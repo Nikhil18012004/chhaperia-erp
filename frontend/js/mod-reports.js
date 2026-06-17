@@ -138,12 +138,14 @@
       toast("Backup exported",{type:"ok"}); }
     function restore(){ const inp=h("input",{type:"file",accept:".json",style:"display:none"});
       inp.onchange=e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-        r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!d.items||!d.movements) throw 0;
-          DB.save(d); toast("Backup restored — reloading",{type:"ok"}); setTimeout(()=>location.reload(),800);
+        r.onload=async ()=>{ try{ const d=JSON.parse(r.result); if(!d.items||!d.movements) throw 0;
+          await DB.save(d); toast("Backup restored — reloading",{type:"ok"}); setTimeout(()=>location.reload(),800);
         }catch(_){ toast("Invalid backup file",{type:"danger"}); } };
         r.readAsText(f); };
       document.body.appendChild(inp); inp.click(); inp.remove(); }
     async function reset(){ if(await confirm("Reset all data to the seeded demo dataset? Your current changes will be lost.",{title:"Reset Data",danger:true})){
-      localStorage.removeItem(DB.KEY); toast("Resetting…",{type:"info"}); setTimeout(()=>location.reload(),600); } }
+      toast("Resetting…",{type:"info"});
+      try{ await DB.reset(); setTimeout(()=>location.reload(),500); }
+      catch(e){ toast("Reset failed: "+e.message,{type:"danger"}); } } }
   }};
 })();

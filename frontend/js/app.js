@@ -10,8 +10,19 @@
     current:"dashboard", params:null,
     theme:"dark", accent:"orange", autoAccent:false,
 
-    boot(){
-      const data = DB.load();
+    async boot(){
+      let data;
+      try{
+        data = await DB.loadAsync();
+      }catch(err){
+        console.error("Failed to load data from API:", err);
+        $("#splash").innerHTML = '<div style="text-align:center;color:var(--text)">'+
+          '<div style="font-size:42px;margin-bottom:14px">⚠</div>'+
+          '<div style="font-weight:700;font-size:18px">Cannot reach the ERP server</div>'+
+          '<div style="color:var(--text-mut);margin-top:8px;max-width:360px;line-height:1.6">'+
+          esc(err.message)+'<br><br>Start the backend with <b>npm start</b> in the <b>backend/</b> folder, then reload.</div></div>';
+        return;
+      }
       ENG.init(data);
       // restore settings
       const s = data.settings||{};
