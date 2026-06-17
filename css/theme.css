@@ -1,0 +1,124 @@
+/* ============================================================
+   CHHAPERIA ERP — THEME / DESIGN TOKENS
+   Brand: #F06820 (orange arcs)  •  #E84820 (red diamond)
+   Dynamic accent system + dark/light modes
+   ============================================================ */
+
+:root{
+  /* brand anchors */
+  --brand-orange:#F06820;
+  --brand-red:#E84820;
+  --brand-orange-600:#d9551a;
+  --brand-orange-300:#ff8c4d;
+
+  /* accent (overridden by [data-accent]) */
+  --accent:#F06820;
+  --accent-600:#d9551a;
+  --accent-300:#ff8c4d;
+  --accent-soft:rgba(240,104,32,.14);
+  --accent-line:rgba(240,104,32,.34);
+
+  /* status palette */
+  --ok:#16a34a; --ok-soft:rgba(22,163,74,.14);
+  --warn:#e0a000; --warn-soft:rgba(224,160,0,.16);
+  --danger:#e23d2e; --danger-soft:rgba(226,61,46,.14);
+  --info:#2f7fe0; --info-soft:rgba(47,127,224,.14);
+  --violet:#7c5cff; --violet-soft:rgba(124,92,255,.14);
+
+  /* chart series */
+  --c1:var(--accent); --c2:#2f7fe0; --c3:#16a34a; --c4:#e0a000;
+  --c5:#7c5cff; --c6:#e23d2e; --c7:#0fb5ae; --c8:#ec4899;
+
+  --radius:14px; --radius-sm:10px; --radius-lg:22px;
+  --shadow-1:0 1px 2px rgba(0,0,0,.18), 0 1px 3px rgba(0,0,0,.10);
+  --shadow-2:0 10px 30px rgba(0,0,0,.28);
+  --shadow-pop:0 18px 50px rgba(0,0,0,.40);
+  --ring:0 0 0 3px var(--accent-soft);
+  --font:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --tr:.18s cubic-bezier(.4,0,.2,1);
+}
+
+/* ---------- DARK (default) ---------- */
+[data-theme="dark"]{
+  --bg:#0c0f16;
+  --bg-grad:radial-gradient(1200px 600px at 78% -8%, rgba(240,104,32,.10), transparent 60%),
+            radial-gradient(900px 500px at -8% 110%, rgba(47,127,224,.08), transparent 55%);
+  --panel:#141925;
+  --panel-2:#1a2030;
+  --panel-3:#212a3d;
+  --elev:#1c2434;
+  --line:rgba(255,255,255,.08);
+  --line-strong:rgba(255,255,255,.16);
+  --text:#eef2f8;
+  --text-dim:#aab4c5;
+  --text-mut:#6f7c92;
+  --sidebar:#0a0d14;
+  --sidebar-line:rgba(255,255,255,.06);
+  --table-stripe:rgba(255,255,255,.022);
+  --table-hover:rgba(240,104,32,.07);
+  --glass:rgba(20,25,37,.72);
+}
+
+/* ---------- LIGHT ---------- */
+[data-theme="light"]{
+  --bg:#f4f6fb;
+  --bg-grad:radial-gradient(1100px 560px at 80% -10%, rgba(240,104,32,.10), transparent 60%),
+            radial-gradient(800px 480px at -6% 108%, rgba(47,127,224,.08), transparent 55%);
+  --panel:#ffffff;
+  --panel-2:#f7f9fd;
+  --panel-3:#eef2f8;
+  --elev:#ffffff;
+  --line:rgba(15,23,42,.09);
+  --line-strong:rgba(15,23,42,.18);
+  --text:#10151f;
+  --text-dim:#46506180;
+  --text-dim:#475066;
+  --text-mut:#8a94a6;
+  --sidebar:#0a0d14;
+  --sidebar-line:rgba(255,255,255,.06);
+  --table-stripe:rgba(15,23,42,.018);
+  --table-hover:rgba(240,104,32,.08);
+  --glass:rgba(255,255,255,.78);
+}
+
+/* ============ DYNAMIC ACCENTS ============ */
+[data-accent="orange"]{ --accent:#F06820; --accent-600:#d9551a; --accent-300:#ff8c4d; --accent-soft:rgba(240,104,32,.14); --accent-line:rgba(240,104,32,.34);}
+[data-accent="red"]   { --accent:#E84820; --accent-600:#c63818; --accent-300:#ff7a55; --accent-soft:rgba(232,72,32,.14); --accent-line:rgba(232,72,32,.34);}
+[data-accent="blue"]  { --accent:#2f7fe0; --accent-600:#2266c2; --accent-300:#6aa8f5; --accent-soft:rgba(47,127,224,.14); --accent-line:rgba(47,127,224,.34);}
+[data-accent="teal"]  { --accent:#0fb5ae; --accent-600:#0a948e; --accent-300:#54d6d0; --accent-soft:rgba(15,181,174,.14); --accent-line:rgba(15,181,174,.34);}
+[data-accent="violet"]{ --accent:#7c5cff; --accent-600:#6442e6; --accent-300:#a890ff; --accent-soft:rgba(124,92,255,.14); --accent-line:rgba(124,92,255,.34);}
+[data-accent="green"] { --accent:#16a34a; --accent-600:#11823b; --accent-300:#46cc78; --accent-soft:rgba(22,163,74,.14); --accent-line:rgba(22,163,74,.34);}
+[data-accent="pink"]  { --accent:#ec4899; --accent-600:#cf2f80; --accent-300:#f57ab8; --accent-soft:rgba(236,72,153,.14); --accent-line:rgba(236,72,153,.34);}
+[data-accent="amber"] { --accent:#e0a000; --accent-600:#bd8600; --accent-300:#f3c43e; --accent-soft:rgba(224,160,0,.16); --accent-line:rgba(224,160,0,.34);}
+
+*{box-sizing:border-box;margin:0;padding:0}
+/* The HTML `hidden` attribute must always win over component display rules
+   (.cmdk/.modal-host/.drawer set display:flex|grid which would otherwise
+   override the UA [hidden]{display:none}). */
+[hidden]{display:none !important}
+html,body{height:100%}
+body{
+  font-family:var(--font);
+  background:var(--bg);
+  background-image:var(--bg-grad);
+  background-attachment:fixed;
+  color:var(--text);
+  -webkit-font-smoothing:antialiased;
+  transition:background-color var(--tr), color var(--tr);
+  overflow:hidden;
+}
+::selection{background:var(--accent-soft);color:var(--text)}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit}
+
+/* scrollbars */
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:20px;border:2px solid transparent;background-clip:padding-box}
+*::-webkit-scrollbar-thumb:hover{background:var(--accent-line);background-clip:padding-box}
+*::-webkit-scrollbar-track{background:transparent}
+
+kbd{
+  font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:6px;
+  background:var(--panel-3);border:1px solid var(--line);color:var(--text-dim);
+}

@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
+
+# Logs / temp
+*.log
+/tmp/
+*.tmp
+
+# Local scratch / parsing helpers (not part of the app)
+parse*.py
+sample_colors.py
+*_home.html
+prod_*.html
+homepage.html
+tapes_home.html
+
+# Build artifacts (none currently — pure static app)
+dist/
+build/
