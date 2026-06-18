@@ -185,6 +185,16 @@
           desc:`${custName(so.customerId)} — promised ${so.promised}`, kind:"so", id:so.id, ts:3});
       }
     });
+    // CRM follow-ups due / overdue
+    (D.leads||[]).forEach(l=>{
+      if(l.stage!=="Won" && l.stage!=="Lost" && l.nextFollowUp && l.nextFollowUp<=tISO){
+        const overdue = l.nextFollowUp < tISO;
+        out.push({sev: overdue?"warn":"info", ic:"🎯",
+          title:`Follow up: ${l.company}`,
+          desc:`${l.stage} lead — ${overdue?"overdue since":"due"} ${l.nextFollowUp}`,
+          kind:"lead", id:l.id, ts:4});
+      }
+    });
     return out.sort((a,b)=> ({danger:0,warn:1,info:2})[a.sev]-({danger:0,warn:1,info:2})[b.sev]);
   }
 
@@ -274,6 +284,45 @@
     return {avg, slope, projected:fc, projTotal:fc.reduce((a,b)=>a+b,0)};
   }
 
+  /* ============================================================
+     CRM — pipeline analytics, weighted forecast, follow-up reminders
+     ============================================================ */
+  const STAGES = ["New","Contacted","Quoted","Won","Lost"];
+  // probability each open stage eventually closes (for weighted forecast)
+  const STAGE_PROB = { New:0.15, Contacted:0.35, Quoted:0.6, Won:1, Lost:0 };
+
+  function leads(){ return D.leads || []; }
+
+  function crmStats(){
+    const ls = leads();
+    const open = ls.filter(l=>l.stage!=="Won" && l.stage!=="Lost");
+    const won = ls.filter(l=>l.stage==="Won");
+    const lost = ls.filter(l=>l.stage==="Lost");
+    const openValue = open.reduce((s,l)=>s+(l.value||0),0);
+    const wonValue = won.reduce((s,l)=>s+(l.quotedValue||l.value||0),0);
+    // weighted pipeline = sum(value * stage probability) over open leads
+    const weighted = open.reduce((s,l)=>s+(l.value||0)*(STAGE_PROB[l.stage]||0),0);
+    const decided = won.length + lost.length;
+    const winRate = decided ? Math.round(won.length/decided*100) : 0;
+    return { total:ls.length, open:open.length, won:won.length, lost:lost.length,
+      openValue, wonValue, weighted, winRate };
+  }
+
+  function pipelineByStage(){
+    const ls = leads();
+    return STAGES.map(st=>{
+      const items = ls.filter(l=>l.stage===st);
+      return { stage:st, count:items.length, value:items.reduce((s,l)=>s+(l.value||0),0), items };
+    });
+  }
+
+  /* follow-ups due today or overdue (open leads only) */
+  function dueFollowUps(){
+    const t = H.iso(H.today());
+    return leads().filter(l=> l.stage!=="Won" && l.stage!=="Lost" && l.nextFollowUp && l.nextFollowUp <= t)
+      .sort((a,b)=> (a.nextFollowUp<b.nextFollowUp?-1:1));
+  }
+
   /* KPIs for dashboard cards */
   function kpis(){
     const inv = inventoryValue();
@@ -286,9 +335,11 @@
     const prod30 = ser.prod.reduce((a,b)=>a+b,0);
     const sold30 = ser.sold.reduce((a,b)=>a+b,0);
     const activeWO = D.workorders.filter(w=>w.status!=="Completed").length;
+    const crm = crmStats();
     return { invValue:inv.total, fgValue:inv.fg, rmValue:inv.rm, skuCount:inv.items,
       openPO:openPO.length, poValue, openSO:openSO.length, soValue, lowStock:low,
-      prod30, sold30, activeWO, alertCount: alerts().length };
+      prod30, sold30, activeWO, alertCount: alerts().length,
+      openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate };
   }
 
   const E = {
@@ -298,7 +349,8 @@
     stock:(id)=>STOCK[id], usage:(id)=>USAGE[id], ledger:(id)=>LEDGER[id],
     status, pendingIn, pendingOut, wipRawDemand,
     inventoryValue, alerts, dailySeries, salesByProduct, purchaseBySupplier,
-    stockByCategory, abcAnalysis, forecast, kpis, sup, custName
+    stockByCategory, abcAnalysis, forecast, kpis, sup, custName,
+    leads, crmStats, pipelineByStage, dueFollowUps, STAGES, STAGE_PROB
   };
   global.ENG = E;
 })(window);
