@@ -1,0 +1,14 @@
+# keep the build context small & the image clean
+**/node_modules
+.git
+.gitignore
+.gitattributes
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.log
+npm-debug.log*
+tools/
+DEPLOY.md

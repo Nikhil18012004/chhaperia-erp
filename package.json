@@ -1,0 +1,13 @@
+{
+  "name": "chhaperia-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chhaperia ERP — deploy entry. Installs the backend (which owns SQLite) and starts it; the backend also serves the static frontend on the same origin.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node backend/src/server.js",
+    "postinstall": "npm install --prefix backend --omit=dev"
+  }
+}

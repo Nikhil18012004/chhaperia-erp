@@ -1,0 +1,23 @@
+# render.yaml — Render Blueprint for Chhaperia ERP
+# How to deploy:
+#   1. Push this repo to GitHub (already at github.com/Nikhil18012004/chhaperia-erp)
+#   2. render.com  ->  New  ->  Blueprint  ->  pick this repo  ->  Apply
+#   Render reads this file and provisions the service automatically.
+#
+# Free plan note: the free instance has NO persistent disk, so the SQLite DB is
+# ephemeral — it auto-seeds demo data on each cold start and resets on redeploy.
+# For data that survives restarts, see DEPLOY.md ("Make data persistent").
+services:
+  - type: web
+    name: chhaperia-erp
+    runtime: node
+    plan: free
+    region: singapore        # closest free region to India; also: oregon, frankfurt, ohio, virginia
+    branch: main
+    buildCommand: npm install # root postinstall installs backend deps (better-sqlite3 ships prebuilt binaries)
+    startCommand: npm start    # node backend/src/server.js — serves /api + the frontend
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
