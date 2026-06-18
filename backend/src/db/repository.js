@@ -77,11 +77,20 @@ function getState() {
     })
   );
 
+  // CRM leads — merge promoted columns back into the doc (which holds activities[])
+  const leads = db.prepare("SELECT * FROM leads").all().map((l) =>
+    Object.assign({}, P(l.doc, {}), {
+      id: l.id, company: l.company, contact: l.contact, stage: l.stage,
+      value: l.value, owner: l.owner, created: l.created,
+      nextFollowUp: l.next_follow_up, customerId: l.customer_id,
+    })
+  );
+
   return {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers,
-    movements, workorders, salesorders, purchaseorders, settings,
+    movements, workorders, salesorders, purchaseorders, leads, settings,
   };
 }
 
@@ -92,7 +101,7 @@ function saveState(data) {
     // wipe
     for (const t of ["movements", "work_orders", "sales_orders", "purchase_orders",
       "boms", "items", "suppliers", "customers", "warehouses", "categories",
-      "org", "settings", "meta"]) {
+      "leads", "org", "settings", "meta"]) {
       db.prepare(`DELETE FROM ${t}`).run();
     }
 
@@ -164,6 +173,16 @@ function saveState(data) {
       const { id, date, supplierId, status, eta, value, lines, ...rest } = p;
       po.run({ id, date, supplier_id: supplierId, status, eta: eta || null,
         value: value || 0, lines: J(lines || []), doc: J(rest) });
+    });
+
+    const ld = db.prepare(`INSERT INTO leads
+      (id,company,contact,stage,value,owner,created,next_follow_up,customer_id,doc)
+      VALUES(@id,@company,@contact,@stage,@value,@owner,@created,@next_follow_up,@customer_id,@doc)`);
+    (d.leads || []).forEach((l) => {
+      const { id, company, contact, stage, value, owner, created, nextFollowUp, customerId, ...rest } = l;
+      ld.run({ id, company, contact: contact || null, stage: stage || "New",
+        value: value || 0, owner: owner || null, created: created || null,
+        next_follow_up: nextFollowUp || null, customer_id: customerId || null, doc: J(rest) });
     });
   });
   tx(data);

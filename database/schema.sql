@@ -132,3 +132,27 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   lines       TEXT NOT NULL,           -- JSON: order lines
   doc         TEXT
 );
+
+-- ============================================================
+--  CRM — sales pipeline leads / enquiries
+--  Each lead carries its follow-up activities as a JSON array
+--  (same document pattern used by order lines), so the whole
+--  CRM stays simple and loads/saves with the rest of the state.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS leads (
+  id             TEXT PRIMARY KEY,
+  company        TEXT NOT NULL,
+  contact        TEXT,
+  stage          TEXT,                 -- New|Contacted|Quoted|Won|Lost
+  value          REAL DEFAULT 0,       -- estimated deal value (₹)
+  owner          TEXT,
+  created        TEXT,
+  next_follow_up TEXT,                 -- date of next planned follow-up
+  customer_id    TEXT,                 -- set when converted/linked to a customer
+  doc            TEXT NOT NULL         -- JSON: phone,email,city,product,source,
+                                       --       expectedClose,quotedValue,quoteDate,
+                                       --       lostReason,notes,activities[]
+);
+CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
+CREATE INDEX IF NOT EXISTS idx_leads_follow ON leads(next_follow_up);
+

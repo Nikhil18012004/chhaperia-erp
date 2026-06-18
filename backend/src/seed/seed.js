@@ -280,6 +280,98 @@ function buildSeed() {
 
   movements.sort((a,b)=> a.date<b.date?-1: a.date>b.date?1: a.id<b.id?-1:1);
 
+  /* ============================================================
+     CRM — SALES PIPELINE LEADS / ENQUIRIES
+     Generates realistic B2B enquiries for cable-tape products,
+     spread across the pipeline stages with follow-up activities.
+     ============================================================ */
+  const leadCompanies = [
+    {company:"KEI Industries Ltd", contact:"R. Sharma", city:"Bhiwadi, Rajasthan", phone:"+91 98290 20202", email:"sourcing@kei-ind.com"},
+    {company:"Apar Industries (Cables)", contact:"H. Desai", city:"Umbergaon, Gujarat", phone:"+91 98250 60606", email:"cables@apar.com"},
+    {company:"Sterlite Power", contact:"V. Menon", city:"Vadodara, Gujarat", phone:"+91 98255 71010", email:"procurement@sterlite.com"},
+    {company:"Cords Cable Industries", contact:"A. Bansal", city:"Jaipur, Rajasthan", phone:"+91 98281 33440", email:"buy@cordscable.com"},
+    {company:"Paramount Communications", contact:"S. Khanna", city:"Khushkhera, Rajasthan", phone:"+91 98112 55660", email:"vendor@paramountcables.com"},
+    {company:"Ravin Cables Ltd", contact:"D. Kulkarni", city:"Navi Mumbai, MH", phone:"+91 98201 99880", email:"po@ravincables.com"},
+    {company:"Thermo Cables Ltd", contact:"K. Reddy", city:"Hyderabad, Telangana", phone:"+91 98480 12120", email:"materials@thermocables.com"},
+    {company:"Special Cables Pvt Ltd", contact:"M. Verma", city:"Faridabad, Haryana", phone:"+91 98911 44550", email:"sourcing@specialcables.in"},
+    {company:"Grandly Cables", contact:"P. Nair", city:"Coimbatore, TN", phone:"+91 98430 77220", email:"info@grandlycables.com"},
+    {company:"Ultracab India Ltd", contact:"J. Patel", city:"Rajkot, Gujarat", phone:"+91 98242 88110", email:"purchase@ultracab.in"},
+    {company:"Marine Cables & Conductors", contact:"F. D'Souza", city:"Goa", phone:"+91 98225 66770", email:"buy@marinecables.in"},
+    {company:"Nicco Industries", contact:"B. Ghosh", city:"Kolkata, WB", phone:"+91 98300 99110", email:"materials@nicco.in"},
+  ];
+  const leadSources = ["Exhibition (Wire India)", "Website Enquiry", "Referral", "Cold Call", "Existing Customer", "Trade Directory"];
+  const leadOwners = ["Sales Desk", "Marketing Desk"];
+  const actTypes = ["Call", "Email", "Meeting", "Site Visit", "Quotation Sent"];
+  const lostReasons = ["Price too high", "Lost to competitor", "Project delayed", "Spec mismatch", "No budget"];
+  const stages = ["New", "Contacted", "Quoted", "Won", "Lost"];
+  const stageWeights = [22, 25, 28, 15, 10]; // rough realistic distribution
+
+  function weightedStage(){
+    let r = ri(1, 100), acc = 0;
+    for (let i = 0; i < stages.length; i++){ acc += stageWeights[i]; if (r <= acc) return stages[i]; }
+    return "New";
+  }
+
+  let leads = [];
+  let ldSeq = 1;
+  leadCompanies.forEach((lc) => {
+    const stage = weightedStage();
+    const fg = pick(fgItems);
+    const createdAgo = ri(3, 75);
+    const created = daysAgo(createdAgo);
+    const value = ri(2, 25) * 10000; // ₹20k–₹2.5L enquiry value
+    const owner = pick(leadOwners);
+    const source = pick(leadSources);
+
+    // build a short activity history appropriate to the stage
+    const reached = stages.indexOf(stage);
+    const activities = [];
+    const baseTypes = ["Call", "Email", "Meeting", "Quotation Sent"];
+    const nAct = Math.max(1, Math.min(reached + ri(0, 1), 4));
+    for (let a = 0; a < nAct; a++){
+      activities.push({
+        date: daysAgo(createdAgo - a * ri(2, 6) < 0 ? 0 : createdAgo - a * ri(2, 6)),
+        type: a < baseTypes.length ? baseTypes[a] : pick(actTypes),
+        note: pick([
+          "Discussed requirement & volumes",
+          "Shared product datasheet & samples",
+          "Reviewed technical specs (IEC 60331-2)",
+          "Sent quotation for "+fg.typeCode,
+          "Followed up on pending decision",
+          "Negotiated price & delivery terms",
+        ]),
+        by: owner,
+      });
+    }
+
+    const lead = {
+      id: "LD-" + String(ldSeq++).padStart(4, "0"),
+      company: lc.company, contact: lc.contact, stage, value, owner, created,
+      phone: lc.phone, email: lc.email, city: lc.city,
+      product: fg.id, productName: fg.name, source,
+      expectedClose: daysAhead(ri(2, 30)),
+      activities,
+      notes: "",
+    };
+
+    // stage-specific fields
+    if (stage === "Quoted" || stage === "Won" || stage === "Lost"){
+      lead.quotedValue = Math.round(value * rf(0.9, 1.05));
+      lead.quoteDate = daysAgo(Math.max(0, createdAgo - ri(2, 8)));
+    }
+    if (stage === "Won"){
+      lead.customerId = pick(customers).id;
+      lead.nextFollowUp = null;
+    } else if (stage === "Lost"){
+      lead.lostReason = pick(lostReasons);
+      lead.nextFollowUp = null;
+    } else {
+      // open leads get a next follow-up (some overdue, some upcoming)
+      lead.nextFollowUp = daysAhead(ri(-4, 12));
+    }
+    leads.push(lead);
+  });
+
   const org = {
     name:"Chhaperia Cable Material Pvt. Ltd.",
     short:"Chhaperia International",
@@ -303,7 +395,7 @@ function buildSeed() {
   return {
     version:1, seededAt:new Date().toISOString(),
     org, warehouses, categories, items, boms, suppliers, customers,
-    movements, workorders, salesorders, purchaseorders,
+    movements, workorders, salesorders, purchaseorders, leads,
     settings:{ theme:"dark", accent:"orange", autoAccent:false, lowStockOnly:false }
   };
 }

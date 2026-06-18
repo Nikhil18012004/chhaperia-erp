@@ -150,6 +150,8 @@
     {sec:"Operations"},
     {id:"production", icon:"⚙️", label:"Production", accent:"amber"},
     {id:"bom", icon:"🧬", label:"Products & BOM", accent:"green"},
+    {sec:"Sales & CRM"},
+    {id:"crm", icon:"🎯", label:"CRM Pipeline", accent:"pink", pillKey:"openLeads"},
     {sec:"Trade"},
     {id:"purchase", icon:"🛒", label:"Procurement", accent:"blue", pillKey:"openPO"},
     {id:"sales", icon:"🧾", label:"Sales Orders", accent:"orange", pillKey:"openSO"},

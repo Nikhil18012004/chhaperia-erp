@@ -116,7 +116,8 @@
         list.appendChild(h("div",{class:"alert-item",onclick:()=>{ this.closeDrawer();
           if(a.kind==="stock") this.go("inventory");
           else if(a.kind==="po") this.go("purchase");
-          else if(a.kind==="so") this.go("sales"); }},[
+          else if(a.kind==="so") this.go("sales");
+          else if(a.kind==="lead") this.go("crm"); }},[
           h("div",{class:"alert-ic",style:st,text:a.ic}),
           h("div",{style:"flex:1;min-width:0"},[ h("div",{class:"t",text:a.title}), h("div",{class:"d",text:a.desc}) ])
         ]));
