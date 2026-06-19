@@ -199,7 +199,7 @@
     }
     function soDetail(so){
       const body=h("div",{},[
-        MW.dl([["Customer",ENG.custName(so.customerId)],["Status",badge(so.status==="Dispatched"?"ok":"info",so.status)],["Priority",so.priority],["Order Date",so.date],["Promised",so.promised],["Total",ENG.money(so.value)]]),
+        MW.dl([["Customer",ENG.custName(so.customerId)],["Status",badge(so.status==="Dispatched"?"ok":"info",so.status)],["Priority",so.priority],["Order Date",so.date],["Promised",so.promised],["Total",ENG.money(so.value)]].concat(so.fromLead?[["From CRM Lead","🎯 "+so.fromLead]]:[])),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Order Lines"}),
         table(so.lines,[
           {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(U.trim(it.name||r.itemId,30))}</div><div class="cell-sub">${r.itemId} · ${r.width||"-"}mm</div>`;},noSort:true},

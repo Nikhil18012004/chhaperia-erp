@@ -18,10 +18,18 @@
   // Override with window.CHHAPERIA_API_BASE if hosting separately.
   const BASE = (global.CHHAPERIA_API_BASE || "") + "/api";
 
-  /* ---- date helpers (pure, client-side — used across modules) ---- */
+  /* ---- date helpers (pure, client-side — used across modules) ----
+     'today' is the REAL local date (local midnight), not a hardcoded
+     demo date. We format dates in LOCAL time (not UTC via toISOString)
+     so that for users in IST the day rolls over at local midnight,
+     not at 05:30 IST. India has no DST, so adding raw day-milliseconds
+     to walk dates is safe here. */
   const DAY = 86400000;
-  const today = new Date("2026-06-17T00:00:00");
-  const iso = d => new Date(d).toISOString().slice(0, 10);
+  function iso(d){ const x = new Date(d);
+    const y = x.getFullYear(), m = String(x.getMonth()+1).padStart(2,"0"), dd = String(x.getDate()).padStart(2,"0");
+    return `${y}-${m}-${dd}`; }
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // local midnight today
   const daysAgo = n => iso(today.getTime() - n * DAY);
   const daysAhead = n => iso(today.getTime() + n * DAY);
 

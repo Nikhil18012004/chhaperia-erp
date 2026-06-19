@@ -19,8 +19,14 @@ function buildSeed() {
   const chance = p => rnd() < p;
 
   const DAY = 86400000;
-  const today = new Date("2026-06-17T00:00:00");
-  const iso = d => new Date(d).toISOString().slice(0,10);
+  // Anchor the simulated 120-day history to the REAL current date so
+  // "today" in the app always matches the real calendar. Format dates
+  // in LOCAL time (not UTC) to avoid the day rolling over at 05:30 IST.
+  function iso(d){ const x = new Date(d);
+    const y = x.getFullYear(), m = String(x.getMonth()+1).padStart(2,"0"), dd = String(x.getDate()).padStart(2,"0");
+    return `${y}-${m}-${dd}`; }
+  const _n = new Date();
+  const today = new Date(_n.getFullYear(), _n.getMonth(), _n.getDate());
   const daysAgo = n => iso(today.getTime() - n*DAY);
   const daysAhead = n => iso(today.getTime() + n*DAY);
 

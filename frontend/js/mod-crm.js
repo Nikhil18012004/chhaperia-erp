@@ -148,6 +148,7 @@
         ["Expected Close", l.expectedClose || "—"],
         l.lostReason ? ["Lost Reason", l.lostReason] : null,
         l.customerId ? ["Linked Customer", ENG.custName(l.customerId)] : null,
+        l.salesOrderId ? ["Sales Order", l.salesOrderId + " →"] : null,
       ].filter(Boolean)),
 
       l.notes ? h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" },
@@ -199,24 +200,95 @@
     App.go("crm");
   }
 
-  /* ---- mark won / lost ---- */
+  /* ---- mark won / lost ----
+     Marking a lead WON closes the CRM→ERP loop:
+       1. ensure the company exists as a Customer (create if new)
+       2. offer to raise a Sales Order from the lead's product + value
+     so a won enquiry actually flows into Sales → Production → Dispatch
+     instead of dead-ending in the CRM. */
   async function closeLead(l, outcome) {
     if (outcome === "Lost") {
       const reason = await promptText("Why was this lead lost?", "e.g. Price too high / lost to competitor");
       if (reason === null) return;
       l.lostReason = reason || "Not specified";
+      l.stage = "Lost";
+      l.nextFollowUp = null;
+      App.persistAndRefresh();
+      UI.$("#modalHost").hidden = true;
+      toast(l.company + " marked Lost", { type: "warn" });
+      App.go("crm");
+      return;
     }
-    l.stage = outcome;
+
+    // ----- WON -----
+    l.stage = "Won";
     l.nextFollowUp = null;
-    if (outcome === "Won" && !l.customerId) {
-      // try to match an existing customer by company name; else leave unlinked
-      const match = ENG.data.customers.find((c) => c.name.toLowerCase() === (l.company || "").toLowerCase());
-      if (match) l.customerId = match.id;
+
+    // 1) ensure a Customer record exists for this company
+    let cust = ENG.data.customers.find((c) => c.name.toLowerCase() === (l.company || "").toLowerCase());
+    let createdCustomer = false;
+    if (!cust) {
+      cust = {
+        id: nextCustomerId(),
+        name: l.company,
+        city: l.city || "—",
+        gst: "—",
+        segment: "Cable Tapes",
+        rating: "B",
+        terms: "30 days",
+        contact: l.contact || "—",
+        phone: l.phone || "—",
+        email: l.email || "—",
+        since: String(DB.helpers.today().getFullYear()),
+      };
+      ENG.data.customers.push(cust);
+      createdCustomer = true;
     }
-    App.persistAndRefresh();
+    l.customerId = cust.id;
+
+    // 2) ask whether to raise a Sales Order from this won lead
     UI.$("#modalHost").hidden = true;
-    toast(l.company + " marked " + outcome, { type: outcome === "Won" ? "ok" : "warn" });
+    const makeSO = await confirm(
+      `🏆 ${l.company} marked WON!\n\n` +
+      (createdCustomer ? `• New customer "${cust.name}" added to your customer list.\n` : `• Linked to existing customer ${cust.name}.\n`) +
+      `\nRaise a Sales Order now for ${l.productName || l.product}?\n` +
+      `This pushes the deal into your order book → production → dispatch.`,
+      { title: "Convert Won lead to order?" });
+
+    if (makeSO) {
+      const fg = ENG.item(l.product);
+      const price = (fg && fg.price) || 0;
+      // derive a sensible quantity from the deal value (value ÷ unit price)
+      const qty = price > 0 ? Math.max(1, Math.round((l.value || 0) / price)) : 0;
+      const rate = price || (qty ? Math.round((l.value || 0) / qty) : 0);
+      const soId = "SO-" + String(1000 + ENG.data.salesorders.length + 1).slice(1);
+      ENG.data.salesorders.push({
+        id: soId,
+        date: DB.helpers.iso(DB.helpers.today()),
+        customerId: cust.id,
+        lines: qty ? [{ itemId: l.product, qty, rate, width: (fg && fg.widthMM ? fg.widthMM[0] : 25) }] : [],
+        status: "Confirmed",
+        promised: DB.helpers.daysAhead(14),
+        priority: "Normal",
+        value: l.value || 0,
+        fromLead: l.id, // traceability back to the CRM lead
+      });
+      l.salesOrderId = soId; // traceability forward to the order
+      App.persistAndRefresh();
+      toast(`${soId} created from ${l.company}`, { type: "ok", title: "Lead converted to order" });
+      App.go("sales");
+      return;
+    }
+
+    App.persistAndRefresh();
+    toast(l.company + " marked Won", { type: "ok" });
     App.go("crm");
+  }
+
+  function nextCustomerId() {
+    const ids = (ENG.data.customers || []).map((c) => +(String(c.id).replace(/\D/g, "")) || 0);
+    const n = (ids.length ? Math.max(...ids) : 0) + 1;
+    return "CUS-" + String(n).padStart(2, "0");
   }
 
   /* ---- log an activity ---- */

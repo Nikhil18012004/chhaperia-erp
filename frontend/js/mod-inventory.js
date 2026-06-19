@@ -205,10 +205,25 @@
       const mo=modal({title:"Stock Adjustment", sub:"Posts an audited ledger entry", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn primary",onclick:save,text:"Post Entry"})]});
-      function save(){
+      async function save(){
         const id=UI.$("#a_item").value, qty=+UI.$("#a_qty").value;
-        if(!qty){ toast("Enter a non-zero quantity",{type:"warn"}); return; }
+        if(!qty || isNaN(qty)){ toast("Enter a non-zero quantity",{type:"warn"}); return; }
         const it=ENG.item(id);
+        const onHand=ENG.stock(id).onHand;
+        // Negative-stock guard: a reduction that pushes on-hand below zero
+        // is blocked by default, but can be overridden deliberately.
+        if(qty<0 && (onHand+qty) < -0.0001){
+          const after=onHand+qty;
+          const ok=await confirm(
+            `⚠ This will take ${it.name} below zero.\n\n`+
+            `On hand: ${ENG.num(onHand,2)} ${it.uom}\n`+
+            `Change : ${ENG.num(qty,2)} ${it.uom}\n`+
+            `Result : ${ENG.num(after,2)} ${it.uom}\n\n`+
+            `Negative stock usually means a receipt (GRN) wasn't entered yet. `+
+            `Post anyway?`,
+            {title:"Stock would go negative", danger:true});
+          if(!ok) return;
+        }
         ENG.data.movements.push({id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:id,
           wh:UI.$("#a_wh").value, type:UI.$("#a_type").value, qty, rate:it.cost,
           ref:UI.$("#a_type").value+"-"+Math.floor(Math.random()*9000+1000), note:UI.$("#a_note").value||"Manual adjustment", by:"user"});
