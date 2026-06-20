@@ -9,6 +9,8 @@
 const path = require("path");
 const express = require("express");
 const apiRoutes = require("./routes/api");
+const { router: authRoutes } = require("./routes/auth");
+const authService = require("./services/authService");
 
 const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
@@ -16,7 +18,9 @@ const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 
-// API
+// Auth (login, me, user management)
+app.use("/api/auth", authRoutes);
+// API (protected, role-scoped)
 app.use("/api", apiRoutes);
 
 // Static frontend
@@ -30,10 +34,19 @@ app.use((err, req, res, next) => {
 });
 
 const server = app.listen(PORT, () => {
+  // ensure default accounts exist on first run
+  let seedInfo = { seeded: false };
+  try { seedInfo = authService.seedDefaultUsers(); } catch (e) { console.error("[user seed]", e.message); }
+
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);
   console.log(`  ├─ Frontend : http://localhost:${PORT}/`);
-  console.log(`  └─ Database : SQLite (data/chhaperia.db)\n`);
+  console.log(`  ├─ Database : SQLite (data/chhaperia.db)`);
+  if (seedInfo.seeded) {
+    console.log(`  └─ Users    : seeded ${seedInfo.count} default accounts (admin/admin@123)\n`);
+  } else {
+    console.log(`  └─ Users    : ${seedInfo.count || "existing"} accounts\n`);
+  }
 });
 
 module.exports = { app, server };

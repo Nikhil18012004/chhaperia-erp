@@ -156,3 +156,25 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
 CREATE INDEX IF NOT EXISTS idx_leads_follow ON leads(next_follow_up);
 
+-- ============================================================
+--  USERS — authentication & role-based access control (RBAC)
+--  roles: admin (full + user mgmt) | office (full app, no user
+--  mgmt) | supervisor (production only, money-free).
+--  'area' scopes a supervisor to a production area:
+--  coating | slitting | fiberglass.
+--  Passwords are stored as scrypt 'saltHex:hashHex' — never plaintext.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS users (
+  id         TEXT PRIMARY KEY,
+  username   TEXT UNIQUE NOT NULL,
+  name       TEXT,
+  role       TEXT NOT NULL,            -- admin | office | supervisor
+  area       TEXT,                     -- supervisor scope: coating|slitting|fiberglass
+  pass       TEXT NOT NULL,            -- scrypt 'saltHex:hashHex'
+  active     INTEGER DEFAULT 1,
+  created    TEXT,
+  last_login TEXT,
+  doc        TEXT                      -- JSON: phone, notes, etc.
+);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+

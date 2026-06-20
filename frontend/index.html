@@ -23,6 +23,28 @@
     <div class="splash-text">CHHAPERIA&nbsp;ERP</div>
   </div>
 
+  <!-- Login gate -->
+  <div id="login" class="login-screen" hidden>
+    <div class="login-card">
+      <img src="assets/logo-full.png" class="login-logo" alt="Chhaperia" />
+      <div class="login-title">Production &amp; ERP Suite</div>
+      <div class="login-sub">Sign in to continue</div>
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <label class="login-field">
+          <span>Username</span>
+          <input id="loginUser" type="text" autocomplete="username" placeholder="e.g. admin" required />
+        </label>
+        <label class="login-field">
+          <span>Password</span>
+          <input id="loginPass" type="password" autocomplete="current-password" placeholder="Your password" required />
+        </label>
+        <div id="loginError" class="login-error" hidden></div>
+        <button type="submit" id="loginBtn" class="login-btn">Sign In</button>
+      </form>
+      <div class="login-foot">Chhaperia Cable Material Pvt. Ltd.</div>
+    </div>
+  </div>
+
   <div id="app" class="app-shell" hidden>
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
@@ -69,8 +91,9 @@
           <div class="avatar" id="userAvatar">NC</div>
           <div class="user-meta">
             <div class="user-name" id="userName">Navin Chhaperia</div>
-            <div class="user-role">Administrator</div>
+            <div class="user-role" id="userRole">Administrator</div>
           </div>
+          <button class="icon-btn" id="logoutBtn" title="Sign out" style="margin-left:6px">⏻</button>
         </div>
       </header>
 
@@ -103,17 +126,19 @@
   <!-- Toasts -->
   <div class="toast-stack" id="toasts"></div>
 
-  <script src="js/data.js?v=5"></script>
-  <script src="js/engine.js?v=5"></script>
-  <script src="js/charts.js?v=5"></script>
-  <script src="js/ui.js?v=5"></script>
-  <script src="js/mod-common.js?v=5"></script>
-  <script src="js/mod-overview.js?v=5"></script>
-  <script src="js/mod-inventory.js?v=5"></script>
-  <script src="js/mod-production.js?v=5"></script>
-  <script src="js/mod-trade.js?v=5"></script>
-  <script src="js/mod-crm.js?v=5"></script>
-  <script src="js/mod-reports.js?v=5"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/data.js?v=7"></script>
+  <script src="js/engine.js?v=7"></script>
+  <script src="js/charts.js?v=7"></script>
+  <script src="js/ui.js?v=7"></script>
+  <script src="js/mod-common.js?v=7"></script>
+  <script src="js/mod-overview.js?v=7"></script>
+  <script src="js/mod-inventory.js?v=7"></script>
+  <script src="js/mod-production.js?v=7"></script>
+  <script src="js/mod-trade.js?v=7"></script>
+  <script src="js/mod-crm.js?v=7"></script>
+  <script src="js/mod-reports.js?v=7"></script>
+  <script src="js/mod-users.js?v=7"></script>
+  <script src="js/mod-supervisor.js?v=7"></script>
+  <script src="js/app.js?v=7"></script>
 </body>
 </html>

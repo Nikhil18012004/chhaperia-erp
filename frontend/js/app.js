@@ -11,19 +11,47 @@
     theme:"dark", accent:"orange", autoAccent:false,
 
     async boot(){
+      // 1) gate on authentication — no session ⇒ show login
+      const sessionUser = DB.auth.user();
+      if(!sessionUser || !DB.auth.token()){
+        this.showLogin();
+        return;
+      }
+      // 2) verify the token is still valid + get fresh user/role
+      let me;
+      try{ me = (await DB.auth.me()).user; }
+      catch(err){ this.showLogin(); return; }
+
+      this.user = me;
+
+      // 3) supervisors get the dedicated panel (rendered inside the shell)
+      if(me.role === "supervisor"){
+        $("#login").hidden = true;
+        if(global.SUP && typeof SUP.boot === "function") SUP.boot(me);
+        else { this.hideSplash(); $("#app").hidden=false; $("#view").innerHTML='<div style="padding:40px;text-align:center">Supervisor panel unavailable.</div>'; }
+        return;
+      }
+
+      // 4) admin / office ⇒ full ERP
+      await this.bootFullApp();
+    },
+
+    async bootFullApp(){
       let data;
       try{
         data = await DB.loadAsync();
       }catch(err){
         console.error("Failed to load data from API:", err);
-        $("#splash").innerHTML = '<div style="text-align:center;color:var(--text)">'+
-          '<div style="font-size:42px;margin-bottom:14px">⚠</div>'+
-          '<div style="font-weight:700;font-size:18px">Cannot reach the ERP server</div>'+
-          '<div style="color:var(--text-mut);margin-top:8px;max-width:360px;line-height:1.6">'+
-          esc(err.message)+'<br><br>Start the backend with <b>npm start</b> in the <b>backend/</b> folder, then reload.</div></div>';
+        this.hideSplash();
+        $("#login").hidden = true;
+        $("#app").hidden=false;
+        $("#view").innerHTML = '<div class="empty" style="margin-top:60px"><div class="big">⚠</div>'+
+          '<div style="font-weight:700;font-size:18px">Cannot load data</div>'+
+          '<div style="color:var(--text-mut);margin-top:8px">'+esc(err.message)+'</div></div>';
         return;
       }
       ENG.init(data);
+      const app=$("#app"); app.classList.remove("sup-mode"); // clear supervisor mode if switching roles
       // restore settings
       const s = data.settings||{};
       this.theme = s.theme||"dark";
@@ -36,20 +64,80 @@
       this.bindChrome();
       this.renderAccentMenu();
       this.refreshAlerts();
+      this.applyRoleChrome();
 
       // route from hash
       const hash=location.hash.replace("#","");
       if(hash && M[hash]) this.current=hash;
       this.go(this.current);
 
-      // hide splash
-      setTimeout(()=>{ $("#splash").classList.add("hide"); $("#app").hidden=false;
-        setTimeout(()=>$("#splash").remove(),600); }, 900);
+      // reveal app
+      this.hideSplash();
+      $("#login").hidden = true;
+      $("#app").hidden=false;
+    },
+
+    hideSplash(){
+      const sp=$("#splash"); if(sp){ sp.classList.add("hide"); setTimeout(()=>sp.remove(),600); }
+    },
+
+    /* ---- LOGIN GATE ---- */
+    showLogin(message){
+      this.hideSplash();
+      $("#app").hidden = true;
+      const login = $("#login"); login.hidden = false;
+      const err = $("#loginError");
+      if(message){ err.hidden=false; err.textContent=message; } else { err.hidden=true; }
+      const form = $("#loginForm"), user=$("#loginUser"), pass=$("#loginPass"), btn=$("#loginBtn");
+      user.value=""; pass.value="";
+      setTimeout(()=>user.focus(), 50);
+      form.onsubmit = async (e)=>{
+        e.preventDefault();
+        err.hidden=true;
+        btn.disabled=true; btn.textContent="Signing in…";
+        try{
+          const r = await DB.auth.login(user.value.trim(), pass.value);
+          if(!r || !r.token) throw new Error("Login failed");
+          this.user = r.user;
+          location.hash = "";
+          // route by role
+          if(r.user.role === "supervisor"){
+            login.hidden = true;
+            if(global.SUP && typeof SUP.boot==="function") SUP.boot(r.user);
+          } else {
+            this.current = "dashboard";
+            await this.bootFullApp();
+          }
+        }catch(ex){
+          err.hidden=false; err.textContent = ex.message==="401"||/invalid/i.test(ex.message) ? "Invalid username or password" : ex.message;
+          btn.disabled=false; btn.textContent="Sign In";
+          pass.focus();
+        }
+      };
+    },
+
+    async logout(){
+      try{ await DB.auth.logout(); }catch{}
+      this.user=null;
+      location.hash="";
+      this.showLogin("You have been signed out.");
+    },
+
+    /* hide admin-only chrome from office; label the user chip */
+    applyRoleChrome(){
+      const u=this.user||{};
+      const nameEl=$("#userName"), roleEl=$("#userRole"), av=$("#userAvatar");
+      if(nameEl) nameEl.textContent = u.name || u.username || "User";
+      if(roleEl) roleEl.textContent = ({admin:"Administrator",office:"Office Desk",supervisor:"Supervisor"})[u.role] || u.role || "";
+      if(av) av.textContent = (u.name||u.username||"U").split(" ").map(x=>x[0]).slice(0,2).join("").toUpperCase();
+      const logout=$("#logoutBtn"); if(logout) logout.onclick=()=>this.logout();
     },
 
     buildNav(){
       const nav=$("#nav"); nav.innerHTML="";
+      const isAdmin = this.user && this.user.role === "admin";
       UI.NAV.forEach(n=>{
+        if(n.adminOnly && !isAdmin) return; // hide admin-only items from office
         if(n.sec){ nav.appendChild(h("div",{class:"nav-section",text:n.sec})); return; }
         const item=h("div",{class:"nav-item"+(n.id===this.current?" active":""),"data-id":n.id,onclick:()=>this.go(n.id)},[
           h("span",{class:"ic",text:n.icon}),

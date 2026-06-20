@@ -159,6 +159,7 @@
     {id:"customers", icon:"🤝", label:"Customers", accent:"pink"},
     {sec:"System"},
     {id:"reports", icon:"📊", label:"Reports", accent:"green"},
+    {id:"users", icon:"👥", label:"Users & Access", accent:"red", adminOnly:true},
     {id:"settings", icon:"⚙", label:"Settings", accent:"orange"},
   ];
 

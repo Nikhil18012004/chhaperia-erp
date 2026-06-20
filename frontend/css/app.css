@@ -350,3 +350,70 @@ canvas{display:block;width:100%}
 .crm-card-sub{font-size:11.5px;color:var(--text-dim);margin:5px 0 8px}
 .crm-card-foot{display:flex;justify-content:space-between;align-items:center;font-size:11px}
 .crm-card-due{font-weight:600;font-family:var(--mono)}
+
+/* ============================================================
+   LOGIN GATE
+   ============================================================ */
+.login-screen{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#1a1118,#241015 55%,#2a0f0a);padding:20px}
+.login-card{width:min(400px,94vw);background:var(--panel,#fff);border-radius:18px;padding:34px 30px;
+  box-shadow:0 30px 80px rgba(0,0,0,.5);text-align:center;animation:fadein .4s ease}
+.login-logo{height:54px;margin-bottom:18px;object-fit:contain}
+.login-title{font-size:18px;font-weight:800;color:var(--text)}
+.login-sub{font-size:13px;color:var(--text-mut);margin:4px 0 22px}
+.login-form{display:flex;flex-direction:column;gap:14px;text-align:left}
+.login-field{display:flex;flex-direction:column;gap:6px}
+.login-field span{font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em}
+.login-field input{padding:12px 14px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;
+  background:var(--panel-2);color:var(--text);transition:var(--tr)}
+.login-field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft,rgba(240,104,32,.15))}
+.login-error{background:var(--danger-soft,#fde8e8);color:var(--danger,#c0392b);padding:10px 12px;border-radius:8px;font-size:13px;font-weight:600}
+.login-btn{margin-top:6px;padding:13px;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;
+  color:#fff;background:linear-gradient(135deg,#F06820,#E84820);transition:var(--tr)}
+.login-btn:hover{filter:brightness(1.06)}
+.login-btn:disabled{opacity:.6;cursor:wait}
+.login-foot{margin-top:20px;font-size:11px;color:var(--text-mut)}
+
+/* ============================================================
+   SUPERVISOR (HYBRID) — admin shell + big tap-friendly job cards
+   Renders inside the admin #app shell, so it inherits the sidebar,
+   topbar, dynamic accent colours and dark/light theme for free.
+   These styles are theme-aware (use var() tokens) + touch-sized.
+   ============================================================ */
+/* hide office/admin-only chrome when the shell is in supervisor mode */
+.app-shell.sup-mode #searchTrigger,
+.app-shell.sup-mode .accent-pop,
+.app-shell.sup-mode #bellBtn{ display:none }
+
+.sup-loading{padding:60px 20px;text-align:center;color:var(--text-mut);font-size:15px}
+.sup-tabs{display:flex;gap:8px;margin:0 0 16px;overflow-x:auto;flex-wrap:wrap}
+.sup-tab{flex-shrink:0;padding:9px 18px;border:1.5px solid var(--line);border-radius:22px;background:var(--panel);color:var(--text-dim);
+  font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;transition:var(--tr)}
+.sup-tab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.sup-list{display:grid;gap:14px;grid-template-columns:1fr}
+.sup-card{background:var(--panel);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow-1);border:1px solid var(--line);transition:var(--tr)}
+.sup-card:hover{box-shadow:var(--shadow-2)}
+.sup-card.overdue{border-color:var(--danger)}
+.sup-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:13px}
+.sup-card-prod{font-size:17px;font-weight:800;line-height:1.25;color:var(--text)}
+.sup-card-meta{font-size:12px;color:var(--text-mut);margin-top:3px;font-family:var(--mono,monospace)}
+.sup-status{font-size:11px;font-weight:800;padding:4px 11px;border:1.5px solid;border-radius:20px;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}
+.sup-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:11px;margin-bottom:13px}
+.sup-fact-l{font-size:10.5px;color:var(--text-mut);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.sup-fact-v{font-size:15px;font-weight:600;margin-top:2px;color:var(--text)}
+.sup-mat{margin-bottom:13px;background:var(--panel-2);border-radius:10px;padding:4px 13px;border:1px solid var(--line)}
+.sup-mat summary{font-size:13px;font-weight:700;color:var(--text-dim);cursor:pointer;padding:9px 0}
+.sup-mat-list{padding:4px 0 11px;display:flex;flex-direction:column;gap:7px}
+.sup-mat-row{display:flex;justify-content:space-between;font-size:13.5px;color:var(--text-dim)}
+.sup-actions{display:flex;gap:10px;flex-wrap:wrap}
+.sup-act{flex:1;min-width:150px;padding:15px;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;transition:var(--tr)}
+.sup-act.primary{color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-2,var(--accent)))}
+.sup-act.primary:hover{filter:brightness(1.07)}
+.sup-act.ghost{flex:0 0 auto;min-width:auto;background:var(--panel-2);color:var(--text-dim);border:1px solid var(--line)}
+.sup-act:disabled{opacity:.6;cursor:wait}
+.sup-done-tag{flex:1;text-align:center;padding:13px;color:var(--ok);font-weight:800;background:var(--ok-soft,rgba(22,163,74,.12));border-radius:12px}
+.sup-empty{text-align:center;padding:50px 20px;color:var(--text-mut)}
+.sup-empty .big{font-size:46px;margin-bottom:10px}
+/* tablet / PC: multi-column job grid */
+@media(min-width:760px){ .sup-list{grid-template-columns:repeat(2,1fr)} }
+@media(min-width:1180px){ .sup-list{grid-template-columns:repeat(3,1fr)} }

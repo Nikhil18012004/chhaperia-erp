@@ -1,86 +1,119 @@
 /* ============================================================
    CHHAPERIA ERP — FRONTEND · data access (API client)
-   This layer used to hold the seed + localStorage. In the
-   3-tier architecture it is now a thin REST client that talks
-   to the backend (which owns the SQLite database).
+   Thin REST client to the backend (which owns the database).
 
-   The public surface is intentionally unchanged so the rest of
-   the frontend keeps working:
-       DB.loadAsync()      -> GET    /api/state   (Promise<dataset>)
-       DB.save(dataset)    -> PUT    /api/state   (Promise, debounced)
-       DB.reset()          -> POST   /api/reset   (Promise<dataset>)
-       DB.helpers          -> pure client-side date math (unchanged)
+   Now auth-aware: every request carries the logged-in user's
+   token (Bearer). On 401 we drop the token and bounce to login.
+
+   Public surface:
+       DB.loadAsync()      -> GET    /api/state   (role-scoped)
+       DB.save(dataset)    -> PUT    /api/state   (admin/office)
+       DB.reset()          -> POST   /api/reset   (admin)
+       DB.auth.login(u,p)  -> POST   /api/auth/login -> {token,user}
+       DB.auth.me()        -> GET    /api/auth/me
+       DB.auth.logout()    -> clears token (+ POST /logout)
+       DB.auth.token()/user()/set()/clear()
+       DB.users.*          -> admin user-management endpoints
+       DB.helpers          -> pure client-side date math
    ============================================================ */
 (function (global) {
   "use strict";
 
-  // Same-origin by default (backend serves this frontend).
-  // Override with window.CHHAPERIA_API_BASE if hosting separately.
   const BASE = (global.CHHAPERIA_API_BASE || "") + "/api";
+  const TOKEN_KEY = "chh_token";
+  const USER_KEY = "chh_user";
 
-  /* ---- date helpers (pure, client-side — used across modules) ----
-     'today' is the REAL local date (local midnight), not a hardcoded
-     demo date. We format dates in LOCAL time (not UTC via toISOString)
-     so that for users in IST the day rolls over at local midnight,
-     not at 05:30 IST. India has no DST, so adding raw day-milliseconds
-     to walk dates is safe here. */
+  /* ---- token store (localStorage so it survives reloads) ---- */
+  function getToken() { try { return localStorage.getItem(TOKEN_KEY) || null; } catch { return null; } }
+  function getUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || "null"); } catch { return null; } }
+  function setSession(token, user) {
+    try { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
+  }
+  function clearSession() {
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch {}
+  }
+
+  /* ---- date helpers (pure, client-side, LOCAL time) ---- */
   const DAY = 86400000;
   function iso(d){ const x = new Date(d);
     const y = x.getFullYear(), m = String(x.getMonth()+1).padStart(2,"0"), dd = String(x.getDate()).padStart(2,"0");
     return `${y}-${m}-${dd}`; }
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // local midnight today
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const daysAgo = n => iso(today.getTime() - n * DAY);
   const daysAhead = n => iso(today.getTime() + n * DAY);
 
-  async function http(method, path, body) {
+  /* ---- core HTTP with auth + 401 handling ---- */
+  async function http(method, path, body, opts) {
+    opts = opts || {};
+    const headers = { "Content-Type": "application/json" };
+    const tok = getToken();
+    if (tok) headers.Authorization = "Bearer " + tok;
     const res = await fetch(BASE + path, {
-      method,
-      headers: { "Content-Type": "application/json" },
+      method, headers,
       body: body == null ? undefined : JSON.stringify(body),
     });
+    if (res.status === 401 && !opts.noAuthRedirect) {
+      // session gone/expired — drop it and show the login gate
+      clearSession();
+      if (global.App && typeof App.showLogin === "function") App.showLogin("Your session expired. Please sign in again.");
+      throw new Error("Not authenticated");
+    }
     if (!res.ok) {
       let msg = res.status + " " + res.statusText;
       try { const j = await res.json(); if (j && j.error) msg = j.error; } catch {}
-      throw new Error("API " + method + " " + path + " failed: " + msg);
+      throw new Error(msg);
     }
     return res.status === 204 ? null : res.json();
   }
 
-  /** Load the full dataset from the backend (seeds on first run). */
-  async function loadAsync() {
-    return http("GET", "/state");
-  }
+  /* ---- dataset ---- */
+  async function loadAsync() { return http("GET", "/state"); }
 
-  /* Debounced save so rapid UI mutations collapse into one PUT.
-     Returns a promise that resolves when the in-flight save lands. */
-  let saveTimer = null;
-  let pending = null;
+  let saveTimer = null, pending = null;
   function save(data) {
     pending = data;
     if (saveTimer) clearTimeout(saveTimer);
     return new Promise((resolve, reject) => {
       saveTimer = setTimeout(() => {
         const payload = pending; pending = null; saveTimer = null;
-        http("PUT", "/state", payload).then(resolve).catch((e) => {
-          console.warn("save failed", e); reject(e);
-        });
+        http("PUT", "/state", payload).then(resolve).catch((e) => { console.warn("save failed", e); reject(e); });
       }, 250);
     });
   }
+  function saveSettings(settings) { return http("PATCH", "/settings", settings).catch((e) => console.warn("settings save failed", e)); }
+  function reset() { return http("POST", "/reset"); }
 
-  /** Patch only the UI settings (fast path; optional). */
-  function saveSettings(settings) {
-    return http("PATCH", "/settings", settings).catch((e) => console.warn("settings save failed", e));
-  }
+  /* ---- auth ---- */
+  const auth = {
+    token: getToken,
+    user: getUser,
+    set: setSession,
+    clear: clearSession,
+    async login(username, password) {
+      const r = await http("POST", "/auth/login", { username, password }, { noAuthRedirect: true });
+      if (r && r.token) setSession(r.token, r.user);
+      return r;
+    },
+    async me() { return http("GET", "/auth/me"); },
+    async logout() { try { await http("POST", "/auth/logout", {}, { noAuthRedirect: true }); } catch {} clearSession(); },
+  };
 
-  /** Regenerate the deterministic demo dataset on the server. */
-  function reset() {
-    return http("POST", "/reset");
-  }
+  /* ---- admin user management ---- */
+  const users = {
+    list() { return http("GET", "/auth/users"); },
+    create(u) { return http("POST", "/auth/users", u); },
+    update(id, patch) { return http("PATCH", "/auth/users/" + id, patch); },
+    remove(id) { return http("DELETE", "/auth/users/" + id); },
+  };
+
+  /* ---- supervisor production actions ---- */
+  const production = {
+    setStatus(woId, status) { return http("POST", "/production/wo/" + woId + "/status", { status }); },
+  };
 
   global.DB = {
-    loadAsync, save, saveSettings, reset,
+    loadAsync, save, saveSettings, reset, auth, users, production,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);
