@@ -17,7 +17,9 @@ function buildSeed() {
   const rf = (a,b,d=2)=>+(rnd()*(b-a)+a).toFixed(d);
   const pick = arr => arr[Math.floor(rnd()*arr.length)];
   const chance = p => rnd() < p;
-
+  // Import routing service to determine production line for each item
+  const { getLineForItem } = require("../services/routing");
+  
   const DAY = 86400000;
   // Anchor the simulated 120-day history to the REAL current date so
   // "today" in the app always matches the real calendar. Format dates
