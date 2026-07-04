@@ -9,6 +9,7 @@
 "use strict";
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
+const S = require("./stageService");
 
 /* map a work order's free-text line to a production area */
 function lineToArea(line) {
@@ -54,12 +55,37 @@ function stateForSupervisor(area) {
     return so && custById[so.customerId] ? custById[so.customerId].name : null;
   }
 
-  // work orders in this supervisor's area (open/active first)
+  // ensure every WO has a route, then keep those THIS area is involved in
+  function routeOf(wo) {
+    if (wo.route && wo.route.length) return wo.route;
+    return S.seedRouteFromLegacy(wo).route;
+  }
+  function involved(route) {
+    return area === "all" || route.some((r) => S.areaCovers(area, r.area));
+  }
+
+  // materials THIS area needs for the WO's current stage (quantities only, no cost)
+  function stageMaterials(wo, stage) {
+    const plan = S.computeStagePlan(wo.itemId, wo.qty, d);
+    if (!plan || !plan[stage.key]) return [];
+    return plan[stage.key].consume.map(([rid, q]) => ({
+      id: rid, name: (itemById[rid] || {}).name || rid,
+      uom: (itemById[rid] || {}).uom || "", required: q,
+    }));
+  }
+
   const myWOs = (d.workorders || [])
-    .filter((wo) => area === "all" ? true : lineToArea(wo.line) === area)
-    .map((wo) => {
+    .map((wo) => ({ wo, route: routeOf(wo) }))
+    .filter(({ route }) => involved(route))
+    .map(({ wo, route }) => {
       const it = itemById[wo.itemId] || {};
-      const bom = (d.boms || {})[wo.itemId]; // boms is an object keyed by itemId
+      const idx = Math.min(Math.max(wo.stageIdx || 0, 0), route.length - 1);
+      const cur = route[idx];
+      const myStage = S.stageForArea(route, area) || cur;
+      const mine = area === "all"
+        ? (cur.status !== "Completed" || !wo.dispatched)
+        : (S.areaCovers(area, cur.area) && cur.status !== "Completed");
+      const myDone = area !== "all" && route.filter((r) => S.areaCovers(area, r.area)).every((r) => r.status === "Completed");
       return {
         id: wo.id, date: wo.date, due: wo.due, status: wo.status,
         progress: wo.progress, priority: wo.priority, line: wo.line,
@@ -68,12 +94,16 @@ function stateForSupervisor(area) {
         qty: wo.qty,
         customer: showCustomer ? customerForWO(wo) : undefined, // label info for slitting only
         updatedBy: wo.updatedBy || null, updatedAt: wo.updatedAt || null,
-        // recipe: what materials & how much (QUANTITIES ONLY, no cost)
-        materials: bom ? (bom.lines || []).map(([rid, per]) => ({
-          id: rid, name: (itemById[rid] || {}).name, uom: (itemById[rid] || {}).uom,
-          needPerYield: per, yield: bom.yield,
-          required: +(per * wo.qty / (bom.yield || 1)).toFixed(2),
-        })) : [],
+        // routing / stage hand-off
+        route: route.map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq, status: r.status,
+          doneBy: r.doneBy || null, doneAt: r.doneAt || null })),
+        stageIdx: idx,
+        stage: { key: cur.key, name: cur.name, area: cur.area, seq: cur.seq, status: cur.status },
+        myStageKey: myStage.key,
+        spec: S.specForWO(wo),   // order spec (e.g. copper-wire count), or null
+        mine, myDone, dispatched: !!wo.dispatched,
+        // recipe for THIS area's stage (quantities only)
+        materials: stageMaterials(wo, myStage),
       };
     });
 

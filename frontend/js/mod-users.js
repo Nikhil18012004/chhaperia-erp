@@ -11,7 +11,7 @@
 
   const ROLE_LABEL = { admin: "Administrator", office: "Office (Sales/Purchase/Finance)", supervisor: "Production Supervisor" };
   const ROLE_BADGE = { admin: "danger", office: "info", supervisor: "ok" };
-  const AREA_LABEL = { coating: "Coating / Lamination", slitting: "Slitting + Pack/Dispatch", fiberglass: "Fiber-Glass + Slitting" };
+  const AREA_LABEL = { coating: "Coating / Lamination", slitting: "Slitting + Pack/Dispatch", fiberglass: "Fibre-Glass + Slitting/Dispatch" };
 
   M.users = { title: "Users & Access", sub: "Logins & permissions", render(root) {
     root.appendChild(pageHead("Users & Access",

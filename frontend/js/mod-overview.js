@@ -94,7 +94,7 @@
     root.appendChild(row2);
 
     /* row 3: open work orders progress */
-    const wos=ENG.data.workorders.filter(w=>w.status!=="Completed").slice(0,6);
+    const wos=ENG.data.workorders.filter(w=>w.status!=="Completed"&&w.status!=="Dispatched").slice(0,6);
     if(wos.length){
       const woCard=h("div",{class:"card",style:"margin-top:16px"},[
         h("div",{class:"card-head"},[h("div",{},[h("h3",{text:"Work Orders in Progress"}),h("div",{class:"sub",text:"Live production floor"})]),
@@ -103,7 +103,7 @@
           const it=ENG.item(w.itemId);
           return h("div",{class:"card hover",style:"box-shadow:none;background:var(--panel-2)"},[
             h("div",{class:"flex between aic"},[ h("div",{class:"strong",style:"font-weight:700",text:w.id}),
-              h("span",{html:badge(w.status==="In Progress"?"info":"warn", w.status)}) ]),
+              h("span",{html:badge(w.status==="In Progress"||w.status==="In Production"?"info":"warn", w.status)}) ]),
             h("div",{class:"muted",style:"font-size:12px;margin:6px 0",text:trim(it.name,34)}),
             h("div",{class:"flex between",style:"font-size:11px;margin-bottom:6px"},[
               h("span",{class:"muted",text:w.line}), h("span",{class:"muted",text:"Due "+w.due}) ]),

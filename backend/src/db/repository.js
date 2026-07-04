@@ -195,6 +195,57 @@ function isEmpty() {
   return n === 0;
 }
 
+/* ---------- TARGETED WRITES ----------
+   Single-row updates for hot paths (a supervisor advancing a work
+   order). These avoid rewriting the ENTIRE dataset on every tap,
+   which was slow and caused last-writer-wins races between panels. */
+
+/** Read one work order in the frontend document shape (or null). */
+function getWorkOrder(id) {
+  const db = getDb();
+  const w = db.prepare("SELECT * FROM work_orders WHERE id=?").get(id);
+  if (!w) return null;
+  return Object.assign({}, P(w.doc, {}), {
+    id: w.id, date: w.date, itemId: w.item_id, qty: w.qty, status: w.status,
+    due: w.due, line: w.line, progress: w.progress, priority: w.priority,
+  });
+}
+
+/** Insert-or-replace one work order (extra fields kept in doc JSON). */
+function putWorkOrder(w) {
+  const db = getDb();
+  const { id, date, itemId, qty, status, due, line, progress, priority, ...rest } = w;
+  db.prepare(`INSERT INTO work_orders
+      (id,date,item_id,qty,status,due,line,progress,priority,doc)
+      VALUES(@id,@date,@item_id,@qty,@status,@due,@line,@progress,@priority,@doc)
+      ON CONFLICT(id) DO UPDATE SET
+        date=excluded.date, item_id=excluded.item_id, qty=excluded.qty,
+        status=excluded.status, due=excluded.due, line=excluded.line,
+        progress=excluded.progress, priority=excluded.priority, doc=excluded.doc`)
+    .run({ id, date: date || null, item_id: itemId || null, qty: qty || 0,
+      status: status || null, due: due || null, line: line || null,
+      progress: progress || 0, priority: priority || null, doc: J(rest) });
+  return getWorkOrder(id);
+}
+
+/** Append stock movements (used when a stage posts its consumption/output). */
+function addMovements(moves) {
+  if (!moves || !moves.length) return 0;
+  const db = getDb();
+  const mv = db.prepare(`INSERT INTO movements
+      (id,date,item_id,wh,type,qty,rate,ref,note,by_who,supplier_id)
+      VALUES(@id,@date,@item_id,@wh,@type,@qty,@rate,@ref,@note,@by_who,@supplier_id)`);
+  const tx = db.transaction((rows) => {
+    rows.forEach((m) => mv.run({
+      id: m.id, date: m.date, item_id: m.itemId, wh: m.wh || null, type: m.type,
+      qty: m.qty, rate: m.rate || 0, ref: m.ref || null, note: m.note || null,
+      by_who: m.by || null, supplier_id: m.supplierId || null,
+    }));
+  });
+  tx(moves);
+  return moves.length;
+}
+
 function updateSettings(doc) {
   const db = getDb();
   db.prepare("INSERT INTO settings(id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
@@ -202,4 +253,4 @@ function updateSettings(doc) {
   return doc;
 }
 
-module.exports = { getState, saveState, isEmpty, updateSettings };
+module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder, addMovements };

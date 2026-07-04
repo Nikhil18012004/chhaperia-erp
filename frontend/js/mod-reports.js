@@ -130,6 +130,83 @@
       ])
     ]));
 
+    /* CSV import / export */
+    root.appendChild(h("div",{class:"card",style:"margin-top:16px"},[
+      h("div",{class:"card-head"},h("h3",{text:"📑 CSV Import / Export"})),
+      h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",text:"Export any table to a spreadsheet-friendly CSV, edit it, and import it back. Imports show a preview (new / updated) before anything is saved — nothing is deleted. Imported work orders are automatically routed through Coating → Slitting → Packing."}),
+      h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Export a table"}),
+      h("div",{class:"flex gap wrap",style:"margin-bottom:16px"}, Object.keys(CSVIO.ENTITIES).map(k=>
+        h("button",{class:"btn sm",onclick:()=>{ const n=CSVIO.exportEntity(k); toast(CSVIO.ENTITIES[k].label+" exported ("+n+" rows)",{type:"ok",title:"Download started"}); },html:"⬇ "+CSVIO.ENTITIES[k].label}))),
+      h("div",{style:"border-top:1px solid var(--line);padding-top:14px"},[
+        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Import a CSV"}),
+        h("button",{class:"btn primary",onclick:csvImport,html:"⬆ Import CSV…"}),
+      ])
+    ]));
+
+    function csvImport(){
+      const inp=h("input",{type:"file",accept:".csv,text/csv",style:"display:none"});
+      inp.onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+        r.onload=()=>{ try{
+            const parsed=CSVIO.parse(r.result);
+            if(parsed.length<1){ toast("Empty CSV file",{type:"warn"}); return; }
+            const detected=CSVIO.detect(parsed[0].map(x=>x.trim()));
+            if(!detected){ toast("Could not recognise this CSV. Export a table first to get the right columns.",{type:"danger"}); return; }
+            showImportPreview(detected, parsed);
+          }catch(err){ toast("Import failed: "+err.message,{type:"danger"}); } };
+        r.readAsText(f); };
+      document.body.appendChild(inp); inp.click(); inp.remove();
+    }
+
+    function statPill(txt,col){ return h("span",{style:`padding:6px 12px;border-radius:999px;border:1.5px solid ${col};color:${col};font-weight:700;font-size:13px`,text:txt}); }
+    function previewVal(o,col){ const v=o[col.k]; if(Array.isArray(v)) return v.join("|"); if(v&&typeof v==="object") return JSON.stringify(v); return v==null?"":v; }
+
+    function showImportPreview(key, parsed){
+      let curKey=key;
+      const host=h("div");
+      const mo=modal({title:"Import CSV", sub:"Review changes before saving", wide:true, body:host,
+        foot:[ h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+               h("button",{class:"btn primary",id:"csvApplyBtn",text:"Apply Import"}) ]});
+      const sel=h("select",{class:"select",style:"max-width:240px"}, Object.keys(CSVIO.ENTITIES).map(k=>{
+        const o=h("option",{value:k,text:CSVIO.ENTITIES[k].label}); if(k===curKey)o.selected=true; return o; }));
+      sel.onchange=()=>{ curKey=sel.value; render(); };
+
+      function render(){
+        host.innerHTML="";
+        host.appendChild(h("div",{class:"flex gap aic",style:"margin-bottom:12px"},[
+          h("span",{class:"muted",style:"font-size:12px",text:"Import this file as:"}), sel ]));
+        let diff;
+        try{ diff=CSVIO.buildDiff(curKey, parsed); }
+        catch(err){ host.appendChild(h("div",{class:"muted",text:"Cannot map this file to "+CSVIO.ENTITIES[curKey].label+"."})); return; }
+        host.appendChild(h("div",{class:"flex gap wrap",style:"margin-bottom:14px"},[
+          statPill("＋ "+diff.add.length+" new","var(--ok)"),
+          statPill("~ "+diff.update.length+" updated","var(--info)"),
+          statPill("= "+diff.unchanged.length+" unchanged","var(--text-mut)"),
+          diff.errors.length?statPill("⚠ "+diff.errors.length+" skipped","var(--danger)"):null,
+        ].filter(Boolean)));
+
+        const changed=diff.add.map(x=>({kind:"New",o:x.after})).concat(diff.update.map(x=>({kind:"Updated",o:x.after})));
+        const cols0=CSVIO.ENTITIES[curKey].cols.slice(0,6);
+        const rows=changed.slice(0,120).map(c=>{ const o={_k:c.kind}; cols0.forEach(col=>o[col.k]=previewVal(c.o,col)); return o; });
+        const tcols=[{key:"_k",label:"Change",noSort:true,render:r=>badge(r._k==="New"?"ok":"info",r._k)}].concat(
+          cols0.map(col=>({key:col.k,label:col.k,noSort:true,render:r=>esc(String(r[col.k]==null?"":r[col.k])).slice(0,44)})));
+        host.appendChild(table(rows,tcols,{empty:"No new or changed rows in this file"}));
+        if(changed.length>120) host.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-top:8px",text:"Showing first 120 of "+changed.length+" changed rows — all will be applied."}));
+
+        const applyBtn=UI.$("#csvApplyBtn"); const total=diff.add.length+diff.update.length;
+        if(applyBtn){
+          applyBtn.textContent=total?"Apply Import ("+total+")":"Nothing to import";
+          applyBtn.disabled=!total;
+          applyBtn.onclick=async ()=>{ applyBtn.disabled=true; applyBtn.textContent="Saving…";
+            try{ CSVIO.apply(diff); await DB.save(ENG.data);
+              const fresh=await DB.loadAsync(); ENG.init(fresh); App.buildNav(); App.refreshAlerts();
+              mo.close(); toast(CSVIO.ENTITIES[curKey].label+" imported — "+total+" rows saved",{type:"ok",title:"Import complete"});
+              App.go("settings");
+            }catch(err){ toast("Save failed: "+err.message,{type:"danger"}); applyBtn.disabled=false; applyBtn.textContent="Apply Import"; } };
+        }
+      }
+      render();
+    }
+
     function refreshSeg(e){ [...e.target.parentElement.children].forEach(c=>c.classList.remove("on")); e.target.classList.add("on"); }
     function swColor(a){ return "accent"; }
     function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#2f7fe0",teal:"#0fb5ae",violet:"#7c5cff",green:"#16a34a",pink:"#ec4899",amber:"#e0a000"}; return map[a]; }

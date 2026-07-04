@@ -108,7 +108,7 @@
   function wipRawDemand(itemId){
     let q=0;
     D.workorders.forEach(wo=>{
-      if(wo.status==="Completed") return;
+      if(wo.status==="Completed"||wo.status==="Dispatched") return;
       const bom = D.boms[wo.itemId]; if(!bom) return;
       bom.lines.forEach(([rid,per])=>{
         if(rid===itemId){
@@ -334,7 +334,7 @@
     const ser = dailySeries(30);
     const prod30 = ser.prod.reduce((a,b)=>a+b,0);
     const sold30 = ser.sold.reduce((a,b)=>a+b,0);
-    const activeWO = D.workorders.filter(w=>w.status!=="Completed").length;
+    const activeWO = D.workorders.filter(w=>w.status!=="Completed"&&w.status!=="Dispatched").length;
     const crm = crmStats();
     return { invValue:inv.total, fgValue:inv.fg, rmValue:inv.rm, skuCount:inv.items,
       openPO:openPO.length, poValue, openSO:openSO.length, soValue, lowStock:low,

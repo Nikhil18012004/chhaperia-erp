@@ -107,9 +107,14 @@
     remove(id) { return http("DELETE", "/auth/users/" + id); },
   };
 
-  /* ---- supervisor production actions ---- */
+  /* ---- production / supervisor stage actions ---- */
   const production = {
+    // advance a work order's CURRENT stage: start | pause | complete | dispatch
+    advance(woId, action) { return http("POST", "/production/wo/" + woId + "/advance", { action }); },
+    // back-compat: advance by target status
     setStatus(woId, status) { return http("POST", "/production/wo/" + woId + "/status", { status }); },
+    // office/admin: create a new work order (with a fresh multi-stage route)
+    create(wo) { return http("POST", "/production/wo", wo); },
   };
 
   global.DB = {

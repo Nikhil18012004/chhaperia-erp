@@ -26,9 +26,22 @@ router.get("/state", requireAuth, (req, res, next) => {
   try { res.json(view.stateForUser(req.user)); } catch (e) { next(e); }
 });
 
-// Supervisor (or admin) advances a work order's status — area-scoped, money-free.
-router.post("/production/wo/:id/status", requireAuth, requireRole("supervisor", "admin"), (req, res, next) => {
+// Supervisor (or office/admin) advances a work order's CURRENT stage.
+// action: start | pause | complete | dispatch  — area-scoped, money-free.
+router.post("/production/wo/:id/advance", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.json(production.advance(req.user, req.params.id, (req.body || {}).action)); }
+  catch (e) { next(e); }
+});
+
+// Back-compat: advance by target status (maps to a stage action).
+router.post("/production/wo/:id/status", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
   try { res.json(production.updateWorkOrderStatus(req.user, req.params.id, (req.body || {}).status)); }
+  catch (e) { next(e); }
+});
+
+// Office/admin create a new work order (with a fresh multi-stage route).
+router.post("/production/wo", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.status(201).json(production.createWorkOrder(req.user, req.body || {})); }
   catch (e) { next(e); }
 });
 

@@ -11,6 +11,7 @@ const express = require("express");
 const apiRoutes = require("./routes/api");
 const { router: authRoutes } = require("./routes/auth");
 const authService = require("./services/authService");
+const erpService = require("./services/erpService");
 
 const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
@@ -37,6 +38,14 @@ const server = app.listen(PORT, () => {
   // ensure default accounts exist on first run
   let seedInfo = { seeded: false };
   try { seedInfo = authService.seedDefaultUsers(); } catch (e) { console.error("[user seed]", e.message); }
+
+  // ensure the multi-stage routing model is applied to existing data (idempotent)
+  try { const m = erpService.ensureStageModel(); if (m.changed) console.log("  ├─ Stages   : migrated data to multi-stage routing"); }
+  catch (e) { console.error("[stage migration]", e.message); }
+
+  // restore the CRM pipeline if this DB was seeded before the CRM module existed
+  try { const c = erpService.ensureCrm(); if (c.changed) console.log("  ├─ CRM      : restored " + c.count + " sales leads"); }
+  catch (e) { console.error("[crm restore]", e.message); }
 
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);

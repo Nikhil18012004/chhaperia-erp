@@ -37,6 +37,10 @@ rt*.json
 dist/
 build/
 
+# Local DB backups & test copies (safety snapshots, not part of the app)
+_backup/
+_testdata/
+
 # Env
 .env
 .env.local
