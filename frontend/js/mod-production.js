@@ -47,6 +47,7 @@
 
   M.production = { title:"Production", sub:"Work orders & material consumption", render(root){
     let tab="active";
+    let filter={from:"", to:""};
     root.appendChild(pageHead("Production Control","Jobs flow Coating → Slitting → Packing; each stage consumes materials and posts WIP / finished goods automatically",[
       h("button",{class:"btn primary",onclick:()=>woForm(),html:"＋ New Work Order"})
     ]));
@@ -67,18 +68,25 @@
       segBtn("Active / Released","active"), segBtn("Completed","done"), segBtn("All","all")
     ]);
     root.appendChild(seg);
+    root.appendChild(h("div",{class:"toolbar"},[
+      MW.dateRange(filter, draw, {label:"Start Date"}),
+      h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"prodCount"}))
+    ]));
     const host=h("div"); root.appendChild(host);
 
     function segBtn(label,key){ const b=h("button",{class:tab===key?"on":"",text:label,onclick:()=>{tab=key;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
 
     function draw(){
       let data = tab==="active"?active : tab==="done"?done : wos;
+      data=data.filter(w=>MW.inDateRange(w.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
+      const c=UI.$("#prodCount"); if(c) c.textContent=data.length+" work orders";
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         {key:"item",label:"Product",render:r=>{const it=ENG.item(r.itemId);return `<div class="cell-main">${esc(U.trim(it.name,34))}</div><div class="cell-sub">${r.itemId}</div>`;},sort:r=>r.itemId},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
+        {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
         {key:"stage",label:"Stage",render:r=>stageCell(r),sort:r=>(r.stageIdx||0)},
         {key:"line",label:"Line",render:r=>`<span class="chip">${esc(r.line)}</span>`,sort:r=>r.line},
         {key:"due",label:"Due",render:r=>r.due,sort:r=>r.due},

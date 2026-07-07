@@ -8,7 +8,7 @@
 
   /* ============== STOCK ITEMS ============== */
   M.inventory = { title:"Stock Items", sub:"Auto-calculated inventory", render(root){
-    let filter={q:"", cat:"all", state:"all"};
+    let filter={q:"", cat:"all", state:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       h("button",{class:"btn",onclick:exportCSV,html:"⬇ Export CSV"}),
       h("button",{class:"btn primary",onclick:()=>itemForm(),html:"＋ New Item"})
@@ -30,6 +30,7 @@
       MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
       MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
       MW.select([{value:"all",label:"All Status"},{value:"danger",label:"Critical / Out"},{value:"warn",label:"Reorder"},{value:"ok",label:"Healthy"},{value:"info",label:"Overstock"}], v=>{filter.state=v;draw();}),
+      MW.dateRange(filter, draw, {label:"Last Movement"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
     ]);
     root.appendChild(bar);
@@ -37,11 +38,12 @@
 
     function rows(){
       return ENG.data.items.map(it=>{
-        const st=ENG.status(it.id), u=ENG.usage(it.id);
-        return {it, st, u};
+        const st=ENG.status(it.id), u=ENG.usage(it.id), stock=ENG.stock(it.id);
+        return {it, st, u, stock};
       }).filter(r=>{
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
         if(filter.state!=="all" && r.st.state!==filter.state) return false;
+        if(!MW.inDateRange(r.stock.lastMove, filter)) return false;
         if(filter.q){ const s=(r.it.name+" "+r.it.id+" "+(r.it.hsn||"")+" "+r.it.cat).toLowerCase(); if(!s.includes(filter.q)) return false; }
         return true;
       });
@@ -52,6 +54,7 @@
       tableHost.innerHTML="";
       tableHost.appendChild(table(data,[
         {key:"name",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div><div class="cell-sub">${r.it.id} · ${catName(r.it.cat)} · HSN ${r.it.hsn||"—"}</div>`,sort:r=>r.it.name},
+        {key:"lastMove",label:"Last Move",render:r=>r.stock.lastMove||"—",sort:r=>r.stock.lastMove||""},
         {key:"onHand",label:"On Hand",num:true,render:r=>`<span class="strong">${ENG.num(r.st.onHand,2)}</span> <span class="muted">${r.it.uom}</span>`,sort:r=>r.st.onHand},
         {key:"pIn",label:"Pending In",num:true,render:r=>r.st.pIn?`<span class="badge-s s-ok">▲ ${ENG.num(r.st.pIn)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pIn},
         {key:"pOut",label:"Pending Out",num:true,render:r=>r.st.pOut?`<span class="badge-s s-warn">▼ ${ENG.num(r.st.pOut)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pOut},
@@ -66,9 +69,9 @@
 
     function exportCSV(){
       const data=rows();
-      const head=["Code","Name","Category","UoM","OnHand","PendingIn","PendingOut","ATP","ReorderPt","Safety","AvgCost","Value","Status"];
+      const head=["Code","Name","Category","UoM","LastMove","OnHand","PendingIn","PendingOut","ATP","ReorderPt","Safety","AvgCost","Value","Status"];
       const lines=[head.join(",")].concat(data.map(r=>[
-        r.it.id, '"'+r.it.name+'"', r.it.cat, r.it.uom, r.st.onHand.toFixed(2), r.st.pIn, r.st.pOut, r.st.atp,
+        r.it.id, '"'+r.it.name+'"', r.it.cat, r.it.uom, r.stock.lastMove||"", r.st.onHand.toFixed(2), r.st.pIn, r.st.pOut, r.st.atp,
         r.it.reorder, r.it.safety, r.st.avgCost.toFixed(2), r.st.value.toFixed(0), r.st.label
       ].join(",")));
       downloadCSV("chhaperia_inventory.csv", lines.join("\n"));
@@ -156,7 +159,7 @@
 
   /* ============== STOCK LEDGER ============== */
   M.ledger = { title:"Stock Ledger", sub:"Every movement, running balance", render(root, params){
-    let filter={q:params&&params.item?params.item:"", type:"all", wh:"all"};
+    let filter={q:params&&params.item?params.item:"", type:"all", wh:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Ledger","Complete audit trail — receipts, issues, production, sales & adjustments with auto running balance",[
       h("button",{class:"btn",onclick:()=>adjForm(),html:"⚖ Stock Adjustment"}),
     ]));
@@ -165,6 +168,7 @@
       MW.searchInput("Search item, reference…", v=>{filter.q=v.toLowerCase();draw();}),
       MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;draw();}),
       MW.select([{value:"all",label:"All Warehouses"},...ENG.data.warehouses.map(w=>({value:w.id,label:w.name}))], v=>{filter.wh=v;draw();}),
+      MW.dateRange(filter, draw, {label:"Movement Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"ledCount"}))
     ]);
     if(filter.q){ bar.querySelector("input").value=filter.q; }
@@ -175,6 +179,7 @@
       data=data.filter(m=>{
         if(filter.type!=="all"&&m.type!==filter.type) return false;
         if(filter.wh!=="all"&&m.wh!==filter.wh) return false;
+        if(!MW.inDateRange(m.date, filter)) return false;
         if(filter.q){ const it=ENG.item(m.itemId)||{}; const s=(m.itemId+" "+(it.name||"")+" "+(m.ref||"")+" "+(m.note||"")).toLowerCase(); if(!s.includes(filter.q)) return false; }
         return true;
       }).slice(0,400);

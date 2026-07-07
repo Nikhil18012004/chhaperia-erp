@@ -147,8 +147,7 @@
       )));
 
       let show = this.filter === "all" ? (this.data.workorders || []).slice() : (g[this.filter] || []);
-      const prio = { Urgent: 0, High: 1, Normal: 2, Low: 3 };
-      show = show.slice().sort((a, b) => (prio[a.priority] ?? 2) - (prio[b.priority] ?? 2) || String(a.due).localeCompare(String(b.due)));
+      show = this.sortJobs(show);
 
       const list = H("div", { class: "sup-list" });
       if (!show.length) {
@@ -161,6 +160,36 @@
       }
       view.appendChild(list);
       view.scrollTop = 0;
+    },
+
+    assignmentStamp(w) {
+      const route = w.route || [];
+      const idx = Math.min(Math.max(w.stageIdx || 0, 0), Math.max(route.length - 1, 0));
+      const prev = idx > 0 ? route[idx - 1] : null;
+      return (prev && prev.doneAt) || w.date || w.updatedAt || "";
+    },
+
+    workOrderSeq(w) {
+      const m = /(\d+)(?!.*\d)/.exec(String(w.id || ""));
+      return m ? +m[1] : 0;
+    },
+
+    sortJobs(rows) {
+      const prio = { Urgent: 0, High: 1, Normal: 2, Low: 3 };
+      const bucketRank = (w) => w.mine ? 0 : (!w.myDone && !w.dispatched ? 1 : 2);
+      return rows.slice().sort((a, b) => {
+        const br = bucketRank(a) - bucketRank(b);
+        if (this.filter === "all" && br) return br;
+        const ad = String(this.assignmentStamp(a));
+        const bd = String(this.assignmentStamp(b));
+        const rec = bd.localeCompare(ad);
+        if (rec) return rec;
+        const seq = this.workOrderSeq(b) - this.workOrderSeq(a);
+        if (seq) return seq;
+        const p = (prio[a.priority] ?? 2) - (prio[b.priority] ?? 2);
+        if (p) return p;
+        return String(a.due || "").localeCompare(String(b.due || ""));
+      });
     },
 
     /* the route timeline: three connected stage pills */

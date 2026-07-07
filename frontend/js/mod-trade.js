@@ -10,6 +10,7 @@
   /* ============== PROCUREMENT ============== */
   M.purchase = { title:"Procurement", sub:"Purchase orders & receipts", render(root, params){
     let tab="open";
+    let filter={from:"", to:""};
     root.appendChild(pageHead("Procurement","Auto-suggested reorders, open POs and goods receipts that post straight to stock",[
       h("button",{class:"btn",onclick:reorderWizard,html:"🪄 Reorder Suggestions"}),
       h("button",{class:"btn primary",onclick:()=>poForm(params&&params.create),html:"＋ New PO"})
@@ -26,11 +27,17 @@
     ]));
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open / Partial","open"),segBtn("Received","done"),segBtn("All","all")]);
     root.appendChild(seg);
+    root.appendChild(h("div",{class:"toolbar"},[
+      MW.dateRange(filter, draw, {label:"Order Date"}),
+      h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"poCount"}))
+    ]));
     const host=h("div"); root.appendChild(host);
     function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=k;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
     function draw(){
       let data = tab==="open"?open : tab==="done"?pos.filter(p=>p.status==="Received") : pos;
+      data=data.filter(p=>MW.inDateRange(p.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
+      const c=UI.$("#poCount"); if(c) c.textContent=data.length+" purchase orders";
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"PO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
@@ -145,6 +152,7 @@
   /* ============== SALES ============== */
   M.sales = { title:"Sales Orders", sub:"Demand & dispatch", render(root){
     let tab="open";
+    let filter={from:"", to:""};
     root.appendChild(pageHead("Sales Orders","Customer demand, ATP checks and dispatches that deduct finished goods automatically",[
       h("button",{class:"btn primary",onclick:soForm,html:"＋ New Sales Order"})
     ]));
@@ -160,17 +168,24 @@
     ]));
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open","open"),segBtn("Dispatched","done"),segBtn("All","all")]);
     root.appendChild(seg);
+    root.appendChild(h("div",{class:"toolbar"},[
+      MW.dateRange(filter, draw, {label:"Order Date"}),
+      h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"soCount"}))
+    ]));
     const host=h("div"); root.appendChild(host);
     function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=k;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
     function draw(){
       let data = tab==="open"?open : tab==="done"?sos.filter(s=>s.status==="Dispatched") : sos;
+      data=data.filter(s=>MW.inDateRange(s.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
+      const c=UI.$("#soCount"); if(c) c.textContent=data.length+" sales orders";
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"SO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         {key:"cust",label:"Customer",render:r=>esc(U.trim(ENG.custName(r.customerId),26)),sort:r=>ENG.custName(r.customerId)},
         {key:"lines",label:"Items",num:true,render:r=>r.lines.length,sort:r=>r.lines.length},
         {key:"value",label:"Value",num:true,render:r=>ENG.money(r.value),sort:r=>r.value},
+        {key:"date",label:"Order Date",render:r=>r.date||"—",sort:r=>r.date||""},
         {key:"prio",label:"Priority",render:r=>badge(r.priority==="Urgent"?"danger":r.priority==="High"?"warn":"mut",r.priority),sort:r=>({Urgent:0,High:1,Normal:2}[r.priority])},
         {key:"promised",label:"Promised",render:r=>{const late=r.status!=="Dispatched"&&r.promised<DB.helpers.iso(DB.helpers.today());return `<span style="color:${late?'var(--danger)':'inherit'}">${r.promised}${late?" ⏰":""}</span>`;},sort:r=>r.promised},
         {key:"atp",label:"Fulfillable",render:r=>fulfillBadge(r),noSort:true},

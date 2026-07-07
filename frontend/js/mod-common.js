@@ -96,6 +96,39 @@
     return s;
   }
 
+  /* ----- date range filter ----- */
+  function inDateRange(date, range){
+    if(!date) return !(range && (range.from || range.to));
+    const d=String(date).slice(0,10);
+    if(range && range.from && d < range.from) return false;
+    if(range && range.to && d > range.to) return false;
+    return true;
+  }
+  function dateRange(range, onChange, opts={}){
+    const today = DB.helpers.iso(DB.helpers.today());
+    const presets=[
+      {value:"all",label:"All Dates",from:"",to:""},
+      {value:"7",label:"Last 7d",from:DB.helpers.daysAgo(7),to:today},
+      {value:"30",label:"Last 30d",from:DB.helpers.daysAgo(30),to:today},
+      {value:"90",label:"Last 90d",from:DB.helpers.daysAgo(90),to:today},
+      {value:"custom",label:"Custom",from:range.from||"",to:range.to||""},
+    ];
+    const preset=select(presets, v=>{
+      const p=presets.find(x=>x.value===v)||presets[0];
+      if(v!=="custom"){ range.from=p.from; range.to=p.to; from.value=range.from; to.value=range.to; onChange(range); }
+    }, opts.defaultPreset||"all");
+    const from=h("input",{class:"input date-input",type:"date",value:range.from||"",onchange:e=>{range.from=e.target.value; preset.value="custom"; onChange(range);}});
+    const to=h("input",{class:"input date-input",type:"date",value:range.to||"",onchange:e=>{range.to=e.target.value; preset.value="custom"; onChange(range);}});
+    return h("div",{class:"date-range"},[
+      h("span",{class:"date-label",text:opts.label||"Date"}),
+      preset,
+      from,
+      h("span",{class:"range-sep",text:"to"}),
+      to,
+      h("button",{class:"btn sm ghost",onclick:()=>{range.from=""; range.to=""; from.value=""; to.value=""; preset.value="all"; onChange(range);},text:"Clear"})
+    ]);
+  }
+
   /* ----- detail row helper ----- */
   function dl(pairs){
     return h("div",{class:"grid",style:"grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px"},
@@ -106,5 +139,5 @@
   }
 
   global.M = M;
-  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dl };
+  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl };
 })(window);
