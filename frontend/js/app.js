@@ -4,6 +4,7 @@
    ============================================================ */
 (function (global) {
   "use strict";
+  console.log("%c[Chhaperia ERP] build v12 loaded — Inventory: 🚚 Receive via PO + 📦 Add Stock + instant auto-refresh","color:#F06820;font-weight:700");
   const {$, $$, h, esc, toast} = UI;
 
   const App = {
@@ -176,12 +177,19 @@
       ENG.rebuild();
       this.buildNav();
       this.refreshAlerts();
+      this.refreshView();
+    },
+
+    /* re-render the CURRENT module so newly added/removed data shows
+       instantly — no manual page refresh needed after a save. */
+    refreshView(){
+      if(this.current && M[this.current]) this.go(this.current, this.params);
     },
 
     /* ---- theme/accent ---- */
-    setTheme(t){ this.theme=t; document.documentElement.setAttribute("data-theme",t); this.persistAndRefresh(); this.go(this.current,this.params); },
-    setAccent(a){ this.accent=a; this.autoAccent=false; document.documentElement.setAttribute("data-accent",a); this.renderAccentMenu(); this.persistAndRefresh(); this.go(this.current,this.params); },
-    setAutoAccent(v){ this.autoAccent=v; this.persistAndRefresh(); this.go(this.current,this.params); },
+    setTheme(t){ this.theme=t; document.documentElement.setAttribute("data-theme",t); this.persistAndRefresh(); },
+    setAccent(a){ this.accent=a; this.autoAccent=false; document.documentElement.setAttribute("data-accent",a); this.renderAccentMenu(); this.persistAndRefresh(); },
+    setAutoAccent(v){ this.autoAccent=v; this.persistAndRefresh(); },
 
     renderAccentMenu(){
       const accents=[["orange","#F06820"],["red","#E84820"],["blue","#2f7fe0"],["teal","#0fb5ae"],["violet","#7c5cff"],["green","#16a34a"],["pink","#ec4899"],["amber","#e0a000"]];

@@ -24,9 +24,21 @@ app.use("/api/auth", authRoutes);
 // API (protected, role-scoped)
 app.use("/api", apiRoutes);
 
+// Never cache the HTML shell, so bumped script ?v= URLs always take effect
+// (browsers were reusing a stale index.html that still pointed at old JS).
+app.use((req, res, next) => {
+  if (req.path === "/" || req.path.endsWith(".html")) {
+    res.set("Cache-Control", "no-store, must-revalidate");
+  }
+  next();
+});
+
 // Static frontend
 app.use(express.static(FRONTEND_DIR));
-app.get("/", (req, res) => res.sendFile(path.join(FRONTEND_DIR, "index.html")));
+app.get("/", (req, res) => {
+  res.set("Cache-Control", "no-store, must-revalidate");
+  res.sendFile(path.join(FRONTEND_DIR, "index.html"));
+});
 
 // Central error handler
 app.use((err, req, res, next) => {

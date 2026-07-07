@@ -37,6 +37,10 @@
   let USAGE = {};       // itemId -> {used30, used90, recv90, prod90, sold90, avgDailyUse}
 
   function rebuild(){
+    // keep the item index in sync with the dataset so newly added /
+    // removed items are resolvable immediately (no full reload needed)
+    for(const k in idx) delete idx[k];
+    D.items.forEach(it => idx[it.id] = it);
     STOCK = {}; LEDGER = {}; USAGE = {};
     const moves = D.movements.slice().sort((a,b)=> a.date<b.date?-1:a.date>b.date?1:(a.id<b.id?-1:1));
 

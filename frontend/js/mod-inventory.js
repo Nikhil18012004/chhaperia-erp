@@ -11,6 +11,8 @@
     let filter={q:"", cat:"all", state:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       h("button",{class:"btn",onclick:exportCSV,html:"⬇ Export CSV"}),
+      h("button",{class:"btn",onclick:()=>receiveStockForm(),html:"🚚 Receive via PO"}),
+      h("button",{class:"btn",onclick:()=>addStockForm(),html:"📦 Add Stock"}),
       h("button",{class:"btn primary",onclick:()=>itemForm(),html:"＋ New Item"})
     ]));
 
@@ -95,6 +97,9 @@
       ]),
       MW.dl([
         ["Category", catName(it.cat)],["UoM", it.uom],["HSN", it.hsn||"—"],
+        ...(it.thickness?[["Thickness", it.thickness+" mm"]]:[]),
+        ...(it.width?[["Width", it.width+" mm"]]:[]),
+        ...(it.length?[["Length", it.length+" m"]]:[]),
         ["Reorder Point", ENG.num(it.reorder)+" "+it.uom],["Safety Stock", ENG.num(it.safety)+" "+it.uom],
         ["Lead Time", it.lead+" days"],["ABC Class", it.abc],["Days Cover", st.cover>900?"∞":st.cover+" days"],
         ["Suggested Order", st.suggest? ENG.num(st.suggest)+" "+it.uom : "—"],
@@ -154,6 +159,134 @@
       }
       App.persistAndRefresh();
       mo.close(); toast(edit?"Item updated":"Item created",{type:"ok"});
+    }
+  }
+
+  /* ----- units of measure offered for manual stock intake ----- */
+  const UNITS=[
+    {v:"M",l:"Meter (m)"}, {v:"KG",l:"Kilogram (kg)"}, {v:"PCS",l:"Pieces (pcs)"},
+    {v:"SQM",l:"Square Meter (sqm)"}, {v:"ROLL",l:"Rolls"}
+  ];
+
+  /* generate a fresh, unique item code within a category (e.g. RM-001) */
+  function genItemId(cat){
+    const base=(cat||"IT").toUpperCase();
+    let n=ENG.data.items.filter(i=>String(i.id).startsWith(base+"-")).length+1, id;
+    do{ id=base+"-"+String(1000+n).slice(1); n++; } while(ENG.item(id));
+    return id;
+  }
+
+  /* ----- FEATURE 1: add stock to inventory against a PO number ----- */
+  function receiveStockForm(){
+    const openPOs=ENG.data.purchaseorders.filter(p=>p.status!=="Received");
+    if(!openPOs.length){
+      modal({title:"Receive via PO", sub:"Goods receipt",
+        body:h("div",{class:"empty"},[h("div",{class:"big",text:"📦"}),
+          h("div",{style:"font-weight:700",text:"No open purchase orders"}),
+          h("div",{class:"muted",style:"margin-top:6px",text:"Raise a purchase order in Procurement first, then receive it here."})]),
+        foot:[h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;App.go("purchase");},text:"Go to Procurement"})]});
+      return;
+    }
+    const body=h("div",{},[
+      h("div",{class:"form-grid"},[
+        field("Purchase Order", selectHTML("r_po", openPOs.map(p=>({v:p.id, l:p.id+" — "+trim(ENG.sup(p.supplierId),24)})), openPOs[0].id)),
+        field("Receive into Warehouse", selectHTML("r_wh", ENG.data.warehouses.map(w=>({v:w.id,l:w.name})), "WH-PNY")),
+      ]),
+      h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines to receive (edit qty as needed)"}),
+      h("div",{id:"r_lines"})
+    ]);
+    const mo=modal({title:"Receive Stock against PO", sub:"Posts a goods receipt (GRN) straight to stock", wide:true, body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn primary",onclick:save,text:"Receive Goods"})]});
+    const poSel=UI.$("#r_po");
+    function renderLines(){
+      const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
+      const host=UI.$("#r_lines"); host.innerHTML="";
+      po.lines.forEach((l,idx)=>{
+        const pend=+(l.qty-(l.recd||0)).toFixed(3), it=ENG.item(l.itemId)||{};
+        host.appendChild(h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"+(pend<=0?";opacity:.5":"")},[
+          h("div",{style:"flex:2;min-width:0"},[
+            h("div",{class:"cell-main",text:trim(it.name||l.itemId,30)}),
+            h("div",{class:"cell-sub",text:l.itemId+" · ordered "+ENG.num(l.qty)+", pending "+ENG.num(pend)}),
+          ]),
+          h("input",{class:"input",id:"r_qty_"+idx,type:"number",step:"0.001",style:"flex:1",value:pend>0?pend:0}),
+          h("div",{class:"muted",style:"flex:1;font-size:12px",text:"@ ₹"+ENG.num(l.rate,2)+" / "+(it.uom||"")})
+        ]));
+      });
+    }
+    poSel.onchange=renderLines; renderLines();
+    function save(){
+      const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
+      const wh=UI.$("#r_wh").value, date=DB.helpers.iso(DB.helpers.today());
+      let posted=0;
+      po.lines.forEach((l,idx)=>{
+        const el=UI.$("#r_qty_"+idx); let rq=+((el&&el.value)||0);
+        const pend=l.qty-(l.recd||0);
+        if(rq>pend) rq=pend;
+        if(rq>0){
+          ENG.data.movements.push({id:"MV-"+Date.now()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
+            qty:rq, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by:"user"});
+          l.recd=+((l.recd||0)+rq).toFixed(3); posted++;
+        }
+      });
+      if(!posted){ toast("Enter a quantity to receive on at least one line",{type:"warn"}); return; }
+      po.status = po.lines.every(l=>(l.recd||0) >= l.qty-0.0001) ? "Received" : "Partially Received";
+      App.persistAndRefresh(); mo.close();
+      toast(`${po.id} — goods received, stock updated`,{type:"ok",title:"GRN posted"});
+    }
+  }
+
+  /* ----- FEATURE 2: add stock manually (existing item OR create new) ----- */
+  function addStockForm(){
+    const items=ENG.data.items, whs=ENG.data.warehouses;
+    const body=h("div",{},[
+      h("p",{class:"dim",style:"margin-bottom:12px",text:"Add stock to an existing item, or create a new one on the fly. This posts a receipt to the ledger."}),
+      h("div",{class:"form-grid"},[
+        field("Item", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:trim(i.id+" — "+i.name,40)}))),"__new")),
+      ]),
+      h("div",{id:"s_newblock",class:"form-grid",style:"margin-top:4px"},[
+        field("Item Name",`<input class="input" id="s_name" placeholder="e.g. Copper Foil 0.05mm">`),
+        field("Category",selectHTML("s_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),"RM")),
+        field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`),
+        field("Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="e.g. 25">`),
+        field("Length (m)",`<input class="input" id="s_len" type="number" step="0.1" placeholder="e.g. 1000">`),
+        field("Unit (per)",selectHTML("s_uom",UNITS,"KG")),
+      ]),
+      h("div",{class:"form-grid",style:"margin-top:4px"},[
+        field("Quantity",`<input class="input" id="s_qty" type="number" step="0.001" placeholder="0">`),
+        field("Rate (₹ per unit)",`<input class="input" id="s_rate" type="number" step="0.01" placeholder="0">`),
+        field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),whs[0]&&whs[0].id)),
+      ])
+    ]);
+    const mo=modal({title:"Add Stock", sub:"Manual stock receipt", wide:true, body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn primary",onclick:save,text:"Add to Inventory"})]});
+    const sel=UI.$("#s_item"), newblock=UI.$("#s_newblock");
+    function syncMode(){ newblock.style.display = sel.value==="__new" ? "" : "none"; }
+    sel.onchange=syncMode; syncMode();
+    function save(){
+      const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
+      const qty=+g("s_qty"), rate=+g("s_rate")||0, wh=g("s_wh");
+      if(!qty || isNaN(qty) || qty<=0){ toast("Enter a quantity greater than zero",{type:"warn"}); return; }
+      let itemId=sel.value, it;
+      if(itemId==="__new"){
+        const name=g("s_name").trim();
+        if(!name){ toast("Item name is required for a new item",{type:"warn"}); return; }
+        const cat=g("s_cat");
+        itemId=genItemId(cat);
+        it={ id:itemId, name, cat, uom:g("s_uom"),
+          thickness:+g("s_thk")||null, width:+g("s_wid")||null, length:+g("s_len")||null,
+          reorder:0, safety:0, lead:7, cost:rate, price:0, hsn:"", abc:"C", moq:0, active:true,
+          barcode:"890"+Math.floor(Math.random()*1e7) };
+        ENG.data.items.push(it);
+      } else {
+        it=ENG.item(itemId);
+      }
+      ENG.data.movements.push({ id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()),
+        itemId, wh, type:"GRN", qty, rate, ref:"MANUAL-"+Math.floor(Math.random()*9000+1000),
+        note:"Manual stock addition", by:"user" });
+      App.persistAndRefresh(); mo.close();
+      toast(`${ENG.num(qty,2)} ${it.uom} added to ${it.name}`,{type:"ok",title:"Stock added"});
     }
   }
 
