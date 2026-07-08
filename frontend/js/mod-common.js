@@ -87,7 +87,10 @@
 
   /* ----- toolbar with search ----- */
   function searchInput(ph, onInput){
-    const inp=h("input",{class:"input search",placeholder:ph||"Search…",oninput:e=>onInput(e.target.value)});
+    let t; // debounce so filtering doesn't recompute on every keystroke
+    const inp=h("input",{class:"input search",placeholder:ph||"Search…",oninput:e=>{
+      const v=e.target.value; clearTimeout(t); t=setTimeout(()=>onInput(v),150);
+    }});
     return inp;
   }
   function select(options, onChange, val){

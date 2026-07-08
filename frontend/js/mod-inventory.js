@@ -11,9 +11,7 @@
     let filter={q:"", cat:"all", state:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       h("button",{class:"btn",onclick:exportCSV,html:"⬇ Export CSV"}),
-      h("button",{class:"btn",onclick:()=>receiveStockForm(),html:"🚚 Receive via PO"}),
-      h("button",{class:"btn",onclick:()=>addStockForm(),html:"📦 Add Stock"}),
-      h("button",{class:"btn primary",onclick:()=>itemForm(),html:"＋ New Item"})
+      newItemMenu()
     ]));
 
     /* summary strip */
@@ -31,20 +29,26 @@
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
       MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
-      MW.select([{value:"all",label:"All Status"},{value:"danger",label:"Critical / Out"},{value:"warn",label:"Reorder"},{value:"ok",label:"Healthy"},{value:"info",label:"Overstock"}], v=>{filter.state=v;draw();}),
+      MW.select([{value:"all",label:"All Status"},{value:"instock",label:"In Stock"},{value:"low",label:"Low Stock"},{value:"out",label:"Out of Stock"}], v=>{filter.state=v;draw();}),
       MW.dateRange(filter, draw, {label:"Last Movement"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
     ]);
     root.appendChild(bar);
     root.appendChild(tableHost);
 
+    /* three-way stock bucket for the status filter */
+    function stockClass(st){
+      if(st.onHand<=0) return "out";
+      if(st.onHand<=(st.reorder||0)) return "low";
+      return "instock";
+    }
     function rows(){
       return ENG.data.items.map(it=>{
         const st=ENG.status(it.id), u=ENG.usage(it.id), stock=ENG.stock(it.id);
         return {it, st, u, stock};
       }).filter(r=>{
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
-        if(filter.state!=="all" && r.st.state!==filter.state) return false;
+        if(filter.state!=="all" && stockClass(r.st)!==filter.state) return false;
         if(!MW.inDateRange(r.stock.lastMove, filter)) return false;
         if(filter.q){ const s=(r.it.name+" "+r.it.id+" "+(r.it.hsn||"")+" "+r.it.cat).toLowerCase(); if(!s.includes(filter.q)) return false; }
         return true;
@@ -80,6 +84,24 @@
       toast("Inventory exported to CSV","",{type:"ok",title:"Export complete"});
     }
   }};
+
+  /* ----- "New Item" split-button: create / receive via PO / add stock ----- */
+  function newItemMenu(){
+    const menu=h("div",{class:"ni-menu",hidden:true},[
+      h("button",{class:"ni-opt",onclick:()=>{close();addStockForm();},html:"📦 Add Stock"}),
+      h("button",{class:"ni-opt",onclick:()=>{close();receiveStockForm();},html:"🚚 Receive via PO"}),
+    ]);
+    const trigger=h("button",{class:"btn primary",html:"＋ New Item <span class=\"caret\">▾</span>"});
+    const wrap=h("div",{class:"ni-drop"},[trigger,menu]);
+    function onDoc(e){ if(!wrap.contains(e.target)) close(); }
+    function close(){ menu.hidden=true; trigger.classList.remove("open"); document.removeEventListener("click",onDoc); }
+    trigger.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(menu.hidden){ menu.hidden=false; trigger.classList.add("open"); setTimeout(()=>document.addEventListener("click",onDoc),0); }
+      else close();
+    });
+    return wrap;
+  }
 
   /* ----- item detail drawer/modal ----- */
   function itemDetail(id){
@@ -240,30 +262,68 @@
   function addStockForm(){
     const items=ENG.data.items, whs=ENG.data.warehouses;
     const body=h("div",{},[
-      h("p",{class:"dim",style:"margin-bottom:12px",text:"Add stock to an existing item, or create a new one on the fly. This posts a receipt to the ledger."}),
+      h("p",{class:"dim",style:"margin-bottom:12px",text:"Pick an item (or create a new one), review or edit its parameters, then enter the quantity to receive. The parameters are saved to the item; the quantity posts to the ledger."}),
       h("div",{class:"form-grid"},[
         field("Item", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:trim(i.id+" — "+i.name,40)}))),"__new")),
       ]),
-      h("div",{id:"s_newblock",class:"form-grid",style:"margin-top:4px"},[
-        field("Item Name",`<input class="input" id="s_name" placeholder="e.g. Copper Foil 0.05mm">`),
-        field("Category",selectHTML("s_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),"RM")),
-        field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`),
-        field("Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="e.g. 25">`),
-        field("Length (m)",`<input class="input" id="s_len" type="number" step="0.1" placeholder="e.g. 1000">`),
-        field("Unit (per)",selectHTML("s_uom",UNITS,"KG")),
+      h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Item parameters"}),
+      h("div",{id:"s_newblock"},[
+        h("div",{class:"form-grid"},[
+          field("Item Code",`<input class="input" id="s_code" placeholder="Auto if left blank (e.g. RM-1001)">`),
+          field("Item Name",`<input class="input" id="s_name" placeholder="e.g. Copper Foil 0.05mm">`),
+          field("Category",selectHTML("s_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),"RM")),
+          field("Unit (per)",selectHTML("s_uom",UNITS,"KG")),
+          field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`),
+          field("Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="e.g. 25">`),
+          field("Length (m)",`<input class="input" id="s_len" type="number" step="0.1" placeholder="e.g. 1000">`),
+          field("Reorder Point",`<input class="input" id="s_reorder" type="number" value="0">`),
+          field("Safety Stock",`<input class="input" id="s_safety" type="number" value="0">`),
+          field("Lead Time (days)",`<input class="input" id="s_lead" type="number" value="7">`),
+          field("Std Cost (₹)",`<input class="input" id="s_cost" type="number" disabled placeholder="= Rate (set automatically)">`),
+          field("Selling Price (₹)",`<input class="input" id="s_price" type="number" value="0">`),
+          field("HSN Code",`<input class="input" id="s_hsn" placeholder="e.g. 74102100">`),
+        ])
       ]),
+      h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Stock to receive"}),
       h("div",{class:"form-grid",style:"margin-top:4px"},[
         field("Quantity",`<input class="input" id="s_qty" type="number" step="0.001" placeholder="0">`),
         field("Rate (₹ per unit)",`<input class="input" id="s_rate" type="number" step="0.01" placeholder="0">`),
         field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),whs[0]&&whs[0].id)),
       ])
     ]);
-    const mo=modal({title:"Add Stock", sub:"Manual stock receipt", wide:true, body,
+    const mo=modal({title:"Add Stock", sub:"Add / update an item and post a receipt", wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:"Add to Inventory"})]});
-    const sel=UI.$("#s_item"), newblock=UI.$("#s_newblock");
-    function syncMode(){ newblock.style.display = sel.value==="__new" ? "" : "none"; }
-    sel.onchange=syncMode; syncMode();
+    const sel=UI.$("#s_item");
+    const setVal=(id,v)=>{const el=UI.$("#"+id); if(el) el.value=v;};
+    const setSel=(id,v)=>{const el=UI.$("#"+id); if(!el) return;
+      if(v!=null && ![...el.options].some(o=>o.value===String(v))) el.appendChild(new Option(String(v),String(v)));
+      el.value=v;};
+    /* show the full parameter set for BOTH new and existing items;
+       pre-fill from the selected item so any material can be edited here */
+    function fillParams(){
+      const code=UI.$("#s_code"), catEl=UI.$("#s_cat");
+      if(sel.value==="__new"){
+        code.disabled=false; code.placeholder="Auto if left blank (e.g. RM-1001)";
+        if(catEl) catEl.disabled=false;   // category editable only while creating
+        setVal("s_code",""); setVal("s_name",""); setSel("s_cat","RM"); setSel("s_uom","KG");
+        setVal("s_thk",""); setVal("s_wid",""); setVal("s_len","");
+        setVal("s_reorder","0"); setVal("s_safety","0"); setVal("s_lead","7");
+        setVal("s_cost",""); setVal("s_price","0"); setVal("s_hsn","");
+      } else {
+        const it=ENG.item(sel.value)||{};
+        code.disabled=true; setVal("s_code",it.id||"");
+        if(catEl) catEl.disabled=true;    // locked once the item exists
+        setVal("s_name",it.name||""); setSel("s_cat",it.cat||"RM"); setSel("s_uom",it.uom||"KG");
+        setVal("s_thk",it.thickness!=null?it.thickness:""); setVal("s_wid",it.width!=null?it.width:""); setVal("s_len",it.length!=null?it.length:"");
+        setVal("s_reorder",it.reorder!=null?it.reorder:"0"); setVal("s_safety",it.safety!=null?it.safety:"0"); setVal("s_lead",it.lead!=null?it.lead:"7");
+        setVal("s_cost",it.cost!=null?it.cost:""); setVal("s_price",it.price!=null?it.price:"0"); setVal("s_hsn",it.hsn||"");
+      }
+    }
+    sel.onchange=fillParams; fillParams();
+    /* Std Cost always tracks the entered Rate (rate drives cost) */
+    const rateEl=UI.$("#s_rate"), costEl=UI.$("#s_cost");
+    if(rateEl&&costEl) rateEl.addEventListener("input",()=>{ costEl.value=rateEl.value; });
     function save(){
       const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
       const qty=+g("s_qty"), rate=+g("s_rate")||0, wh=g("s_wh");
@@ -273,14 +333,23 @@
         const name=g("s_name").trim();
         if(!name){ toast("Item name is required for a new item",{type:"warn"}); return; }
         const cat=g("s_cat");
-        itemId=genItemId(cat);
+        let code=g("s_code").trim().toUpperCase();
+        if(code && ENG.item(code)){ toast("Item code already exists — choose another",{type:"danger"}); return; }
+        itemId=code||genItemId(cat);
         it={ id:itemId, name, cat, uom:g("s_uom"),
           thickness:+g("s_thk")||null, width:+g("s_wid")||null, length:+g("s_len")||null,
-          reorder:0, safety:0, lead:7, cost:rate, price:0, hsn:"", abc:"C", moq:0, active:true,
+          reorder:+g("s_reorder")||0, safety:+g("s_safety")||0, lead:+g("s_lead")||7,
+          cost:rate||+g("s_cost")||0, price:+g("s_price")||0, hsn:g("s_hsn").trim(), abc:"C", moq:0, active:true,
           barcode:"890"+Math.floor(Math.random()*1e7) };
         ENG.data.items.push(it);
       } else {
         it=ENG.item(itemId);
+        /* apply edited parameters back to the existing item (category stays locked) */
+        it.name=g("s_name").trim()||it.name;
+        it.uom=g("s_uom")||it.uom;
+        it.thickness=+g("s_thk")||null; it.width=+g("s_wid")||null; it.length=+g("s_len")||null;
+        it.reorder=+g("s_reorder")||0; it.safety=+g("s_safety")||0; it.lead=+g("s_lead")||7;
+        it.cost=rate||it.cost||0; it.price=+g("s_price")||0; it.hsn=g("s_hsn").trim();
       }
       ENG.data.movements.push({ id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()),
         itemId, wh, type:"GRN", qty, rate, ref:"MANUAL-"+Math.floor(Math.random()*9000+1000),

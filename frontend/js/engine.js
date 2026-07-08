@@ -134,11 +134,10 @@
     const pOut = (it.cat==="FG") ? pendingOut(itemId) : wipRawDemand(itemId);
     const atp = onHand + pIn - pOut;        // available to promise / net
     const reorder = it.reorder||0, safety = it.safety||0;
+    // three unified buckets: In Stock / Low Stock / Out of Stock
     let state = "ok", label="In Stock";
     if(onHand<=0){ state="danger"; label="Out of Stock"; }
-    else if(onHand<=safety){ state="danger"; label="Critical"; }
-    else if(onHand<=reorder){ state="warn"; label="Reorder"; }
-    else if(reorder && onHand>reorder*2.2){ state="info"; label="Overstock"; }
+    else if(onHand<=reorder){ state="warn"; label="Low Stock"; }
     // days of cover
     const dailyDemand = it.cat==="FG" ? (u.sold90/90) : Math.max(u.used90/90, wipRawDemand(itemId)/Math.max(it.lead,1));
     const cover = dailyDemand>0 ? onHand/dailyDemand : 999;

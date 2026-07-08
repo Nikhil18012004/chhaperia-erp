@@ -169,6 +169,8 @@
       try{ mod.render(view, params); }
       catch(err){ console.error("Module error:",err); view.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"⚠"}),h("div",{text:"Module failed to render: "+err.message})])); }
       view.scrollTop=0;
+      // on tablet, picking a menu item closes the drawer
+      if(this.isDrawerWidth&&this.isDrawerWidth()) this.closeNavDrawer();
     },
 
     persistAndRefresh(){
@@ -248,9 +250,22 @@
       ])); });
     },
 
+    /* on tablet widths the collapsed class opens a labelled drawer over the
+       content; show a dim backdrop behind it and close on scrim/nav tap */
+    isDrawerWidth(){ return window.matchMedia("(max-width:1100px) and (min-width:821px)").matches; },
+    syncNavScrim(){
+      if(!this.navScrim) return;
+      const open=this.isDrawerWidth() && $("#app").classList.contains("collapsed");
+      this.navScrim.classList.toggle("show", open);
+    },
+    closeNavDrawer(){ $("#app").classList.remove("collapsed"); this.syncNavScrim(); },
+
     bindChrome(){
       $("#themeToggle").onclick=()=>this.setTheme(this.theme==="dark"?"light":"dark");
-      $("#menuToggle").onclick=()=>$("#app").classList.toggle("collapsed");
+      this.navScrim=h("div",{class:"nav-scrim",onclick:()=>this.closeNavDrawer()});
+      document.body.appendChild(this.navScrim);
+      $("#menuToggle").onclick=()=>{ $("#app").classList.toggle("collapsed"); this.syncNavScrim(); };
+      window.addEventListener("resize",()=>this.syncNavScrim());
       $("#bellBtn").onclick=()=>this.openAlerts();
       $("#closeDrawer").onclick=()=>this.closeDrawer();
       $("#scrim").onclick=()=>this.closeDrawer();
