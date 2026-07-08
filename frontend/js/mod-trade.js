@@ -77,8 +77,23 @@
           {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate),noSort:true},
         ],{empty:"No lines"})
       ]);
-      modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body,
-        foot:[po.status!=="Received"?h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}):null]});
+      const anyRecd=po.lines.some(l=>(l.recd||0)>0);
+      const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"})];
+      if(!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
+      if(po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
+      modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
+    }
+
+    async function deletePO(po){
+      const grn=ENG.data.movements.filter(m=>m.ref===po.id);
+      const msg=grn.length
+        ? `Delete ${po.id}? This also removes ${grn.length} stock receipt(s) posted against it, reversing that stock.`
+        : `Delete ${po.id}? This purchase order will be permanently removed.`;
+      if(!await confirm(msg,{title:"Delete Purchase Order",danger:true})) return;
+      ENG.data.purchaseorders=ENG.data.purchaseorders.filter(p=>p.id!==po.id);
+      if(grn.length) ENG.data.movements=ENG.data.movements.filter(m=>m.ref!==po.id);
+      UI.$("#modalHost").hidden=true;
+      App.persistAndRefresh(); toast(`${po.id} deleted`,{type:"ok",title:"Removed"});
     }
 
     function reorderWizard(){
@@ -110,41 +125,53 @@
       App.persistAndRefresh(); tab="open"; draw(); toast(`${n} purchase order(s) created from suggestions`,{type:"ok",title:"POs raised"});
     }
 
-    function poForm(presetItem){
+    function poForm(arg){
+      const editPo=(arg && typeof arg==="object" && arg.id)?arg:null;
+      const presetItem=(typeof arg==="string")?arg:null;
       const sups=ENG.data.suppliers;
       let lines=[];
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Supplier",U.selectHTML("po_sup",sups.map(s=>({v:s.id,l:s.name})),sups[0].id)),
-          U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${DB.helpers.daysAhead(14)}">`),
+          U.field("Supplier",U.selectHTML("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:sups[0].id)),
+          U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
         ]),
         h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines"}),
         h("div",{id:"po_lines"}),
         h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add line"})
       ]);
-      const mo=modal({title:"New Purchase Order", sub:"Raise a PO to a supplier", wide:true, body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),h("button",{class:"btn primary",onclick:save,text:"Create PO"})]});
-      function addLine(itemId){
+      const mo=modal({title:editPo?("Edit "+editPo.id):"New Purchase Order", sub:editPo?"Update this purchase order":"Raise a PO to a supplier", wide:true, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),h("button",{class:"btn primary",onclick:save,text:editPo?"Save Changes":"Create PO"})]});
+      function addLine(seed){
         const rms=ENG.data.items.filter(i=>i.cat!=="FG");
-        const idx=lines.length; lines.push({itemId:itemId||rms[0].id, qty:0, rate:0});
+        const idx=lines.length; lines.push({});
+        const itemId=seed?(seed.itemId||seed):(rms[0]&&rms[0].id);
+        const qtyVal=(seed&&seed.qty!=null)?seed.qty:(typeof seed==="string"?ENG.status(seed).suggest:"");
+        const rateVal=(seed&&seed.rate!=null)?seed.rate:(typeof seed==="string"?ENG.item(seed).cost:"");
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.selectHTML("pl_item_"+idx,rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})),itemId||rms[0].id),style:"flex:2"}),
-          h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"Qty",style:"flex:1",value:itemId?ENG.status(itemId).suggest:""}),
-          h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:itemId?ENG.item(itemId).cost:""}),
+          h("div",{html:U.selectHTML("pl_item_"+idx,rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})),itemId),style:"flex:2"}),
+          h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"Qty",style:"flex:1",value:qtyVal}),
+          h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:rateVal}),
+          h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})
         ]);
         UI.$("#po_lines").appendChild(row);
-        if(itemId){ const sel=UI.$("#pl_item_"+idx); }
       }
-      addLine(presetItem);
+      if(editPo) editPo.lines.forEach(l=>addLine(l)); else addLine(presetItem);
       function save(){
         const sup=UI.$("#po_sup").value; const out=[];
-        lines.forEach((_,i)=>{ const id=UI.$("#pl_item_"+i).value, qty=+UI.$("#pl_qty_"+i).value, rate=+UI.$("#pl_rate_"+i).value;
+        lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#pl_item_"+i); if(!iEl) return;
+          const id=iEl.value, qty=+UI.$("#pl_qty_"+i).value, rate=+UI.$("#pl_rate_"+i).value;
           if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).cost, recd:0}); });
         if(!out.length){ toast("Add at least one line with qty",{type:"warn"}); return; }
-        const poId="PO-"+String(1000+ENG.data.purchaseorders.length+1).slice(1);
-        ENG.data.purchaseorders.push({id:poId, date:DB.helpers.iso(DB.helpers.today()), supplierId:sup, lines:out,
-          status:"Open", eta:UI.$("#po_eta").value, value:out.reduce((s,l)=>s+l.qty*l.rate,0)});
-        App.persistAndRefresh(); mo.close(); tab="open"; draw(); toast(poId+" created",{type:"ok"});
+        const eta=UI.$("#po_eta").value, value=out.reduce((s,l)=>s+l.qty*l.rate,0);
+        if(editPo){
+          editPo.supplierId=sup; editPo.eta=eta; editPo.lines=out; editPo.value=value; editPo.status="Open";
+          App.persistAndRefresh(); mo.close(); toast(editPo.id+" updated",{type:"ok"});
+        } else {
+          const poId="PO-"+String(1000+ENG.data.purchaseorders.length+1).slice(1);
+          ENG.data.purchaseorders.push({id:poId, date:DB.helpers.iso(DB.helpers.today()), supplierId:sup, lines:out,
+            status:"Open", eta, value});
+          App.persistAndRefresh(); mo.close(); tab="open"; draw(); toast(poId+" created",{type:"ok"});
+        }
       }
     }
   }};
@@ -224,41 +251,68 @@
           {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate),noSort:true},
         ],{empty:"No lines"})
       ]);
-      modal({title:so.id, sub:ENG.custName(so.customerId), wide:true, body,
-        foot:[so.status!=="Dispatched"?h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;dispatchSO(so);},text:"Dispatch"}):null]});
+      const foot=[h("button",{class:"btn danger",onclick:()=>deleteSO(so),text:"🗑 Delete"})];
+      if(so.status!=="Dispatched"){
+        foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;soForm(so);},text:"✎ Edit"}));
+        foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;dispatchSO(so);},text:"Dispatch"}));
+      }
+      modal({title:so.id, sub:ENG.custName(so.customerId), wide:true, body, foot});
     }
-    function soForm(){
+
+    async function deleteSO(so){
+      const sale=ENG.data.movements.filter(m=>m.ref===so.id);
+      const msg=sale.length
+        ? `Delete ${so.id}? This also removes ${sale.length} dispatch movement(s), returning that stock.`
+        : `Delete ${so.id}? This sales order will be permanently removed.`;
+      if(!await confirm(msg,{title:"Delete Sales Order",danger:true})) return;
+      ENG.data.salesorders=ENG.data.salesorders.filter(s=>s.id!==so.id);
+      if(sale.length) ENG.data.movements=ENG.data.movements.filter(m=>m.ref!==so.id);
+      UI.$("#modalHost").hidden=true;
+      App.persistAndRefresh(); toast(`${so.id} deleted`,{type:"ok",title:"Removed"});
+    }
+    function soForm(arg){
+      const editSo=(arg && typeof arg==="object" && arg.id)?arg:null;
       const custs=ENG.data.customers; const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       let lines=[];
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Customer",U.selectHTML("so_cust",custs.map(c=>({v:c.id,l:c.name})),custs[0].id)),
-          U.field("Priority",U.selectHTML("so_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
-          U.field("Promised Date",`<input class="input" id="so_prom" type="date" value="${DB.helpers.daysAhead(10)}">`),
+          U.field("Customer",U.selectHTML("so_cust",custs.map(c=>({v:c.id,l:c.name})),editSo?editSo.customerId:custs[0].id)),
+          U.field("Priority",U.selectHTML("so_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],editSo?editSo.priority:"Normal")),
+          U.field("Promised Date",`<input class="input" id="so_prom" type="date" value="${editSo?editSo.promised:DB.helpers.daysAhead(10)}">`),
         ]),
         h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines"}),
         h("div",{id:"so_lines"}),
         h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add line"})
       ]);
-      const mo=modal({title:"New Sales Order", sub:"Capture customer demand", wide:true, body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),h("button",{class:"btn primary",onclick:save,text:"Create Order"})]});
-      function addLine(){ const idx=lines.length; lines.push({});
+      const mo=modal({title:editSo?("Edit "+editSo.id):"New Sales Order", sub:editSo?"Update this sales order":"Capture customer demand", wide:true, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),h("button",{class:"btn primary",onclick:save,text:editSo?"Save Changes":"Create Order"})]});
+      function addLine(seed){ const idx=lines.length; lines.push({});
+        const itemId=seed?seed.itemId:(fgs[0]&&fgs[0].id);
+        const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
+        const rateVal=(seed&&seed.rate!=null)?seed.rate:(fgs[0]&&fgs[0].price);
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.selectHTML("sl_item_"+idx,fgs.map(i=>({v:i.id,l:U.trim(i.name,30)})),fgs[0].id),style:"flex:2"}),
-          h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"Qty (kg)",style:"flex:1"}),
-          h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:fgs[0].price}),
+          h("div",{html:U.selectHTML("sl_item_"+idx,fgs.map(i=>({v:i.id,l:U.trim(i.name,30)})),itemId),style:"flex:2"}),
+          h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"Qty (kg)",style:"flex:1",value:qtyVal}),
+          h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:rateVal}),
+          h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})
         ]); UI.$("#so_lines").appendChild(row); }
-      addLine();
+      if(editSo) editSo.lines.forEach(l=>addLine(l)); else addLine();
       function save(){
         const cust=UI.$("#so_cust").value; const out=[];
-        lines.forEach((_,i)=>{ const id=UI.$("#sl_item_"+i).value, qty=+UI.$("#sl_qty_"+i).value, rate=+UI.$("#sl_rate_"+i).value;
+        lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#sl_item_"+i); if(!iEl) return;
+          const id=iEl.value, qty=+UI.$("#sl_qty_"+i).value, rate=+UI.$("#sl_rate_"+i).value;
           if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).price, width:(ENG.item(id).widthMM||[25])[0]}); });
         if(!out.length){ toast("Add at least one line",{type:"warn"}); return; }
-        const soId="SO-"+String(1000+ENG.data.salesorders.length+1).slice(1);
-        ENG.data.salesorders.push({id:soId, date:DB.helpers.iso(DB.helpers.today()), customerId:cust, lines:out,
-          status:"Confirmed", promised:UI.$("#so_prom").value, priority:UI.$("#so_prio").value,
-          value:out.reduce((s,l)=>s+l.qty*l.rate,0)});
-        App.persistAndRefresh(); mo.close(); tab="open"; draw(); toast(soId+" created",{type:"ok"});
+        const value=out.reduce((s,l)=>s+l.qty*l.rate,0);
+        if(editSo){
+          editSo.customerId=cust; editSo.priority=UI.$("#so_prio").value; editSo.promised=UI.$("#so_prom").value; editSo.lines=out; editSo.value=value;
+          App.persistAndRefresh(); mo.close(); toast(editSo.id+" updated",{type:"ok"});
+        } else {
+          const soId="SO-"+String(1000+ENG.data.salesorders.length+1).slice(1);
+          ENG.data.salesorders.push({id:soId, date:DB.helpers.iso(DB.helpers.today()), customerId:cust, lines:out,
+            status:"Confirmed", promised:UI.$("#so_prom").value, priority:UI.$("#so_prio").value, value});
+          App.persistAndRefresh(); mo.close(); tab="open"; draw(); toast(soId+" created",{type:"ok"});
+        }
       }
     }
   }};

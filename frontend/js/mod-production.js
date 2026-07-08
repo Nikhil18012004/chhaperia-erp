@@ -204,7 +204,9 @@
 
   /* ============== PRODUCTS & BOM ============== */
   M.bom = { title:"Products & BOM", sub:"Recipes & cost roll-up", render(root){
-    root.appendChild(pageHead("Products & Bill of Materials","Chhaperia cable-tape range with live material cost roll-up, margin analysis & specifications"));
+    root.appendChild(pageHead("Products & Bill of Materials","Chhaperia cable-tape range with live material cost roll-up, margin analysis & specifications",[
+      h("button",{class:"btn primary",onclick:()=>bomForm(),html:"＋ Create BOM"})
+    ]));
     const fgs=ENG.data.items.filter(i=>i.cat==="FG");
     const groups=[
       {key:"MICA", label:"🔥 Mica Tapes", sub:"Fire-survival / high-voltage insulation"},
@@ -253,10 +255,64 @@
           h("summary",{style:"cursor:pointer;font-size:12.5px;font-weight:700;color:var(--accent)",text:`Recipe · ${bom.lines.length} components · ${(bom.yield*100).toFixed(0)}% yield`}),
           h("div",{style:"margin-top:10px"}, bom.lines.map(([rid,per])=>{ const r=ENG.item(rid);
             return h("div",{class:"flex between",style:"font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)"},[
-              h("span",{text:U.trim(r.name,30)}), h("span",{class:"mono muted",text:ENG.num(per,3)+" "+r.uom+"/kg"})
+              h("span",{text:U.trim((r||{}).name||rid,30)}), h("span",{class:"mono muted",text:ENG.num(per,3)+" "+((r||{}).uom||"")+"/kg"})
             ]); }))
-        ]):h("div",{class:"muted",style:"font-size:12px",text:"No BOM defined"})
+        ]):h("div",{class:"muted",style:"font-size:12px",text:"No BOM defined"}),
+        h("div",{class:"flex",style:"justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"},[
+          h("button",{class:"btn sm ghost",title:bom?"Edit this BOM":"Add a BOM",onclick:()=>bomForm(fg.id),html:bom?"✎ Edit BOM":"＋ Add BOM"})
+        ])
       ]);
+    }
+
+    /* ----- create / edit / delete a product's BOM ----- */
+    function bomForm(fgId){
+      const fgs=ENG.data.items.filter(i=>i.cat==="FG");
+      const rms=ENG.data.items.filter(i=>i.cat!=="FG");   // raw materials + WIP usable as components
+      if(!fgs.length){ toast("Create a finished-good product first",{type:"warn"}); return; }
+      const existing = fgId? ENG.data.boms[fgId] : null;
+      const editing = !!existing;
+      let lines=[];
+      const body=h("div",{},[
+        h("div",{class:"form-grid"},[
+          U.field("Product (Finished Good)", U.selectHTML("bm_fg", fgs.map(f=>({v:f.id,l:U.trim(f.id+" — "+f.name,42)})), fgId||fgs[0].id)),
+          U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
+        ]),
+        h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Components (quantity per kg of finished good)"}),
+        h("div",{id:"bm_lines"}),
+        h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add component"})
+      ]);
+      const foot=[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"})];
+      if(editing) foot.push(h("button",{class:"btn danger",onclick:()=>delBom(),text:"🗑 Delete BOM"}));
+      foot.push(h("button",{class:"btn primary",onclick:save,text:editing?"Save BOM":"Create BOM"}));
+      const mo=modal({title: editing?("Edit BOM · "+fgId):"Create BOM", sub:"Define the material recipe", wide:true, body, foot});
+      const fgSel=UI.$("#bm_fg"); if(editing && fgSel) fgSel.disabled=true;   // lock product when editing its recipe
+      function addLine(seed){
+        const idx=lines.length; lines.push({});
+        const rid = seed? seed[0] : (rms[0]&&rms[0].id);
+        const per = seed? seed[1] : "";
+        const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
+          h("div",{html:U.selectHTML("bl_rid_"+idx, rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})), rid), style:"flex:2"}),
+          h("input",{class:"input",id:"bl_per_"+idx,type:"number",step:"0.001",placeholder:"Qty / kg",style:"flex:1",value:per}),
+          h("button",{class:"btn sm ghost",title:"Remove component",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})
+        ]);
+        UI.$("#bm_lines").appendChild(row);
+      }
+      if(existing && existing.lines.length) existing.lines.forEach(l=>addLine(l)); else addLine();
+      function save(){
+        const fg2=UI.$("#bm_fg").value;
+        const yld=Math.min(100,Math.max(1,+UI.$("#bm_yield").value||100))/100;
+        const out=[];
+        lines.forEach((_,i)=>{ if(!lines[i]) return; const rEl=UI.$("#bl_rid_"+i), pEl=UI.$("#bl_per_"+i); if(!rEl||!pEl) return;
+          const rid=rEl.value, per=+pEl.value; if(rid && per>0) out.push([rid, per]); });
+        if(!out.length){ toast("Add at least one component with a quantity",{type:"warn"}); return; }
+        ENG.data.boms[fg2] = { yield:yld, lines:out };
+        App.persistAndRefresh(); mo.close(); toast(editing?("BOM updated for "+fg2):("BOM created for "+fg2),{type:"ok"});
+      }
+      async function delBom(){
+        if(!await confirm(`Delete the BOM for ${fgId}? The product stays — only its recipe is removed.`,{title:"Delete BOM",danger:true})) return;
+        delete ENG.data.boms[fgId];
+        App.persistAndRefresh(); mo.close(); toast("BOM deleted",{type:"ok"});
+      }
     }
   }};
 

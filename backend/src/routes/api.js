@@ -45,6 +45,23 @@ router.post("/production/wo", requireAuth, requireRole("admin", "office"), (req,
   catch (e) { next(e); }
 });
 
+// ---- Granular inventory writes (avoid rewriting the whole dataset) ----
+// Create or update a single stock item.
+router.post("/items", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.status(201).json(erp.upsertItem(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/items/:id", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json(erp.upsertItem(Object.assign({}, req.body || {}, { id: req.params.id }))); } catch (e) { next(e); }
+});
+// Append a single stock movement (manual receipt / adjustment).
+router.post("/movements", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.status(201).json(erp.addMovement(req.body || {})); } catch (e) { next(e); }
+});
+// Receive goods against a PO (posts GRN movements + updates PO status).
+router.post("/purchase-orders/:id/receive", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json(erp.receivePurchaseOrder(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+
 // Only admin/office can write the full dataset.
 router.put("/state", requireAuth, requireRole("admin", "office"), (req, res, next) => {
   try { res.json(erp.saveState(req.body)); } catch (e) { next(e); }

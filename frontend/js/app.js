@@ -182,6 +182,32 @@
       this.refreshView();
     },
 
+    /* Optimistic granular save: the caller has ALREADY mutated ENG.data
+       locally; we reflect it in the UI immediately, then persist via a
+       targeted API call. If the server rejects, we reload the truth so
+       the UI never drifts from the database. */
+    async saveDelta(apiCall){
+      ENG.rebuild();
+      this.buildNav();
+      this.refreshAlerts();
+      this.refreshView();
+      try{ await apiCall(); }
+      catch(e){
+        UI.toast("Save failed — reloaded from server",{type:"danger",title:"Sync error"});
+        await this.reloadState();
+        throw e;
+      }
+    },
+
+    /* Replace the in-memory dataset with the server's, then re-render. */
+    async reloadState(){
+      try{
+        const fresh=await DB.loadAsync();
+        ENG.init(fresh);
+        this.buildNav(); this.refreshAlerts(); this.refreshView();
+      }catch(e){ console.warn("reloadState failed",e); }
+    },
+
     /* re-render the CURRENT module so newly added/removed data shows
        instantly — no manual page refresh needed after a save. */
     refreshView(){
@@ -234,6 +260,10 @@
     cmdkItems(q){
       q=q.toLowerCase(); const out=[];
       UI.NAV.forEach(n=>{ if(n.sec)return; if(!q||n.label.toLowerCase().includes(q)) out.push({ic:n.icon,label:n.label,tag:"Module",act:()=>this.go(n.id)}); });
+      // quick actions registered by modules (Add Stock, Receive PO, …)
+      const acts=global.ERPActions||{};
+      Object.keys(acts).forEach(k=>{ const a=acts[k];
+        if(!q||a.label.toLowerCase().includes(q)) out.push({ic:a.ic||"⚡",label:a.label,tag:"Action",act:()=>a.run()}); });
       if(q.length>=2){
         ENG.data.items.forEach(it=>{ if((it.name+" "+it.id).toLowerCase().includes(q)) out.push({ic:"📦",label:it.name,meta:it.id,tag:"Item",act:()=>this.go("inventory")}); });
         ENG.data.salesorders.forEach(s=>{ if(s.id.toLowerCase().includes(q)) out.push({ic:"🧾",label:s.id+" — "+ENG.custName(s.customerId),tag:"Sales",act:()=>this.go("sales")}); });

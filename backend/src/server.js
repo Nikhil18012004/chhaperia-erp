@@ -7,6 +7,7 @@
    ============================================================ */
 "use strict";
 const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const apiRoutes = require("./routes/api");
 const { router: authRoutes } = require("./routes/auth");
@@ -33,12 +34,25 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static frontend
-app.use(express.static(FRONTEND_DIR));
-app.get("/", (req, res) => {
+// Serve index.html with AUTOMATIC cache-busting: rewrite every
+// js/*.js?v= and css/*.css?v= to the referenced file's mtime, so any
+// edit is picked up on reload with no manual ?v= bump and no restart.
+function serveIndex(req, res) {
+  let html;
+  try { html = fs.readFileSync(path.join(FRONTEND_DIR, "index.html"), "utf8"); }
+  catch (e) { return res.status(500).send("index.html not found"); }
+  html = html.replace(/(src|href)="((?:js|css)\/[^"?]+)(?:\?v=[^"]*)?"/g, (m, attr, rel) => {
+    let v = "0";
+    try { v = String(Math.floor(fs.statSync(path.join(FRONTEND_DIR, rel)).mtimeMs)); } catch {}
+    return `${attr}="${rel}?v=${v}"`;
+  });
   res.set("Cache-Control", "no-store, must-revalidate");
-  res.sendFile(path.join(FRONTEND_DIR, "index.html"));
-});
+  res.type("html").send(html);
+}
+app.get(["/", "/index.html"], serveIndex);
+
+// Static frontend (index disabled — the route above owns the HTML shell)
+app.use(express.static(FRONTEND_DIR, { index: false }));
 
 // Central error handler
 app.use((err, req, res, next) => {

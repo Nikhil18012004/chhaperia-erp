@@ -246,6 +246,66 @@ function addMovements(moves) {
   return moves.length;
 }
 
+/** Append a single stock movement (hot path for manual receipts/adjustments). */
+function addMovement(m) { return addMovements([m]); }
+
+/** Read one item in the frontend document shape (or null). */
+function getItem(id) {
+  const db = getDb();
+  const r = db.prepare("SELECT * FROM items WHERE id=?").get(id);
+  if (!r) return null;
+  return Object.assign({}, P(r.doc, {}), {
+    id: r.id, name: r.name, cat: r.cat, uom: r.uom, cost: r.cost, price: r.price,
+    reorder: r.reorder, safety: r.safety, lead: r.lead, abc: r.abc, hsn: r.hsn,
+    supplierId: r.supplier_id, group: r.grp,
+  });
+}
+
+/** Insert-or-update one item (promoted columns + extra fields in doc JSON). */
+function putItem(i) {
+  const db = getDb();
+  const { id, name, cat, uom, cost, price, reorder, safety, lead, abc, hsn, supplierId, group, ...rest } = i;
+  db.prepare(`INSERT INTO items
+      (id,name,cat,uom,cost,price,reorder,safety,lead,abc,hsn,supplier_id,grp,doc)
+      VALUES(@id,@name,@cat,@uom,@cost,@price,@reorder,@safety,@lead,@abc,@hsn,@supplier_id,@grp,@doc)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name, cat=excluded.cat, uom=excluded.uom, cost=excluded.cost,
+        price=excluded.price, reorder=excluded.reorder, safety=excluded.safety,
+        lead=excluded.lead, abc=excluded.abc, hsn=excluded.hsn,
+        supplier_id=excluded.supplier_id, grp=excluded.grp, doc=excluded.doc`)
+    .run({ id, name: name || null, cat: cat || null, uom: uom || null,
+      cost: cost || 0, price: price || 0, reorder: reorder || 0, safety: safety || 0,
+      lead: lead || 7, abc: abc || null, hsn: hsn || null,
+      supplier_id: supplierId || null, grp: group || null, doc: J(rest) });
+  return getItem(id);
+}
+
+/** Read one purchase order in the frontend document shape (or null). */
+function getPurchaseOrder(id) {
+  const db = getDb();
+  const p = db.prepare("SELECT * FROM purchase_orders WHERE id=?").get(id);
+  if (!p) return null;
+  return Object.assign({}, P(p.doc, {}), {
+    id: p.id, date: p.date, supplierId: p.supplier_id, status: p.status,
+    eta: p.eta, value: p.value, lines: P(p.lines, []),
+  });
+}
+
+/** Insert-or-update one purchase order. */
+function putPurchaseOrder(p) {
+  const db = getDb();
+  const { id, date, supplierId, status, eta, value, lines, ...rest } = p;
+  db.prepare(`INSERT INTO purchase_orders
+      (id,date,supplier_id,status,eta,value,lines,doc)
+      VALUES(@id,@date,@supplier_id,@status,@eta,@value,@lines,@doc)
+      ON CONFLICT(id) DO UPDATE SET
+        date=excluded.date, supplier_id=excluded.supplier_id, status=excluded.status,
+        eta=excluded.eta, value=excluded.value, lines=excluded.lines, doc=excluded.doc`)
+    .run({ id, date: date || null, supplier_id: supplierId || null, status: status || null,
+      eta: eta || null, value: value || 0, lines: J(lines || []), doc: J(rest) });
+  return getPurchaseOrder(id);
+}
+
 function updateSettings(doc) {
   const db = getDb();
   db.prepare("INSERT INTO settings(id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
@@ -253,4 +313,5 @@ function updateSettings(doc) {
   return doc;
 }
 
-module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder, addMovements };
+module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
+  addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder };

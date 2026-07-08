@@ -11,6 +11,7 @@
     let filter={q:"", cat:"all", state:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       h("button",{class:"btn",onclick:exportCSV,html:"⬇ Export CSV"}),
+      h("button",{class:"btn",onclick:autoReorderDraftPOs,html:"🛒 Auto-Reorder"}),
       newItemMenu()
     ]));
 
@@ -103,6 +104,24 @@
     return wrap;
   }
 
+  /* ----- one-click: turn every below-reorder item into draft POs (grouped by supplier) ----- */
+  function autoReorderDraftPOs(){
+    const sugg=ENG.data.items.map(it=>({it,st:ENG.status(it.id)})).filter(x=>x.st.suggest>0);
+    if(!sugg.length){ toast("Everything is above reorder level — nothing to order",{type:"ok",title:"Auto-Reorder"}); return; }
+    const bySup={}; sugg.forEach(x=>{ const s=x.it.supplierId||"SUP-09"; (bySup[s]=bySup[s]||[]).push(x); });
+    let n=0;
+    Object.entries(bySup).forEach(([sid,list])=>{
+      const poId="PO-"+String(1000+ENG.data.purchaseorders.length+1+n).slice(1); n++;
+      ENG.data.purchaseorders.push({ id:poId, date:DB.helpers.iso(DB.helpers.today()), supplierId:sid,
+        lines:list.map(x=>({itemId:x.it.id, qty:x.st.suggest, rate:x.it.cost||0, recd:0})),
+        status:"Open", eta:DB.helpers.daysAhead(Math.max(...list.map(x=>x.it.lead||7))),
+        value:list.reduce((s,x)=>s+x.st.suggest*(x.it.cost||0),0) });
+    });
+    App.persistAndRefresh();
+    toast(`${n} draft PO(s) created for ${sugg.length} low-stock item(s)`,{type:"ok",title:"Auto-Reorder"});
+    App.go("purchase");
+  }
+
   /* ----- item detail drawer/modal ----- */
   function itemDetail(id){
     const it=ENG.item(id), st=ENG.status(id), u=ENG.usage(id), s=ENG.stock(id);
@@ -176,11 +195,13 @@
       Object.assign(obj,{ id:code, name:g("f_name").trim(), cat:g("f_cat"), uom:g("f_uom"),
         reorder:+g("f_reorder")||0, safety:+g("f_safety")||0, lead:+g("f_lead")||7,
         cost:+g("f_cost")||0, price:+g("f_price")||0, hsn:g("f_hsn") });
+      let openMove=null;
       if(!edit){ ENG.data.items.push(obj);
-        ENG.data.movements.push({id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:code, wh:obj.cat==="FG"?"WH-FG":"WH-PNY", type:"OPEN", qty:0, rate:obj.cost, ref:"NEW", note:"Item created"});
+        openMove={id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:code, wh:obj.cat==="FG"?"WH-FG":"WH-PNY", type:"OPEN", qty:0, rate:obj.cost, ref:"NEW", note:"Item created"};
+        ENG.data.movements.push(openMove);
       }
-      App.persistAndRefresh();
       mo.close(); toast(edit?"Item updated":"Item created",{type:"ok"});
+      App.saveDelta(async()=>{ await DB.items.put(obj); if(openMove) await DB.movements.add(openMove); });
     }
   }
 
@@ -240,12 +261,13 @@
     function save(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const wh=UI.$("#r_wh").value, date=DB.helpers.iso(DB.helpers.today());
-      let posted=0;
+      const recvLines=[]; let posted=0;
       po.lines.forEach((l,idx)=>{
         const el=UI.$("#r_qty_"+idx); let rq=+((el&&el.value)||0);
         const pend=l.qty-(l.recd||0);
         if(rq>pend) rq=pend;
         if(rq>0){
+          recvLines.push({i:idx, qty:rq});
           ENG.data.movements.push({id:"MV-"+Date.now()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
             qty:rq, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by:"user"});
           l.recd=+((l.recd||0)+rq).toFixed(3); posted++;
@@ -253,8 +275,9 @@
       });
       if(!posted){ toast("Enter a quantity to receive on at least one line",{type:"warn"}); return; }
       po.status = po.lines.every(l=>(l.recd||0) >= l.qty-0.0001) ? "Received" : "Partially Received";
-      App.persistAndRefresh(); mo.close();
+      mo.close();
       toast(`${po.id} — goods received, stock updated`,{type:"ok",title:"GRN posted"});
+      App.saveDelta(()=>DB.purchase.receive(po.id,{wh, date, lines:recvLines}));
     }
   }
 
@@ -262,8 +285,9 @@
   function addStockForm(){
     const items=ENG.data.items, whs=ENG.data.warehouses;
     const body=h("div",{},[
-      h("p",{class:"dim",style:"margin-bottom:12px",text:"Pick an item (or create a new one), review or edit its parameters, then enter the quantity to receive. The parameters are saved to the item; the quantity posts to the ledger."}),
+      h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick an item (or create a new one), review or edit its parameters, then enter the quantity to receive. The parameters are saved to the item; the quantity posts to the ledger."}),
       h("div",{class:"form-grid"},[
+        field("Scan / Barcode",`<input class="input" id="s_scan" placeholder="Scan or type barcode / item code, then press Enter">`,"full"),
         field("Item", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:trim(i.id+" — "+i.name,40)}))),"__new")),
       ]),
       h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Item parameters"}),
@@ -324,6 +348,19 @@
     /* Std Cost always tracks the entered Rate (rate drives cost) */
     const rateEl=UI.$("#s_rate"), costEl=UI.$("#s_cost");
     if(rateEl&&costEl) rateEl.addEventListener("input",()=>{ costEl.value=rateEl.value; });
+    /* barcode scan: match by barcode or item code, select it, jump to qty */
+    const scan=UI.$("#s_scan");
+    if(scan){
+      scan.addEventListener("keydown",e=>{
+        if(e.key!=="Enter") return; e.preventDefault();
+        const raw=scan.value.trim(); if(!raw) return;
+        const v=raw.toLowerCase();
+        const found=ENG.data.items.find(i=>String(i.barcode||"").toLowerCase()===v || String(i.id).toLowerCase()===v);
+        if(found){ setSel("s_item",found.id); fillParams(); scan.value=""; const q=UI.$("#s_qty"); if(q) q.focus(); toast("Matched "+found.name,{type:"ok"}); }
+        else toast("No item matches “"+raw+"”",{type:"warn"});
+      });
+      setTimeout(()=>scan.focus(),40);
+    }
     function save(){
       const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
       const qty=+g("s_qty"), rate=+g("s_rate")||0, wh=g("s_wh");
@@ -351,11 +388,13 @@
         it.reorder=+g("s_reorder")||0; it.safety=+g("s_safety")||0; it.lead=+g("s_lead")||7;
         it.cost=rate||it.cost||0; it.price=+g("s_price")||0; it.hsn=g("s_hsn").trim();
       }
-      ENG.data.movements.push({ id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()),
+      const move={ id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()),
         itemId, wh, type:"GRN", qty, rate, ref:"MANUAL-"+Math.floor(Math.random()*9000+1000),
-        note:"Manual stock addition", by:"user" });
-      App.persistAndRefresh(); mo.close();
+        note:"Manual stock addition", by:"user" };
+      ENG.data.movements.push(move);
+      mo.close();
       toast(`${ENG.num(qty,2)} ${it.uom} added to ${it.name}`,{type:"ok",title:"Stock added"});
+      App.saveDelta(async()=>{ await DB.items.put(it); await DB.movements.add(move); });
     }
   }
 
@@ -431,10 +470,12 @@
             {title:"Stock would go negative", danger:true});
           if(!ok) return;
         }
-        ENG.data.movements.push({id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:id,
+        const move={id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:id,
           wh:UI.$("#a_wh").value, type:UI.$("#a_type").value, qty, rate:it.cost,
-          ref:UI.$("#a_type").value+"-"+Math.floor(Math.random()*9000+1000), note:UI.$("#a_note").value||"Manual adjustment", by:"user"});
-        App.persistAndRefresh(); mo.close(); toast("Ledger entry posted",{type:"ok"}); draw();
+          ref:UI.$("#a_type").value+"-"+Math.floor(Math.random()*9000+1000), note:UI.$("#a_note").value||"Manual adjustment", by:"user"};
+        ENG.data.movements.push(move);
+        mo.close(); toast("Ledger entry posted",{type:"ok"});
+        App.saveDelta(()=>DB.movements.add(move));
       }
     }
   }};
@@ -493,4 +534,12 @@
     const a=document.createElement("a"); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
   // expose for other modules
   window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, downloadCSV, trim, catName, moveBadge});
+
+  // register quick actions for the ⌘K command palette
+  window.ERPActions = Object.assign(window.ERPActions||{}, {
+    addStock:    { ic:"📦", label:"Add Stock",             run:()=>addStockForm() },
+    receivePO:   { ic:"🚚", label:"Receive via PO",        run:()=>receiveStockForm() },
+    newItem:     { ic:"＋", label:"New Item",               run:()=>itemForm() },
+    autoReorder: { ic:"🛒", label:"Auto-Reorder → Draft POs", run:()=>autoReorderDraftPOs() },
+  });
 })();

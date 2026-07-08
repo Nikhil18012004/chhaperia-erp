@@ -82,4 +82,67 @@ function reset() {
   return repo.saveState(buildSeed());
 }
 
-module.exports = { getState, saveState, updateSettings, reset, ensureStageModel, ensureCrm };
+function todayISO() {
+  const x = new Date();
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
+function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
+
+/* ============================================================
+   Granular writes — single-row updates for hot inventory paths,
+   so a stock receipt / item edit no longer rewrites the ENTIRE
+   dataset (faster + no last-writer-wins clobber between users).
+   ============================================================ */
+
+/** Create or update one stock item. Partial fields are merged over the
+    existing row (so a PATCH never nulls out omitted columns). */
+function upsertItem(item) {
+  if (!item || !item.id) throw err("Item id is required", 400);
+  const existing = repo.getItem(item.id);
+  if (!existing && !item.name) throw err("New item needs a name", 400);
+  const merged = existing ? Object.assign({}, existing, item) : item;
+  return repo.putItem(merged);
+}
+
+/** Append one stock movement (manual receipt / adjustment). */
+function addMovement(m) {
+  if (!m || !m.itemId || !m.type) throw err("Movement needs itemId and type", 400);
+  if (m.qty == null || isNaN(+m.qty)) throw err("Movement needs a numeric qty", 400);
+  if (!m.id) m.id = "MV-" + Date.now() + "-" + Math.floor(Math.random() * 1e4);
+  if (!m.date) m.date = todayISO();
+  repo.addMovement(m);
+  return { ok: true, id: m.id };
+}
+
+/** Receive goods against a PO: post GRN movements + update the PO row.
+    body: { wh, date?, by?, lines:[{i:lineIndex, qty}] } */
+function receivePurchaseOrder(poId, body) {
+  body = body || {};
+  const po = repo.getPurchaseOrder(poId);
+  if (!po) throw err("Purchase order not found", 404);
+  const wh = body.wh || "WH-PNY";
+  const date = body.date || todayISO();
+  const by = body.by || "user";
+  const moves = [];
+  (body.lines || []).forEach(({ i, qty }) => {
+    const l = po.lines[i];
+    if (!l) return;
+    let rq = +qty || 0;
+    const pend = l.qty - (l.recd || 0);
+    if (rq > pend) rq = pend;
+    if (rq > 0) {
+      moves.push({ id: "MV-" + Date.now() + "-" + l.itemId, date, itemId: l.itemId, wh,
+        type: "GRN", qty: rq, rate: l.rate || 0, ref: po.id, note: "Goods receipt vs PO",
+        supplierId: po.supplierId, by });
+      l.recd = +((l.recd || 0) + rq).toFixed(3);
+    }
+  });
+  if (!moves.length) throw err("No quantity to receive", 400);
+  repo.addMovements(moves);
+  po.status = po.lines.every((l) => (l.recd || 0) >= l.qty - 0.0001) ? "Received" : "Partially Received";
+  repo.putPurchaseOrder(po);
+  return { ok: true, posted: moves.length, po: { id: po.id, status: po.status, lines: po.lines } };
+}
+
+module.exports = { getState, saveState, updateSettings, reset, ensureStageModel, ensureCrm,
+  upsertItem, addMovement, receivePurchaseOrder };

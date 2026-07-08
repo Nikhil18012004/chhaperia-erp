@@ -107,6 +107,19 @@
     remove(id) { return http("DELETE", "/auth/users/" + id); },
   };
 
+  /* ---- granular inventory writes (avoid full-dataset rewrites) ---- */
+  const items = {
+    // upsert one item (PATCH is an INSERT-or-UPDATE on the server)
+    put(item) { return http("PATCH", "/items/" + encodeURIComponent(item.id), item); },
+  };
+  const movements = {
+    add(m) { return http("POST", "/movements", m); },
+  };
+  const purchase = {
+    // receive goods against a PO: { wh, date?, by?, lines:[{i:lineIndex, qty}] }
+    receive(poId, payload) { return http("POST", "/purchase-orders/" + encodeURIComponent(poId) + "/receive", payload); },
+  };
+
   /* ---- production / supervisor stage actions ---- */
   const production = {
     // advance a work order's CURRENT stage: start | pause | complete | dispatch
@@ -119,6 +132,7 @@
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
+    items, movements, purchase,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);
