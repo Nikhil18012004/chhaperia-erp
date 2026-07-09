@@ -140,8 +140,11 @@
       UI.NAV.forEach(n=>{
         if(n.adminOnly && !isAdmin) return; // hide admin-only items from office
         if(n.sec){ nav.appendChild(h("div",{class:"nav-section",text:n.sec})); return; }
-        const item=h("div",{class:"nav-item"+(n.id===this.current?" active":""),"data-id":n.id,onclick:()=>this.go(n.id)},[
-          h("span",{class:"ic",text:n.icon}),
+        const item=h("div",{class:"nav-item"+(n.id===this.current?" active":""),"data-id":n.id,
+          role:"button",tabindex:"0","aria-label":n.label,
+          onclick:()=>this.go(n.id),
+          onkeydown:(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); this.go(n.id); } }},[
+          h("span",{class:"ic","aria-hidden":"true",text:n.icon}),
           h("span",{class:"lbl",text:n.label}),
         ]);
         // pills (open counts / alerts)
@@ -182,6 +185,17 @@
       this.refreshView();
     },
 
+    /* Persist ONLY the UI settings document (theme/accent) via the dedicated
+       PATCH /settings fast path — no need to rewrite the whole dataset just to
+       flip a colour. Re-renders locally so the change shows instantly. */
+    persistSettings(){
+      const s={theme:this.theme,accent:this.accent,autoAccent:this.autoAccent,lowStockOnly:false};
+      ENG.data.settings=s;
+      DB.saveSettings(s);
+      this.buildNav();
+      this.refreshView();
+    },
+
     /* Optimistic granular save: the caller has ALREADY mutated ENG.data
        locally; we reflect it in the UI immediately, then persist via a
        targeted API call. If the server rejects, we reload the truth so
@@ -215,9 +229,9 @@
     },
 
     /* ---- theme/accent ---- */
-    setTheme(t){ this.theme=t; document.documentElement.setAttribute("data-theme",t); this.persistAndRefresh(); },
-    setAccent(a){ this.accent=a; this.autoAccent=false; document.documentElement.setAttribute("data-accent",a); this.renderAccentMenu(); this.persistAndRefresh(); },
-    setAutoAccent(v){ this.autoAccent=v; this.persistAndRefresh(); },
+    setTheme(t){ this.theme=t; document.documentElement.setAttribute("data-theme",t); this.persistSettings(); },
+    setAccent(a){ this.accent=a; this.autoAccent=false; document.documentElement.setAttribute("data-accent",a); this.renderAccentMenu(); this.persistSettings(); },
+    setAutoAccent(v){ this.autoAccent=v; this.persistSettings(); },
 
     renderAccentMenu(){
       const accents=[["orange","#F06820"],["red","#E84820"],["blue","#2f7fe0"],["teal","#0fb5ae"],["violet","#7c5cff"],["green","#16a34a"],["pink","#ec4899"],["amber","#e0a000"]];
@@ -268,8 +282,12 @@
         ENG.data.items.forEach(it=>{ if((it.name+" "+it.id).toLowerCase().includes(q)) out.push({ic:"📦",label:it.name,meta:it.id,tag:"Item",act:()=>this.go("inventory")}); });
         ENG.data.salesorders.forEach(s=>{ if(s.id.toLowerCase().includes(q)) out.push({ic:"🧾",label:s.id+" — "+ENG.custName(s.customerId),tag:"Sales",act:()=>this.go("sales")}); });
         ENG.data.purchaseorders.forEach(p=>{ if(p.id.toLowerCase().includes(q)) out.push({ic:"🛒",label:p.id+" — "+ENG.sup(p.supplierId),tag:"PO",act:()=>this.go("purchase")}); });
+        ENG.data.workorders.forEach(w=>{ const nm=(ENG.item(w.itemId)||{}).name||w.itemId; if((w.id+" "+nm).toLowerCase().includes(q)) out.push({ic:"⚙️",label:w.id+" — "+nm,tag:"Work Order",act:()=>this.go("production")}); });
+        (ENG.data.leads||[]).forEach(l=>{ if((l.company+" "+l.id).toLowerCase().includes(q)) out.push({ic:"🎯",label:l.company,meta:l.id,tag:"Lead",act:()=>this.go("crm")}); });
+        ENG.data.customers.forEach(c=>{ if((c.name+" "+c.id).toLowerCase().includes(q)) out.push({ic:"🤝",label:c.name,tag:"Customer",act:()=>this.go("customers")}); });
+        ENG.data.suppliers.forEach(s=>{ if((s.name+" "+s.id).toLowerCase().includes(q)) out.push({ic:"🏭",label:s.name,tag:"Supplier",act:()=>this.go("suppliers")}); });
       }
-      return out.slice(0,18);
+      return out.slice(0,24);
     },
     cmdkRender(q){
       const items=this.cmdkItems(q); this.cmdkList=items; const box=$("#cmdkResults"); box.innerHTML="";

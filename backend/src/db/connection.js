@@ -17,11 +17,18 @@ let db = null;
 
 function getDb() {
   if (db) return db;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  db = new Database(DB_FILE);
-  db.pragma("journal_mode = WAL");
-  const schema = fs.readFileSync(SCHEMA_FILE, "utf8");
-  db.exec(schema);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    db = new Database(DB_FILE);
+    db.pragma("journal_mode = WAL");
+    const schema = fs.readFileSync(SCHEMA_FILE, "utf8");
+    db.exec(schema);
+  } catch (e) {
+    db = null;
+    const wrapped = new Error("Database initialisation failed: " + e.message);
+    wrapped.status = 500;
+    throw wrapped;
+  }
   return db;
 }
 

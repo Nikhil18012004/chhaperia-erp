@@ -59,7 +59,71 @@ router.post("/movements", requireAuth, requireRole("admin", "office"), (req, res
 });
 // Receive goods against a PO (posts GRN movements + updates PO status).
 router.post("/purchase-orders/:id/receive", requireAuth, requireRole("admin", "office"), (req, res, next) => {
-  try { res.json(erp.receivePurchaseOrder(req.params.id, req.body || {})); } catch (e) { next(e); }
+  try { res.json(erp.receivePurchaseOrder(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+
+// ---- Granular Trade / CRM writes (no more full-state clobber) ----
+const rw = requireRole("admin", "office");
+// Purchase orders: create / update / delete (delete reverses its GRN movements)
+router.post("/purchase-orders", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.createPurchaseOrder(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/purchase-orders/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updatePurchaseOrder(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/purchase-orders/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deletePurchaseOrder(req.params.id)); } catch (e) { next(e); }
+});
+// Sales orders: create / update / delete (delete reverses its SALE movements)
+router.post("/sales-orders", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.createSalesOrder(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/sales-orders/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateSalesOrder(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/sales-orders/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteSalesOrder(req.params.id)); } catch (e) { next(e); }
+});
+router.post("/sales-orders/:id/dispatch", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.dispatchSalesOrder(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+// Bill of materials: save recipe / delete
+router.put("/boms/:itemId", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.saveBom(req.params.itemId, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/boms/:itemId", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteBom(req.params.itemId)); } catch (e) { next(e); }
+});
+// CRM leads: create / update / delete
+router.post("/leads", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.createLead(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/leads/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateLead(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/leads/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteLead(req.params.id)); } catch (e) { next(e); }
+});
+// Customer upsert (CRM Won→customer)
+router.post("/customers", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.upsertCustomer(req.body || {})); } catch (e) { next(e); }
+});
+// Transporters (dispatch providers): create / update / delete
+router.post("/transporters", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.createTransporter(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/transporters/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateTransporter(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/transporters/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteTransporter(req.params.id)); } catch (e) { next(e); }
+});
+// Delete a stock item / work order
+router.delete("/items/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteItem(req.params.id)); } catch (e) { next(e); }
+});
+router.delete("/production/wo/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteWorkOrder(req.params.id)); } catch (e) { next(e); }
 });
 
 // Only admin/office can write the full dataset.

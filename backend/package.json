@@ -8,7 +8,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "seed": "node src/seed/run-seed.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js && node test/http.js",
+    "test:smoke": "node test/smoke.js",
+    "test:http": "node test/http.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",

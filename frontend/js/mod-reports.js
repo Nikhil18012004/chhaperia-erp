@@ -107,7 +107,7 @@
       h("div",{class:"field"},[
         h("label",{text:"Accent Colour"}),
         h("div",{class:"swatches",style:"grid-template-columns:repeat(8,1fr)"}, accents.map(a=>{
-          const sw=h("div",{class:"swatch"+(App.accent===a?" sel":""),style:`background:var(--${swColor(a)})`,onclick:()=>{App.setAccent(a);[...sw.parentElement.children].forEach(c=>c.classList.remove("sel"));sw.classList.add("sel");}});
+          const sw=h("div",{class:"swatch"+(App.accent===a?" sel":""),onclick:()=>{App.setAccent(a);[...sw.parentElement.children].forEach(c=>c.classList.remove("sel"));sw.classList.add("sel");}});
           sw.style.setProperty("--x",a); sw.style.background=accentHex(a); return sw;
         }))
       ]),
@@ -208,7 +208,6 @@
     }
 
     function refreshSeg(e){ [...e.target.parentElement.children].forEach(c=>c.classList.remove("on")); e.target.classList.add("on"); }
-    function swColor(a){ return "accent"; }
     function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#2f7fe0",teal:"#0fb5ae",violet:"#7c5cff",green:"#16a34a",pink:"#ec4899",amber:"#e0a000"}; return map[a]; }
     function backup(){ const blob=new Blob([JSON.stringify(ENG.data,null,2)],{type:"application/json"});
       const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="chhaperia_erp_backup_"+DB.helpers.iso(DB.helpers.today())+".json"; a.click();

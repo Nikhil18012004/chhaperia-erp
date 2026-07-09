@@ -45,7 +45,7 @@
     return box;
   }
 
-  M.production = { title:"Production", sub:"Work orders & material consumption", render(root){
+  M.production = { title:"Production", sub:"Work orders & material consumption", render(root, params){
     let tab="active";
     let filter={from:"", to:""};
     root.appendChild(pageHead("Production Control","Jobs flow Coating → Slitting → Packing; each stage consumes materials and posts WIP / finished goods automatically",[
@@ -96,6 +96,7 @@
       ],{onRow:r=>woDetail(r),empty:"No work orders"}));
     }
     draw();
+    if(params&&params.openNew){ params.openNew=false; woForm(); }
 
     function woActions(r){
       const wrap=h("div",{class:"flex gap"});
@@ -203,7 +204,7 @@
   }};
 
   /* ============== PRODUCTS & BOM ============== */
-  M.bom = { title:"Products & BOM", sub:"Recipes & cost roll-up", render(root){
+  M.bom = { title:"Products & BOM", sub:"Recipes & cost roll-up", render(root, params){
     root.appendChild(pageHead("Products & Bill of Materials","Chhaperia cable-tape range with live material cost roll-up, margin analysis & specifications",[
       h("button",{class:"btn primary",onclick:()=>bomForm(),html:"＋ Create BOM"})
     ]));
@@ -226,6 +227,7 @@
       list.forEach(fg=> grid.appendChild(productCard(fg)));
       root.appendChild(grid);
     });
+    if(params&&params.openNew){ params.openNew=false; bomForm(); }
 
     function productCard(fg){
       const bom=ENG.data.boms[fg.id];
@@ -306,15 +308,23 @@
           const rid=rEl.value, per=+pEl.value; if(rid && per>0) out.push([rid, per]); });
         if(!out.length){ toast("Add at least one component with a quantity",{type:"warn"}); return; }
         ENG.data.boms[fg2] = { yield:yld, lines:out };
-        App.persistAndRefresh(); mo.close(); toast(editing?("BOM updated for "+fg2):("BOM created for "+fg2),{type:"ok"});
+        mo.close(); toast(editing?("BOM updated for "+fg2):("BOM created for "+fg2),{type:"ok"});
+        App.saveDelta(()=>DB.boms.save(fg2,{yield:yld, lines:out}));
       }
       async function delBom(){
         if(!await confirm(`Delete the BOM for ${fgId}? The product stays — only its recipe is removed.`,{title:"Delete BOM",danger:true})) return;
         delete ENG.data.boms[fgId];
-        App.persistAndRefresh(); mo.close(); toast("BOM deleted",{type:"ok"});
+        mo.close(); toast("BOM deleted",{type:"ok"});
+        App.saveDelta(()=>DB.boms.remove(fgId));
       }
     }
   }};
 
   function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
+
+  // register ⌘K quick actions for Production & BOM
+  window.ERPActions = Object.assign(window.ERPActions||{}, {
+    newWO:  { ic:"⚙️", label:"New Work Order", run:()=>App.go("production",{openNew:true}) },
+    newBOM: { ic:"🧬", label:"Create BOM",     run:()=>App.go("bom",{openNew:true}) },
+  });
 })();

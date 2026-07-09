@@ -10,9 +10,12 @@ const path = require("path");
 const fs = require("fs");
 const express = require("express");
 const apiRoutes = require("./routes/api");
+const hrRoutes = require("./routes/hr");
 const { router: authRoutes } = require("./routes/auth");
 const authService = require("./services/authService");
 const erpService = require("./services/erpService");
+const hrService = require("./services/hrService");
+const { closeDb } = require("./db/connection");
 
 const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
@@ -22,6 +25,8 @@ app.use(express.json({ limit: "25mb" }));
 
 // Auth (login, me, user management)
 app.use("/api/auth", authRoutes);
+// Human Resources (workers, attendance, leave, payroll + device punch ingest)
+app.use("/api/hr", hrRoutes);
 // API (protected, role-scoped)
 app.use("/api", apiRoutes);
 
@@ -54,10 +59,14 @@ app.get(["/", "/index.html"], serveIndex);
 // Static frontend (index disabled — the route above owns the HTML shell)
 app.use(express.static(FRONTEND_DIR, { index: false }));
 
-// Central error handler
+// Central error handler. Log full stacks server-side; never leak an internal
+// 500 message (e.g. a raw SQLite error) to the client — only intended 4xx
+// messages are returned.
 app.use((err, req, res, next) => {
-  console.error("[api error]", err.message);
-  res.status(err.status || 500).json({ error: err.message || "Internal error" });
+  const status = err.status || 500;
+  if (status >= 500) console.error("[api error]", err.stack || err.message);
+  else console.warn("[api]", status, req.method, req.path, "—", err.message);
+  res.status(status).json({ error: status >= 500 ? "Internal server error" : (err.message || "Error") });
 });
 
 const server = app.listen(PORT, () => {
@@ -73,6 +82,14 @@ const server = app.listen(PORT, () => {
   try { const c = erpService.ensureCrm(); if (c.changed) console.log("  ├─ CRM      : restored " + c.count + " sales leads"); }
   catch (e) { console.error("[crm restore]", e.message); }
 
+  // seed demo HR data (workers + leave types + recent attendance) on first run
+  try { const hr = hrService.ensureHr(); if (hr.changed) console.log("  ├─ HR       : seeded " + hr.workers + " workers + attendance"); }
+  catch (e) { console.error("[hr seed]", e.message); }
+
+  // seed demo transport agencies (dispatch directory) on first run
+  try { const dp = erpService.ensureDispatch(); if (dp.changed) console.log("  ├─ Dispatch : seeded " + dp.count + " transport agencies"); }
+  catch (e) { console.error("[dispatch seed]", e.message); }
+
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);
   console.log(`  ├─ Frontend : http://localhost:${PORT}/`);
@@ -83,5 +100,16 @@ const server = app.listen(PORT, () => {
     console.log(`  └─ Users    : ${seedInfo.count || "existing"} accounts\n`);
   }
 });
+
+// Graceful shutdown: stop accepting connections, close the DB handle, exit.
+function shutdown(sig) {
+  console.log(`\n[${sig}] shutting down…`);
+  server.close(() => { try { closeDb(); } catch {} process.exit(0); });
+  setTimeout(() => process.exit(0), 3000).unref(); // hard-stop if close hangs
+}
+["SIGINT", "SIGTERM"].forEach((s) => process.on(s, () => shutdown(s)));
+// Last-resort safety nets so one bad request can't silently take the server down.
+process.on("unhandledRejection", (r) => console.error("[unhandledRejection]", r));
+process.on("uncaughtException", (e) => console.error("[uncaughtException]", e.stack || e));
 
 module.exports = { app, server };

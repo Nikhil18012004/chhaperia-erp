@@ -18,8 +18,7 @@
     return E;
   }
 
-  /* ---------- formatting ---------- */
-  const cur = D => (global.DB && DB.cur) || "₹";
+  /* ---------- formatting (all money is ₹ / INR) ---------- */
   function money(n){ if(n==null||isNaN(n)) return "—"; const neg=n<0; n=Math.abs(n);
     let s; if(n>=1e7) s=(n/1e7).toFixed(2)+" Cr"; else if(n>=1e5) s=(n/1e5).toFixed(2)+" L"; else s=Math.round(n).toLocaleString("en-IN");
     return (neg?"-":"")+"₹"+s; }
@@ -342,7 +341,8 @@
     return { invValue:inv.total, fgValue:inv.fg, rmValue:inv.rm, skuCount:inv.items,
       openPO:openPO.length, poValue, openSO:openSO.length, soValue, lowStock:low,
       prod30, sold30, activeWO, alertCount: alerts().length,
-      openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate };
+      openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate,
+      hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 
   const E = {

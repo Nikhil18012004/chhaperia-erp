@@ -11,7 +11,6 @@
     let filter={q:"", cat:"all", state:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       h("button",{class:"btn",onclick:exportCSV,html:"⬇ Export CSV"}),
-      h("button",{class:"btn",onclick:autoReorderDraftPOs,html:"🛒 Auto-Reorder"}),
       newItemMenu()
     ]));
 
@@ -82,7 +81,7 @@
         r.it.reorder, r.it.safety, r.st.avgCost.toFixed(2), r.st.value.toFixed(0), r.st.label
       ].join(",")));
       downloadCSV("chhaperia_inventory.csv", lines.join("\n"));
-      toast("Inventory exported to CSV","",{type:"ok",title:"Export complete"});
+      toast("Inventory exported to CSV",{type:"ok",title:"Export complete"});
     }
   }};
 
@@ -102,24 +101,6 @@
       else close();
     });
     return wrap;
-  }
-
-  /* ----- one-click: turn every below-reorder item into draft POs (grouped by supplier) ----- */
-  function autoReorderDraftPOs(){
-    const sugg=ENG.data.items.map(it=>({it,st:ENG.status(it.id)})).filter(x=>x.st.suggest>0);
-    if(!sugg.length){ toast("Everything is above reorder level — nothing to order",{type:"ok",title:"Auto-Reorder"}); return; }
-    const bySup={}; sugg.forEach(x=>{ const s=x.it.supplierId||"SUP-09"; (bySup[s]=bySup[s]||[]).push(x); });
-    let n=0;
-    Object.entries(bySup).forEach(([sid,list])=>{
-      const poId="PO-"+String(1000+ENG.data.purchaseorders.length+1+n).slice(1); n++;
-      ENG.data.purchaseorders.push({ id:poId, date:DB.helpers.iso(DB.helpers.today()), supplierId:sid,
-        lines:list.map(x=>({itemId:x.it.id, qty:x.st.suggest, rate:x.it.cost||0, recd:0})),
-        status:"Open", eta:DB.helpers.daysAhead(Math.max(...list.map(x=>x.it.lead||7))),
-        value:list.reduce((s,x)=>s+x.st.suggest*(x.it.cost||0),0) });
-    });
-    App.persistAndRefresh();
-    toast(`${n} draft PO(s) created for ${sugg.length} low-stock item(s)`,{type:"ok",title:"Auto-Reorder"});
-    App.go("purchase");
   }
 
   /* ----- item detail drawer/modal ----- */
@@ -182,6 +163,7 @@
       field("Std Cost (₹)",`<input class="input" id="f_cost" type="number" value="${f('cost',0)}">`),
       field("Selling Price (₹)",`<input class="input" id="f_price" type="number" value="${f('price',0)}">`),
       field("HSN Code",`<input class="input" id="f_hsn" value="${esc(f('hsn',''))}">`),
+      field("Barcode",`<input class="input" id="f_barcode" value="${esc(f('barcode',''))}" placeholder="Scan/enter, or leave blank to auto-generate">`),
     ]);
     const mo=modal({title:edit?"Edit Item":"New Item", sub:edit?it.id:"Create a stock item", body,
       foot:[ h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
@@ -191,13 +173,14 @@
       const code=g("f_id").trim().toUpperCase();
       if(!code||!g("f_name").trim()){ toast("Code and name are required",{type:"warn"}); return; }
       if(!edit && ENG.item(code)){ toast("Item code already exists",{type:"danger"}); return; }
-      const obj=edit?it:{barcode:"890"+Math.floor(Math.random()*1e7), active:true, moq:0};
+      const obj=edit?it:{active:true, moq:0};
+      const barcode=g("f_barcode").trim() || obj.barcode || ("890"+Math.floor(Math.random()*1e7));
       Object.assign(obj,{ id:code, name:g("f_name").trim(), cat:g("f_cat"), uom:g("f_uom"),
         reorder:+g("f_reorder")||0, safety:+g("f_safety")||0, lead:+g("f_lead")||7,
-        cost:+g("f_cost")||0, price:+g("f_price")||0, hsn:g("f_hsn") });
+        cost:+g("f_cost")||0, price:+g("f_price")||0, hsn:g("f_hsn"), barcode });
       let openMove=null;
       if(!edit){ ENG.data.items.push(obj);
-        openMove={id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:code, wh:obj.cat==="FG"?"WH-FG":"WH-PNY", type:"OPEN", qty:0, rate:obj.cost, ref:"NEW", note:"Item created"};
+        openMove={id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:code, wh:obj.cat==="FG"?"WH-FG":"WH-PNY", type:"OPEN", qty:0, rate:obj.cost, ref:"NEW", note:"Item created"};
         ENG.data.movements.push(openMove);
       }
       mo.close(); toast(edit?"Item updated":"Item created",{type:"ok"});
@@ -232,6 +215,7 @@
     }
     const body=h("div",{},[
       h("div",{class:"form-grid"},[
+        field("Scan / Barcode",`<input class="input" id="r_scan" placeholder="Scan a received item to jump to its line">`,"full"),
         field("Purchase Order", selectHTML("r_po", openPOs.map(p=>({v:p.id, l:p.id+" — "+trim(ENG.sup(p.supplierId),24)})), openPOs[0].id)),
         field("Receive into Warehouse", selectHTML("r_wh", ENG.data.warehouses.map(w=>({v:w.id,l:w.name})), "WH-PNY")),
       ]),
@@ -242,6 +226,13 @@
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:"Receive Goods"})]});
     const poSel=UI.$("#r_po");
+    // scanning a received item jumps to its line on the current PO
+    attachScan(UI.$("#r_scan"), (found)=>{
+      const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
+      const idx=(po.lines||[]).findIndex(l=>l.itemId===found.id);
+      if(idx<0){ toast(found.name+" is not on "+po.id,{type:"warn"}); return; }
+      const q=UI.$("#r_qty_"+idx); if(q){ q.focus(); if(q.select) q.select(); }
+    });
     function renderLines(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const host=UI.$("#r_lines"); host.innerHTML="";
@@ -268,8 +259,8 @@
         if(rq>pend) rq=pend;
         if(rq>0){
           recvLines.push({i:idx, qty:rq});
-          ENG.data.movements.push({id:"MV-"+Date.now()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
-            qty:rq, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by:"user"});
+          ENG.data.movements.push({id:genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
+            qty:rq, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by:(App.user&&App.user.username)||"user"});
           l.recd=+((l.recd||0)+rq).toFixed(3); posted++;
         }
       });
@@ -349,18 +340,7 @@
     const rateEl=UI.$("#s_rate"), costEl=UI.$("#s_cost");
     if(rateEl&&costEl) rateEl.addEventListener("input",()=>{ costEl.value=rateEl.value; });
     /* barcode scan: match by barcode or item code, select it, jump to qty */
-    const scan=UI.$("#s_scan");
-    if(scan){
-      scan.addEventListener("keydown",e=>{
-        if(e.key!=="Enter") return; e.preventDefault();
-        const raw=scan.value.trim(); if(!raw) return;
-        const v=raw.toLowerCase();
-        const found=ENG.data.items.find(i=>String(i.barcode||"").toLowerCase()===v || String(i.id).toLowerCase()===v);
-        if(found){ setSel("s_item",found.id); fillParams(); scan.value=""; const q=UI.$("#s_qty"); if(q) q.focus(); toast("Matched "+found.name,{type:"ok"}); }
-        else toast("No item matches “"+raw+"”",{type:"warn"});
-      });
-      setTimeout(()=>scan.focus(),40);
-    }
+    attachScan(UI.$("#s_scan"), (found)=>{ setSel("s_item",found.id); fillParams(); const q=UI.$("#s_qty"); if(q) q.focus(); });
     function save(){
       const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
       const qty=+g("s_qty"), rate=+g("s_rate")||0, wh=g("s_wh");
@@ -388,9 +368,9 @@
         it.reorder=+g("s_reorder")||0; it.safety=+g("s_safety")||0; it.lead=+g("s_lead")||7;
         it.cost=rate||it.cost||0; it.price=+g("s_price")||0; it.hsn=g("s_hsn").trim();
       }
-      const move={ id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()),
+      const move={ id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()),
         itemId, wh, type:"GRN", qty, rate, ref:"MANUAL-"+Math.floor(Math.random()*9000+1000),
-        note:"Manual stock addition", by:"user" };
+        note:"Manual stock addition", by:(App.user&&App.user.username)||"user" };
       ENG.data.movements.push(move);
       mo.close();
       toast(`${ENG.num(qty,2)} ${it.uom} added to ${it.name}`,{type:"ok",title:"Stock added"});
@@ -442,6 +422,7 @@
     function adjForm(){
       const items=ENG.data.items;
       const body=h("div",{class:"form-grid"},[
+        field("Scan / Barcode",`<input class="input" id="a_scan" placeholder="Scan or type barcode / item code, then press Enter">`,"full"),
         field("Item",selectHTML("a_item",items.map(i=>({v:i.id,l:i.id+" — "+trim(i.name,30)})),items[0].id)),
         field("Warehouse",selectHTML("a_wh",ENG.data.warehouses.map(w=>({v:w.id,l:w.name})),"WH-PNY")),
         field("Adjustment Type",selectHTML("a_type",[{v:"ADJ",l:"Adjustment (+/-)"},{v:"SCRAP",l:"Scrap (-)"} ,{v:"RET",l:"Return (+)"}],"ADJ")),
@@ -451,6 +432,7 @@
       const mo=modal({title:"Stock Adjustment", sub:"Posts an audited ledger entry", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn primary",onclick:save,text:"Post Entry"})]});
+      attachScan(UI.$("#a_scan"), (found)=>{ selectSet("a_item",found.id); const q=UI.$("#a_qty"); if(q) q.focus(); });
       async function save(){
         const id=UI.$("#a_item").value, qty=+UI.$("#a_qty").value;
         if(!qty || isNaN(qty)){ toast("Enter a non-zero quantity",{type:"warn"}); return; }
@@ -470,9 +452,9 @@
             {title:"Stock would go negative", danger:true});
           if(!ok) return;
         }
-        const move={id:"MV-"+Date.now(), date:DB.helpers.iso(DB.helpers.today()), itemId:id,
+        const move={id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:id,
           wh:UI.$("#a_wh").value, type:UI.$("#a_type").value, qty, rate:it.cost,
-          ref:UI.$("#a_type").value+"-"+Math.floor(Math.random()*9000+1000), note:UI.$("#a_note").value||"Manual adjustment", by:"user"};
+          ref:UI.$("#a_type").value+"-"+Math.floor(Math.random()*9000+1000), note:UI.$("#a_note").value||"Manual adjustment", by:(App.user&&App.user.username)||"user"};
         ENG.data.movements.push(move);
         mo.close(); toast("Ledger entry posted",{type:"ok"});
         App.saveDelta(()=>DB.movements.add(move));
@@ -524,6 +506,35 @@
   function whName(id){ return (ENG.data.warehouses.find(w=>w.id===id)||{}).name||id; }
   function whIcon(t){ return {"Raw Material":"🧱","WIP":"⚙️","Finished Goods":"🎁","Quarantine":"🔬"}[t]||"🏬"; }
   function trim(s,n){ s=String(s||""); return s.length>n?s.slice(0,n-1)+"…":s; }
+  /* collision-free sequential id: take the highest numeric suffix already in
+     use (NOT list.length, which drops after a delete and reuses live ids) and
+     add 1, preserving the widest zero-pad width seen. */
+  function nextSeqId(list, prefix){
+    let max=0, width=3;
+    (list||[]).forEach(x=>{ const m=/(\d+)\s*$/.exec(String((x&&x.id)||"")); if(m){ max=Math.max(max,+m[1]); width=Math.max(width,m[1].length); } });
+    return prefix+String(max+1).padStart(width,"0");
+  }
+  /* unique ledger movement id (Date.now alone collides within a millisecond) */
+  function genMoveId(){ return "MV-"+Date.now()+"-"+Math.floor(Math.random()*1e4); }
+  /* shared barcode-scan handler: on Enter, match a scanned string against an
+     item's barcode or code, clear the field and hand the item to onMatch.
+     Used by Add Stock, Receive-via-PO and Stock Adjustment. */
+  function attachScan(scanEl, onMatch){
+    if(!scanEl) return;
+    scanEl.addEventListener("keydown",e=>{
+      if(e.key!=="Enter") return; e.preventDefault();
+      const raw=scanEl.value.trim(); if(!raw) return;
+      const v=raw.toLowerCase();
+      const found=ENG.data.items.find(i=>String(i.barcode||"").toLowerCase()===v || String(i.id).toLowerCase()===v);
+      if(found){ scanEl.value=""; onMatch(found); toast("Matched "+found.name,{type:"ok"}); }
+      else toast("No item matches “"+raw+"”",{type:"warn"});
+    });
+    setTimeout(()=>{ try{ scanEl.focus(); }catch{} },40);
+  }
+  /* set a <select> to a value, adding the option if it isn't listed */
+  function selectSet(id,v){ const el=UI.$("#"+id); if(!el) return;
+    if(v!=null && ![...el.options].some(o=>o.value===String(v))) el.appendChild(new Option(String(v),String(v)));
+    el.value=v; }
   function cssv(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
   function last30Series(id){ const t=DB.helpers.today().getTime(); const labels=[],bal=[];
     const led=ENG.ledger(id); 
@@ -533,13 +544,12 @@
   function downloadCSV(name,content){ const blob=new Blob([content],{type:"text/csv"}); const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
   // expose for other modules
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, downloadCSV, trim, catName, moveBadge});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {
     addStock:    { ic:"📦", label:"Add Stock",             run:()=>addStockForm() },
     receivePO:   { ic:"🚚", label:"Receive via PO",        run:()=>receiveStockForm() },
     newItem:     { ic:"＋", label:"New Item",               run:()=>itemForm() },
-    autoReorder: { ic:"🛒", label:"Auto-Reorder → Draft POs", run:()=>autoReorderDraftPOs() },
   });
 })();

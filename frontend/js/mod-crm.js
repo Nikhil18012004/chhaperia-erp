@@ -26,7 +26,7 @@
   const trim = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
   const todayISO = () => DB.helpers.iso(DB.helpers.today());
 
-  M.crm = { title: "CRM Pipeline", sub: "Sales leads & enquiries", render(root) {
+  M.crm = { title: "CRM Pipeline", sub: "Sales leads & enquiries", render(root, params) {
     const stats = ENG.crmStats();
     const due = ENG.dueFollowUps();
 
@@ -89,6 +89,7 @@
       board.appendChild(column);
     });
     root.appendChild(board);
+    if (params && params.openNew) { params.openNew = false; leadForm(); }
 
     /* a single draggable-feel lead card */
     function leadCard(l) {
@@ -194,10 +195,9 @@
     l.stage = st;
     if (st === "Won" || st === "Lost") l.nextFollowUp = null;
     else if (!l.nextFollowUp || l.nextFollowUp < todayISO()) l.nextFollowUp = DB.helpers.daysAhead(3);
-    App.persistAndRefresh();
     toast(l.company + " → " + st, { type: "ok" });
     UI.$("#modalHost").hidden = true;
-    App.go("crm");
+    App.saveDelta(() => DB.leads.update(l.id, { stage: l.stage, nextFollowUp: l.nextFollowUp }));
   }
 
   /* ---- mark won / lost ----
@@ -213,10 +213,9 @@
       l.lostReason = reason || "Not specified";
       l.stage = "Lost";
       l.nextFollowUp = null;
-      App.persistAndRefresh();
       UI.$("#modalHost").hidden = true;
       toast(l.company + " marked Lost", { type: "warn" });
-      App.go("crm");
+      App.saveDelta(() => DB.leads.update(l.id, { stage: "Lost", lostReason: l.lostReason, nextFollowUp: null }));
       return;
     }
 
@@ -258,30 +257,38 @@
     if (makeSO) {
       const fg = ENG.item(l.product);
       const price = (fg && fg.price) || 0;
-      // derive a sensible quantity from the deal value (value ÷ unit price)
-      const qty = price > 0 ? Math.max(1, Math.round((l.value || 0) / price)) : 0;
-      const rate = price || (qty ? Math.round((l.value || 0) / qty) : 0);
-      const soId = "SO-" + String(1000 + ENG.data.salesorders.length + 1).slice(1);
-      ENG.data.salesorders.push({
-        id: soId,
+      // derive a sensible quantity from the deal value (value ÷ unit price);
+      // always carry at least one line so the granular SO endpoint accepts it
+      const qty = price > 0 ? Math.max(1, Math.round((l.value || 0) / price)) : 1;
+      const rate = price || (l.value || 0);
+      const so = {
+        id: window._erpUtil.nextSeqId(ENG.data.salesorders, "SO-"),
         date: DB.helpers.iso(DB.helpers.today()),
         customerId: cust.id,
-        lines: qty ? [{ itemId: l.product, qty, rate, width: (fg && fg.widthMM ? fg.widthMM[0] : 25) }] : [],
+        lines: [{ itemId: l.product, qty, rate, width: (fg && fg.widthMM ? fg.widthMM[0] : 25) }],
         status: "Confirmed",
         promised: DB.helpers.daysAhead(14),
         priority: "Normal",
         value: l.value || 0,
         fromLead: l.id, // traceability back to the CRM lead
+      };
+      ENG.data.salesorders.push(so);
+      l.salesOrderId = so.id; // traceability forward to the order
+      toast(`${so.id} created from ${l.company}`, { type: "ok", title: "Lead converted to order" });
+      App.saveDelta(async () => {
+        if (createdCustomer) await DB.customers.upsert(cust);
+        await DB.sales.create(so);
+        await DB.leads.update(l.id, { stage: "Won", customerId: cust.id, salesOrderId: so.id, nextFollowUp: null });
       });
-      l.salesOrderId = soId; // traceability forward to the order
-      App.persistAndRefresh();
-      toast(`${soId} created from ${l.company}`, { type: "ok", title: "Lead converted to order" });
       App.go("sales");
       return;
     }
 
-    App.persistAndRefresh();
     toast(l.company + " marked Won", { type: "ok" });
+    App.saveDelta(async () => {
+      if (createdCustomer) await DB.customers.upsert(cust);
+      await DB.leads.update(l.id, { stage: "Won", customerId: cust.id, nextFollowUp: null });
+    });
     App.go("crm");
   }
 
@@ -313,7 +320,7 @@
       if (next) l.nextFollowUp = next;
       // logging contact on a New lead auto-advances it to Contacted
       if (l.stage === "New") l.stage = "Contacted";
-      App.persistAndRefresh();
+      App.saveDelta(() => DB.leads.update(l.id, { activities: l.activities, nextFollowUp: l.nextFollowUp, stage: l.stage }));
       mo.close();
       toast("Activity logged", { type: "ok" });
       leadDetail(l.id);
@@ -370,9 +377,9 @@
         notes: UI.$("#l_notes").value.trim(),
       });
       if (!edit) ENG.data.leads.push(obj);
-      App.persistAndRefresh();
       mo.close();
       toast(edit ? "Lead updated" : "Lead created", { type: "ok" });
+      App.saveDelta(() => edit ? DB.leads.update(obj.id, obj) : DB.leads.create(obj));
       App.go("crm");
     }
   }
@@ -411,4 +418,9 @@
         ] });
     });
   }
+
+  // register the ⌘K quick action for CRM
+  window.ERPActions = Object.assign(window.ERPActions || {}, {
+    newLead: { ic: "🎯", label: "New Lead", run: () => App.go("crm", { openNew: true }) },
+  });
 })();

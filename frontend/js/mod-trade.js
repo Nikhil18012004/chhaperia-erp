@@ -52,16 +52,28 @@
       ],{onRow:r=>poDetail(r),empty:"No purchase orders"}));
     }
     draw();
+    // ⌘K "New Purchase Order" lands here with openNew; consume the flag so a
+    // later re-render (saveDelta) doesn't reopen the form.
+    if(params&&params.openNew){ params.openNew=false; poForm(); }
 
+    /* Receive all pending lines through the granular server endpoint (same
+       path as Inventory → Receive via PO), so the receipt logic + GRN posting
+       lives in one place on the server instead of being hand-built client-side
+       and clobbered via a full-state save. */
     async function receivePO(po){
       if(!await confirm(`Receive all pending items on ${po.id}? Goods will be posted to stock (GRN) at PO rates.`,{title:"Goods Receipt"})) return;
-      const date=DB.helpers.iso(DB.helpers.today());
-      po.lines.forEach(l=>{ const pend=l.qty-(l.recd||0); if(pend>0){
-        ENG.data.movements.push({id:"MV-"+Date.now()+"-"+l.itemId, date, itemId:l.itemId, wh:"WH-PNY", type:"GRN",
-          qty:pend, rate:l.rate, ref:po.id, note:"Goods receipt", supplierId:po.supplierId});
-        l.recd=l.qty; }});
-      po.status="Received";
-      App.persistAndRefresh(); draw(); toast(`${po.id} received — stock updated`,{type:"ok",title:"GRN posted"});
+      const wh="WH-PNY", date=DB.helpers.iso(DB.helpers.today());
+      const by=(App.user&&App.user.username)||"user";
+      const recvLines=[];
+      po.lines.forEach((l,i)=>{ const pend=+(l.qty-(l.recd||0)).toFixed(3); if(pend>0){
+        recvLines.push({i, qty:pend});
+        ENG.data.movements.push({id:U.genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
+          qty:pend, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by});
+        l.recd=+((l.recd||0)+pend).toFixed(3); }});
+      if(!recvLines.length){ toast("Nothing pending to receive",{type:"warn"}); return; }
+      po.status = po.lines.every(l=>(l.recd||0)>=l.qty-0.0001) ? "Received" : "Partially Received";
+      toast(`${po.id} received — stock updated`,{type:"ok",title:"GRN posted"});
+      App.saveDelta(()=>DB.purchase.receive(po.id,{wh, date, lines:recvLines}));
     }
 
     function poDetail(po){
@@ -93,7 +105,8 @@
       ENG.data.purchaseorders=ENG.data.purchaseorders.filter(p=>p.id!==po.id);
       if(grn.length) ENG.data.movements=ENG.data.movements.filter(m=>m.ref!==po.id);
       UI.$("#modalHost").hidden=true;
-      App.persistAndRefresh(); toast(`${po.id} deleted`,{type:"ok",title:"Removed"});
+      toast(`${po.id} deleted`,{type:"ok",title:"Removed"});
+      App.saveDelta(()=>DB.purchase.remove(po.id));  // server also reverses its GRN movements
     }
 
     function reorderWizard(){
@@ -115,14 +128,15 @@
     }
     function createPOsFromSuggestions(sugg){
       const bySup={}; sugg.forEach(x=>{ const s=x.it.supplierId||"SUP-09"; (bySup[s]=bySup[s]||[]).push(x); });
-      let n=0; Object.entries(bySup).forEach(([sid,items])=>{
-        const poId="PO-"+String(1000+ENG.data.purchaseorders.length+1+n).slice(1); n++;
-        ENG.data.purchaseorders.push({id:poId, date:DB.helpers.iso(DB.helpers.today()), supplierId:sid,
+      const created=[]; Object.entries(bySup).forEach(([sid,items])=>{
+        const po={id:U.nextSeqId(ENG.data.purchaseorders,"PO-"), date:DB.helpers.iso(DB.helpers.today()), supplierId:sid,
           lines:items.map(x=>({itemId:x.it.id, qty:x.st.suggest, rate:x.it.cost, recd:0})),
           status:"Open", eta:DB.helpers.daysAhead(Math.max(...items.map(x=>x.it.lead))),
-          value:items.reduce((s,x)=>s+x.st.suggest*x.it.cost,0)});
+          value:items.reduce((s,x)=>s+x.st.suggest*x.it.cost,0)};
+        ENG.data.purchaseorders.push(po); created.push(po);
       });
-      App.persistAndRefresh(); tab="open"; draw(); toast(`${n} purchase order(s) created from suggestions`,{type:"ok",title:"POs raised"});
+      tab="open"; toast(`${created.length} purchase order(s) created from suggestions`,{type:"ok",title:"POs raised"});
+      App.saveDelta(async()=>{ for(const po of created) await DB.purchase.create(po); });
     }
 
     function poForm(arg){
@@ -165,19 +179,21 @@
         const eta=UI.$("#po_eta").value, value=out.reduce((s,l)=>s+l.qty*l.rate,0);
         if(editPo){
           editPo.supplierId=sup; editPo.eta=eta; editPo.lines=out; editPo.value=value; editPo.status="Open";
-          App.persistAndRefresh(); mo.close(); toast(editPo.id+" updated",{type:"ok"});
+          mo.close(); toast(editPo.id+" updated",{type:"ok"});
+          App.saveDelta(()=>DB.purchase.update(editPo.id,{supplierId:sup, eta, lines:out, value, status:"Open"}));
         } else {
-          const poId="PO-"+String(1000+ENG.data.purchaseorders.length+1).slice(1);
-          ENG.data.purchaseorders.push({id:poId, date:DB.helpers.iso(DB.helpers.today()), supplierId:sup, lines:out,
-            status:"Open", eta, value});
-          App.persistAndRefresh(); mo.close(); tab="open"; draw(); toast(poId+" created",{type:"ok"});
+          const po={id:U.nextSeqId(ENG.data.purchaseorders,"PO-"), date:DB.helpers.iso(DB.helpers.today()), supplierId:sup, lines:out,
+            status:"Open", eta, value};
+          ENG.data.purchaseorders.push(po);
+          mo.close(); tab="open"; toast(po.id+" created",{type:"ok"});
+          App.saveDelta(()=>DB.purchase.create(po));
         }
       }
     }
   }};
 
   /* ============== SALES ============== */
-  M.sales = { title:"Sales Orders", sub:"Demand & dispatch", render(root){
+  M.sales = { title:"Sales Orders", sub:"Demand & dispatch", render(root, params){
     let tab="open";
     let filter={from:"", to:""};
     root.appendChild(pageHead("Sales Orders","Customer demand, ATP checks and dispatches that deduct finished goods automatically",[
@@ -221,6 +237,7 @@
       ],{onRow:r=>soDetail(r),empty:"No sales orders"}));
     }
     draw();
+    if(params&&params.openNew){ params.openNew=false; soForm(); }
 
     function fulfillBadge(so){
       const ok=so.lines.every(l=>ENG.stock(l.itemId).onHand>=l.qty);
@@ -234,10 +251,11 @@
         :`Dispatch ${so.id} to ${ENG.custName(so.customerId)}? Finished goods will be deducted from stock.`;
       if(!await confirm(msg,{title:"Dispatch Order",danger:short.length>0})) return;
       const date=DB.helpers.iso(DB.helpers.today());
-      so.lines.forEach(l=>{ ENG.data.movements.push({id:"MV-"+Date.now()+"-"+l.itemId, date, itemId:l.itemId, wh:"WH-FG", type:"SALE",
-        qty:-l.qty, rate:l.rate, ref:so.id, note:"Dispatch to "+ENG.custName(so.customerId), by:"sales"}); });
+      so.lines.forEach(l=>{ ENG.data.movements.push({id:U.genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh:"WH-FG", type:"SALE",
+        qty:-l.qty, rate:l.rate, ref:so.id, note:"Dispatch to "+ENG.custName(so.customerId), by:(App.user&&App.user.username)||"sales"}); });
       so.status="Dispatched";
-      App.persistAndRefresh(); draw(); toast(`${so.id} dispatched — stock deducted`,{type:"ok",title:"Dispatch posted"});
+      toast(`${so.id} dispatched — stock deducted`,{type:"ok",title:"Dispatch posted"});
+      App.saveDelta(()=>DB.sales.dispatch(so.id,{date}));  // server posts the SALE movements + sets status atomically
     }
     function soDetail(so){
       const body=h("div",{},[
@@ -268,7 +286,8 @@
       ENG.data.salesorders=ENG.data.salesorders.filter(s=>s.id!==so.id);
       if(sale.length) ENG.data.movements=ENG.data.movements.filter(m=>m.ref!==so.id);
       UI.$("#modalHost").hidden=true;
-      App.persistAndRefresh(); toast(`${so.id} deleted`,{type:"ok",title:"Removed"});
+      toast(`${so.id} deleted`,{type:"ok",title:"Removed"});
+      App.saveDelta(()=>DB.sales.remove(so.id));  // server also reverses its SALE movements
     }
     function soForm(arg){
       const editSo=(arg && typeof arg==="object" && arg.id)?arg:null;
@@ -305,13 +324,16 @@
         if(!out.length){ toast("Add at least one line",{type:"warn"}); return; }
         const value=out.reduce((s,l)=>s+l.qty*l.rate,0);
         if(editSo){
-          editSo.customerId=cust; editSo.priority=UI.$("#so_prio").value; editSo.promised=UI.$("#so_prom").value; editSo.lines=out; editSo.value=value;
-          App.persistAndRefresh(); mo.close(); toast(editSo.id+" updated",{type:"ok"});
+          const prio=UI.$("#so_prio").value, prom=UI.$("#so_prom").value;
+          editSo.customerId=cust; editSo.priority=prio; editSo.promised=prom; editSo.lines=out; editSo.value=value;
+          mo.close(); toast(editSo.id+" updated",{type:"ok"});
+          App.saveDelta(()=>DB.sales.update(editSo.id,{customerId:cust, priority:prio, promised:prom, lines:out, value}));
         } else {
-          const soId="SO-"+String(1000+ENG.data.salesorders.length+1).slice(1);
-          ENG.data.salesorders.push({id:soId, date:DB.helpers.iso(DB.helpers.today()), customerId:cust, lines:out,
-            status:"Confirmed", promised:UI.$("#so_prom").value, priority:UI.$("#so_prio").value, value});
-          App.persistAndRefresh(); mo.close(); tab="open"; draw(); toast(soId+" created",{type:"ok"});
+          const so={id:U.nextSeqId(ENG.data.salesorders,"SO-"), date:DB.helpers.iso(DB.helpers.today()), customerId:cust, lines:out,
+            status:"Confirmed", promised:UI.$("#so_prom").value, priority:UI.$("#so_prio").value, value};
+          ENG.data.salesorders.push(so);
+          mo.close(); tab="open"; toast(so.id+" created",{type:"ok"});
+          App.saveDelta(()=>DB.sales.create(so));
         }
       }
     }
@@ -370,4 +392,10 @@
   }};
 
   function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
+
+  // register ⌘K quick actions for Procurement & Sales
+  window.ERPActions = Object.assign(window.ERPActions||{}, {
+    newPO: { ic:"🛒", label:"New Purchase Order", run:()=>App.go("purchase",{openNew:true}) },
+    newSO: { ic:"🧾", label:"New Sales Order",    run:()=>App.go("sales",{openNew:true}) },
+  });
 })();

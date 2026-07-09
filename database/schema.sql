@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS customers (
   doc       TEXT NOT NULL              -- JSON: full customer record
 );
 
+-- Transport agencies / dispatch providers (logistics vendor master).
+CREATE TABLE IF NOT EXISTS transporters (
+  id        TEXT PRIMARY KEY,          -- TR-001
+  doc       TEXT NOT NULL              -- JSON: name,contact,phone,email,city,state,
+                                       --       gstin,pan,vehicleTypes[],routes,rateBasis,
+                                       --       baseRate,onTime,rating,owner,terms,active,notes
+);
+
 -- Item master — common columns promoted, the rest kept in doc
 CREATE TABLE IF NOT EXISTS items (
   id          TEXT PRIMARY KEY,
@@ -177,4 +185,103 @@ CREATE TABLE IF NOT EXISTS users (
   doc        TEXT                      -- JSON: phone, notes, etc.
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+
+-- ============================================================
+--  HUMAN RESOURCES — workers/labour master, biometric attendance,
+--  leave and payroll. Kept fully configurable (daily-wage base with
+--  admin-set overtime multiplier + toggleable PF/ESI/PT deductions;
+--  leave types defined by the admin). The biometric device pushes
+--  raw punches to /api/hr/punch 24/7; the service derives the daily
+--  muster (first-in/last-out, hours, overtime) from them.
+-- ============================================================
+
+-- Worker / labour master. Common columns promoted; rest in doc JSON.
+CREATE TABLE IF NOT EXISTS hr_workers (
+  id          TEXT PRIMARY KEY,        -- EMP-0001
+  name        TEXT NOT NULL,
+  dept        TEXT,                    -- coating | slitting | fiberglass | packing | admin …
+  designation TEXT,
+  pay_type    TEXT DEFAULT 'daily',    -- daily | monthly
+  daily_rate  REAL DEFAULT 0,          -- ₹ / day (daily-wage base)
+  monthly_ctc REAL DEFAULT 0,          -- ₹ / month (monthly-salaried)
+  device_uid  TEXT,                    -- biometric device user id (maps punches → worker)
+  active      INTEGER DEFAULT 1,
+  joined      TEXT,
+  doc         TEXT NOT NULL            -- JSON: phone,email,dob,gender,pfNo,esiNo,uan,
+                                       --       bank{acc,ifsc,name},address,shift,
+                                       --       allowances,leaveBalances{},photo…
+);
+CREATE INDEX IF NOT EXISTS idx_hrw_dept ON hr_workers(dept);
+CREATE INDEX IF NOT EXISTS idx_hrw_device ON hr_workers(device_uid);
+
+-- Raw biometric punches (source of truth for attendance). Append-only.
+CREATE TABLE IF NOT EXISTS hr_punches (
+  id          TEXT PRIMARY KEY,
+  worker_id   TEXT,                    -- resolved from device_uid (nullable if unknown)
+  device_uid  TEXT,                    -- raw id as sent by the device
+  ts          TEXT NOT NULL,           -- ISO timestamp of the punch
+  direction   TEXT,                    -- in | out | auto
+  device_id   TEXT,                    -- device serial / location
+  source      TEXT DEFAULT 'device'    -- device | manual | sim
+);
+CREATE INDEX IF NOT EXISTS idx_hrp_worker ON hr_punches(worker_id);
+CREATE INDEX IF NOT EXISTS idx_hrp_ts ON hr_punches(ts);
+
+-- Daily muster — one derived row per worker per day.
+CREATE TABLE IF NOT EXISTS hr_attendance (
+  id         TEXT PRIMARY KEY,         -- <worker_id>:<date>
+  worker_id  TEXT NOT NULL,
+  date       TEXT NOT NULL,            -- YYYY-MM-DD
+  status     TEXT,                     -- P | A | HD | WO | L (present/absent/half/weekoff/leave)
+  in_time    TEXT,                     -- HH:MM (first punch)
+  out_time   TEXT,                     -- HH:MM (last punch)
+  hours      REAL DEFAULT 0,
+  ot_hours   REAL DEFAULT 0,
+  note       TEXT,
+  source     TEXT DEFAULT 'device'     -- device | manual
+);
+CREATE INDEX IF NOT EXISTS idx_hra_worker ON hr_attendance(worker_id);
+CREATE INDEX IF NOT EXISTS idx_hra_date ON hr_attendance(date);
+
+-- Configurable leave types (admin-defined: quota + accrual rule).
+CREATE TABLE IF NOT EXISTS hr_leave_types (
+  id       TEXT PRIMARY KEY,           -- EL | CL | SL | any custom code
+  name     TEXT NOT NULL,
+  quota    REAL DEFAULT 0,             -- annual entitlement (days)
+  accrual  TEXT DEFAULT 'fixed',       -- fixed (credited yearly) | earned (1/20 worked) | none
+  paid     INTEGER DEFAULT 1,
+  color    TEXT
+);
+
+-- Leave applications / ledger.
+CREATE TABLE IF NOT EXISTS hr_leaves (
+  id         TEXT PRIMARY KEY,         -- LV-0001
+  worker_id  TEXT NOT NULL,
+  type       TEXT NOT NULL,            -- hr_leave_types.id
+  from_date  TEXT NOT NULL,
+  to_date    TEXT NOT NULL,
+  days       REAL DEFAULT 0,
+  status     TEXT DEFAULT 'Pending',   -- Pending | Approved | Rejected
+  reason     TEXT,
+  applied_on TEXT,
+  decided_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_hrl_worker ON hr_leaves(worker_id);
+CREATE INDEX IF NOT EXISTS idx_hrl_status ON hr_leaves(status);
+
+-- Monthly payroll runs + their payslips (per-worker computed lines).
+CREATE TABLE IF NOT EXISTS hr_payruns (
+  id           TEXT PRIMARY KEY,       -- PR-2026-07
+  period       TEXT NOT NULL,          -- YYYY-MM
+  status       TEXT DEFAULT 'Draft',   -- Draft | Finalized
+  generated_at TEXT,
+  doc          TEXT                    -- JSON: totals snapshot + config used
+);
+CREATE TABLE IF NOT EXISTS hr_payslips (
+  id         TEXT PRIMARY KEY,         -- <payrun_id>:<worker_id>
+  payrun_id  TEXT NOT NULL,
+  worker_id  TEXT NOT NULL,
+  doc        TEXT NOT NULL             -- JSON: daysPresent,otHours,gross,deductions{},advances,net…
+);
+CREATE INDEX IF NOT EXISTS idx_hrps_run ON hr_payslips(payrun_id);
 

@@ -31,30 +31,46 @@
   function toast(msg, opts={}){
     const {type="info", title, dur=3200}=opts;
     const ic={ok:"✓",warn:"⚠",danger:"✕",info:"ℹ"}[type]||"ℹ";
-    const t=h("div",{class:"toast "+type},[
-      h("div",{class:"ic",text:ic}),
+    const host=$("#toasts");
+    // announce toasts to assistive tech (set once on the container)
+    if(host && !host.hasAttribute("aria-live")){ host.setAttribute("aria-live","polite"); host.setAttribute("aria-atomic","false"); }
+    const t=h("div",{class:"toast "+type,role:type==="danger"?"alert":"status"},[
+      h("div",{class:"ic","aria-hidden":"true",text:ic}),
       h("div",{},[ title?h("div",{class:"t",text:title}):null, h("div",{class:"d",text:msg}) ])
     ]);
-    $("#toasts").appendChild(t);
+    host.appendChild(t);
     setTimeout(()=>{ t.classList.add("out"); setTimeout(()=>t.remove(),320); }, dur);
   }
 
   /* ---------- modal ---------- */
   function modal({title, sub, body, foot, wide}){
     const host=$("#modalHost"); host.hidden=false; host.innerHTML="";
-    const m=h("div",{class:"modal",style:wide?"width:min(960px,96vw)":""},[
+    const prevFocus=document.activeElement;   // restore focus on close (a11y)
+    const m=h("div",{class:"modal",role:"dialog","aria-modal":"true","aria-label":title||"Dialog",style:wide?"width:min(960px,96vw)":""},[
       h("div",{class:"modal-head"},[
         h("div",{},[ h("h3",{text:title||""}), sub?h("div",{class:"sub",text:sub}):null ]),
-        h("button",{class:"icon-btn",style:"margin-left:auto",onclick:close,text:"✕"})
+        h("button",{class:"icon-btn","aria-label":"Close dialog",style:"margin-left:auto",onclick:close,text:"✕"})
       ]),
       h("div",{class:"modal-body"}, typeof body==="string"?h("div",{html:body}):body),
       foot?h("div",{class:"modal-foot"},foot):null
     ]);
     host.appendChild(m);
-    function onKey(e){ if(e.key==="Escape") close(); }
+    // move focus into the dialog for keyboard/screen-reader users
+    requestAnimationFrame(()=>{ const f=m.querySelector('input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button.primary,button'); if(f) try{f.focus();}catch{} });
+    function focusables(){ return [...m.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(el=>el.offsetParent!==null); }
+    function onKey(e){
+      if(e.key==="Escape"){ close(); return; }
+      if(e.key==="Tab"){                       // simple focus trap
+        const f=focusables(); if(!f.length) return;
+        const first=f[0], last=f[f.length-1];
+        if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+        else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+      }
+    }
     document.addEventListener("keydown",onKey);
     host.onclick=e=>{ if(e.target===host) close(); };
-    function close(){ host.hidden=true; host.innerHTML=""; document.removeEventListener("keydown",onKey); }
+    function close(){ host.hidden=true; host.innerHTML=""; document.removeEventListener("keydown",onKey);
+      if(prevFocus && prevFocus.focus) try{ prevFocus.focus(); }catch{} }
     return {close, el:m};
   }
 
@@ -157,6 +173,14 @@
     {id:"sales", icon:"🧾", label:"Sales Orders", accent:"orange", pillKey:"openSO"},
     {id:"suppliers", icon:"🏭", label:"Suppliers", accent:"violet"},
     {id:"customers", icon:"🤝", label:"Customers", accent:"pink"},
+    {id:"dispatch", icon:"🚚", label:"Dispatch", accent:"amber"},
+    {sec:"HR & Payroll"},
+    {id:"hr", icon:"▦", label:"Overview", accent:"teal"},
+    {id:"hr-workers", icon:"👷", label:"Workers", accent:"teal"},
+    {id:"hr-attendance", icon:"🕒", label:"Attendance", accent:"teal"},
+    {id:"hr-leave", icon:"🌴", label:"Leave", accent:"teal", pillKey:"hrPendingLeaves"},
+    {id:"hr-payroll", icon:"💰", label:"Payroll", accent:"teal"},
+    {id:"hr-settings", icon:"⚙", label:"Settings", accent:"teal"},
     {sec:"System"},
     {id:"reports", icon:"📊", label:"Reports", accent:"green"},
     {id:"users", icon:"👥", label:"Users & Access", accent:"red", adminOnly:true},
