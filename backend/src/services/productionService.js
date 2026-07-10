@@ -140,7 +140,7 @@ function createWorkOrder(user, body) {
     status: "Released", due: body.due || null, line,
     progress: 0, priority: body.priority || "Normal",
     route: S.freshRoute({ line, itemId: body.itemId }), stageIdx: 0, legacy: false,
-    createdBy: user.username,
+    createdBy: user.username, createdAt: new Date().toISOString(),
   };
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId);

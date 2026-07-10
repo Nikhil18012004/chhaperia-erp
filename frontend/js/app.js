@@ -52,6 +52,7 @@
         return;
       }
       ENG.init(data);
+      this._lastSig=this._stateSig(data);   // baseline for auto-refresh change detection
       const app=$("#app"); app.classList.remove("sup-mode"); // clear supervisor mode if switching roles
       // restore settings
       const s = data.settings||{};
@@ -76,6 +77,43 @@
       this.hideSplash();
       $("#login").hidden = true;
       $("#app").hidden=false;
+
+      // keep the UI live: poll the server and auto-apply changes made by
+      // other users / sessions without a manual browser refresh
+      this.startAutoRefresh();
+    },
+
+    /* ---- auto-refresh ----
+       Poll the server periodically and, when the dataset actually changed,
+       re-render the current view. Skipped while the tab is hidden, a modal /
+       palette / drawer is open, or the user is typing — so it never yanks
+       the UI out from under an in-progress edit. */
+    _stateSig(s){ try{ return JSON.stringify(s); }catch(e){ return String(Math.random()); } },
+    _uiBusy(){
+      const mh=$("#modalHost"); if(mh && !mh.hidden) return true;
+      const ck=$("#cmdk"); if(ck && !ck.hidden) return true;
+      const ad=$("#alertDrawer"); if(ad && ad.classList.contains("open")) return true;
+      const ae=document.activeElement; if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+      return false;
+    },
+    startAutoRefresh(ms){
+      this.stopAutoRefresh();
+      this._pollTimer=setInterval(()=>this.pollState(), ms||15000);
+    },
+    stopAutoRefresh(){ if(this._pollTimer){ clearInterval(this._pollTimer); this._pollTimer=null; } },
+    async pollState(){
+      if(this._polling || document.hidden || this._uiBusy()) return;
+      this._polling=true;
+      try{
+        const fresh=await DB.loadAsync();
+        const sig=this._stateSig(fresh);
+        if(sig!==this._lastSig){
+          this._lastSig=sig;
+          if(this._uiBusy()) return;            // user started interacting mid-fetch — apply next tick
+          ENG.init(fresh); this.buildNav(); this.refreshAlerts(); this.refreshView();
+        }
+      }catch(e){ /* transient network/auth blip — try again next tick */ }
+      finally{ this._polling=false; }
     },
 
     hideSplash(){
@@ -118,6 +156,7 @@
     },
 
     async logout(){
+      this.stopAutoRefresh();
       try{ await DB.auth.logout(); }catch{}
       this.user=null;
       location.hash="";
@@ -236,6 +275,7 @@
     async reloadState(){
       try{
         const fresh=await DB.loadAsync();
+        this._lastSig=this._stateSig(fresh);   // keep auto-refresh baseline in sync
         ENG.init(fresh);
         this.buildNav(); this.refreshAlerts(); this.refreshView();
       }catch(e){ console.warn("reloadState failed",e); }
