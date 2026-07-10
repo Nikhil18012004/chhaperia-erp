@@ -340,8 +340,9 @@
       document.addEventListener("click",(e)=>{ if(!e.target.closest(".accent-pop")) $("#accentMenu").hidden=true; });
       $("#autoAccent").onchange=(e)=>this.setAutoAccent(e.target.checked);
       $("#searchTrigger").onclick=()=>this.openCmdk();
-      // org/user from data
-      const org=ENG.data.org; $("#userName").textContent=org.contacts[0].name; $("#userAvatar").textContent=org.contacts[0].name.split(" ").map(x=>x[0]).slice(0,2).join("");
+      // org name/sub from data — the user chip (name/avatar) is set by
+      // applyRoleChrome() from the logged-in account, never from org contacts.
+      const org=ENG.data.org;
       const on=$("#orgName"), os=$("#orgSub");
       if(on) on.textContent=org.short||org.name;
       if(os) os.textContent="Doddaballapur, Bangalore";

@@ -382,7 +382,7 @@ function buildSeed() {
 
   const org = {
     name:"Chhaperia Cable Material Pvt. Ltd.",
-    short:"Chhaperia International",
+    short:"Chhaperia Cable Material",
     group:"Chhaperia Group",
     tagline:"A Revolutionary & Innovative Manufacturer of Cable Tapes",
     estd:1959,
