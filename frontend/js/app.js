@@ -132,6 +132,10 @@
       if(roleEl) roleEl.textContent = ({admin:"Administrator",office:"Office Desk",supervisor:"Supervisor"})[u.role] || u.role || "";
       if(av) av.textContent = (u.name||u.username||"U").split(" ").map(x=>x[0]).slice(0,2).join("").toUpperCase();
       const logout=$("#logoutBtn"); if(logout) logout.onclick=()=>this.logout();
+      // theme + accent are system settings — only admin may change them
+      const admin=this.isAdmin();
+      const themeBtn=$("#themeToggle"); if(themeBtn) themeBtn.hidden=!admin;
+      const accentPop=document.querySelector(".accent-pop"); if(accentPop) accentPop.hidden=!admin;
     },
 
     buildNav(){
@@ -155,8 +159,22 @@
       });
     },
 
+    /* ---- role-based module access ----
+       Admin sees everything. Other roles (office) are denied any NAV item
+       flagged adminOnly — currently the Overview and System sections. */
+    isAdmin(){ return !!(this.user && this.user.role === "admin"); },
+    canAccess(id){
+      const meta = UI.NAV.find(n => n.id === id);
+      return meta ? !(meta.adminOnly && !this.isAdmin()) : true;
+    },
+    homeId(){
+      const first = UI.NAV.find(n => n.id && !(n.adminOnly && !this.isAdmin()));
+      return first ? first.id : "dashboard";
+    },
+
     go(id, params){
-      if(!M[id]){ id="dashboard"; }
+      if(!M[id]){ id=this.homeId(); }
+      if(!this.canAccess(id)){ id=this.homeId(); } // block hidden modules by hash/palette
       this.current=id; this.params=params||null;
       location.hash=id;
       // nav active state
@@ -189,6 +207,7 @@
        PATCH /settings fast path — no need to rewrite the whole dataset just to
        flip a colour. Re-renders locally so the change shows instantly. */
     persistSettings(){
+      if(!this.isAdmin()) return; // theme/accent are system settings — admin only
       const s={theme:this.theme,accent:this.accent,autoAccent:this.autoAccent,lowStockOnly:false};
       ENG.data.settings=s;
       DB.saveSettings(s);
@@ -273,7 +292,7 @@
     closeCmdk(){ $("#cmdk").hidden=true; },
     cmdkItems(q){
       q=q.toLowerCase(); const out=[];
-      UI.NAV.forEach(n=>{ if(n.sec)return; if(!q||n.label.toLowerCase().includes(q)) out.push({ic:n.icon,label:n.label,tag:"Module",act:()=>this.go(n.id)}); });
+      UI.NAV.forEach(n=>{ if(n.sec||!this.canAccess(n.id))return; if(!q||n.label.toLowerCase().includes(q)) out.push({ic:n.icon,label:n.label,tag:"Module",act:()=>this.go(n.id)}); });
       // quick actions registered by modules (Add Stock, Receive PO, …)
       const acts=global.ERPActions||{};
       Object.keys(acts).forEach(k=>{ const a=acts[k];

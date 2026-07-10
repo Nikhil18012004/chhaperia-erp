@@ -156,9 +156,9 @@
 
   /* ---------- NAV MANIFEST ---------- */
   const NAV = [
-    {sec:"Overview"},
-    {id:"dashboard", icon:"▦", label:"Dashboard", accent:"orange"},
-    {id:"analytics", icon:"📈", label:"Analytics", accent:"violet"},
+    {sec:"Overview", adminOnly:true},
+    {id:"dashboard", icon:"▦", label:"Dashboard", accent:"orange", adminOnly:true},
+    {id:"analytics", icon:"📈", label:"Analytics", accent:"violet", adminOnly:true},
     {sec:"Inventory"},
     {id:"inventory", icon:"📦", label:"Stock Items", accent:"blue"},
     {id:"ledger", icon:"📒", label:"Stock Ledger", accent:"teal"},
@@ -181,10 +181,10 @@
     {id:"hr-leave", icon:"🌴", label:"Leave", accent:"teal", pillKey:"hrPendingLeaves"},
     {id:"hr-payroll", icon:"💰", label:"Payroll", accent:"teal"},
     {id:"hr-settings", icon:"⚙", label:"Settings", accent:"teal"},
-    {sec:"System"},
-    {id:"reports", icon:"📊", label:"Reports", accent:"green"},
+    {sec:"System", adminOnly:true},
+    {id:"reports", icon:"📊", label:"Reports", accent:"green", adminOnly:true},
     {id:"users", icon:"👥", label:"Users & Access", accent:"red", adminOnly:true},
-    {id:"settings", icon:"⚙", label:"Settings", accent:"orange"},
+    {id:"settings", icon:"⚙", label:"Settings", accent:"orange", adminOnly:true},
   ];
 
   global.UI = { $, $$, h, esc, toast, modal, confirm, table, badge, meter, sparkEl, NAV };

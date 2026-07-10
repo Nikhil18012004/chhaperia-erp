@@ -131,7 +131,8 @@ router.put("/state", requireAuth, requireRole("admin", "office"), (req, res, nex
   try { res.json(erp.saveState(req.body)); } catch (e) { next(e); }
 });
 
-router.patch("/settings", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+// System settings (theme/accent/config) are admin only.
+router.patch("/settings", requireAuth, requireRole("admin"), (req, res, next) => {
   try { res.json(erp.updateSettings(req.body)); } catch (e) { next(e); }
 });
 
