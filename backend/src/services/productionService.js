@@ -31,12 +31,7 @@ function todayISO() {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 }
 
-function calcProgress(route) {
-  if (!route || !route.length) return 0;
-  let p = 0;
-  route.forEach((r) => { if (r.status === "Completed") p += 1; else if (r.status === "In Production") p += 0.5; });
-  return Math.round((p / route.length) * 100);
-}
+const calcProgress = S.calcProgress; // single source of truth (stageService)
 
 /** Ensure a WO has a route (bridges any WO that predates the stage model). */
 function withRoute(wo) {
@@ -60,8 +55,9 @@ function advance(user, woId, action) {
   const data = fullState();                       // read-only context (items, boms)
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
 
-  const wo = withRoute(repo.getWorkOrder(woId));
-  if (!wo.id) throw err("Work order not found", 404);
+  const found = repo.getWorkOrder(woId);
+  if (!found || !found.id) throw err("Work order not found", 404);
+  const wo = withRoute(found);
 
   const route = wo.route;
   const idx = Math.min(Math.max(wo.stageIdx || 0, 0), route.length - 1);

@@ -239,6 +239,16 @@ function seedRouteFromLegacy(wo) {
   return { route, stageIdx: done ? route.length - 1 : curIdx, legacy: true };
 }
 
+/* route-derived completion % (Completed = 1, In Production = 0.5 of a stage).
+   Single source of truth for progress — productionService delegates here so
+   the stored wo.progress can never drift from the route. */
+function calcProgress(route) {
+  if (!route || !route.length) return 0;
+  let p = 0;
+  route.forEach((r) => { if (r.status === "Completed") p += 1; else if (r.status === "In Production") p += 0.5; });
+  return Math.round((p / route.length) * 100);
+}
+
 /* recompute the flat wo.status (for admin views / analytics) from the route */
 function rollupStatus(wo) {
   if (wo.dispatched) return "Dispatched";
@@ -315,15 +325,23 @@ function ensureStageModel(data) {
     });
   });
 
-  // 2) attach routes to work orders that don't have one
+  // 2) attach routes to work orders that don't have one, and reconcile the
+  //    flat status + progress fields against the route for EVERY work order.
+  //    (Seed data set progress to a random value independent of the route, so
+  //    without this the Production board's progress bar disagreed with its
+  //    stage dots. Runs idempotently on every boot → self-heals old data.)
   data.workorders.forEach((wo) => {
-    if (wo.route && wo.route.length) return;
-    const seeded = seedRouteFromLegacy(wo);
-    wo.route = seeded.route;
-    wo.stageIdx = seeded.stageIdx;
-    wo.legacy = seeded.legacy;
-    wo.status = rollupStatus(wo);
-    changed = true;
+    if (!wo.route || !wo.route.length) {
+      const seeded = seedRouteFromLegacy(wo);
+      wo.route = seeded.route;
+      wo.stageIdx = seeded.stageIdx;
+      wo.legacy = seeded.legacy;
+      changed = true;
+    }
+    const status = rollupStatus(wo);
+    const progress = calcProgress(wo.route);
+    if (wo.status !== status) { wo.status = status; changed = true; }
+    if (wo.progress !== progress) { wo.progress = progress; changed = true; }
   });
 
   return { changed };
@@ -334,6 +352,6 @@ module.exports = {
   wipId, templateKeyFor, templateFor, specForProduct, specForWO,
   materialRole, areaCovers,
   computeStagePlan, stageMovements,
-  freshRoute, seedRouteFromLegacy, rollupStatus,
+  freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,
   stageForArea, currentStage, ensureStageModel,
 };
