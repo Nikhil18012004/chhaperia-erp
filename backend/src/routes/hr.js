@@ -98,7 +98,7 @@ router.patch("/payslips/:id", requireAuth, office, (req, res, next) => {
 router.get("/config", requireAuth, office, (req, res, next) => {
   try { res.json(hr.getConfig()); } catch (e) { next(e); }
 });
-router.patch("/config", requireAuth, requireRole("admin"), (req, res, next) => {
+router.patch("/config", requireAuth, office, (req, res, next) => {
   try { res.json(hr.setConfig(req.body || {})); } catch (e) { next(e); }
 });
 
