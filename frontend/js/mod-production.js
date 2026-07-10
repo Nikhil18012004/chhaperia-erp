@@ -45,7 +45,63 @@
     return box;
   }
 
-  M.production = { title:"Production", sub:"Work orders & material consumption", render(root){
+  /* ---- time-status helpers (per-stage timing for the detail modal) ---- */
+  function fmtDT(s){
+    if(!s) return "—";
+    if(typeof s==="string" && s.indexOf("T")>=0){
+      const d=new Date(s); if(isNaN(d.getTime())) return s;
+      return d.toLocaleString(undefined,{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});
+    }
+    return s; // date-only (legacy work orders)
+  }
+  function durBetween(a,b){
+    if(!a||!b||String(a).indexOf("T")<0||String(b).indexOf("T")<0) return "—";
+    const ms=new Date(b)-new Date(a); if(isNaN(ms)||ms<0) return "—";
+    const mins=Math.round(ms/60000), hh=Math.floor(mins/60), mm=mins%60;
+    if(mins<1) return "<1m";
+    return hh? (hh+"h "+mm+"m") : (mm+"m");
+  }
+  // per-stage timing table shown under the "Time Status" tab of a work order
+  function stageTimeStatus(wo){
+    const rt=wo.route||[];
+    const wrap=h("div",{style:"margin-top:4px"});
+    // work order creation — the origin of the production timeline
+    const createdAt=wo.createdAt||wo.date;
+    wrap.appendChild(h("div",{class:"flex between aic",style:"padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:14px"},[
+      h("div",{},[h("div",{style:"font-weight:700;font-size:12.5px",text:"🗓 Work Order Created"}), wo.createdBy?h("div",{class:"muted",style:"font-size:11px",text:"by "+wo.createdBy}):null]),
+      h("div",{class:"mono",style:"font-size:12.5px;font-weight:600",text:fmtDT(createdAt)})
+    ]));
+    if(!rt.length){ wrap.appendChild(h("div",{class:"muted",style:"font-size:12px",text:"No routing — legacy work order (no per-stage timing captured)."})); return wrap; }
+    const nowISO=new Date().toISOString();
+    const rows=rt.map((s,i)=>{
+      const started=s.startedAt, done=s.doneAt;
+      let duration;
+      if(done) duration=durBetween(started,done);
+      else if(s.status==="In Production" && started) duration="⏱ "+durBetween(started,nowISO);
+      else duration="—";
+      return { stage:STAGE_LABEL[s.key]||s.name||s.key, status:s.status,
+        started:fmtDT(started), completed:fmtDT(done), duration, by:s.doneBy||s.startedBy||"—",
+        cur:(i===(wo.stageIdx||0))&&!wo.dispatched&&s.status!=="Completed" };
+    });
+    wrap.appendChild(table(rows,[
+      {key:"stage",label:"Stage",noSort:true,render:r=>`<span class="cell-main">${esc(r.stage)}</span>${r.cur?' <span class="chip" style="color:var(--info);border-color:var(--info)">current</span>':''}`},
+      {key:"status",label:"Status",noSort:true,render:r=>badge(r.status==="Completed"?"ok":r.status==="In Production"?"info":"warn",r.status)},
+      {key:"started",label:"Started",noSort:true,render:r=>esc(r.started)},
+      {key:"completed",label:"Completed",noSort:true,render:r=>esc(r.completed)},
+      {key:"duration",label:"Duration",noSort:true,render:r=>`<span class="mono">${esc(r.duration)}</span>`},
+      {key:"by",label:"By",noSort:true,render:r=>esc(r.by)},
+    ],{empty:"No stages"}));
+    // summary: total lead time + dispatch
+    const starts=rt.map(s=>s.startedAt).filter(x=>x&&String(x).indexOf("T")>=0).sort();
+    const lastDone=wo.dispatchedAt||wo.packedAt||rt.map(s=>s.doneAt).filter(x=>x&&String(x).indexOf("T")>=0).sort().slice(-1)[0];
+    const parts=[];
+    if(starts[0]&&lastDone) parts.push("Total lead time: "+durBetween(starts[0],lastDone));
+    if(wo.dispatched&&wo.dispatchedAt) parts.push("Dispatched: "+fmtDT(wo.dispatchedAt)+(wo.dispatchedBy?(" · by "+wo.dispatchedBy):""));
+    if(parts.length) wrap.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:12px",text:parts.join("    ·    ")}));
+    return wrap;
+  }
+
+  M.production = { title:"Production", sub:"Work orders & material consumption", render(root, params){
     let tab="active";
     let filter={from:"", to:""};
     root.appendChild(pageHead("Production Control","Jobs flow Coating → Slitting → Packing; each stage consumes materials and posts WIP / finished goods automatically",[
@@ -96,11 +152,15 @@
       ],{onRow:r=>woDetail(r),empty:"No work orders"}));
     }
     draw();
+    if(params&&params.openNew){ params.openNew=false; woForm(); }
 
     function woActions(r){
       const wrap=h("div",{class:"flex gap"});
       const finished=r.status==="Completed"||r.status==="Dispatched";
-      if(!finished){
+      // Stage-determining actions (Start / Finish / Complete all) are for
+      // supervisors + admin only. Office plans work orders but does not drive
+      // process stages, so it just gets a read-only View.
+      if(!finished && App.isAdmin()){
         const cur=curStage(r);
         wrap.appendChild(h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();advanceStage(r,cur);},text:cur&&cur.status==="Pending"?"Start "+(STAGE_LABEL[cur.key]||"stage"):"Finish "+(STAGE_LABEL[cur.key]||"stage")}));
         wrap.appendChild(h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();completeWO(r);},text:"Complete all"}));
@@ -139,7 +199,8 @@
       const it=ENG.item(wo.itemId); const bom=ENG.data.boms[wo.itemId];
       const rows = bom? bom.lines.map(([rid,per])=>{ const need=per*wo.qty/bom.yield; const st=ENG.stock(rid);
         return {rid, name:ENG.item(rid).name, per, need, have:st.onHand, ok:st.onHand>=need, uom:ENG.item(rid).uom}; }):[];
-      const body=h("div",{},[
+      // ---- Details pane ----
+      const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
@@ -152,9 +213,19 @@
           {key:"ok",label:"",noSort:true,render:r=>badge(r.ok?"ok":"danger",r.ok?"Available":"Short")},
         ],{empty:"No BOM"})
       ]);
+      // ---- Time Status pane (per-stage timing of the production route) ----
+      const timePane=stageTimeStatus(wo); timePane.hidden=true;
+      // ---- tab bar ----
+      const tabs=h("div",{class:"seg",style:"margin-bottom:16px"});
+      const tabD=h("button",{class:"on",text:"Details"});
+      const tabT=h("button",{text:"⏱ Time Status"});
+      const sel=(showD)=>{ detailsPane.hidden=!showD; timePane.hidden=showD; tabD.classList.toggle("on",showD); tabT.classList.toggle("on",!showD); };
+      tabD.onclick=()=>sel(true); tabT.onclick=()=>sel(false);
+      tabs.appendChild(tabD); tabs.appendChild(tabT);
+      const body=h("div",{},[tabs,detailsPane,timePane]);
       const finished=wo.status==="Completed"||wo.status==="Dispatched";
       modal({title:wo.id, sub:it.name, wide:true, body,
-        foot:[ finished?null:h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;completeWO(wo);},text:"Complete all stages"}) ]});
+        foot:[ (finished||!App.isAdmin())?null:h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;completeWO(wo);},text:"Complete all stages"}) ]});
     }
 
     function woForm(){
@@ -203,7 +274,7 @@
   }};
 
   /* ============== PRODUCTS & BOM ============== */
-  M.bom = { title:"Products & BOM", sub:"Recipes & cost roll-up", render(root){
+  M.bom = { title:"Products & BOM", sub:"Recipes & cost roll-up", render(root, params){
     root.appendChild(pageHead("Products & Bill of Materials","Chhaperia cable-tape range with live material cost roll-up, margin analysis & specifications",[
       h("button",{class:"btn primary",onclick:()=>bomForm(),html:"＋ Create BOM"})
     ]));
@@ -226,6 +297,7 @@
       list.forEach(fg=> grid.appendChild(productCard(fg)));
       root.appendChild(grid);
     });
+    if(params&&params.openNew){ params.openNew=false; bomForm(); }
 
     function productCard(fg){
       const bom=ENG.data.boms[fg.id];
@@ -306,15 +378,23 @@
           const rid=rEl.value, per=+pEl.value; if(rid && per>0) out.push([rid, per]); });
         if(!out.length){ toast("Add at least one component with a quantity",{type:"warn"}); return; }
         ENG.data.boms[fg2] = { yield:yld, lines:out };
-        App.persistAndRefresh(); mo.close(); toast(editing?("BOM updated for "+fg2):("BOM created for "+fg2),{type:"ok"});
+        mo.close(); toast(editing?("BOM updated for "+fg2):("BOM created for "+fg2),{type:"ok"});
+        App.saveDelta(()=>DB.boms.save(fg2,{yield:yld, lines:out}));
       }
       async function delBom(){
         if(!await confirm(`Delete the BOM for ${fgId}? The product stays — only its recipe is removed.`,{title:"Delete BOM",danger:true})) return;
         delete ENG.data.boms[fgId];
-        App.persistAndRefresh(); mo.close(); toast("BOM deleted",{type:"ok"});
+        mo.close(); toast("BOM deleted",{type:"ok"});
+        App.saveDelta(()=>DB.boms.remove(fgId));
       }
     }
   }};
 
   function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
+
+  // register ⌘K quick actions for Production & BOM
+  window.ERPActions = Object.assign(window.ERPActions||{}, {
+    newWO:  { ic:"⚙️", label:"New Work Order", run:()=>App.go("production",{openNew:true}) },
+    newBOM: { ic:"🧬", label:"Create BOM",     run:()=>App.go("bom",{openNew:true}) },
+  });
 })();

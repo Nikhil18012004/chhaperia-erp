@@ -107,17 +107,79 @@
     remove(id) { return http("DELETE", "/auth/users/" + id); },
   };
 
-  /* ---- granular inventory writes (avoid full-dataset rewrites) ---- */
+  /* ---- granular writes (avoid full-dataset rewrites & last-writer clobber) ---- */
+  const enc = encodeURIComponent;
   const items = {
     // upsert one item (PATCH is an INSERT-or-UPDATE on the server)
-    put(item) { return http("PATCH", "/items/" + encodeURIComponent(item.id), item); },
+    put(item) { return http("PATCH", "/items/" + enc(item.id), item); },
+    remove(id) { return http("DELETE", "/items/" + enc(id)); },
   };
   const movements = {
     add(m) { return http("POST", "/movements", m); },
   };
   const purchase = {
-    // receive goods against a PO: { wh, date?, by?, lines:[{i:lineIndex, qty}] }
-    receive(poId, payload) { return http("POST", "/purchase-orders/" + encodeURIComponent(poId) + "/receive", payload); },
+    // receive goods against a PO: { wh, date?, lines:[{i:lineIndex, qty}] }
+    receive(poId, payload) { return http("POST", "/purchase-orders/" + enc(poId) + "/receive", payload); },
+    create(po) { return http("POST", "/purchase-orders", po); },
+    update(id, patch) { return http("PATCH", "/purchase-orders/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/purchase-orders/" + enc(id)); },
+  };
+  const sales = {
+    create(so) { return http("POST", "/sales-orders", so); },
+    update(id, patch) { return http("PATCH", "/sales-orders/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/sales-orders/" + enc(id)); },
+    dispatch(id, payload) { return http("POST", "/sales-orders/" + enc(id) + "/dispatch", payload || {}); },
+  };
+  const boms = {
+    // save one product's recipe: { yield, lines:[[rawId, perKg], …] }
+    save(itemId, bom) { return http("PUT", "/boms/" + enc(itemId), bom); },
+    remove(itemId) { return http("DELETE", "/boms/" + enc(itemId)); },
+  };
+  const leads = {
+    create(lead) { return http("POST", "/leads", lead); },
+    update(id, patch) { return http("PATCH", "/leads/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/leads/" + enc(id)); },
+  };
+  const customers = {
+    upsert(cust) { return http("POST", "/customers", cust); },
+  };
+  const transporters = {
+    create(t) { return http("POST", "/transporters", t); },
+    update(id, patch) { return http("PATCH", "/transporters/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/transporters/" + enc(id)); },
+  };
+
+  /* ---- Human Resources ---- */
+  const hr = {
+    // biometric ingest (also used by the in-app simulator via the office token)
+    punch(p) { return http("POST", "/hr/punch", p); },
+    punches(limit) { return http("GET", "/hr/punches?limit=" + (limit || 100)); },
+    worker: {
+      create(w) { return http("POST", "/hr/workers", w); },
+      update(id, patch) { return http("PATCH", "/hr/workers/" + enc(id), patch); },
+      remove(id) { return http("DELETE", "/hr/workers/" + enc(id)); },
+    },
+    attendance(a) { return http("POST", "/hr/attendance", a); },
+    balances(workerId) { return http("GET", "/hr/leave-balances/" + enc(workerId)); },
+    leaveType: {
+      save(t) { return http("POST", "/hr/leave-types", t); },
+      remove(id) { return http("DELETE", "/hr/leave-types/" + enc(id)); },
+    },
+    leave: {
+      apply(l) { return http("POST", "/hr/leaves", l); },
+      decide(id, status) { return http("POST", "/hr/leaves/" + enc(id) + "/decide", { status }); },
+      remove(id) { return http("DELETE", "/hr/leaves/" + enc(id)); },
+    },
+    payroll: {
+      run(period, opts) { return http("POST", "/hr/payroll/run", Object.assign({ period }, opts || {})); },
+      finalize(id) { return http("POST", "/hr/payroll/" + enc(id) + "/finalize", {}); },
+      remove(id) { return http("DELETE", "/hr/payroll/" + enc(id)); },
+    },
+    payslip: { update(id, patch) { return http("PATCH", "/hr/payslips/" + enc(id), patch); } },
+    config: {
+      get() { return http("GET", "/hr/config"); },
+      set(patch) { return http("PATCH", "/hr/config", patch); },
+    },
   };
 
   /* ---- production / supervisor stage actions ---- */
@@ -128,11 +190,13 @@
     setStatus(woId, status) { return http("POST", "/production/wo/" + woId + "/status", { status }); },
     // office/admin: create a new work order (with a fresh multi-stage route)
     create(wo) { return http("POST", "/production/wo", wo); },
+    // office/admin: delete a work order
+    remove(woId) { return http("DELETE", "/production/wo/" + enc(woId)); },
   };
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
-    items, movements, purchase,
+    items, movements, purchase, sales, boms, leads, customers, transporters, hr,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);

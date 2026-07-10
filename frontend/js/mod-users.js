@@ -13,13 +13,14 @@
   const ROLE_BADGE = { admin: "danger", office: "info", supervisor: "ok" };
   const AREA_LABEL = { coating: "Coating / Lamination", slitting: "Slitting + Pack/Dispatch", fiberglass: "Fibre-Glass + Slitting/Dispatch" };
 
-  M.users = { title: "Users & Access", sub: "Logins & permissions", render(root) {
+  M.users = { title: "Users & Access", sub: "Logins & permissions", render(root, params) {
     root.appendChild(pageHead("Users & Access",
       "Create accounts, set roles & work areas, and reset passwords. Only admins see this page.",
       [ h("button", { class: "btn primary", onclick: () => userForm(), html: "＋ New User" }) ]));
 
     const wrap = h("div", { class: "card" }, [ h("div", { class: "muted", style: "padding:20px", text: "Loading users…" }) ]);
     root.appendChild(wrap);
+    if (params && params.openNew) { params.openNew = false; userForm(); }
 
     DB.users.list().then(({ users }) => {
       wrap.innerHTML = "";
@@ -33,7 +34,7 @@
         { key: "area", label: "Work Area", render: r => r.area ? esc(AREA_LABEL[r.area] || r.area) : "<span class='muted'>—</span>" },
         { key: "active", label: "Status", render: r => r.active ? badge("ok", "Active") : badge("mut", "Disabled") },
         { key: "lastLogin", label: "Last Login", render: r => r.lastLogin ? esc(r.lastLogin.slice(0, 10)) : "<span class='muted'>never</span>" },
-        { key: "act", label: "", noSort: true, render: r => "" , },
+        { key: "act", label: "", noSort: true, render: () => "<span class='muted'>⋯</span>" },
       ], { onRow: (r) => userActions(r) }));
     }).catch(err => {
       wrap.innerHTML = ""; wrap.appendChild(h("div", { class: "empty", style: "padding:30px" }, [
@@ -153,4 +154,13 @@
   function field(label, inner, cls) {
     return h("div", { class: "field" + (cls ? " " + cls : "") }, [h("label", { text: label }), h("div", { html: inner })]);
   }
+
+  // register the ⌘K quick action for user management (admin-only; gate the run
+  // so a non-admin who somehow sees it doesn't hit the 403 users page)
+  window.ERPActions = Object.assign(window.ERPActions || {}, {
+    newUser: { ic: "👥", label: "New User", run: () => {
+      if (App.user && App.user.role === "admin") App.go("users", { openNew: true });
+      else UI.toast("User management is admin-only", { type: "warn" });
+    } },
+  });
 })();

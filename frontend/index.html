@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Chhaperia ERP — Tape & Insulation Manufacturing Suite</title>
-  <meta name="description" content="Chhaperia International ERP — inventory, production, procurement & sales with automated stock, usage and pending calculations." />
+  <meta name="description" content="Chhaperia Cable Material ERP — inventory, production, procurement & sales with automated stock, usage and pending calculations." />
   <link rel="icon" type="image/png" href="assets/favicon.png" />
   <link rel="apple-touch-icon" href="assets/favicon-180.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -67,15 +67,15 @@
     <!-- Main -->
     <div class="main">
       <header class="topbar">
-        <button class="icon-btn menu-toggle" id="menuToggle" title="Menu">☰</button>
+        <button class="icon-btn menu-toggle" id="menuToggle" title="Menu" aria-label="Toggle navigation menu">☰</button>
         <div class="crumbs" id="crumbs"></div>
         <div class="topbar-spacer"></div>
         <button class="search-trigger" id="searchTrigger">
           <span class="si">⌕</span><span>Search anything…</span><kbd>Ctrl K</kbd>
         </button>
-        <button class="icon-btn" id="themeToggle" title="Toggle theme">◐</button>
+        <button class="icon-btn" id="themeToggle" title="Toggle theme" aria-label="Toggle light/dark theme">◐</button>
         <div class="accent-pop">
-          <button class="icon-btn" id="accentToggle" title="Accent color">🎨</button>
+          <button class="icon-btn" id="accentToggle" title="Accent color" aria-label="Choose accent colour">🎨</button>
           <div class="accent-menu" id="accentMenu" hidden>
             <div class="accent-title">Accent</div>
             <div class="swatches" id="swatches"></div>
@@ -84,16 +84,16 @@
             </label>
           </div>
         </div>
-        <button class="icon-btn bell" id="bellBtn" title="Alerts">
+        <button class="icon-btn bell" id="bellBtn" title="Alerts" aria-label="View alerts">
           🔔<span class="badge" id="bellBadge" hidden>0</span>
         </button>
         <div class="user-chip">
-          <div class="avatar" id="userAvatar">NC</div>
+          <div class="avatar" id="userAvatar"></div>
           <div class="user-meta">
-            <div class="user-name" id="userName">Navin Chhaperia</div>
-            <div class="user-role" id="userRole">Administrator</div>
+            <div class="user-name" id="userName">User</div>
+            <div class="user-role" id="userRole"></div>
           </div>
-          <button class="icon-btn" id="logoutBtn" title="Sign out" style="margin-left:6px">⏻</button>
+          <button class="icon-btn" id="logoutBtn" title="Sign out" aria-label="Sign out" style="margin-left:6px">⏻</button>
         </div>
       </header>
 
@@ -137,6 +137,8 @@
   <script src="js/mod-production.js?v=10"></script>
   <script src="js/mod-trade.js?v=10"></script>
   <script src="js/mod-crm.js?v=9"></script>
+  <script src="js/mod-hr.js?v=1"></script>
+  <script src="js/mod-dispatch.js?v=1"></script>
   <script src="js/mod-reports.js?v=9"></script>
   <script src="js/mod-users.js?v=9"></script>
   <script src="js/mod-supervisor.js?v=10"></script>

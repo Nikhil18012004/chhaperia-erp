@@ -30,6 +30,7 @@ function getState() {
   const categories = db.prepare("SELECT id,name,kind FROM categories").all();
   const suppliers = db.prepare("SELECT doc FROM suppliers").all().map((r) => P(r.doc));
   const customers = db.prepare("SELECT doc FROM customers").all().map((r) => P(r.doc));
+  const transporters = db.prepare("SELECT doc FROM transporters").all().map((r) => P(r.doc));
 
   // items: merge promoted columns back into the doc
   const items = db.prepare("SELECT * FROM items").all().map((r) => {
@@ -86,12 +87,41 @@ function getState() {
     })
   );
 
+  // ---- Human Resources (workers, attendance, leave, payroll) ----
+  const hrWorkers = db.prepare("SELECT * FROM hr_workers").all().map(mapWorker);
+  const hrAttendance = db.prepare("SELECT * FROM hr_attendance").all().map(mapAtt);
+  const hrLeaveTypes = db.prepare("SELECT * FROM hr_leave_types").all()
+    .map((r) => ({ id: r.id, name: r.name, quota: r.quota, accrual: r.accrual, paid: !!r.paid, color: r.color }));
+  const hrLeaves = db.prepare("SELECT * FROM hr_leaves").all().map(mapLeave);
+  const hrPayruns = db.prepare("SELECT * FROM hr_payruns ORDER BY period DESC").all()
+    .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, period: r.period, status: r.status, generatedAt: r.generated_at }));
+  const hrPayslips = db.prepare("SELECT * FROM hr_payslips").all()
+    .map((r) => Object.assign({ id: r.id, payrunId: r.payrun_id, workerId: r.worker_id }, P(r.doc, {})));
+
   return {
     version: 1,
     seededAt: meta.seededAt || null,
-    org, warehouses, categories, items, boms, suppliers, customers,
+    org, warehouses, categories, items, boms, suppliers, customers, transporters,
     movements, workorders, salesorders, purchaseorders, leads, settings,
+    hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
   };
+}
+
+/* ---------- HR row ⇄ document mappers ---------- */
+function mapWorker(r) {
+  return Object.assign({}, P(r.doc, {}), {
+    id: r.id, name: r.name, dept: r.dept, designation: r.designation, payType: r.pay_type,
+    dailyRate: r.daily_rate, monthlyCtc: r.monthly_ctc, deviceUid: r.device_uid,
+    active: !!r.active, joined: r.joined,
+  });
+}
+function mapAtt(r) {
+  return { id: r.id, workerId: r.worker_id, date: r.date, status: r.status,
+    inTime: r.in_time, outTime: r.out_time, hours: r.hours, otHours: r.ot_hours, note: r.note, source: r.source };
+}
+function mapLeave(r) {
+  return { id: r.id, workerId: r.worker_id, type: r.type, fromDate: r.from_date, toDate: r.to_date,
+    days: r.days, status: r.status, reason: r.reason, appliedOn: r.applied_on, decidedBy: r.decided_by };
 }
 
 /* ---------- WRITE: replace the entire dataset in one transaction ---------- */
@@ -306,6 +336,154 @@ function putPurchaseOrder(p) {
   return getPurchaseOrder(id);
 }
 
+/** Delete one purchase order and reverse any stock movements posted against
+    it (GRN receipts), all in one transaction. */
+function deletePurchaseOrder(id) {
+  const db = getDb();
+  const tx = db.transaction((pid) => {
+    db.prepare("DELETE FROM movements WHERE ref=?").run(pid);
+    db.prepare("DELETE FROM purchase_orders WHERE id=?").run(pid);
+  });
+  tx(id);
+  return { id };
+}
+
+/* ---------- SALES ORDERS (granular) ---------- */
+function getSalesOrder(id) {
+  const db = getDb();
+  const s = db.prepare("SELECT * FROM sales_orders WHERE id=?").get(id);
+  if (!s) return null;
+  return Object.assign({}, P(s.doc, {}), {
+    id: s.id, date: s.date, customerId: s.customer_id, status: s.status,
+    promised: s.promised, priority: s.priority, value: s.value, lines: P(s.lines, []),
+  });
+}
+function putSalesOrder(s) {
+  const db = getDb();
+  const { id, date, customerId, status, promised, priority, value, lines, ...rest } = s;
+  db.prepare(`INSERT INTO sales_orders
+      (id,date,customer_id,status,promised,priority,value,lines,doc)
+      VALUES(@id,@date,@customer_id,@status,@promised,@priority,@value,@lines,@doc)
+      ON CONFLICT(id) DO UPDATE SET
+        date=excluded.date, customer_id=excluded.customer_id, status=excluded.status,
+        promised=excluded.promised, priority=excluded.priority, value=excluded.value,
+        lines=excluded.lines, doc=excluded.doc`)
+    .run({ id, date: date || null, customer_id: customerId || null, status: status || null,
+      promised: promised || null, priority: priority || null, value: value || 0,
+      lines: J(lines || []), doc: J(rest) });
+  return getSalesOrder(id);
+}
+/** Delete one sales order and reverse any dispatch (SALE) movements. */
+function deleteSalesOrder(id) {
+  const db = getDb();
+  const tx = db.transaction((sid) => {
+    db.prepare("DELETE FROM movements WHERE ref=?").run(sid);
+    db.prepare("DELETE FROM sales_orders WHERE id=?").run(sid);
+  });
+  tx(id);
+  return { id };
+}
+
+/* ---------- BILL OF MATERIALS (granular) ---------- */
+function getBom(itemId) {
+  const db = getDb();
+  const b = db.prepare("SELECT item_id,yield,lines FROM boms WHERE item_id=?").get(itemId);
+  if (!b) return null;
+  return { itemId: b.item_id, yield: b.yield, lines: P(b.lines, []) };
+}
+function putBom(itemId, bom) {
+  const db = getDb();
+  db.prepare(`INSERT INTO boms(item_id,yield,lines) VALUES(?,?,?)
+      ON CONFLICT(item_id) DO UPDATE SET yield=excluded.yield, lines=excluded.lines`)
+    .run(itemId, (bom && bom.yield) || 1, J((bom && bom.lines) || []));
+  return getBom(itemId);
+}
+function deleteBom(itemId) {
+  const db = getDb();
+  db.prepare("DELETE FROM boms WHERE item_id=?").run(itemId);
+  return { itemId };
+}
+
+/* ---------- CRM LEADS (granular) ---------- */
+function getLead(id) {
+  const db = getDb();
+  const l = db.prepare("SELECT * FROM leads WHERE id=?").get(id);
+  if (!l) return null;
+  return Object.assign({}, P(l.doc, {}), {
+    id: l.id, company: l.company, contact: l.contact, stage: l.stage,
+    value: l.value, owner: l.owner, created: l.created,
+    nextFollowUp: l.next_follow_up, customerId: l.customer_id,
+  });
+}
+function putLead(l) {
+  const db = getDb();
+  const { id, company, contact, stage, value, owner, created, nextFollowUp, customerId, ...rest } = l;
+  db.prepare(`INSERT INTO leads
+      (id,company,contact,stage,value,owner,created,next_follow_up,customer_id,doc)
+      VALUES(@id,@company,@contact,@stage,@value,@owner,@created,@next_follow_up,@customer_id,@doc)
+      ON CONFLICT(id) DO UPDATE SET
+        company=excluded.company, contact=excluded.contact, stage=excluded.stage,
+        value=excluded.value, owner=excluded.owner, created=excluded.created,
+        next_follow_up=excluded.next_follow_up, customer_id=excluded.customer_id, doc=excluded.doc`)
+    .run({ id, company: company || "", contact: contact || null, stage: stage || "New",
+      value: value || 0, owner: owner || null, created: created || null,
+      next_follow_up: nextFollowUp || null, customer_id: customerId || null, doc: J(rest) });
+  return getLead(id);
+}
+function deleteLead(id) {
+  const db = getDb();
+  db.prepare("DELETE FROM leads WHERE id=?").run(id);
+  return { id };
+}
+
+/* ---------- CUSTOMERS (granular) — used by CRM Won→customer conversion ---------- */
+function getCustomer(id) {
+  const db = getDb();
+  const c = db.prepare("SELECT doc FROM customers WHERE id=?").get(id);
+  return c ? P(c.doc) : null;
+}
+function putCustomer(c) {
+  const db = getDb();
+  db.prepare("INSERT INTO customers(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(c.id, J(c));
+  return c;
+}
+
+/* ---------- ITEM / WORK-ORDER deletes ---------- */
+function deleteItem(id) {
+  const db = getDb();
+  db.prepare("DELETE FROM items WHERE id=?").run(id);
+  return { id };
+}
+function deleteWorkOrder(id) {
+  const db = getDb();
+  db.prepare("DELETE FROM work_orders WHERE id=?").run(id);
+  return { id };
+}
+
+/* ---------- TRANSPORTERS (dispatch providers) ---------- */
+function getTransporter(id) {
+  const db = getDb();
+  const t = db.prepare("SELECT doc FROM transporters WHERE id=?").get(id);
+  return t ? P(t.doc) : null;
+}
+function putTransporter(t) {
+  const db = getDb();
+  db.prepare("INSERT INTO transporters(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(t.id, J(t));
+  return t;
+}
+function deleteTransporter(id) { getDb().prepare("DELETE FROM transporters WHERE id=?").run(id); return { id }; }
+
+function getSettings() {
+  const db = getDb();
+  return P(db.prepare("SELECT doc FROM settings WHERE id=1").pluck().get(), {});
+}
+function categoryExists(id) {
+  const db = getDb();
+  return !!db.prepare("SELECT 1 FROM categories WHERE id=?").get(id);
+}
+
 function updateSettings(doc) {
   const db = getDb();
   db.prepare("INSERT INTO settings(id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
@@ -313,5 +491,160 @@ function updateSettings(doc) {
   return doc;
 }
 
+/* ============================================================
+   HUMAN RESOURCES — granular accessors
+   ============================================================ */
+/* ---- workers ---- */
+function getWorker(id) {
+  const db = getDb();
+  const r = db.prepare("SELECT * FROM hr_workers WHERE id=?").get(id);
+  return r ? mapWorker(r) : null;
+}
+function getWorkerByDevice(uid) {
+  const db = getDb();
+  const r = db.prepare("SELECT * FROM hr_workers WHERE device_uid=?").get(String(uid));
+  return r ? mapWorker(r) : null;
+}
+function putWorker(w) {
+  const db = getDb();
+  const { id, name, dept, designation, payType, dailyRate, monthlyCtc, deviceUid, active, joined, ...rest } = w;
+  db.prepare(`INSERT INTO hr_workers
+      (id,name,dept,designation,pay_type,daily_rate,monthly_ctc,device_uid,active,joined,doc)
+      VALUES(@id,@name,@dept,@designation,@pay_type,@daily_rate,@monthly_ctc,@device_uid,@active,@joined,@doc)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name, dept=excluded.dept, designation=excluded.designation,
+        pay_type=excluded.pay_type, daily_rate=excluded.daily_rate, monthly_ctc=excluded.monthly_ctc,
+        device_uid=excluded.device_uid, active=excluded.active, joined=excluded.joined, doc=excluded.doc`)
+    .run({ id, name: name || "", dept: dept || null, designation: designation || null,
+      pay_type: payType || "daily", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
+      device_uid: deviceUid || null, active: active === false ? 0 : 1, joined: joined || null, doc: J(rest) });
+  return getWorker(id);
+}
+function deleteWorker(id) { getDb().prepare("DELETE FROM hr_workers WHERE id=?").run(id); return { id }; }
+
+/* ---- punches (append-only) ---- */
+function addPunch(p) {
+  getDb().prepare(`INSERT INTO hr_punches(id,worker_id,device_uid,ts,direction,device_id,source)
+      VALUES(@id,@worker_id,@device_uid,@ts,@direction,@device_id,@source)`)
+    .run({ id: p.id, worker_id: p.workerId || null, device_uid: p.deviceUid || null, ts: p.ts,
+      direction: p.direction || "auto", device_id: p.deviceId || null, source: p.source || "device" });
+  return p;
+}
+function punchesForDate(date) {
+  return getDb().prepare("SELECT * FROM hr_punches WHERE ts LIKE ? ORDER BY ts ASC").all(date + "%")
+    .map((r) => ({ id: r.id, workerId: r.worker_id, deviceUid: r.device_uid, ts: r.ts, direction: r.direction, deviceId: r.device_id, source: r.source }));
+}
+function recentPunches(limit) {
+  return getDb().prepare("SELECT * FROM hr_punches ORDER BY ts DESC LIMIT ?").all(limit || 100)
+    .map((r) => ({ id: r.id, workerId: r.worker_id, deviceUid: r.device_uid, ts: r.ts, direction: r.direction, deviceId: r.device_id, source: r.source }));
+}
+
+/* ---- attendance (daily muster) ---- */
+function getAttendance(workerId, date) {
+  const r = getDb().prepare("SELECT * FROM hr_attendance WHERE id=?").get(workerId + ":" + date);
+  return r ? mapAtt(r) : null;
+}
+function putAttendance(a) {
+  const db = getDb();
+  const id = a.workerId + ":" + a.date;
+  db.prepare(`INSERT INTO hr_attendance(id,worker_id,date,status,in_time,out_time,hours,ot_hours,note,source)
+      VALUES(@id,@worker_id,@date,@status,@in_time,@out_time,@hours,@ot_hours,@note,@source)
+      ON CONFLICT(id) DO UPDATE SET status=excluded.status, in_time=excluded.in_time,
+        out_time=excluded.out_time, hours=excluded.hours, ot_hours=excluded.ot_hours,
+        note=excluded.note, source=excluded.source`)
+    .run({ id, worker_id: a.workerId, date: a.date, status: a.status || null,
+      in_time: a.inTime || null, out_time: a.outTime || null, hours: a.hours || 0,
+      ot_hours: a.otHours || 0, note: a.note || null, source: a.source || "device" });
+  return getAttendance(a.workerId, a.date);
+}
+function attendanceForPeriod(period) {
+  return getDb().prepare("SELECT * FROM hr_attendance WHERE date LIKE ? ORDER BY date ASC").all(period + "%").map(mapAtt);
+}
+
+/* ---- leave types ---- */
+function putLeaveType(t) {
+  getDb().prepare(`INSERT INTO hr_leave_types(id,name,quota,accrual,paid,color)
+      VALUES(@id,@name,@quota,@accrual,@paid,@color)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, quota=excluded.quota,
+        accrual=excluded.accrual, paid=excluded.paid, color=excluded.color`)
+    .run({ id: t.id, name: t.name || t.id, quota: t.quota || 0, accrual: t.accrual || "fixed",
+      paid: t.paid === false ? 0 : 1, color: t.color || null });
+  return t;
+}
+function getLeaveType(id) {
+  const r = getDb().prepare("SELECT * FROM hr_leave_types WHERE id=?").get(id);
+  return r ? { id: r.id, name: r.name, quota: r.quota, accrual: r.accrual, paid: !!r.paid, color: r.color } : null;
+}
+function deleteLeaveType(id) { getDb().prepare("DELETE FROM hr_leave_types WHERE id=?").run(id); return { id }; }
+
+/* ---- leaves ---- */
+function getLeave(id) {
+  const r = getDb().prepare("SELECT * FROM hr_leaves WHERE id=?").get(id);
+  return r ? mapLeave(r) : null;
+}
+function putLeave(l) {
+  const db = getDb();
+  db.prepare(`INSERT INTO hr_leaves(id,worker_id,type,from_date,to_date,days,status,reason,applied_on,decided_by)
+      VALUES(@id,@worker_id,@type,@from_date,@to_date,@days,@status,@reason,@applied_on,@decided_by)
+      ON CONFLICT(id) DO UPDATE SET worker_id=excluded.worker_id, type=excluded.type,
+        from_date=excluded.from_date, to_date=excluded.to_date, days=excluded.days,
+        status=excluded.status, reason=excluded.reason, applied_on=excluded.applied_on, decided_by=excluded.decided_by`)
+    .run({ id: l.id, worker_id: l.workerId, type: l.type, from_date: l.fromDate, to_date: l.toDate,
+      days: l.days || 0, status: l.status || "Pending", reason: l.reason || null,
+      applied_on: l.appliedOn || null, decided_by: l.decidedBy || null });
+  return getLeave(l.id);
+}
+function deleteLeave(id) { getDb().prepare("DELETE FROM hr_leaves WHERE id=?").run(id); return { id }; }
+
+/* ---- payroll ---- */
+function getPayrun(id) {
+  const r = getDb().prepare("SELECT * FROM hr_payruns WHERE id=?").get(id);
+  return r ? Object.assign({}, P(r.doc, {}), { id: r.id, period: r.period, status: r.status, generatedAt: r.generated_at }) : null;
+}
+function putPayrun(pr) {
+  const db = getDb();
+  const { id, period, status, generatedAt, ...rest } = pr;
+  db.prepare(`INSERT INTO hr_payruns(id,period,status,generated_at,doc)
+      VALUES(@id,@period,@status,@generated_at,@doc)
+      ON CONFLICT(id) DO UPDATE SET period=excluded.period, status=excluded.status,
+        generated_at=excluded.generated_at, doc=excluded.doc`)
+    .run({ id, period, status: status || "Draft", generated_at: generatedAt || null, doc: J(rest) });
+  return getPayrun(id);
+}
+function putPayslip(ps) {
+  const db = getDb();
+  const { id, payrunId, workerId, ...rest } = ps;
+  db.prepare(`INSERT INTO hr_payslips(id,payrun_id,worker_id,doc) VALUES(@id,@payrun_id,@worker_id,@doc)
+      ON CONFLICT(id) DO UPDATE SET payrun_id=excluded.payrun_id, worker_id=excluded.worker_id, doc=excluded.doc`)
+    .run({ id, payrun_id: payrunId, worker_id: workerId, doc: J(rest) });
+  return ps;
+}
+function payslipsForRun(payrunId) {
+  return getDb().prepare("SELECT * FROM hr_payslips WHERE payrun_id=?").all(payrunId)
+    .map((r) => Object.assign({ id: r.id, payrunId: r.payrun_id, workerId: r.worker_id }, P(r.doc, {})));
+}
+function deletePayrun(id) {
+  const db = getDb();
+  const tx = db.transaction((pid) => {
+    db.prepare("DELETE FROM hr_payslips WHERE payrun_id=?").run(pid);
+    db.prepare("DELETE FROM hr_payruns WHERE id=?").run(pid);
+  });
+  tx(id);
+  return { id };
+}
+function hrIsEmpty() { return getDb().prepare("SELECT COUNT(*) AS c FROM hr_workers").pluck().get() === 0; }
+
 module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
-  addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder };
+  addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
+  deletePurchaseOrder, getSalesOrder, putSalesOrder, deleteSalesOrder,
+  getBom, putBom, deleteBom, getLead, putLead, deleteLead,
+  getCustomer, putCustomer, deleteItem, deleteWorkOrder,
+  getSettings, categoryExists,
+  getTransporter, putTransporter, deleteTransporter,
+  // HR
+  getWorker, getWorkerByDevice, putWorker, deleteWorker,
+  addPunch, punchesForDate, recentPunches,
+  getAttendance, putAttendance, attendanceForPeriod,
+  putLeaveType, getLeaveType, deleteLeaveType,
+  getLeave, putLeave, deleteLeave,
+  getPayrun, putPayrun, putPayslip, payslipsForRun, deletePayrun, hrIsEmpty };

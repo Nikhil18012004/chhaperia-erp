@@ -85,7 +85,7 @@
       h("div",{class:"card-head"},[h("div",{},[h("h3",{text:"Priority Alerts"}),h("div",{class:"sub",text:al.length+" items"})]),
         h("button",{class:"btn sm ghost",style:"margin-left:auto",onclick:()=>App.openAlerts(),text:"View all"})]),
       al.length?h("div",{}, al.map(a=>h("div",{class:"alert-item",style:"margin-bottom:8px",onclick:()=>a.itemId&&App.go("inventory")},[
-        h("div",{class:"alert-ic "+sevCls(a.sev),style:sevStyle(a.sev),text:a.ic}),
+        h("div",{class:"alert-ic sev-"+a.sev,style:sevStyle(a.sev),text:a.ic}),
         h("div",{style:"flex:1;min-width:0"},[ h("div",{class:"t",text:trim(a.title,30)}), h("div",{class:"d",text:a.desc}) ])
       ]))):h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),h("div",{text:"No active alerts"})])
     ]);
@@ -188,6 +188,5 @@
   function cssv(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
   function legendDot(c,t){ return h("span",{class:"chip",html:`<span class="d" style="background:${c}"></span>${esc(t)}`}); }
   function trim(s,n){ s=String(s||""); return s.length>n?s.slice(0,n-1)+"…":s; }
-  function sevCls(s){ return ""; }
   function sevStyle(s){ const m={danger:"background:var(--danger-soft);color:var(--danger)",warn:"background:var(--warn-soft);color:var(--warn)",info:"background:var(--info-soft);color:var(--info)"}; return m[s]||m.info; }
 })();

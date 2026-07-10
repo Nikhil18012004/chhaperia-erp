@@ -15,6 +15,7 @@
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
+const { getLineForItem } = require("./routing");
 
 const ACTIONS = ["start", "pause", "complete", "dispatch"];
 
@@ -131,13 +132,15 @@ function createWorkOrder(user, body) {
   (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
   const id = "WO-" + String(max + 1).padStart(4, "0");
 
-  const line = body.line || "Coating Line 1";
+  // default the production line from routing (same logic the seed uses) so a
+  // WO created without an explicit line still lands on the right area's board
+  const line = body.line || getLineForItem(item) || "Coating Line 1";
   const wo = {
     id, date: todayISO(), itemId: body.itemId, qty,
     status: "Released", due: body.due || null, line,
     progress: 0, priority: body.priority || "Normal",
     route: S.freshRoute({ line, itemId: body.itemId }), stageIdx: 0, legacy: false,
-    createdBy: user.username,
+    createdBy: user.username, createdAt: new Date().toISOString(),
   };
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId);

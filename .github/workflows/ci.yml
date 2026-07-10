@@ -1,0 +1,33 @@
+name: CI
+
+# Runs the backend smoke + HTTP integration tests on every push / PR.
+# The HTTP test boots the real Express app against a throwaway SQLite DB on
+# an ephemeral port, so routes, auth/RBAC and the role-scoped view are covered.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Run tests (smoke + HTTP integration)
+        working-directory: backend
+        run: npm test
