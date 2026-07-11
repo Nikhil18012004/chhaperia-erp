@@ -1,7 +1,8 @@
 /* ============================================================
    CHHAPERIA ERP — THEME / DESIGN TOKENS
-   Brand: #F06820 (orange arcs)  •  #E84820 (red diamond)
-   Dynamic accent system + dark/light modes
+   "Operations Console" — precision-engineered, data-dense.
+   Brand: #F06820 (orange arcs) • #E84820 (red diamond)
+   Dynamic accent system + first-class dark & light modes.
    ============================================================ */
 
 :root{
@@ -17,100 +18,151 @@
   --accent-300:#ff8c4d;
   --accent-soft:rgba(240,104,32,.14);
   --accent-line:rgba(240,104,32,.34);
+  --accent-grad:linear-gradient(135deg,var(--accent-300),var(--accent) 55%,var(--accent-600));
 
   /* status palette */
-  --ok:#16a34a; --ok-soft:rgba(22,163,74,.14);
-  --warn:#e0a000; --warn-soft:rgba(224,160,0,.16);
-  --danger:#e23d2e; --danger-soft:rgba(226,61,46,.14);
-  --info:#2f7fe0; --info-soft:rgba(47,127,224,.14);
-  --violet:#7c5cff; --violet-soft:rgba(124,92,255,.14);
+  --ok:#18b364; --ok-soft:rgba(24,179,100,.15);
+  --warn:#eab308; --warn-soft:rgba(234,179,8,.16);
+  --danger:#f04438; --danger-soft:rgba(240,68,56,.15);
+  --info:#3b82f6; --info-soft:rgba(59,130,246,.15);
+  --violet:#8b5cf6; --violet-soft:rgba(139,92,246,.15);
 
   /* chart series */
-  --c1:var(--accent); --c2:#2f7fe0; --c3:#16a34a; --c4:#e0a000;
-  --c5:#7c5cff; --c6:#e23d2e; --c7:#0fb5ae; --c8:#ec4899;
+  --c1:var(--accent); --c2:#3b82f6; --c3:#18b364; --c4:#eab308;
+  --c5:#8b5cf6; --c6:#f04438; --c7:#0fb5ae; --c8:#ec4899;
 
-  --radius:14px; --radius-sm:10px; --radius-lg:22px;
-  --shadow-1:0 1px 2px rgba(0,0,0,.18), 0 1px 3px rgba(0,0,0,.10);
-  --shadow-2:0 10px 30px rgba(0,0,0,.28);
-  --shadow-pop:0 18px 50px rgba(0,0,0,.40);
-  --ring:0 0 0 3px var(--accent-soft);
+  /* geometry — data-dense, precision radii */
+  --radius:13px; --radius-sm:9px; --radius-lg:20px; --radius-pill:999px;
+
+  /* spacing scale (4/8 rhythm) */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+
+  /* typography */
   --font:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --tr:.18s cubic-bezier(.4,0,.2,1);
+
+  /* motion */
+  --tr:.17s cubic-bezier(.4,0,.2,1);
+  --tr-slow:.28s cubic-bezier(.4,0,.2,1);
+  --spring:cubic-bezier(.34,1.56,.64,1);
 }
 
-/* ---------- DARK (default) ---------- */
+/* ---------- DARK (default) — Graphite Industrial ---------- */
 [data-theme="dark"]{
-  --bg:#0c0f16;
-  --bg-grad:radial-gradient(1200px 600px at 78% -8%, rgba(240,104,32,.10), transparent 60%),
-            radial-gradient(900px 500px at -8% 110%, rgba(47,127,224,.08), transparent 55%);
-  --panel:#141925;
-  --panel-2:#1a2030;
-  --panel-3:#212a3d;
-  --elev:#1c2434;
-  --line:rgba(255,255,255,.08);
-  --line-strong:rgba(255,255,255,.16);
-  --text:#eef2f8;
-  --text-dim:#aab4c5;
-  --text-mut:#6f7c92;
-  --sidebar:#0a0d14;
+  --bg:#090b11;
+  --bg-grid:rgba(255,255,255,.022);
+  --bg-grad:
+    radial-gradient(1100px 560px at 82% -10%, rgba(240,104,32,.12), transparent 58%),
+    radial-gradient(880px 520px at -8% 108%, rgba(59,130,246,.09), transparent 55%),
+    linear-gradient(var(--bg-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+  --bg-grid-size:34px;
+  --panel:#12151d;
+  --panel-2:#171b25;
+  --panel-3:#1f2431;
+  --elev:#1b202c;
+  --line:rgba(255,255,255,.075);
+  --line-strong:rgba(255,255,255,.15);
+  --sheen:rgba(255,255,255,.055);            /* inset top highlight on surfaces */
+  --sheen-strong:rgba(255,255,255,.09);
+  --text:#eef1f7;
+  --text-dim:#a9b2c2;
+  --text-mut:#6b7789;
+  --sidebar:#070910;
+  --sidebar-2:#0b0e16;
   --sidebar-line:rgba(255,255,255,.06);
-  --table-stripe:rgba(255,255,255,.022);
-  --table-hover:rgba(240,104,32,.07);
-  --glass:rgba(20,25,37,.72);
+  --sidebar-text:#aeb8cc;
+  --table-stripe:rgba(255,255,255,.018);
+  --table-hover:rgba(240,104,32,.075);
+  --glass:rgba(14,17,25,.72);
+  --scrim:rgba(3,5,9,.62);
+
+  --shadow-1:0 1px 2px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.28);
+  --shadow-2:0 8px 24px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
+  --shadow-pop:0 24px 60px rgba(0,0,0,.55), 0 6px 18px rgba(0,0,0,.4);
+  --ring:0 0 0 3px var(--accent-soft);
+  --inset-top:inset 0 1px 0 var(--sheen);
 }
 
-/* ---------- LIGHT ---------- */
+/* ---------- LIGHT — Precision Daylight ---------- */
 [data-theme="light"]{
-  --bg:#f4f6fb;
-  --bg-grad:radial-gradient(1100px 560px at 80% -10%, rgba(240,104,32,.10), transparent 60%),
-            radial-gradient(800px 480px at -6% 108%, rgba(47,127,224,.08), transparent 55%);
+  --bg:#eef1f6;
+  --bg-grid:rgba(15,23,42,.028);
+  --bg-grad:
+    radial-gradient(1000px 520px at 84% -12%, rgba(240,104,32,.10), transparent 56%),
+    radial-gradient(760px 460px at -6% 106%, rgba(59,130,246,.07), transparent 52%),
+    linear-gradient(var(--bg-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+  --bg-grid-size:34px;
   --panel:#ffffff;
-  --panel-2:#f7f9fd;
-  --panel-3:#eef2f8;
+  --panel-2:#f5f7fb;
+  --panel-3:#e9edf4;
   --elev:#ffffff;
-  --line:rgba(15,23,42,.09);
-  --line-strong:rgba(15,23,42,.18);
-  --text:#10151f;
-  --text-dim:#46506180;
-  --text-dim:#475066;
-  --text-mut:#8a94a6;
-  --sidebar:#0a0d14;
+  --line:rgba(15,23,42,.10);
+  --line-strong:rgba(15,23,42,.17);
+  --sheen:rgba(255,255,255,.9);
+  --sheen-strong:#ffffff;
+  --text:#0d1220;
+  --text-dim:#465066;
+  --text-mut:#7b8698;
+  --sidebar:#0a0d15;
+  --sidebar-2:#0e121c;
   --sidebar-line:rgba(255,255,255,.06);
-  --table-stripe:rgba(15,23,42,.018);
-  --table-hover:rgba(240,104,32,.08);
-  --glass:rgba(255,255,255,.78);
+  --sidebar-text:#aeb8cc;
+  --table-stripe:rgba(15,23,42,.02);
+  --table-hover:rgba(240,104,32,.07);
+  --glass:rgba(255,255,255,.8);
+  --scrim:rgba(15,23,42,.42);
+
+  --shadow-1:0 1px 2px rgba(15,23,42,.08), 0 1px 3px rgba(15,23,42,.06);
+  --shadow-2:0 10px 28px rgba(15,23,42,.12), 0 2px 8px rgba(15,23,42,.08);
+  --shadow-pop:0 24px 60px rgba(15,23,42,.22), 0 6px 18px rgba(15,23,42,.12);
+  --ring:0 0 0 3px var(--accent-soft);
+  --inset-top:inset 0 1px 0 var(--sheen);
 }
 
 /* ============ DYNAMIC ACCENTS ============ */
 [data-accent="orange"]{ --accent:#F06820; --accent-600:#d9551a; --accent-300:#ff8c4d; --accent-soft:rgba(240,104,32,.14); --accent-line:rgba(240,104,32,.34);}
 [data-accent="red"]   { --accent:#E84820; --accent-600:#c63818; --accent-300:#ff7a55; --accent-soft:rgba(232,72,32,.14); --accent-line:rgba(232,72,32,.34);}
-[data-accent="blue"]  { --accent:#2f7fe0; --accent-600:#2266c2; --accent-300:#6aa8f5; --accent-soft:rgba(47,127,224,.14); --accent-line:rgba(47,127,224,.34);}
-[data-accent="teal"]  { --accent:#0fb5ae; --accent-600:#0a948e; --accent-300:#54d6d0; --accent-soft:rgba(15,181,174,.14); --accent-line:rgba(15,181,174,.34);}
-[data-accent="violet"]{ --accent:#7c5cff; --accent-600:#6442e6; --accent-300:#a890ff; --accent-soft:rgba(124,92,255,.14); --accent-line:rgba(124,92,255,.34);}
-[data-accent="green"] { --accent:#16a34a; --accent-600:#11823b; --accent-300:#46cc78; --accent-soft:rgba(22,163,74,.14); --accent-line:rgba(22,163,74,.34);}
-[data-accent="pink"]  { --accent:#ec4899; --accent-600:#cf2f80; --accent-300:#f57ab8; --accent-soft:rgba(236,72,153,.14); --accent-line:rgba(236,72,153,.34);}
-[data-accent="amber"] { --accent:#e0a000; --accent-600:#bd8600; --accent-300:#f3c43e; --accent-soft:rgba(224,160,0,.16); --accent-line:rgba(224,160,0,.34);}
+[data-accent="blue"]  { --accent:#3b82f6; --accent-600:#2266c2; --accent-300:#7cb0fb; --accent-soft:rgba(59,130,246,.15); --accent-line:rgba(59,130,246,.36);}
+[data-accent="teal"]  { --accent:#0fb5ae; --accent-600:#0a948e; --accent-300:#54d6d0; --accent-soft:rgba(15,181,174,.15); --accent-line:rgba(15,181,174,.34);}
+[data-accent="violet"]{ --accent:#8b5cf6; --accent-600:#6442e6; --accent-300:#b49bff; --accent-soft:rgba(139,92,246,.15); --accent-line:rgba(139,92,246,.34);}
+[data-accent="green"] { --accent:#18b364; --accent-600:#11823b; --accent-300:#4fd18c; --accent-soft:rgba(24,179,100,.15); --accent-line:rgba(24,179,100,.34);}
+[data-accent="pink"]  { --accent:#ec4899; --accent-600:#cf2f80; --accent-300:#f57ab8; --accent-soft:rgba(236,72,153,.15); --accent-line:rgba(236,72,153,.34);}
+[data-accent="amber"] { --accent:#eab308; --accent-600:#bd8600; --accent-300:#f3c43e; --accent-soft:rgba(234,179,8,.16); --accent-line:rgba(234,179,8,.34);}
 
 *{box-sizing:border-box;margin:0;padding:0}
-/* The HTML `hidden` attribute must always win over component display rules
-   (.cmdk/.modal-host/.drawer set display:flex|grid which would otherwise
-   override the UA [hidden]{display:none}). */
+/* The HTML `hidden` attribute must always win over component display rules. */
 [hidden]{display:none !important}
 html,body{height:100%}
 body{
   font-family:var(--font);
   background:var(--bg);
   background-image:var(--bg-grad);
+  background-size:auto,auto,var(--bg-grid-size) var(--bg-grid-size),var(--bg-grid-size) var(--bg-grid-size);
   background-attachment:fixed;
   color:var(--text);
+  font-feature-settings:" cv11","ss01";
   -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
   transition:background-color var(--tr), color var(--tr);
   overflow:hidden;
 }
 ::selection{background:var(--accent-soft);color:var(--text)}
 a{color:inherit;text-decoration:none}
 button{font-family:inherit}
+
+/* tabular figures for all data surfaces — engineered precision */
+.mono,.tbl .num,.tbl .mono,.kpi-val,.crm-card-val,.crm-col-val,.crm-card-due,
+.barlist .row .val,.legend .li .v,.chart-tooltip .tt-r b,.sup-card-meta,kbd{
+  font-variant-numeric:tabular-nums;
+}
+
+/* accessible focus ring (keyboard only) — engine priority #1 */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.btn:focus-visible,.icon-btn:focus-visible,.nav-item:focus-visible,.input:focus-visible,
+.select:focus-visible,.chip:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
 
 /* scrollbars */
 *::-webkit-scrollbar{width:10px;height:10px}
@@ -120,5 +172,13 @@ button{font-family:inherit}
 
 kbd{
   font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:6px;
-  background:var(--panel-3);border:1px solid var(--line);color:var(--text-dim);
+  background:var(--panel-3);border:1px solid var(--line);box-shadow:var(--inset-top);color:var(--text-dim);
+}
+
+/* respect reduced-motion — engine a11y requirement */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important;animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;scroll-behavior:auto !important;
+  }
 }
