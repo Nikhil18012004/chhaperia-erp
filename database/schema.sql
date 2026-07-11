@@ -285,3 +285,30 @@ CREATE TABLE IF NOT EXISTS hr_payslips (
 );
 CREATE INDEX IF NOT EXISTS idx_hrps_run ON hr_payslips(payrun_id);
 
+-- ============================================================
+--  LAB REPORTS — QC test certificates for finished goods.
+--  Own product master (decoupled from `items`, replaced when the
+--  real product data file arrives). Each product carries material
+--  TYPE flags (mica / waterBlocking / semiConductive) that decide
+--  which test parameters apply, a per-product reference mode
+--  (batch vs lot/WO number), and a BACKEND-ONLY `spec` map
+--  {param:{min,max}} used to grade a report Pass/Fail. Specs are
+--  never sent to the data-entry form.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lab_products (
+  id        TEXT PRIMARY KEY,          -- LP-001
+  doc       TEXT NOT NULL              -- JSON: name,code,thickness,series,flags{mica,
+                                       --       waterBlocking,semiConductive},refMode,
+                                       --       spec{param:{min,max}},active,notes
+);
+
+-- One row per submitted lab test report. Pass/Fail is computed on
+-- the server against the product's hidden spec and stored here.
+CREATE TABLE IF NOT EXISTS lab_reports (
+  id        TEXT PRIMARY KEY,          -- LR-0001
+  doc       TEXT NOT NULL              -- JSON: productId,productCode,productName,thickness,
+                                       --       refMode,refNo,reportDate,flags{},values{param:n},
+                                       --       results{param:pass|fail|na|—},result,assignee,
+                                       --       testedBy,remarks,createdAt
+);
+

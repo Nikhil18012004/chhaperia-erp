@@ -15,6 +15,7 @@ const { router: authRoutes } = require("./routes/auth");
 const authService = require("./services/authService");
 const erpService = require("./services/erpService");
 const hrService = require("./services/hrService");
+const labService = require("./services/labService");
 const { closeDb } = require("./db/connection");
 
 const PORT = process.env.PORT || 4000;
@@ -89,6 +90,10 @@ const server = app.listen(PORT, () => {
   // seed demo transport agencies (dispatch directory) on first run
   try { const dp = erpService.ensureDispatch(); if (dp.changed) console.log("  ├─ Dispatch : seeded " + dp.count + " transport agencies"); }
   catch (e) { console.error("[dispatch seed]", e.message); }
+
+  // seed the lab-reports product master (finished-goods list) on first run
+  try { const lp = labService.ensureLab(); if (lp.changed) console.log("  ├─ Lab      : seeded " + lp.products + " lab products"); }
+  catch (e) { console.error("[lab seed]", e.message); }
 
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);

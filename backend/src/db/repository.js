@@ -98,12 +98,17 @@ function getState() {
   const hrPayslips = db.prepare("SELECT * FROM hr_payslips").all()
     .map((r) => Object.assign({ id: r.id, payrunId: r.payrun_id, workerId: r.worker_id }, P(r.doc, {})));
 
+  // ---- Lab reports (QC test certificates + their own product master) ----
+  const labProducts = db.prepare("SELECT doc FROM lab_products").all().map((r) => P(r.doc));
+  const labReports = db.prepare("SELECT doc FROM lab_reports").all().map((r) => P(r.doc));
+
   return {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers, transporters,
     movements, workorders, salesorders, purchaseorders, leads, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
+    labProducts, labReports,
   };
 }
 
@@ -475,6 +480,30 @@ function putTransporter(t) {
 }
 function deleteTransporter(id) { getDb().prepare("DELETE FROM transporters WHERE id=?").run(id); return { id }; }
 
+/* ---------- LAB REPORTS (QC certificates + own product master) ---------- */
+function getLabProduct(id) {
+  const r = getDb().prepare("SELECT doc FROM lab_products WHERE id=?").get(id);
+  return r ? P(r.doc) : null;
+}
+function putLabProduct(p) {
+  getDb().prepare("INSERT INTO lab_products(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(p.id, J(p));
+  return p;
+}
+function deleteLabProduct(id) { getDb().prepare("DELETE FROM lab_products WHERE id=?").run(id); return { id }; }
+function labProductsEmpty() { return getDb().prepare("SELECT COUNT(*) n FROM lab_products").get().n === 0; }
+
+function getLabReport(id) {
+  const r = getDb().prepare("SELECT doc FROM lab_reports WHERE id=?").get(id);
+  return r ? P(r.doc) : null;
+}
+function putLabReport(rep) {
+  getDb().prepare("INSERT INTO lab_reports(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(rep.id, J(rep));
+  return rep;
+}
+function deleteLabReport(id) { getDb().prepare("DELETE FROM lab_reports WHERE id=?").run(id); return { id }; }
+
 function getSettings() {
   const db = getDb();
   return P(db.prepare("SELECT doc FROM settings WHERE id=1").pluck().get(), {});
@@ -647,4 +676,7 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   getAttendance, putAttendance, attendanceForPeriod,
   putLeaveType, getLeaveType, deleteLeaveType,
   getLeave, putLeave, deleteLeave,
-  getPayrun, putPayrun, putPayslip, payslipsForRun, deletePayrun, hrIsEmpty };
+  getPayrun, putPayrun, putPayslip, payslipsForRun, deletePayrun, hrIsEmpty,
+  // Lab reports
+  getLabProduct, putLabProduct, deleteLabProduct, labProductsEmpty,
+  getLabReport, putLabReport, deleteLabReport };

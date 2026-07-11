@@ -182,6 +182,19 @@
     },
   };
 
+  /* ---- Lab reports (QC certificates + own product master) ---- */
+  const labProducts = {
+    create(p) { return http("POST", "/lab/products", p); },
+    update(id, patch) { return http("PATCH", "/lab/products/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/lab/products/" + enc(id)); },
+    setSpec(id, spec) { return http("PUT", "/lab/products/" + enc(id) + "/spec", { spec }); },
+  };
+  const labReports = {
+    create(r) { return http("POST", "/lab/reports", r); },
+    update(id, patch) { return http("PATCH", "/lab/reports/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/lab/reports/" + enc(id)); },
+  };
+
   /* ---- production / supervisor stage actions ---- */
   const production = {
     // advance a work order's CURRENT stage: start | pause | complete | dispatch
@@ -197,6 +210,7 @@
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
     items, movements, purchase, sales, boms, leads, customers, transporters, hr,
+    labProducts, labReports,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);

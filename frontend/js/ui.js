@@ -166,6 +166,7 @@
     {sec:"Operations"},
     {id:"production", icon:"⚙️", label:"Production", accent:"amber"},
     {id:"bom", icon:"🧬", label:"Products & BOM", accent:"green"},
+    {id:"lab-reports", icon:"🧪", label:"Lab Reports", accent:"teal"},
     {sec:"Sales & CRM"},
     {id:"crm", icon:"🎯", label:"CRM Pipeline", accent:"pink", pillKey:"openLeads"},
     {sec:"Trade"},

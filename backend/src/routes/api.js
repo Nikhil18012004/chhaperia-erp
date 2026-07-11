@@ -13,6 +13,7 @@ const express = require("express");
 const erp = require("../services/erpService");
 const view = require("../services/viewService");
 const production = require("../services/productionService");
+const lab = require("../services/labService");
 const { requireAuth, requireRole } = require("./auth");
 
 const router = express.Router();
@@ -120,6 +121,32 @@ router.patch("/transporters/:id", requireAuth, rw, (req, res, next) => {
 router.delete("/transporters/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(erp.deleteTransporter(req.params.id)); } catch (e) { next(e); }
 });
+// ---- Lab reports: QC product master + test certificates ----
+// Product master (create/update/delete + hidden spec) — admin/office.
+router.post("/lab/products", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(lab.createProduct(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/lab/products/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(lab.updateProduct(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/lab/products/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(lab.deleteProduct(req.params.id)); } catch (e) { next(e); }
+});
+// Spec is sensitive (hidden from the entry form) — admin only.
+router.put("/lab/products/:id/spec", requireAuth, requireRole("admin"), (req, res, next) => {
+  try { res.json(lab.setProductSpec(req.params.id, (req.body || {}).spec || req.body || {})); } catch (e) { next(e); }
+});
+// Test reports: create / update / delete. Pass/Fail is graded server-side.
+router.post("/lab/reports", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(lab.createReport(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/lab/reports/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(lab.updateReport(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/lab/reports/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(lab.deleteReport(req.params.id)); } catch (e) { next(e); }
+});
+
 // Delete a stock item / work order
 router.delete("/items/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(erp.deleteItem(req.params.id)); } catch (e) { next(e); }
