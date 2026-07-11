@@ -338,7 +338,10 @@
     const sold30 = ser.sold.reduce((a,b)=>a+b,0);
     const activeWO = D.workorders.filter(w=>w.status!=="Completed"&&w.status!=="Dispatched").length;
     const crm = crmStats();
+    const whList = D.warehouses||[];
+    const whActive = whList.filter(w=> D.items.some(it=> (((STOCK[it.id]||{}).byWh||{})[w.id]||0) > 0.001)).length;
     return { invValue:inv.total, fgValue:inv.fg, rmValue:inv.rm, skuCount:inv.items,
+      whTotal:whList.length, whActive,
       openPO:openPO.length, poValue, openSO:openSO.length, soValue, lowStock:low,
       prod30, sold30, activeWO, alertCount: alerts().length,
       openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate,

@@ -21,8 +21,9 @@
     const kpis=h("div",{class:"grid kpi-grid compact",style:"margin-bottom:16px"},[
       kpi({icon:"💰", label:"Inventory Value", value:ENG.money(k.invValue),
         delta:"FG "+ENG.money(k.fgValue), deltaType:"flat", spark:ser.prod, sparkColor:"var(--accent)"}),
-      kpi({icon:"📦", label:"Active SKUs", value:ENG.num(k.skuCount),
-        delta:k.lowStock+" need attention", deltaType:k.lowStock?"down":"up", onClick:()=>App.go("inventory")}),
+      kpi({icon:"🏬", label:"Active Warehouses", value:ENG.num(k.whActive),
+        delta:(k.whActive<k.whTotal? (k.whTotal-k.whActive)+" empty of "+k.whTotal : "all "+k.whTotal+" stocked"),
+        deltaType:(k.whActive<k.whTotal?"down":"up"), onClick:()=>App.go("warehouses")}),
       kpi({icon:"🛒", label:"Open Purchase Orders", value:ENG.num(k.openPO),
         delta:ENG.money(k.poValue)+" pending in", deltaType:"flat", onClick:()=>App.go("purchase")}),
       kpi({icon:"🧾", label:"Open Sales Orders", value:ENG.num(k.openSO),
