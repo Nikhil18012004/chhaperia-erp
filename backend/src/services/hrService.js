@@ -37,6 +37,7 @@ function nextId(list, prefix, width = 4) {
 const HR_DEFAULTS = {
   standardDayHours: 8,        // overtime accrues beyond this per day
   otMultiplier: 2,            // Factories Act §59: 2× ordinary wage
+  timezone: "Asia/Kolkata",   // factory-local tz; zoned device punches are normalised to this
   weekOff: [0],               // 0=Sun … 6=Sat
   halfDayBelowHours: 4,       // a present day under this = half day
   deductions: {
@@ -70,6 +71,21 @@ function eachDate(from, to) {
   const out = []; let d = new Date(from + "T12:00:00"); const end = new Date(to + "T12:00:00");
   while (d <= end) { out.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); d.setDate(d.getDate() + 1); }
   return out;
+}
+/** Normalise a punch timestamp to factory-local wall-clock (naive ISO, no tz).
+    A biometric device may push UTC (`…Z`) or an offset (`+00:00`); we convert
+    that absolute instant into the configured timezone so the date bucket
+    (`ts LIKE 'YYYY-MM-DD%'`) and the displayed HH:MM are the real local muster
+    time. Timestamps that are already naive/local are left untouched. */
+function normalizeTs(ts, cfg) {
+  const s = String(ts);
+  if (!/([zZ]|[+-]\d\d:?\d\d)$/.test(s)) return s;               // already local/naive
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  const tz = (cfg && cfg.timezone) || "Asia/Kolkata";
+  const date = d.toLocaleDateString("en-CA", { timeZone: tz });                 // YYYY-MM-DD
+  const time = d.toLocaleTimeString("en-GB", { timeZone: tz, hour12: false });  // HH:MM:SS
+  return `${date}T${time}`;
 }
 
 /* ============================================================
@@ -130,8 +146,9 @@ function ingestPunch(body) {
   body = body || {};
   const deviceUid = String(body.deviceUid || body.userId || body.uid || body.pin || "").trim();
   if (!deviceUid) throw err("Punch needs a device user id (deviceUid)", 400);
-  const ts = body.ts || body.time || new Date().toISOString();
-  if (isNaN(new Date(ts).getTime())) throw err("Punch has an invalid timestamp", 400);
+  const rawTs = body.ts || body.time || new Date().toISOString();
+  if (isNaN(new Date(rawTs).getTime())) throw err("Punch has an invalid timestamp", 400);
+  const ts = normalizeTs(rawTs, getConfig());   // store factory-local wall-clock
   const worker = repo.getWorkerByDevice(deviceUid);
   const punch = repo.addPunch({
     id: rid("PN"), workerId: worker ? worker.id : null, deviceUid, ts,
@@ -229,15 +246,17 @@ function ptForGross(gross, slabs) {
 }
 
 /** Compute one worker's payslip for a period (YYYY-MM) from attendance. */
-function computeSlip(worker, period, cfg, leaveTypeById) {
+function computeSlip(worker, period, cfg, isPaidLeaveDay) {
   const att = repo.attendanceForPeriod(period).filter((a) => a.workerId === worker.id);
   let present = 0, otHours = 0, paidLeave = 0, unpaidLeave = 0, absent = 0;
   att.forEach((a) => {
     if (a.status === "P") present += 1;
     else if (a.status === "HD") present += 0.5;
     else if (a.status === "L") {
-      // was this an approved leave of a PAID type?
-      paidLeave += 1;   // treated paid by default; refine below if type known
+      // honour the leave type's `paid` flag; unpaid types are excluded from payable days.
+      // No resolver (e.g. computeSlip called directly) → treat as paid for back-compat.
+      if (!isPaidLeaveDay || isPaidLeaveDay(a)) paidLeave += 1;
+      else unpaidLeave += 1;
     } else if (a.status === "A") absent += 1;
     otHours += num(a.otHours);
   });
@@ -272,7 +291,7 @@ function computeSlip(worker, period, cfg, leaveTypeById) {
   const net = round(gross - pf - esi - pt - advances);
   return {
     workerId: worker.id, name: worker.name, dept: worker.dept, payType: worker.payType,
-    dailyRate: worker.dailyRate, present: round(present, 1), paidLeave, absent, payableDays: round(payableDays, 1),
+    dailyRate: worker.dailyRate, present: round(present, 1), paidLeave, unpaidLeave, absent, payableDays: round(payableDays, 1),
     otHours: round(otHours), otPay: otPayOut || 0, allowances: allowOut || 0, hourly: hourlyOut || 0,
     basicEarned, gross,
     deductions: { pf, esi, pt }, employer: { pf: employerPf, esi: employerEsi }, advances, net,
@@ -288,7 +307,26 @@ function runPayroll(period, opts) {
   const existing = repo.getPayrun("PR-" + period);
   if (existing && existing.status === "Finalized" && !opts.force) throw err("Pay run for " + period + " is finalized", 400);
   const workers = st.hrWorkers.filter((w) => w.active !== false);
-  const slips = workers.map((w) => computeSlip(w, period, cfg));
+
+  // Resolve whether an "L" muster day is a PAID leave, honouring each leave
+  // type's `paid` flag. Approved leave records are authoritative for the
+  // worker+date → type mapping; fall back to parsing the muster note
+  // ("<TYPE> leave", written by decideLeave); unknown/manual days stay paid.
+  const leaveTypeById = {};
+  (st.hrLeaveTypes || []).forEach((t) => { leaveTypeById[t.id] = t; });
+  const leaveTypeByDay = {};
+  (st.hrLeaves || []).forEach((l) => {
+    if (l.status !== "Approved") return;
+    eachDate(l.fromDate, l.toDate).forEach((d) => { leaveTypeByDay[l.workerId + "|" + d] = l.type; });
+  });
+  const isPaidLeaveDay = (a) => {
+    let typeId = leaveTypeByDay[a.workerId + "|" + a.date];
+    if (!typeId && a.note) { const m = /^(\S+)\s+leave$/.exec(String(a.note)); if (m) typeId = m[1]; }
+    const t = typeId ? leaveTypeById[typeId] : null;
+    return t ? t.paid !== false : true;
+  };
+
+  const slips = workers.map((w) => computeSlip(w, period, cfg, isPaidLeaveDay));
   const totals = slips.reduce((t, s) => ({ gross: t.gross + s.gross, net: t.net + s.net,
     pf: t.pf + s.deductions.pf, esi: t.esi + s.deductions.esi, pt: t.pt + s.deductions.pt }),
     { gross: 0, net: 0, pf: 0, esi: 0, pt: 0 });
