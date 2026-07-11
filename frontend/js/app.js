@@ -299,25 +299,68 @@
       const auto=$("#autoAccent"); if(auto) auto.checked=this.autoAccent;
     },
 
-    /* ---- alerts ---- */
+    /* ---- alerts / notifications ----
+       Alerts are computed live from data (they have no natural timestamp), so
+       we persist a small "first-seen" log in localStorage: each alert is dated
+       the day it first appeared, grouped day-by-day, and AUTO-EXPIRES after
+       NOTIF_RETENTION_DAYS — after which it vanishes and is dropped from the
+       log. An aged-out alert is not resurrected while its condition persists;
+       once the condition clears, its log entry is removed so it can recur. */
+    NOTIF_KEY:"chh_notiflog", NOTIF_RETENTION_DAYS:3,
+    _notifLog(){ try{ return JSON.parse(localStorage.getItem(this.NOTIF_KEY)||"{}")||{}; }catch{ return {}; } },
+    _saveNotifLog(o){ try{ localStorage.setItem(this.NOTIF_KEY, JSON.stringify(o)); }catch{} },
+    _alertKey(a){ return [a.kind||"gen", a.itemId||a.id||a.title||""].join("|"); },
+    /* register today's alerts, purge resolved/expired, return day-grouped view */
+    notifications(){
+      const al = ENG.alerts();
+      const today = DB.helpers.iso(DB.helpers.today());
+      const cutoff = DB.helpers.daysAgo(this.NOTIF_RETENTION_DAYS-1);  // keep first-seen >= cutoff
+      const log = this._notifLog();
+      const active = new Set(al.map(a=>this._alertKey(a)));
+      // stamp newly-appeared alerts with today's date (keep existing first-seen)
+      al.forEach(a=>{ const k=this._alertKey(a); if(!log[k]) log[k]=today; });
+      // a resolved condition frees its slot (so it can recur later as new)
+      Object.keys(log).forEach(k=>{ if(!active.has(k)) delete log[k]; });
+      this._saveNotifLog(log);
+      // visible = active alerts still inside the retention window
+      const visible = al.filter(a=> (log[this._alertKey(a)]||today) >= cutoff);
+      const byDate={}; visible.forEach(a=>{ const d=log[this._alertKey(a)]; (byDate[d]=byDate[d]||[]).push(a); });
+      const groups = Object.keys(byDate).sort((a,b)=> a<b?1:-1)
+        .map(date=>({date, label:this._notifLabel(date), items:byDate[date]}));
+      return { groups, count:visible.length };
+    },
+    _notifLabel(date){
+      const today = DB.helpers.iso(DB.helpers.today());
+      if(date===today) return "Today";
+      if(date===DB.helpers.daysAgo(1)) return "Yesterday";
+      try{ return new Date(date+"T12:00:00").toLocaleDateString(undefined,{weekday:"short",day:"2-digit",month:"short"}); }
+      catch{ return date; }
+    },
     refreshAlerts(){
-      const al=ENG.alerts(); const badge=$("#bellBadge");
-      if(al.length){ badge.hidden=false; badge.textContent=al.length>99?"99+":al.length; }
+      const n=this.notifications(); const badge=$("#bellBadge");
+      if(n.count){ badge.hidden=false; badge.textContent=n.count>99?"99+":n.count; }
       else badge.hidden=true;
     },
     openAlerts(){
-      const al=ENG.alerts(); const list=$("#alertList"); list.innerHTML="";
-      if(!al.length){ list.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),h("div",{text:"No active alerts — all systems healthy."})])); }
-      al.forEach(a=>{
-        const st={danger:"background:var(--danger-soft);color:var(--danger)",warn:"background:var(--warn-soft);color:var(--warn)",info:"background:var(--info-soft);color:var(--info)"}[a.sev];
-        list.appendChild(h("div",{class:"alert-item",onclick:()=>{ this.closeDrawer();
-          if(a.kind==="stock") this.go("inventory");
-          else if(a.kind==="po") this.go("purchase");
-          else if(a.kind==="so") this.go("sales");
-          else if(a.kind==="lead") this.go("crm"); }},[
-          h("div",{class:"alert-ic",style:st,text:a.ic}),
-          h("div",{style:"flex:1;min-width:0"},[ h("div",{class:"t",text:a.title}), h("div",{class:"d",text:a.desc}) ])
+      const n=this.notifications(); const list=$("#alertList"); list.innerHTML="";
+      if(!n.count){ list.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),h("div",{text:"No active alerts — all systems healthy."})])); }
+      n.groups.forEach(g=>{
+        list.appendChild(h("div",{class:"alert-date"},[
+          h("span",{class:"alert-date-lbl",text:g.label}),
+          h("span",{class:"alert-date-rule"}),
+          h("span",{class:"alert-date-n",text:g.items.length+(g.items.length>1?" alerts":" alert")})
         ]));
+        g.items.forEach(a=>{
+          const st={danger:"background:var(--danger-soft);color:var(--danger)",warn:"background:var(--warn-soft);color:var(--warn)",info:"background:var(--info-soft);color:var(--info)"}[a.sev];
+          list.appendChild(h("div",{class:"alert-item",onclick:()=>{ this.closeDrawer();
+            if(a.kind==="stock") this.go("inventory");
+            else if(a.kind==="po") this.go("purchase");
+            else if(a.kind==="so") this.go("sales");
+            else if(a.kind==="lead") this.go("crm"); }},[
+            h("div",{class:"alert-ic",style:st,text:a.ic}),
+            h("div",{style:"flex:1;min-width:0"},[ h("div",{class:"t",text:a.title}), h("div",{class:"d",text:a.desc}) ])
+          ]));
+        });
       });
       $("#alertDrawer").hidden=false; $("#scrim").hidden=false;
       requestAnimationFrame(()=>$("#alertDrawer").classList.add("open"));

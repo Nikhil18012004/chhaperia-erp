@@ -18,7 +18,7 @@
       ]));
 
     /* KPI row */
-    const kpis=h("div",{class:"grid kpi-grid",style:"margin-bottom:16px"},[
+    const kpis=h("div",{class:"grid kpi-grid compact",style:"margin-bottom:16px"},[
       kpi({icon:"💰", label:"Inventory Value", value:ENG.money(k.invValue),
         delta:"FG "+ENG.money(k.fgValue), deltaType:"flat", spark:ser.prod, sparkColor:"var(--accent)"}),
       kpi({icon:"📦", label:"Active SKUs", value:ENG.num(k.skuCount),
