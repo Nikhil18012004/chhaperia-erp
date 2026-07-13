@@ -543,8 +543,96 @@
     return {labels,bal}; }
   function downloadCSV(name,content){ const blob=new Blob([content],{type:"text/csv"}); const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
+
+  /* ---------- searchable select (drop-in replacement for selectHTML) ----------
+     Renders a type-to-filter combobox. A hidden <input id="ID"> holds the
+     selected VALUE (so existing `UI.$("#ID").value` reads + "change" listeners
+     keep working); a visible text box (#ID_s) filters the options. One delegated
+     controller (installed once) drives every widget. The popup is position:fixed
+     so it escapes the modal's overflow:auto clipping. */
+  const _ssOpts = new Map();   // id -> [{v,l}]
+  function searchSelect(id, opts, sel, placeholder){
+    opts = (opts||[]).map(o=>({v:String(o.v), l:String(o.l)}));
+    _ssOpts.set(id, opts);
+    const selStr = sel==null ? "" : String(sel);
+    const cur = opts.find(o=>o.v===selStr);
+    return `<div class="ss" data-ss="${esc(id)}">`
+      + `<input type="hidden" id="${esc(id)}" value="${esc(selStr)}">`
+      + `<input type="text" class="input ss-input" id="${esc(id)}_s" autocomplete="off" spellcheck="false"`
+      + ` role="combobox" aria-autocomplete="list" aria-expanded="false"`
+      + ` placeholder="${esc(placeholder||"Search…")}" value="${esc(cur?cur.l:"")}">`
+      + `<div class="ss-pop" hidden></div></div>`;
+  }
+  function ssHidden(wrap){ return wrap.querySelector('input[type="hidden"]'); }
+  function ssInput(wrap){ return wrap.querySelector(".ss-input"); }
+  function ssPosition(wrap){
+    const inp=ssInput(wrap), pop=wrap.querySelector(".ss-pop");
+    if(!inp||!pop||pop.hidden) return;
+    const r=inp.getBoundingClientRect();
+    const popH=Math.min(240, pop.scrollHeight||240);
+    const below=window.innerHeight-r.bottom;
+    pop.style.width=r.width+"px"; pop.style.left=r.left+"px";
+    if(below < popH+8 && r.top > below){ pop.style.top="auto"; pop.style.bottom=(window.innerHeight-r.top+4)+"px"; }
+    else { pop.style.bottom="auto"; pop.style.top=(r.bottom+4)+"px"; }
+  }
+  function ssOpen(wrap, filter){
+    const opts=_ssOpts.get(wrap.getAttribute("data-ss"))||[];
+    const pop=wrap.querySelector(".ss-pop"), hid=ssHidden(wrap);
+    const q=String(filter||"").toLowerCase().trim();
+    const list=q ? opts.filter(o=>o.l.toLowerCase().includes(q)||o.v.toLowerCase().includes(q)) : opts;
+    pop.innerHTML = list.length
+      ? list.slice(0,300).map(o=>`<div class="ss-opt${o.v===hid.value?" sel":""}" data-v="${esc(o.v)}">${esc(o.l)}</div>`).join("")
+      : `<div class="ss-empty">No match</div>`;
+    pop.hidden=false; ssInput(wrap).setAttribute("aria-expanded","true"); ssPosition(wrap);
+  }
+  function ssClose(wrap, reconcile){
+    const pop=wrap.querySelector(".ss-pop"); if(pop) pop.hidden=true;
+    const inp=ssInput(wrap); if(inp) inp.setAttribute("aria-expanded","false");
+    if(reconcile!==false){ // restore the search box text to the selected value's label
+      const cur=(_ssOpts.get(wrap.getAttribute("data-ss"))||[]).find(o=>o.v===ssHidden(wrap).value);
+      if(inp) inp.value=cur?cur.l:"";
+    }
+  }
+  function ssPick(wrap, v){
+    const hid=ssHidden(wrap), inp=ssInput(wrap);
+    const cur=(_ssOpts.get(wrap.getAttribute("data-ss"))||[]).find(o=>o.v===String(v));
+    hid.value=String(v); if(inp) inp.value=cur?cur.l:"";
+    ssClose(wrap, false);
+    hid.dispatchEvent(new Event("change",{bubbles:true}));  // keep existing change listeners working
+  }
+  let _ssWired=false;
+  function ssWire(){
+    if(_ssWired||typeof document==="undefined") return; _ssWired=true;
+    document.addEventListener("input", e=>{ const inp=e.target.closest&&e.target.closest(".ss-input"); if(inp) ssOpen(inp.closest(".ss"), inp.value); });
+    document.addEventListener("focusin", e=>{ const inp=e.target.closest&&e.target.closest(".ss-input"); if(inp){ try{inp.select();}catch{} ssOpen(inp.closest(".ss"), ""); } });
+    document.addEventListener("mousedown", e=>{
+      const opt=e.target.closest&&e.target.closest(".ss-opt");
+      if(opt){ e.preventDefault(); ssPick(opt.closest(".ss"), opt.getAttribute("data-v")); return; }
+      const inside=e.target.closest&&e.target.closest(".ss");
+      document.querySelectorAll(".ss").forEach(w=>{ if(w!==inside){ const p=w.querySelector(".ss-pop"); if(p&&!p.hidden) ssClose(w); } });
+    });
+    document.addEventListener("keydown", e=>{
+      const inp=e.target.closest&&e.target.closest(".ss-input"); if(!inp) return;
+      const wrap=inp.closest(".ss"), pop=wrap.querySelector(".ss-pop");
+      if(e.key==="Escape"){ ssClose(wrap); return; }
+      if(pop.hidden && (e.key==="ArrowDown"||e.key==="ArrowUp")){ ssOpen(wrap, inp.value); return; }
+      if(pop.hidden) return;
+      const items=[...pop.querySelectorAll(".ss-opt")]; if(!items.length) return;
+      let i=items.findIndex(o=>o.classList.contains("act"));
+      if(e.key==="ArrowDown"){ e.preventDefault(); i=Math.min(items.length-1,i+1); }
+      else if(e.key==="ArrowUp"){ e.preventDefault(); i=Math.max(0,i<0?0:i-1); }
+      else if(e.key==="Enter"){ if(i>=0){ e.preventDefault(); ssPick(wrap, items[i].getAttribute("data-v")); } return; }
+      else return;
+      items.forEach(o=>o.classList.remove("act")); if(items[i]){ items[i].classList.add("act"); items[i].scrollIntoView({block:"nearest"}); }
+    });
+    const reflow=()=>document.querySelectorAll(".ss").forEach(w=>{ const p=w.querySelector(".ss-pop"); if(p&&!p.hidden) ssPosition(w); });
+    window.addEventListener("scroll", reflow, true);  // capture → catches modal-body scroll
+    window.addEventListener("resize", reflow);
+  }
+  ssWire();
+
   // expose for other modules
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

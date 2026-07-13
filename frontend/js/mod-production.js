@@ -231,7 +231,7 @@
     function woForm(){
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       const body=h("div",{class:"form-grid"},[
-        U.field("Product",U.selectHTML("w_item",fgs.map(i=>({v:i.id,l:U.trim(i.name,36)})),fgs[0].id),"full"),
+        U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:U.trim(i.name,36)})),fgs[0].id,"Search product…"),"full"),
         U.field("Quantity (kg)",`<input class="input" id="w_qty" type="number" value="100">`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"Coating Line 1",l:"Coating Line 1"},{v:"Coating Line 2",l:"Coating Line 2"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Coating Line 1")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
@@ -276,6 +276,7 @@
   /* ============== PRODUCTS & BOM ============== */
   M.bom = { title:"Products & BOM", sub:"Recipes & cost roll-up", render(root, params){
     root.appendChild(pageHead("Products & Bill of Materials","Chhaperia cable-tape range with live material cost roll-up, margin analysis & specifications",[
+      h("button",{class:"btn",onclick:()=>bomCalc(),html:"🧮 BOM Calculator"}),
       h("button",{class:"btn primary",onclick:()=>bomForm(),html:"＋ Create BOM"})
     ]));
     const fgs=ENG.data.items.filter(i=>i.cat==="FG");
@@ -298,6 +299,43 @@
       root.appendChild(grid);
     });
     if(params&&params.openNew){ params.openNew=false; bomForm(); }
+
+    /* ----- BOM Calculator: material requirement for a production run ----- */
+    function bomCalc(){
+      const withBom=ENG.data.items.filter(i=>i.cat==="FG" && ENG.data.boms[i.id]);
+      if(!withBom.length){ toast("No product has a BOM yet — create one first",{type:"warn"}); return; }
+      const body=h("div",{},[
+        h("p",{class:"dim",style:"margin-bottom:12px",text:"Pick a finished product and a target production quantity to see the raw materials required (per the current BOM), with available stock and any shortfall."}),
+        h("div",{class:"form-grid"},[
+          U.field("Product (Finished Good)", U.searchSelect("bc_fg", withBom.map(f=>({v:f.id,l:U.trim(f.id+" — "+f.name,44)})), withBom[0].id, "Search product…"), "full"),
+          U.field("Quantity to produce (kg)", `<input class="input" id="bc_qty" type="number" step="0.1" min="0" value="100">`),
+        ]),
+        h("div",{id:"bc_out",style:"margin-top:14px"})
+      ]);
+      const mo=modal({title:"🧮 BOM Calculator", sub:"Material requirement for a production run — uses the current BOM", wide:true, body,
+        foot:[h("button",{class:"btn primary",onclick:()=>mo.close(),text:"Close"})]});
+      function recalc(){
+        const id=UI.$("#bc_fg").value, qty=+UI.$("#bc_qty").value||0;
+        const bom=ENG.data.boms[id], out=UI.$("#bc_out"); if(!out) return; out.innerHTML="";
+        if(!bom){ out.appendChild(h("div",{class:"muted",text:"No BOM for this product."})); return; }
+        const fg=ENG.item(id)||{name:id};
+        const rows=bom.lines.map(([rid,per])=>{ const need=per*qty/bom.yield; const st=ENG.stock(rid)||{}; const have=st.onHand||0;
+          const r=ENG.item(rid)||{}; return {rid, name:r.name||rid, uom:r.uom||"", per, need, have, short:Math.max(0,need-have), avgCost:st.avgCost||r.cost||0}; });
+        const totCost=rows.reduce((s,x)=>s+x.need*x.avgCost,0);
+        out.appendChild(h("div",{class:"flex between aic wrap",style:"margin-bottom:10px;gap:8px"},[
+          h("div",{style:"font-weight:700",text:fg.name+" · "+ENG.num(qty,1)+" kg @ "+Math.round(bom.yield*100)+"% yield"}),
+          h("span",{class:"chip",text:rows.length+" materials · est. ₹"+ENG.num(totCost,0)})
+        ]));
+        out.appendChild(table(rows,[
+          {key:"name",label:"Raw Material",render:r=>esc(U.trim(r.name,40))},
+          {key:"per",label:"Per kg",num:true,render:r=>ENG.num(r.per,3)+" "+esc(r.uom),sort:r=>r.per},
+          {key:"need",label:"Required",num:true,render:r=>"<b>"+ENG.num(r.need,2)+"</b> "+esc(r.uom),sort:r=>r.need},
+          {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1)+" "+esc(r.uom),sort:r=>r.have},
+          {key:"short",label:"Shortfall",num:true,render:r=> r.short>0? badge("danger",ENG.num(r.short,2)+" "+r.uom): badge("ok","OK"),sort:r=>r.short},
+        ],{empty:"No components"}));
+      }
+      setTimeout(()=>{ const s=UI.$("#bc_fg"); if(s) s.addEventListener("change",recalc); const q=UI.$("#bc_qty"); if(q) q.addEventListener("input",recalc); recalc(); },50);
+    }
 
     function productCard(fg){
       const bom=ENG.data.boms[fg.id];
@@ -346,7 +384,7 @@
       let lines=[];
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Product (Finished Good)", U.selectHTML("bm_fg", fgs.map(f=>({v:f.id,l:U.trim(f.id+" — "+f.name,42)})), fgId||fgs[0].id)),
+          U.field("Product (Finished Good)", U.searchSelect("bm_fg", fgs.map(f=>({v:f.id,l:U.trim(f.id+" — "+f.name,42)})), fgId||fgs[0].id, "Search product…")),
           U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
         ]),
         h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Components (quantity per kg of finished good)"}),
@@ -357,13 +395,13 @@
       if(editing) foot.push(h("button",{class:"btn danger",onclick:()=>delBom(),text:"🗑 Delete BOM"}));
       foot.push(h("button",{class:"btn primary",onclick:save,text:editing?"Save BOM":"Create BOM"}));
       const mo=modal({title: editing?("Edit BOM · "+fgId):"Create BOM", sub:"Define the material recipe", wide:true, body, foot});
-      const fgSel=UI.$("#bm_fg"); if(editing && fgSel) fgSel.disabled=true;   // lock product when editing its recipe
+      const fgSel=UI.$("#bm_fg_s"); if(editing && fgSel){ fgSel.readOnly=true; fgSel.classList.add("is-locked"); }   // lock product when editing its recipe
       function addLine(seed){
         const idx=lines.length; lines.push({});
         const rid = seed? seed[0] : (rms[0]&&rms[0].id);
         const per = seed? seed[1] : "";
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.selectHTML("bl_rid_"+idx, rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})), rid), style:"flex:2"}),
+          h("div",{html:U.searchSelect("bl_rid_"+idx, rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})), rid, "Search material…"), style:"flex:2"}),
           h("input",{class:"input",id:"bl_per_"+idx,type:"number",step:"0.001",placeholder:"Qty / kg",style:"flex:1",value:per}),
           h("button",{class:"btn sm ghost",title:"Remove component",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})
         ]);

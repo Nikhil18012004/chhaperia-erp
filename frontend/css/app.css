@@ -233,6 +233,18 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .date-label,.range-sep{font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-mut);letter-spacing:.04em}
 .date-input{min-width:140px}
 textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;line-height:1.5}
+
+/* searchable select (combobox) — see _erpUtil.searchSelect */
+.ss{position:relative}
+.ss .ss-input{width:100%}
+.ss-pop{position:fixed;z-index:200;max-height:240px;overflow-y:auto;background:var(--panel);
+  border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);padding:5px}
+.ss-opt{padding:7px 10px;border-radius:7px;font-size:13px;line-height:1.3;cursor:pointer;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ss-opt:hover,.ss-opt.act{background:var(--panel-2);color:var(--accent)}
+.ss-opt.sel{font-weight:700}
+.ss-empty{padding:8px 10px;font-size:12.5px;color:var(--text-mut)}
+.ss-input.is-locked{opacity:.65;pointer-events:none}
 .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px;box-shadow:var(--inset-top)}
 .seg button{border:none;background:transparent;color:var(--text-mut);font-weight:700;font-size:12.5px;padding:6px 13px;
   border-radius:7px;cursor:pointer;transition:var(--tr)}

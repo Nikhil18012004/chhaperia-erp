@@ -176,7 +176,7 @@
 
     const body = h("div", {}, [
       h("div", { class: "form-grid" }, [
-        U.field("Product", U.selectHTML("lr_prod", prodOpts, prod.id), "full"),
+        U.field("Product", U.searchSelect("lr_prod", prodOpts, prod.id, "Search product…"), "full"),
         U.field("Reference No.",
           `<input class="input" id="lr_ref" value="${esc(edit ? existing.refNo || "" : "")}" placeholder="e.g. B-2026-0142"><div class="muted" id="lr_refmode" style="font-size:10.5px;margin-top:3px">${refLabel(prod.refMode)}</div>`),
         U.field("Report Date", `<input class="input" id="lr_date" type="date" value="${edit ? esc(existing.reportDate) : DB.helpers.iso(DB.helpers.today())}">`),

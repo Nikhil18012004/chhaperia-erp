@@ -146,7 +146,7 @@
       let lines=[];
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Supplier",U.selectHTML("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:sups[0].id)),
+          U.field("Supplier",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:sups[0].id,"Search supplier…")),
           U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
         ]),
         h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines"}),
@@ -162,7 +162,7 @@
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:(typeof seed==="string"?ENG.status(seed).suggest:"");
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(typeof seed==="string"?ENG.item(seed).cost:"");
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.selectHTML("pl_item_"+idx,rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})),itemId),style:"flex:2"}),
+          h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})),itemId,"Search material…"),style:"flex:2"}),
           h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"Qty",style:"flex:1",value:qtyVal}),
           h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:rateVal}),
           h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})
@@ -295,7 +295,7 @@
       let lines=[];
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Customer",U.selectHTML("so_cust",custs.map(c=>({v:c.id,l:c.name})),editSo?editSo.customerId:custs[0].id)),
+          U.field("Customer",U.searchSelect("so_cust",custs.map(c=>({v:c.id,l:c.name})),editSo?editSo.customerId:custs[0].id,"Search customer…")),
           U.field("Priority",U.selectHTML("so_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],editSo?editSo.priority:"Normal")),
           U.field("Promised Date",`<input class="input" id="so_prom" type="date" value="${editSo?editSo.promised:DB.helpers.daysAhead(10)}">`),
         ]),
@@ -310,7 +310,7 @@
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(fgs[0]&&fgs[0].price);
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.selectHTML("sl_item_"+idx,fgs.map(i=>({v:i.id,l:U.trim(i.name,30)})),itemId),style:"flex:2"}),
+          h("div",{html:U.searchSelect("sl_item_"+idx,fgs.map(i=>({v:i.id,l:U.trim(i.name,30)})),itemId,"Search product…"),style:"flex:2"}),
           h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"Qty (kg)",style:"flex:1",value:qtyVal}),
           h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:rateVal}),
           h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})
