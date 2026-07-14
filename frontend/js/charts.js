@@ -204,57 +204,6 @@
     animate(render);
   }
 
-  /* ---------------- HORIZONTAL BARS (ranking) ----------------
-     For ranked categorical data with long names (e.g. Revenue by
-     Product). Each item is its own row — name on the left, bar to the
-     right, value in a fixed right column — so labels never collide or
-     get squeezed the way vertical-bar x-axis labels do on narrow
-     screens. Full name shows in the hover/tap tooltip.
-     cfg: { items:[{label,value,color?}], fmt, name, color } */
-  function hbars(canvas, cfg){
-    const box=canvas.parentElement; const {ctx,w,h}=setup(canvas);
-    const items=cfg.items||[]; const n=Math.max(1,items.length);
-    const pad={t:6,b:6,l:12,r:12};
-    const valW=64;                                   // reserved value column
-    const rowH=(h-pad.t-pad.b)/n;
-    const barH=Math.max(9,Math.min(18,rowH*0.5));
-    const max=Math.max(...items.map(d=>d.value),1);
-    const text=css("--text"), mut=css("--text-mut");
-    const accent=cfg.color||css("--accent");
-    const labelW=Math.max(84,Math.min(w*0.36,200));
-    const trackX=pad.l+labelW+10;
-    const trackW=Math.max(20, w-trackX-valW-pad.r);
-    const fontLbl="12px "+css("--font");
-    function fmt(v){ return cfg.fmt?cfg.fmt(v):(Math.abs(v)>=1000?(v/1000).toFixed(1)+"k":Math.round(v)); }
-    function elide(s,maxW){ s=String(s==null?"":s); ctx.font=fontLbl;
-      if(ctx.measureText(s).width<=maxW) return s;
-      let lo=0,hi=s.length;
-      while(lo<hi){ const mid=(lo+hi+1)>>1; if(ctx.measureText(s.slice(0,mid)+"…").width<=maxW) lo=mid; else hi=mid-1; }
-      return s.slice(0,Math.max(1,lo))+"…"; }
-    function render(prog){
-      ctx.clearRect(0,0,w,h); ctx.textBaseline="middle";
-      items.forEach((d,i)=>{
-        const cy=pad.t+i*rowH+rowH/2;
-        rr(ctx,trackX,cy-barH/2,trackW,barH,barH/2,hexA(accent,.10));   // track
-        const bw=Math.max(barH,d.value/max*trackW*prog);               // bar
-        rr(ctx,trackX,cy-barH/2,bw,barH,barH/2,d.color||accent);
-        ctx.font=fontLbl; ctx.textAlign="left"; ctx.fillStyle=text;    // name
-        ctx.fillText(elide(d.label,labelW),pad.l,cy);
-        ctx.font="700 11px "+css("--font"); ctx.textAlign="right"; ctx.fillStyle=mut;  // value
-        ctx.fillText(fmt(d.value),w-pad.r,cy);
-      });
-      ctx.textAlign="left"; ctx.textBaseline="alphabetic";
-    }
-    animate(render);
-    const tt=tip(box);
-    canvas.onmousemove=(e)=>{ const r=canvas.getBoundingClientRect(); const my=e.clientY-r.top;
-      let i=Math.floor((my-pad.t)/rowH); if(i<0||i>=items.length){tt.style.opacity=0;return;}
-      const d=items[i]; tt.style.opacity=1;
-      tt.style.left=Math.min(w-150,trackX)+"px"; tt.style.top=(pad.t+i*rowH)+"px";
-      tt.innerHTML=`<div class="tt-t">${d.label}</div><div class="tt-r"><span class="d" style="background:${d.color||accent}"></span>${cfg.name||"Value"}<b>${fmt(d.value)}</b></div>`; };
-    canvas.onmouseleave=()=>tt.style.opacity=0;
-  }
-
   /* utils */
   function rr(ctx,x,y,w,h,r,fill){ if(h<=0)return; r=Math.min(r,w/2,h); ctx.beginPath();
     ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,0); ctx.arcTo(x,y+h,x,y,0); ctx.arcTo(x,y,x+w,y,r);
@@ -262,5 +211,5 @@
   function hexA(hex,a){ hex=hex.replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
     const n=parseInt(hex,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
 
-  global.Charts = { line, bars, hbars, donut, spark, gauge };
+  global.Charts = { line, bars, donut, spark, gauge };
 })(window);
