@@ -48,6 +48,13 @@ router.post("/production/wo", requireAuth, requireRole("admin", "office"), (req,
   catch (e) { next(e); }
 });
 
+// Supervisor/admin record finished stock made on the floor: deduct raw
+// materials from the store per BOM + add the produced qty to a chosen warehouse.
+router.post("/production/finished", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.status(201).json(production.produceFinished(req.user, req.body || {})); }
+  catch (e) { next(e); }
+});
+
 // ---- Granular inventory writes (avoid rewriting the whole dataset) ----
 // Create or update a single stock item.
 router.post("/items", requireAuth, requireRole("admin", "office"), (req, res, next) => {

@@ -112,12 +112,34 @@ function stateForSupervisor(area) {
     .filter((i) => ["RM", "WIP", "FG", "PKG", "CON"].includes(i.cat))
     .map((i) => ({ id: i.id, name: i.name, cat: i.cat, uom: i.uom }));
 
+  // finished-goods products that can be produced on the floor (have a BOM), each
+  // with a per-unit recipe so the "Add to Finished Stock" form can preview what
+  // will be consumed. No costs/prices — quantities only.
+  const boms = d.boms || {};
+  const finishedProducts = d.items
+    .filter((i) => i.cat === "FG" && boms[i.id] && (boms[i.id].lines || []).length)
+    .map((i) => {
+      const bom = boms[i.id];
+      const Y = bom.yield || 1;
+      return {
+        id: i.id, name: i.name, uom: i.uom || "KG",
+        recipe: (bom.lines || []).map(([rid, per]) => ({
+          id: rid, name: (itemById[rid] || {}).name || rid,
+          uom: (itemById[rid] || {}).uom || "", perUnit: per / Y,
+        })),
+      };
+    });
+  // warehouses the finished stock can be stored in (id/name/type, no locations detail)
+  const warehouses = (d.warehouses || []).map((w) => ({ id: w.id, name: w.name, type: w.type || null }));
+
   return {
     role: "supervisor",
     area,
     org: { name: d.org.name, short: d.org.short, group: d.org.group },
     workorders: myWOs,
     stockItems: stock,           // names/uom only; live qty comes from /production/stock if needed
+    finishedProducts,            // producible FGs + per-unit recipe (for Add to Finished Stock)
+    warehouses,                  // storage choices for finished stock
     settings: d.settings || {},
     generatedAt: new Date().toISOString(),
   };

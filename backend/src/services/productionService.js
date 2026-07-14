@@ -19,7 +19,14 @@ const { getLineForItem } = require("./routing");
 
 const ACTIONS = ["start", "pause", "complete", "dispatch"];
 
+// The raw-material store the BOM draws down when finished stock is produced.
+const RAW_STORE = "WH-PNY";
+
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
+
+let _mvSeq = 0;
+function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
+const r2 = (n) => Math.round((+n || 0) * 100) / 100;
 
 function fullState() {
   if (repo.isEmpty()) repo.saveState(buildSeed());
@@ -146,6 +153,62 @@ function createWorkOrder(user, body) {
   return summarize(wo);
 }
 
+/* ============================================================
+   produceFinished — floor action: record finished stock made.
+   Deducts the raw materials from the store per the product's BOM
+   (same recipe a work order uses) and posts the produced quantity
+   to the finished-goods warehouse the supervisor chose.
+   body: { itemId, qty, wh }
+   ============================================================ */
+function produceFinished(user, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
+  body = body || {};
+  const data = fullState();
+
+  const item = (data.items || []).find((i) => i.id === body.itemId);
+  if (!item) throw err("Unknown product", 400);
+  if (item.cat !== "FG") throw err("Only finished goods can be added to finished stock", 400);
+
+  const bom = (data.boms || {})[body.itemId];
+  if (!bom || !(bom.lines || []).length) throw err("This product has no BOM recipe — cannot deduct raw materials", 400);
+
+  const qty = +body.qty;
+  if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
+
+  const warehouse = (data.warehouses || []).find((w) => w.id === body.wh);
+  if (!warehouse) throw err("Choose a valid warehouse to store the finished stock", 400);
+
+  const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+  const Y = bom.yield || 1;
+  const by = user.username;
+  const date = todayISO();
+  const ref = "FP-" + Date.now().toString(36).toUpperCase(); // finished-production batch ref
+
+  const moves = [];
+  const consumed = [];
+  // 1) deduct each raw material from the store, scaled by the BOM + overall yield
+  (bom.lines || []).forEach(([rid, per]) => {
+    const need = r2(per * qty / Y);
+    if (!need || !itemsById[rid]) return;
+    moves.push({ id: mvId(), date, itemId: rid, wh: RAW_STORE, type: "ISSUE",
+      qty: -Math.abs(need), rate: (itemsById[rid] || {}).cost || 0, ref,
+      note: "Production issue → " + item.id, by });
+    consumed.push({ id: rid, name: (itemsById[rid] || {}).name || rid, qty: need, uom: (itemsById[rid] || {}).uom || "" });
+  });
+  // 2) add the produced finished quantity to the chosen warehouse
+  moves.push({ id: mvId(), date, itemId: item.id, wh: warehouse.id, type: "PROD",
+    qty: Math.abs(qty), rate: item.cost || 0, ref,
+    note: "Finished stock added at " + warehouse.name, by });
+
+  repo.addMovements(moves);
+  return {
+    ok: true, ref,
+    produced: { itemId: item.id, name: item.name, qty, uom: item.uom || "", wh: warehouse.id, whName: warehouse.name },
+    consumed,
+  };
+}
+
 /* ---- legacy status-based endpoint kept working (maps to actions) ---- */
 function updateWorkOrderStatus(user, woId, status) {
   const map = {
@@ -171,4 +234,4 @@ function summarize(wo) {
   };
 }
 
-module.exports = { advance, createWorkOrder, updateWorkOrderStatus, ACTIONS };
+module.exports = { advance, createWorkOrder, produceFinished, updateWorkOrderStatus, ACTIONS };

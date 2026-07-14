@@ -129,7 +129,10 @@
       view.appendChild(pageHead(
         AREA_ICON[this.area] + " " + (AREA_LABEL[this.area] || this.area),
         "Tap a job to move it to the next stage. Once you complete a stage it hands off to the next team automatically.",
-        [H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" })]
+        [
+          H("button", { class: "btn primary", onclick: () => this.openProduce(), html: "➕ Add to Finished Stock" }),
+          H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" }),
+        ]
       ));
 
       view.appendChild(H("div", { class: "grid kpi-grid", style: "margin-bottom:18px" }, [
@@ -287,7 +290,87 @@
         this.render();
       }
     },
+
+    /* ============================================================
+       Add to Finished Stock — record production made on the floor.
+       Deducts raw materials from the store per the product's BOM and
+       adds the produced quantity to the warehouse the supervisor picks.
+       ============================================================ */
+    openProduce() {
+      const products = this.data.finishedProducts || [];
+      const warehouses = this.data.warehouses || [];
+      if (!products.length) { toast("No finished product has a BOM recipe yet — ask office to add one first.", { type: "warn" }); return; }
+      const self = this;
+      const fgWh = warehouses.find((w) => String(w.type || "").toLowerCase().includes("finish")) || warehouses[0];
+
+      const prodSel = MW.select(products.map((p) => ({ value: p.id, label: p.name })), () => draw(), products[0].id);
+      const qtyInp = H("input", { class: "input", type: "number", min: "0", step: "any", value: "100", oninput: () => draw() });
+      const whSel = MW.select(warehouses.map((w) => ({ value: w.id, label: w.name + (w.type ? " · " + w.type : "") })), () => {}, fgWh ? fgWh.id : (warehouses[0] || {}).id);
+      [prodSel, qtyInp, whSel].forEach((el) => { el.style.width = "100%"; });
+      const preview = H("div", { style: "margin-top:16px" });
+
+      function currentProduct() { return products.find((p) => p.id === prodSel.value) || products[0]; }
+      function draw() {
+        const p = currentProduct();
+        const qty = +qtyInp.value || 0;
+        preview.innerHTML = "";
+        preview.appendChild(H("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px", text: "Raw materials to be deducted from store" }));
+        if (!p.recipe || !p.recipe.length) { preview.appendChild(H("div", { class: "muted", text: "No recipe lines for this product." })); return; }
+        p.recipe.forEach((r) => {
+          preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)" }, [
+            H("span", { text: r.name }),
+            H("b", { text: fmtQty(r.perUnit * qty) + " " + (r.uom || "") }),
+          ]));
+        });
+        preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13.5px;padding:10px 0 0;font-weight:700;color:var(--ok)" }, [
+          H("span", { text: "→ Added to finished stock" }),
+          H("b", { text: fmtQty(qty) + " " + (p.uom || "") }),
+        ]));
+      }
+
+      const body = H("div", {}, [
+        field("Finished product", prodSel),
+        field("Quantity produced", qtyInp),
+        field("Store finished stock in", whSel),
+        preview,
+      ]);
+
+      const mo = UI.modal({
+        title: "➕ Add to Finished Stock",
+        sub: "Deducts raw materials by BOM · adds the output to your chosen warehouse",
+        body,
+        foot: [
+          H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+          H("button", { class: "btn primary", onclick: (e) => save(e.currentTarget), text: "Add to Finished Stock" }),
+        ],
+      });
+      draw();
+
+      async function save(btn) {
+        const p = currentProduct();
+        const qty = +qtyInp.value || 0;
+        if (!qty || qty <= 0) { toast("Enter a valid quantity", { type: "warn" }); return; }
+        if (btn) { btn.disabled = true; btn.textContent = "…"; }
+        try {
+          const res = await DB.production.addFinishedStock({ itemId: p.id, qty, wh: whSel.value });
+          mo.close();
+          const where = (res && res.produced && res.produced.whName) || "finished stock";
+          toast("Added " + fmtQty(qty) + " " + (p.uom || "") + " of " + p.name + " → " + where, { type: "ok" });
+          await self.refresh();
+        } catch (err) {
+          toast(err.message, { type: "danger" });
+          if (btn) { btn.disabled = false; btn.textContent = "Add to Finished Stock"; }
+        }
+      }
+    },
   };
+
+  function field(label, control) {
+    return UI.h("div", { style: "margin-bottom:14px" }, [
+      UI.h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px", text: label }),
+      control,
+    ]);
+  }
 
   function fact(label, val) {
     return UI.h("div", { class: "sup-fact" }, [
