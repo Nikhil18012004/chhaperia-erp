@@ -550,6 +550,31 @@ canvas{display:block;width:100%}
   .tbl tbody td[colspan]{display:block;padding:0}
   .tbl tbody td[colspan]::before{content:none}
 }
+
+/* ---------- ABC classification: compact list on phones ----------
+   The full 5-column table is fine on laptops/tablets but becomes a
+   very long stack of cards on a phone. There we swap it for a tight
+   Class + name list; tapping a row opens the full details in a modal. */
+.abc-mobile{display:none}
+@media(max-width:640px){
+  .abc-full{display:none}
+  .abc-mobile{display:block}
+  .abc-mobile.empty{padding:40px 20px;text-align:center;color:var(--text-mut)}
+  .abc-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+    padding:11px 12px;border:none;border-bottom:1px solid var(--line);background:none;
+    color:var(--text);font:inherit;cursor:pointer;transition:var(--tr)}
+  .abc-row:last-child{border-bottom:none}
+  .abc-row:active{background:var(--panel-2)}
+  .abc-cls{flex:0 0 30px;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    font-size:13px;font-weight:800}
+  .abc-cls.abc-A{background:var(--danger-soft);color:var(--danger)}
+  .abc-cls.abc-B{background:var(--warn-soft);color:var(--warn)}
+  .abc-cls.abc-C{background:var(--ok-soft);color:var(--ok)}
+  .abc-nm{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .abc-nm .cell-main{font-weight:700;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .abc-nm .cell-sub{font-size:11px;color:var(--text-mut)}
+  .abc-chev{flex:0 0 auto;color:var(--text-mut);font-size:20px;line-height:1;font-weight:700}
+}
 .fade-in{animation:fadein .35s ease}
 @keyframes fadein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 

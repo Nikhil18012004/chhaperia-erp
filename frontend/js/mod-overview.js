@@ -162,15 +162,50 @@
           h("span",{class:"chip",html:`<span class="d" style="background:var(--warn)"></span>B · ${counts.B}`}),
           h("span",{class:"chip",html:`<span class="d" style="background:var(--ok)"></span>C · ${counts.C}`}),
         ])]),
-      table(abc, [
+      /* full table — laptops & tablets (hidden on phones via CSS) */
+      abcTableWrap(table(abc, [
         {key:"name", label:"Item", render:r=>`<div class="cell-main">${esc(trim(r.it.name,40))}</div><div class="cell-sub">${r.it.id}</div>`, sort:r=>r.it.name},
         {key:"class", label:"Class", render:r=>badge(r.class==="A"?"danger":r.class==="B"?"warn":"ok", "Class "+r.class), sort:r=>r.class},
         {key:"annualVal", label:"Annual Value", num:true, render:r=>ENG.money(r.annualVal), sort:r=>r.annualVal},
         {key:"onHandVal", label:"On-hand Value", num:true, render:r=>ENG.money(r.onHandVal), sort:r=>r.onHandVal},
         {key:"cumPct", label:"Cumulative %", num:true, render:r=>r.cumPct.toFixed(1)+"%", sort:r=>r.cumPct},
-      ], {empty:"No data"})
+      ], {empty:"No data"})),
+      /* phones — compact class + name list; tap a row for full details */
+      abc.length ? h("div",{class:"abc-mobile"}, abc.map(r=>
+        h("button",{class:"abc-row",onclick:()=>abcDetail(r)},[
+          h("span",{class:"abc-cls abc-"+r.class,text:r.class}),
+          h("span",{class:"abc-nm"},[
+            h("span",{class:"cell-main",text:trim(r.it.name,40)}),
+            h("span",{class:"cell-sub",text:r.it.id})
+          ]),
+          h("span",{class:"abc-chev","aria-hidden":"true",text:"›"})
+        ])
+      )) : h("div",{class:"abc-mobile empty",text:"No data"})
     ]);
     root.appendChild(abcCard);
+
+    /* details popup for a single ABC material (phone list) */
+    function abcDetail(r){
+      const it=r.it, st=ENG.stock(it.id);
+      const clsName={A:"Class A — high value",B:"Class B — moderate",C:"Class C — low value"}[r.class];
+      const body=h("div",{},[
+        h("div",{style:"margin-bottom:16px"},
+          h("span",{html:badge(r.class==="A"?"danger":r.class==="B"?"warn":"ok","Class "+r.class)})),
+        dl([
+          ["Item Code", it.id],
+          ["Category", catLabel(it.cat)],
+          ["Classification", clsName],
+          ["Annual Consumption Value", ENG.money(r.annualVal)],
+          ["On-hand Value", ENG.money(r.onHandVal)],
+          ["On-hand Qty", ENG.num(st.onHand,2)+" "+(it.uom||"")],
+          ["Cumulative %", r.cumPct.toFixed(1)+"%"],
+          ["Unit Cost", ENG.money(it.cost||0)],
+        ])
+      ]);
+      const mo=UI.modal({title:it.name, sub:"ABC Inventory Classification", body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
+          h("button",{class:"btn primary",onclick:()=>{mo.close();App.go("inventory");},text:"Open in Stock Items"})]});
+    }
 
     /* forecast for top item */
     const topItem=sp[0]; if(topItem){
@@ -187,6 +222,8 @@
 
   /* helpers */
   function cssv(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function abcTableWrap(tbl){ tbl.classList.add("abc-full"); return tbl; }
+  function catLabel(id){ return (ENG.data.categories.find(c=>c.id===id)||{}).name||id; }
   function legendDot(c,t){ return h("span",{class:"chip",html:`<span class="d" style="background:${c}"></span>${esc(t)}`}); }
   function trim(s,n){ s=String(s||""); return s.length>n?s.slice(0,n-1)+"…":s; }
   function sevStyle(s){ const m={danger:"background:var(--danger-soft);color:var(--danger)",warn:"background:var(--warn-soft);color:var(--warn)",info:"background:var(--info-soft);color:var(--info)"}; return m[s]||m.info; }
