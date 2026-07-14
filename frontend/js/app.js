@@ -174,7 +174,6 @@
       // theme + accent are system settings — only admin may change them
       const admin=this.isAdmin();
       const themeBtn=$("#themeToggle"); if(themeBtn) themeBtn.hidden=!admin;
-      const accentPop=document.querySelector(".accent-pop"); if(accentPop) accentPop.hidden=!admin;
     },
 
     buildNav(){
@@ -294,7 +293,7 @@
 
     renderAccentMenu(){
       const accents=[["orange","#F06820"],["red","#E84820"],["blue","#2f7fe0"],["teal","#0fb5ae"],["violet","#7c5cff"],["green","#16a34a"],["pink","#ec4899"],["amber","#e0a000"]];
-      const box=$("#swatches"); box.innerHTML="";
+      const box=$("#swatches"); if(!box) return; box.innerHTML="";
       accents.forEach(([a,hex])=>{ const sw=h("div",{class:"swatch"+(this.accent===a&&!this.autoAccent?" sel":""),style:`background:${hex}`,title:a,onclick:()=>this.setAccent(a)}); box.appendChild(sw); });
       const auto=$("#autoAccent"); if(auto) auto.checked=this.autoAccent;
     },
@@ -419,9 +418,6 @@
       $("#bellBtn").onclick=()=>this.openAlerts();
       $("#closeDrawer").onclick=()=>this.closeDrawer();
       $("#scrim").onclick=()=>this.closeDrawer();
-      $("#accentToggle").onclick=(e)=>{ e.stopPropagation(); const m=$("#accentMenu"); m.hidden=!m.hidden; };
-      document.addEventListener("click",(e)=>{ if(!e.target.closest(".accent-pop")) $("#accentMenu").hidden=true; });
-      $("#autoAccent").onchange=(e)=>this.setAutoAccent(e.target.checked);
       $("#searchTrigger").onclick=()=>this.openCmdk();
       // org name/sub from data — the user chip (name/avatar) is set by
       // applyRoleChrome() from the logged-in account, never from org contacts.
