@@ -118,7 +118,10 @@
         const tr=h("tr",{class:opts.onRow?"row-click":""});
         if(opts.onRow) tr.onclick=(e)=>{ if(e.target.closest("button,a,input,select")) return; opts.onRow(r); };
         cols.forEach(c=>{
-          const td=h("td",{class:(c.num?"num ":"")+(c.cls||"")});
+          // data-label drives the stacked "card" table layout on phones
+          // (see .table-wrap in app.css) — it shows the column name beside
+          // each value so no horizontal scrolling is needed on narrow screens.
+          const td=h("td",{class:(c.num?"num ":"")+(c.cls||""),"data-label":typeof c.label==="string"?c.label:""});
           const content=c.render?c.render(r):r[c.key];
           if(content instanceof Node) td.appendChild(content);
           else td.innerHTML=content==null?"—":content;

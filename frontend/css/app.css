@@ -516,7 +516,39 @@ canvas{display:block;width:100%}
   #logoutBtn{width:32px;height:32px}
   .nav-item,.collapsed .nav-item{flex-basis:66px}
   .view{padding-left:12px;padding-right:12px}
-  table.tbl{min-width:660px}
+}
+
+/* ---------- PHONE: data tables become stacked cards ----------
+   On narrow screens a wide table is unreadable behind a horizontal
+   scrollbar. Here every row turns into a self-contained card and each
+   cell shows its column name (from td[data-label], set in ui.js table())
+   beside its value — so a whole record reads top-to-bottom, no sideways
+   scrolling. Kept ≤640px so tablets keep the real table. */
+@media(max-width:640px){
+  .table-wrap{overflow-x:visible;border:none;background:transparent;box-shadow:none}
+  table.tbl,.tbl tbody,.tbl tbody tr,.tbl tbody td{display:block;width:auto}
+  table.tbl{min-width:0;font-size:13px}
+  .tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .tbl tbody tr{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:var(--shadow-1),var(--inset-top);padding:6px 2px 8px;margin-bottom:12px;overflow:hidden}
+  .tbl tbody tr:nth-child(even){background:var(--panel)}
+  .tbl tbody tr:hover{background:var(--panel);box-shadow:var(--shadow-1),var(--inset-top)}
+  .tbl tbody tr:last-child td{border-bottom:none}
+  .tbl tbody td{border:none;padding:8px 14px;display:flex;align-items:center;
+    justify-content:space-between;gap:16px;text-align:right;min-height:0}
+  .tbl tbody td.num{text-align:right}
+  .tbl tbody td::before{content:attr(data-label);flex:0 0 auto;text-align:left;
+    font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--text-mut);white-space:nowrap}
+  .tbl tbody td[data-label=""]::before{content:none}
+  /* first cell = card header: full width, no label prefix, emphasised */
+  .tbl tbody td:first-child{background:var(--panel-2);border-radius:11px;margin:0 6px 8px;
+    padding:11px 13px;text-align:left;display:block}
+  .tbl tbody td:first-child::before{content:none}
+  .tbl tbody td:first-child .cell-main{font-size:14px}
+  /* empty-state row keeps its centered look, not the label:value grid */
+  .tbl tbody td[colspan]{display:block;padding:0}
+  .tbl tbody td[colspan]::before{content:none}
 }
 .fade-in{animation:fadein .35s ease}
 @keyframes fadein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
