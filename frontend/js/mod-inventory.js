@@ -529,13 +529,18 @@
     function transferForm(){
       const whs=ENG.data.warehouses;
       if(whs.length<2){ toast("Need at least two warehouses to move stock",{type:"warn"}); return; }
-      const items=ENG.data.items;
-      const itemOpts=items.map(i=>({v:i.id,l:i.id+" — "+trim(i.name,34)}));
+      // materials that actually have stock in a given warehouse, each label
+      // carrying its on-hand qty so you pick from real, in-stock options
+      function matsIn(whId){
+        return ENG.data.items.map(it=>({it, q:(ENG.stock(it.id).byWh[whId])||0}))
+          .filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q)
+          .map(x=>({v:x.it.id, l:trim(x.it.name,26)+" — "+ENG.num(x.q,2)+" "+(x.it.uom||"")}));
+      }
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           field("From Warehouse", selectHTML("t_from", whs.map(w=>({v:w.id,l:w.name})), whs[0].id)),
           field("To Warehouse", selectHTML("t_to", whs.map(w=>({v:w.id,l:w.name})), whs[1].id)),
-          field("Material", searchSelect("t_item", itemOpts, items[0]&&items[0].id, "Search material / code…"), "full"),
+          h("div",{class:"field full",id:"t_item_wrap"}),
           field("Quantity to move", `<input class="input" id="t_qty" type="number" step="0.001" min="0" value="0">`),
           field("Note (optional)", `<input class="input" id="t_note" placeholder="e.g. Rebalancing stock">`),
         ]),
@@ -544,12 +549,29 @@
       const mo=modal({title:"Move Stock Between Warehouses", sub:"Transfers on-hand quantity — total stock & valuation stay the same", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn primary",onclick:save,text:"Move Stock"})]});
-      function avail(){
-        const id=UI.$("#t_item").value, from=UI.$("#t_from").value, it=ENG.item(id)||{};
-        const q=((ENG.stock(id)||{byWh:{}}).byWh[from])||0;
-        UI.$("#t_avail").innerHTML = id ? `Available in <b>${esc(whName(from))}</b>: <b>${ENG.num(q,2)} ${esc(it.uom||"")}</b>` : "";
+      // Material list is scoped to whatever "From" warehouse is selected,
+      // and rebuilt whenever that changes.
+      function renderMats(){
+        const from=UI.$("#t_from").value, opts=matsIn(from), wrap=UI.$("#t_item_wrap");
+        if(opts.length){
+          wrap.innerHTML = `<label>Material in this warehouse</label><div>`
+            + searchSelect("t_item", opts, opts[0].v, "Search material in this warehouse…") + `</div>`;
+        } else {
+          wrap.innerHTML = `<label>Material in this warehouse</label>`
+            + `<input type="hidden" id="t_item" value="">`
+            + `<div class="muted" style="padding:9px 2px">No stock in ${esc(whName(from))} to move.</div>`;
+        }
+        const sel=UI.$("#t_item"); if(sel) sel.onchange=avail;
+        UI.$("#t_qty").value="0";
+        avail();
       }
-      UI.$("#t_from").onchange=avail; UI.$("#t_item").onchange=avail; avail();
+      function avail(){
+        const el=UI.$("#t_item"), id=el?el.value:"", from=UI.$("#t_from").value, it=ENG.item(id)||{};
+        const q=id?((ENG.stock(id)||{byWh:{}}).byWh[from]||0):0;
+        UI.$("#t_avail").innerHTML = id ? `Available: <b>${ENG.num(q,2)} ${esc(it.uom||"")}</b> in ${esc(whName(from))}` : "";
+      }
+      UI.$("#t_from").onchange=renderMats;
+      renderMats();
       function save(){
         const from=UI.$("#t_from").value, to=UI.$("#t_to").value, id=UI.$("#t_item").value;
         const qty=+UI.$("#t_qty").value, note=UI.$("#t_note").value.trim();
