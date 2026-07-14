@@ -137,12 +137,15 @@
 
     const row=h("div",{class:"grid cols-12",style:"margin-top:16px"});
 
-    /* sales by product bars */
-    const sp=ENG.salesByProduct(90);
-    const spCard=chartCard("Revenue by Product","Last 90 days",null,260); spCard.classList.add("span-7");
+    /* sales by product — horizontal ranking bars (names stay readable
+       on phones/tablets, unlike a squeezed vertical-bar x-axis) */
+    const sp=ENG.salesByProduct(90).slice(0,8);
+    const spH=Math.max(200, sp.length*32+16);
+    const spCard=chartCard("Revenue by Product","Top "+sp.length+" · last 90 days",null,spH); spCard.classList.add("span-7");
     row.appendChild(spCard);
-    requestAnimationFrame(()=>Charts.bars(spCard._canvas,{labels:sp.map(s=>trim(s.name,10)),series:[
-      {name:"Revenue",data:sp.map(s=>s.value),color:cssv("--accent")}],fmt:v=>ENG.money(v)}));
+    requestAnimationFrame(()=>Charts.hbars(spCard._canvas,{
+      items:sp.map(s=>({label:s.name,value:s.value})), name:"Revenue",
+      color:cssv("--accent"), fmt:v=>ENG.money(v)}));
 
     /* supplier spend donut */
     const ps=ENG.purchaseBySupplier(120).slice(0,6);
