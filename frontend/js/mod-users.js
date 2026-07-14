@@ -48,7 +48,7 @@
       h("div", { class: "flex between aic", style: "margin-bottom:6px" }, [
         h("div", {}, [ h("div", { style: "font-weight:700", text: u.name || u.username }),
           h("div", { class: "muted", text: "@" + u.username + " · " + (ROLE_LABEL[u.role] || u.role) + (u.area ? " · " + (AREA_LABEL[u.area] || u.area) : "") }) ]),
-        badge(u.active ? "ok" : "mut", u.active ? "Active" : "Disabled"),
+        h("span", { html: badge(u.active ? "ok" : "mut", u.active ? "Active" : "Disabled") }),
       ]),
       h("div", { class: "flex wrap gap" }, [
         h("button", { class: "btn sm", onclick: () => { mo.close(); userForm(u); }, html: "✎ Edit" }),
