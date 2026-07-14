@@ -470,7 +470,7 @@
       let val=0, items=0;
       ENG.data.items.forEach(it=>{ const q=ENG.stock(it.id).byWh[w.id]||0; if(q>0.001){ val+=q*ENG.stock(it.id).avgCost; items++; } });
       const top=ENG.data.items.map(it=>({it,q:ENG.stock(it.id).byWh[w.id]||0})).filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q).slice(0,5);
-      grid.appendChild(h("div",{class:"card hover"},[
+      grid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:()=>whDetail(w),title:"Click to view all materials in "+w.name},[
         h("div",{class:"flex between aic"},[
           h("div",{},[h("h3",{style:"font-size:16px",text:w.name}),h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})]),
           h("div",{class:"kpi-ic",text:whIcon(w.type)})
@@ -481,10 +481,47 @@
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Top items"}),
         h("div",{class:"barlist"}, top.length?top.map(x=>h("div",{class:"flex between",style:"font-size:12.5px;padding:4px 0"},[
           h("span",{text:trim(x.it.name,30)}), h("span",{class:"mono muted",text:ENG.num(x.q,1)+" "+x.it.uom})
-        ])):[h("div",{class:"muted",text:"Empty"})])
+        ])):[h("div",{class:"muted",text:"Empty"})]),
+        h("div",{class:"muted",style:"font-size:11.5px;margin-top:10px;text-align:right",text:"View all materials →"})
       ]));
     });
     root.appendChild(grid);
+
+    /* drill-down: every material held in this warehouse */
+    function whDetail(w){
+      const rows=ENG.data.items.map(it=>{
+        const st=ENG.stock(it.id), q=st.byWh[w.id]||0;
+        return {it, q, cost:st.avgCost, val:q*st.avgCost};
+      }).filter(r=>r.q>0.001).sort((a,b)=>b.val-a.val);
+      const totalVal=rows.reduce((s,r)=>s+r.val,0);
+
+      let q="";
+      const tableHost=h("div",{style:"max-height:56vh;overflow:auto"});
+      const countChip=h("span",{class:"chip"});
+      function draw(){
+        const data=q?rows.filter(r=>(r.it.name+" "+r.it.id+" "+r.it.cat).toLowerCase().includes(q)):rows;
+        countChip.textContent=data.length+" materials · "+ENG.money(totalVal)+" total";
+        tableHost.innerHTML="";
+        tableHost.appendChild(table(data,[
+          {key:"item",label:"Material",render:r=>`<div class="cell-main">${esc(trim(r.it.name,36))}</div><div class="cell-sub">${r.it.id}</div>`,sort:r=>r.it.name},
+          {key:"cat",label:"Category",render:r=>`<span class="muted">${esc(catName(r.it.cat))}</span>`,sort:r=>r.it.cat},
+          {key:"qty",label:"Quantity",num:true,render:r=>`<span style="font-weight:700">${ENG.num(r.q,2)}</span> <span class="muted">${esc(r.it.uom||"")}</span>`,sort:r=>r.q},
+          {key:"cost",label:"Avg Cost",num:true,render:r=>"₹"+ENG.num(r.cost,2),sort:r=>r.cost},
+          {key:"val",label:"Value",num:true,render:r=>ENG.money(r.val),sort:r=>r.val},
+          {key:"share",label:"Share",num:true,render:r=>totalVal>0?ENG.num(r.val/totalVal*100,1)+"%":"—",sort:r=>r.val},
+        ],{empty:q?"No materials match":"No stock in this warehouse"}));
+      }
+      const body=h("div",{},[
+        h("div",{class:"toolbar",style:"margin-bottom:10px"},[
+          MW.searchInput("Search material, code, category…", v=>{q=v.toLowerCase();draw();}),
+          h("div",{style:"margin-left:auto"},countChip)
+        ]),
+        tableHost
+      ]);
+      const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
+      draw();
+    }
   }};
 
   /* ---------- shared helpers ---------- */
