@@ -128,7 +128,7 @@ function upsertItem(item) {
   return repo.putItem(merged);
 }
 
-const MOVE_TYPES = ["OPEN", "GRN", "ISSUE", "PROD", "SALE", "ADJ", "RET", "SCRAP"];
+const MOVE_TYPES = ["OPEN", "GRN", "ISSUE", "PROD", "SALE", "ADJ", "RET", "SCRAP", "XFER"];
 
 /** Append one stock movement (manual receipt / adjustment). */
 function addMovement(m) {

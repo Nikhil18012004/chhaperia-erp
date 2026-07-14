@@ -387,7 +387,7 @@
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search item, reference…", v=>{filter.q=v.toLowerCase();draw();}),
-      MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;draw();}),
+      MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP","XFER"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;draw();}),
       MW.select([{value:"all",label:"All Warehouses"},...ENG.data.warehouses.map(w=>({value:w.id,label:w.name}))], v=>{filter.wh=v;draw();}),
       MW.dateRange(filter, draw, {label:"Movement Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"ledCount"}))
@@ -464,7 +464,9 @@
 
   /* ============== WAREHOUSES ============== */
   M.warehouses = { title:"Warehouses", sub:"Stock by location", render(root){
-    root.appendChild(pageHead("Warehouses","Stock distribution across plant locations"));
+    root.appendChild(pageHead("Warehouses","Stock distribution across plant locations",[
+      h("button",{class:"btn primary",onclick:()=>transferForm(),html:"🔀 Move Stock"})
+    ]));
     const grid=h("div",{class:"grid cols-2"});
     ENG.data.warehouses.forEach(w=>{
       let val=0, items=0;
@@ -522,6 +524,50 @@
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
       draw();
     }
+
+    /* move stock from one warehouse to another (posts a linked out/in pair) */
+    function transferForm(){
+      const whs=ENG.data.warehouses;
+      if(whs.length<2){ toast("Need at least two warehouses to move stock",{type:"warn"}); return; }
+      const items=ENG.data.items;
+      const itemOpts=items.map(i=>({v:i.id,l:i.id+" — "+trim(i.name,34)}));
+      const body=h("div",{},[
+        h("div",{class:"form-grid"},[
+          field("From Warehouse", selectHTML("t_from", whs.map(w=>({v:w.id,l:w.name})), whs[0].id)),
+          field("To Warehouse", selectHTML("t_to", whs.map(w=>({v:w.id,l:w.name})), whs[1].id)),
+          field("Material", searchSelect("t_item", itemOpts, items[0]&&items[0].id, "Search material / code…"), "full"),
+          field("Quantity to move", `<input class="input" id="t_qty" type="number" step="0.001" min="0" value="0">`),
+          field("Note (optional)", `<input class="input" id="t_note" placeholder="e.g. Rebalancing stock">`),
+        ]),
+        h("div",{id:"t_avail",class:"muted",style:"margin-top:2px;font-size:12.5px"})
+      ]);
+      const mo=modal({title:"Move Stock Between Warehouses", sub:"Transfers on-hand quantity — total stock & valuation stay the same", body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn primary",onclick:save,text:"Move Stock"})]});
+      function avail(){
+        const id=UI.$("#t_item").value, from=UI.$("#t_from").value, it=ENG.item(id)||{};
+        const q=((ENG.stock(id)||{byWh:{}}).byWh[from])||0;
+        UI.$("#t_avail").innerHTML = id ? `Available in <b>${esc(whName(from))}</b>: <b>${ENG.num(q,2)} ${esc(it.uom||"")}</b>` : "";
+      }
+      UI.$("#t_from").onchange=avail; UI.$("#t_item").onchange=avail; avail();
+      function save(){
+        const from=UI.$("#t_from").value, to=UI.$("#t_to").value, id=UI.$("#t_item").value;
+        const qty=+UI.$("#t_qty").value, note=UI.$("#t_note").value.trim();
+        if(from===to){ toast("Source and destination must be different",{type:"warn"}); return; }
+        if(!id){ toast("Pick a material to move",{type:"warn"}); return; }
+        if(!qty || isNaN(qty) || qty<=0){ toast("Enter a quantity greater than zero",{type:"warn"}); return; }
+        const it=ENG.item(id), have=((ENG.stock(id)||{byWh:{}}).byWh[from])||0;
+        if(qty > have+0.0001){ toast(`Only ${ENG.num(have,2)} ${it.uom||""} available in ${whName(from)}`,{type:"warn",title:"Not enough stock"}); return; }
+        const date=DB.helpers.iso(DB.helpers.today()), ref="TRF-"+Math.floor(Math.random()*9000+1000);
+        const cost=ENG.stock(id).avgCost, by=(App.user&&App.user.username)||"user";
+        const outMove={id:genMoveId()+"-O", date, itemId:id, wh:from, type:"XFER", qty:-qty, rate:cost, ref, note:"Transfer → "+whName(to)+(note?" · "+note:""), by};
+        const inMove ={id:genMoveId()+"-I", date, itemId:id, wh:to,   type:"XFER", qty: qty, rate:cost, ref, note:"Transfer ← "+whName(from)+(note?" · "+note:""), by};
+        ENG.data.movements.push(outMove, inMove);
+        mo.close();
+        toast(`Moved ${ENG.num(qty,2)} ${it.uom||""}: ${whName(from)} → ${whName(to)}`,{type:"ok",title:"Stock transferred"});
+        App.saveDelta(async()=>{ await DB.movements.add(outMove); await DB.movements.add(inMove); });
+      }
+    }
   }};
 
   /* ---------- shared helpers ---------- */
@@ -536,9 +582,9 @@
     return `<span class="badge-s ${ {danger:'s-danger',warn:'s-warn',ok:'s-ok',info:'s-info'}[r.st.state] }">${esc(r.st.label)}</span>`; }
   function coverBadge(d){ if(d>900) return '<span class="muted">∞</span>';
     const cls=d<14?"s-danger":d<30?"s-warn":"s-ok"; return `<span class="badge-s ${cls}">${d}d</span>`; }
-  function moveBadge(t){ const m={OPEN:"s-mut",GRN:"s-ok",ISSUE:"s-warn",PROD:"s-info",SALE:"s-violet",ADJ:"s-mut",RET:"s-ok",SCRAP:"s-danger"};
+  function moveBadge(t){ const m={OPEN:"s-mut",GRN:"s-ok",ISSUE:"s-warn",PROD:"s-info",SALE:"s-violet",ADJ:"s-mut",RET:"s-ok",SCRAP:"s-danger",XFER:"s-info"};
     return `<span class="badge-s ${m[t]||"s-mut"}">${esc(typeLabel(t))}</span>`; }
-  function typeLabel(t){ return {OPEN:"Opening",GRN:"Receipt",ISSUE:"Issue",PROD:"Production",SALE:"Sale",ADJ:"Adjust",RET:"Return",SCRAP:"Scrap"}[t]||t; }
+  function typeLabel(t){ return {OPEN:"Opening",GRN:"Receipt",ISSUE:"Issue",PROD:"Production",SALE:"Sale",ADJ:"Adjust",RET:"Return",SCRAP:"Scrap",XFER:"Transfer"}[t]||t; }
   function catName(id){ return (ENG.data.categories.find(c=>c.id===id)||{}).name||id; }
   function whName(id){ return (ENG.data.warehouses.find(w=>w.id===id)||{}).name||id; }
   function whIcon(t){ return {"Raw Material":"🧱","WIP":"⚙️","Finished Goods":"🎁","Quarantine":"🔬"}[t]||"🏬"; }
