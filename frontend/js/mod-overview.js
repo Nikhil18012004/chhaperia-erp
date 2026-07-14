@@ -137,12 +137,30 @@
 
     const row=h("div",{class:"grid cols-12",style:"margin-top:16px"});
 
-    /* sales by product bars */
-    const sp=ENG.salesByProduct(90);
-    const spCard=chartCard("Revenue by Product","Last 90 days",null,260); spCard.classList.add("span-7");
+    /* sales by product — ranked bar list (DOM, not canvas). Each product
+       is its own row so the full name can wrap and stays readable on
+       every device; the bar shows revenue relative to the top seller. */
+    const sp=ENG.salesByProduct(90).slice(0,10);
+    const spMax=Math.max(...sp.map(s=>s.value),1);
+    const spTotal=sp.reduce((a,x)=>a+x.value,0)||1;
+    const spCard=h("div",{class:"card span-7"},[
+      h("div",{class:"card-head"},[h("div",{},[h("h3",{text:"Revenue by Product"}),
+        h("div",{class:"sub",text:"Top "+sp.length+" · last 90 days"})])]),
+      sp.length? h("div",{class:"rankbars"}, sp.map((s,i)=>{
+        const fill=h("span",{class:"rankbar-fill"});
+        requestAnimationFrame(()=>{ fill.style.width=(s.value/spMax*100).toFixed(1)+"%"; });
+        return h("div",{class:"rankbar"},[
+          h("div",{class:"rankbar-top"},[
+            h("span",{class:"rankbar-rank",text:"#"+(i+1)}),
+            h("span",{class:"rankbar-name",text:s.name}),
+            h("span",{class:"rankbar-val"},[ document.createTextNode(ENG.money(s.value)),
+              h("span",{class:"sh",text:(s.value/spTotal*100).toFixed(0)+"%"}) ])
+          ]),
+          h("div",{class:"rankbar-track"}, fill)
+        ]);
+      })) : h("div",{class:"empty"},[h("div",{class:"big",text:"∅"}),h("div",{text:"No sales in range"})])
+    ]);
     row.appendChild(spCard);
-    requestAnimationFrame(()=>Charts.bars(spCard._canvas,{labels:sp.map(s=>trim(s.name,10)),series:[
-      {name:"Revenue",data:sp.map(s=>s.value),color:cssv("--accent")}],fmt:v=>ENG.money(v)}));
 
     /* supplier spend donut */
     const ps=ENG.purchaseBySupplier(120).slice(0,6);

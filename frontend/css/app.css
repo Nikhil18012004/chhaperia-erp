@@ -272,6 +272,19 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 .empty{padding:50px 20px;text-align:center;color:var(--text-mut)}
 .empty .big{font-size:42px;opacity:.4;margin-bottom:10px}
 
+/* ranked bar list (Revenue by Product) — DOM-based so the full product
+   name wraps and stays readable on every device; no canvas label clipping */
+.rankbars{display:flex;flex-direction:column;gap:15px;margin-top:2px}
+.rankbar-top{display:flex;align-items:baseline;gap:9px;margin-bottom:7px}
+.rankbar-rank{flex:0 0 auto;min-width:22px;font-size:11px;font-weight:800;color:var(--text-mut);font-family:var(--mono)}
+.rankbar-name{flex:1;min-width:0;font-size:13px;font-weight:600;line-height:1.3}
+.rankbar-val{flex:0 0 auto;font-size:12.5px;font-weight:800;font-family:var(--mono);white-space:nowrap;color:var(--text)}
+.rankbar-val .sh{margin-left:6px;font-weight:600;font-size:11px;color:var(--text-mut)}
+.rankbar-track{height:8px;border-radius:20px;background:var(--panel-3);overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
+.rankbar-fill{display:block;height:100%;width:0;border-radius:20px;
+  background:linear-gradient(90deg,var(--accent-300),var(--accent));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.3);transition:width .7s cubic-bezier(.4,0,.2,1)}
+
 /* mini-bars & spark */
 .barlist{display:flex;flex-direction:column;gap:12px}
 .barlist .row{display:grid;grid-template-columns:130px 1fr 56px;align-items:center;gap:12px;font-size:12.5px}
