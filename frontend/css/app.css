@@ -588,6 +588,49 @@ canvas{display:block;width:100%}
   .abc-nm .cell-sub{font-size:11px;color:var(--text-mut)}
   .abc-chev{flex:0 0 auto;color:var(--text-mut);font-size:20px;line-height:1;font-weight:700}
 }
+
+/* ---------- PHONE: compact tap-to-open cards for data tables ----------
+   Generalises the ABC pattern to EVERY section except Operations. On
+   phones each row shows its key parameters (name/id + identity line + the
+   most telling value & status), and tapping opens the record's own detail
+   view (opts.onRow) or a generated field list. Applied via ui.js table()
+   (adds .tbl-compact + a .tbl-cards sibling). Laptops/tablets and the
+   Operations section are untouched. */
+.tbl-cards{display:none}
+.tbl-card-dl{display:flex;flex-direction:column}
+.tbl-card-dl .tcd-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+  padding:10px 2px;border-bottom:1px solid var(--line)}
+.tbl-card-dl .tcd-row:last-child{border-bottom:none}
+.tbl-card-dl .tcd-row.nolabel{justify-content:flex-start}
+.tbl-card-dl .tcd-k{flex:0 0 auto;font-size:11px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.04em;color:var(--text-mut)}
+.tbl-card-dl .tcd-v{flex:1;min-width:0;text-align:right;font-size:13.5px;font-weight:600;overflow-wrap:anywhere}
+/* the value may embed the list's nowrap primary line — let it wrap here so
+   a long name can't force the modal wider than the phone viewport */
+.tbl-card-dl .tcd-v .cell-main,.tbl-card-dl .tcd-v .cell-sub{white-space:normal}
+.tbl-card-dl .tcd-row.nolabel .tcd-v{text-align:left}
+@media(max-width:640px){
+  .table-wrap.tbl-compact{overflow-x:visible;border:none;background:transparent;box-shadow:none;padding:0}
+  .table-wrap.tbl-compact > table.tbl{display:none}
+  .tbl-cards{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:var(--shadow-1),var(--inset-top);overflow:hidden}
+  .tbl-cards-empty{padding:40px 20px;text-align:center;color:var(--text-mut)}
+  .tbl-card-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+    padding:12px 14px;border:none;border-bottom:1px solid var(--line);background:none;
+    color:var(--text);font:inherit;cursor:pointer;transition:var(--tr)}
+  .tbl-card-row:last-child{border-bottom:none}
+  .tbl-card-row:active{background:var(--panel-2)}
+  .tbl-card-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .tbl-card-head{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbl-card-head .cell-main{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbl-card-head .cell-sub{font-size:11px;color:var(--text-mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbl-card-sub{font-size:11.5px;color:var(--text-mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbl-card-params{display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;margin-top:1px}
+  .tcp{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;min-width:0}
+  .tcp-k{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-mut)}
+  .tcp-v{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbl-card-chev{flex:0 0 auto;color:var(--text-mut);font-size:22px;line-height:1;font-weight:700}
+}
 .fade-in{animation:fadein .35s ease}
 @keyframes fadein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 

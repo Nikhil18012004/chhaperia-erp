@@ -103,6 +103,67 @@
     const tbody=h("tbody"); tbl.appendChild(tbody);
     wrap.appendChild(tbl);
 
+    /* ---- phone-only compact cards (tap a row → full details) ----
+       Every section flows through here, so on phones each row collapses
+       to its key parameters — the name/id, an identity line, and the most
+       telling value + status fields — then tapping opens the record's own
+       detail view (opts.onRow) or a generated field list. Skipped for the
+       Operations section (keeps its stacked-field cards) and tiny tables. */
+    const useCards = opts.mobileCards!==false && cols.length>=3
+      && sectionOfView(curView())!=="Operations";
+    let cards=null, summary=null;
+    if(useCards){
+      wrap.classList.add("tbl-compact");
+      cards=h("div",{class:"tbl-cards"});
+      wrap.appendChild(cards);
+      summary = summaryFor(cols, opts);
+    }
+
+    function renderVal(c,r){ return c.render?c.render(r):r[c.key]; }
+    function putVal(node,v){ if(v instanceof Node) node.appendChild(v); else node.innerHTML=v==null?"—":v; }
+    function firstColText(r){
+      const c=cols[0]; const content=renderVal(c,r);
+      let el;
+      if(content instanceof Node){ el=content; }
+      else { el=document.createElement("div"); el.innerHTML=content==null?"":String(content); }
+      const main=el.querySelector?el.querySelector(".cell-main"):null;   // prefer the primary name line
+      return ((main?main.textContent:el.textContent)||"").trim();
+    }
+    function buildCard(r){
+      const row=h("button",{class:"tbl-card-row",onclick:()=>openCard(r)});
+      const main=h("div",{class:"tbl-card-main"});
+      const head=h("div",{class:"tbl-card-head"}); putVal(head, renderVal(cols[0],r)); main.appendChild(head);
+      const hasMain=!!head.querySelector(".cell-main");
+      // identity line (e.g. Supplier / Customer) when the first column is only a code
+      if(!hasMain && summary.subIdx>=0){
+        const sub=h("div",{class:"tbl-card-sub"}); putVal(sub, renderVal(cols[summary.subIdx],r)); main.appendChild(sub);
+      }
+      // key parameters (value + status)
+      if(summary.chips.length){
+        const params=h("div",{class:"tbl-card-params"});
+        summary.chips.forEach(i=>{
+          const c=cols[i]; const chip=h("span",{class:"tcp"});
+          if(i!==summary.statusIdx){ chip.appendChild(h("span",{class:"tcp-k",text:typeof c.label==="string"?c.label:""})); }
+          const val=h("span",{class:"tcp-v"}); putVal(val, renderVal(c,r)); chip.appendChild(val);
+          params.appendChild(chip);
+        });
+        main.appendChild(params);
+      }
+      row.appendChild(main);
+      row.appendChild(h("span",{class:"tbl-card-chev","aria-hidden":"true",text:"›"}));
+      return row;
+    }
+    function openCard(r){
+      if(opts.onRow){ opts.onRow(r); return; }                 // reuse the table's own detail view
+      const body=h("div",{class:"tbl-card-dl"}, cols.map(c=>{
+        const label=typeof c.label==="string"?c.label:"";
+        const v=h("div",{class:"tcd-v"}); putVal(v, renderVal(c,r));
+        return h("div",{class:"tcd-row"+(label?"":" nolabel")},[ label?h("div",{class:"tcd-k",text:label}):null, v ].filter(Boolean));
+      }));
+      const mo=modal({title:firstColText(r)||"Details", sub:opts.cardSub||null, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
+    }
+
     function render(){
       let data=rows.slice();
       if(state.sort){
@@ -129,6 +190,12 @@
         });
         tbody.appendChild(tr);
       });
+      // phone compact cards mirror the (sorted) data order
+      if(cards){
+        cards.innerHTML="";
+        if(!data.length){ cards.appendChild(h("div",{class:"tbl-cards-empty",text:opts.empty||"No records found"})); }
+        else data.forEach(r=>cards.appendChild(buildCard(r)));
+      }
       // update header arrows
       $$("th",thead).forEach((th,i)=>{ const c=cols[i]; th.className=(c.num?"num ":"")+(state.sort===c.key?"sorted":"");
         const arr=th.querySelector(".arr"); if(arr) arr.textContent= state.sort===c.key?(state.dir>0?"▲":"▼"):"⇅"; });
@@ -136,6 +203,41 @@
     render();
     wrap._refresh = (newRows)=>{ if(newRows) rows=newRows; render(); };
     return wrap;
+  }
+
+  /* the view id currently shown (drives per-section mobile behaviour) */
+  function curView(){ return (global.App && global.App.current) || ""; }
+  /* which NAV section a view belongs to (walks the manifest's section headers) */
+  function sectionOfView(viewId){
+    let sec=null;
+    for(const n of NAV){ if(n.sec){ sec=n.sec; } else if(n.id===viewId){ return sec; } }
+    return null;
+  }
+  /* Pick the KEY parameters to surface on a phone card. A caller can be
+     explicit via opts.cardCols (column keys) + opts.cardSubKey; otherwise
+     we choose the most telling status + value columns semantically so the
+     card reads like the ABC list (identity + a couple of numbers/badges). */
+  const STATUS_RE=/status|state|result|stage/i;
+  const CLASS_RE =/\b(class|grade|priority|rating|risk|type|tier)\b/i;
+  const VALUE_RE =/value|amount|amt|total|on.?hand|balance|net|pay|salary|wage|qty|stock|suggest|due|count|days|hours|leaves|present|score/i;
+  const IDENT_RE =/supplier|customer|name|item|worker|employee|party|agency|transporter|lead|contact|product/i;
+  function summaryFor(cols, opts){
+    const lab=c=>typeof c.label==="string"?c.label:"";
+    const hay=c=>((c.key||"")+" "+lab(c));
+    const idxOf=k=>cols.findIndex(c=>c.key===k);
+    if(opts.cardCols && opts.cardCols.length){
+      const chips=opts.cardCols.map(idxOf).filter(i=>i>0);
+      const statusIdx=chips.find(i=>STATUS_RE.test(hay(cols[i]))||CLASS_RE.test(hay(cols[i])));
+      return { chips, statusIdx: statusIdx==null?-1:statusIdx, subIdx: opts.cardSubKey?idxOf(opts.cardSubKey):-1 };
+    }
+    const find=(pred,skip)=>{ for(let i=1;i<cols.length;i++){ if(i===skip) continue; if(pred(cols[i],i)) return i; } return -1; };
+    let statusIdx=find(c=>STATUS_RE.test(hay(c)));
+    if(statusIdx<0) statusIdx=find(c=>CLASS_RE.test(hay(c)));
+    let valueIdx=find(c=>VALUE_RE.test(hay(c)), statusIdx);          // semantic value first…
+    if(valueIdx<0) valueIdx=find(c=>c.num===true, statusIdx);        // …then any numeric column
+    const identIdx=find(c=>IDENT_RE.test(hay(c)));
+    const chips=[valueIdx,statusIdx].filter((i,n,a)=>i>=0 && a.indexOf(i)===n);
+    return { chips, statusIdx, subIdx: identIdx };
   }
 
   /* ---------- status badge ---------- */
