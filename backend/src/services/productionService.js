@@ -218,7 +218,8 @@ function produceFinished(user, body) {
    ============================================================ */
 function recordExcessMaterial(user, body) {
   if (!user) throw err("Not authenticated", 401);
-  if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
+  const isOffice = user.role === "admin" || user.role === "office";
+  if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
   body = body || {};
   const lines = Array.isArray(body.lines) ? body.lines : [];
   if (!lines.length) throw err("Add at least one material to justify", 400);
@@ -226,27 +227,67 @@ function recordExcessMaterial(user, body) {
   const data = fullState();
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
   const whById = Object.fromEntries((data.warehouses || []).map((w) => [w.id, w]));
+
+  // 1) the excess is always tied to a REAL job, and (for supervisors) one in
+  //    their own work area — same authorization rule as advance().
+  const found = repo.getWorkOrder(body.woId);
+  if (!found || !found.id) throw err("Work order not found", 404);
+  const wo = withRoute(found);
+  const route = wo.route || [];
+  const curStage = route[Math.min(Math.max(wo.stageIdx || 0, 0), Math.max(route.length - 1, 0))] || {};
+  if (!isOffice && user.area !== "all" && !S.areaCovers(user.area, curStage.area)) {
+    throw err("This job is at the “" + (curStage.name || "current") + "” stage — not your work area", 403);
+  }
+
+  // 2) the materials this job's product actually consumes (union across stages).
+  //    Legacy WOs with no derivable BOM plan → null (fall back to any raw material,
+  //    still bounded by the category + on-hand checks below).
+  const RAW = new Set(["RM", "PKG", "CON"]);
+  const plan = S.computeStagePlan(wo.itemId, wo.qty, data);
+  const jobMaterials = plan
+    ? new Set(Object.keys(plan).flatMap((k) => (plan[k].consume || []).map(([rid]) => rid)))
+    : null;
+
+  // 3) on-hand per (requested item, warehouse) from movements — deducted as we go
+  //    so multiple lines against the same store can't collectively over-draw.
+  const reqIds = new Set(lines.map((l) => l && l.itemId).filter(Boolean));
+  const onHand = {};
+  (data.movements || []).forEach((m) => {
+    if (!reqIds.has(m.itemId) || !m.wh) return;
+    (onHand[m.itemId] || (onHand[m.itemId] = {}));
+    onHand[m.itemId][m.wh] = (onHand[m.itemId][m.wh] || 0) + (+m.qty || 0);
+  });
+  const availOf = (iid, wh) => Math.round((((onHand[iid] || {})[wh]) || 0) * 100) / 100;
+
   const by = user.username;
   const date = todayISO();
   const ref = "EX-" + Date.now().toString(36).toUpperCase();  // excess-material batch ref
-  const woRef = body.woId ? String(body.woId) : "";
+  const woRef = String(wo.id);
 
   const moves = [];
   const deducted = [];
-  lines.forEach((ln) => {
+  lines.forEach((ln, i) => {
+    const tag = "Line " + (i + 1) + ": ";
     const it = itemsById[ln && ln.itemId];
     const qty = r2(ln && ln.qty);
-    if (!it || !qty || qty <= 0) return;
+    if (!it) throw err(tag + "unknown material", 400);
+    if (!RAW.has(it.cat)) throw err(tag + it.name + " is not a raw material and can't be issued here", 400);
+    if (jobMaterials && !jobMaterials.has(it.id)) throw err(tag + it.name + " is not used by this job", 400);
+    if (!qty || qty <= 0) throw err(tag + "enter a valid quantity", 400);
+    const wh = ln && ln.location;
+    if (!whById[wh]) throw err(tag + "choose a valid store to take it from", 400);
+    const avail = availOf(it.id, wh);
+    if (avail <= 0) throw err(tag + whById[wh].name + " holds no " + it.name, 400);
+    if (qty > avail) throw err(tag + "only " + avail + " " + (it.uom || "") + " of " + it.name + " in " + whById[wh].name + " — can't take " + qty, 400);
+    onHand[it.id][wh] = avail - qty;  // reserve against the running balance
     const reason = String((ln && ln.reason) || "").trim() || "Unspecified";
-    const wh = whById[ln.location] ? ln.location : RAW_STORE;  // deduct from the chosen store, else the raw store
-    const locName = (whById[wh] || {}).name || wh;
     moves.push({ id: mvId(), date, itemId: it.id, wh, type: "ISSUE",
       qty: -Math.abs(qty), rate: it.cost || 0, ref,
-      note: "Excess material" + (woRef ? " (" + woRef + ")" : "") + " — " + reason, by });
-    deducted.push({ id: it.id, name: it.name || it.id, qty, uom: it.uom || "", location: locName, reason });
+      note: "Excess material (" + woRef + ") — " + reason, by });
+    deducted.push({ id: it.id, name: it.name || it.id, qty, uom: it.uom || "", location: whById[wh].name, reason });
   });
 
-  if (!moves.length) throw err("No valid material lines — check the material and quantity", 400);
+  if (!moves.length) throw err("No valid material lines", 400);
   repo.addMovements(moves);
   return { ok: true, ref, woId: woRef, deducted };
 }

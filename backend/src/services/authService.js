@@ -13,9 +13,24 @@
 const crypto = require("crypto");
 const users = require("../db/userRepository");
 
-/* ---- server secret (set AUTH_SECRET in prod; dev fallback below) ---- */
+/* ---- server secret ----
+   Tokens are HMAC-signed with this secret, so a known/committed value lets
+   anyone forge an admin session. AUTH_SECRET MUST be set in production; we
+   fail fast (refuse to boot) if it isn't. In development we fall back to a
+   fixed local secret and warn loudly so tokens survive restarts. */
+const IS_PROD = process.env.NODE_ENV === "production";
+if (IS_PROD && !process.env.AUTH_SECRET) {
+  throw new Error(
+    "AUTH_SECRET is not set. Refusing to start in production with a default " +
+    "token-signing secret — it would let anyone forge an admin session. " +
+    "Set AUTH_SECRET to a long random value (e.g. `openssl rand -hex 32`) and restart."
+  );
+}
 const SECRET = process.env.AUTH_SECRET ||
   "chhaperia-dev-secret-change-me-in-production-8f2a1c";
+if (!process.env.AUTH_SECRET) {
+  console.warn("[auth] AUTH_SECRET not set — using the INSECURE dev fallback secret. Never run production like this.");
+}
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 /* ============================================================
