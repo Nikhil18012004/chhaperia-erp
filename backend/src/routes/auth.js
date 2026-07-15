@@ -39,49 +39,12 @@ function requireRole(...roles) {
   };
 }
 
-/* ---- brute-force guard for /login ----
-   Locks an (ip + username) pair after repeated failures for a cooldown.
-   In-memory (fine for this single-process server); no external deps. */
-const MAX_FAILS = 5;             // failures allowed inside the window
-const WINDOW_MS = 15 * 60 * 1000; // counting window
-const LOCK_MS = 15 * 60 * 1000;   // lockout duration once tripped
-const failMap = new Map();        // key -> { count, firstAt, lockUntil }
-function limiterKey(req, username) {
-  const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || "unknown").replace(/^::ffff:/, "");
-  return ip + "|" + String(username || "").toLowerCase();
-}
-function lockSecondsLeft(key) {
-  const e = failMap.get(key);
-  if (e && e.lockUntil && Date.now() < e.lockUntil) return Math.ceil((e.lockUntil - Date.now()) / 1000);
-  return 0;
-}
-function noteFail(key) {
-  const now = Date.now();
-  let e = failMap.get(key);
-  if (!e || now - e.firstAt > WINDOW_MS) e = { count: 0, firstAt: now, lockUntil: 0 };
-  e.count += 1;
-  if (e.count >= MAX_FAILS) e.lockUntil = now + LOCK_MS;
-  failMap.set(key, e);
-}
-// prune stale entries so the map can't grow unbounded
-const pruneTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [k, e] of failMap) {
-    if ((!e.lockUntil || now > e.lockUntil) && now - e.firstAt > WINDOW_MS) failMap.delete(k);
-  }
-}, WINDOW_MS);
-if (pruneTimer.unref) pruneTimer.unref();
-
 /* ---- auth endpoints ---- */
 router.post("/login", (req, res, next) => {
   try {
     const { username, password } = req.body || {};
-    const key = limiterKey(req, username);
-    const wait = lockSecondsLeft(key);
-    if (wait) return res.status(429).json({ error: "Too many failed attempts. Try again in about " + Math.ceil(wait / 60) + " min." });
     const result = auth.login(username, password);
-    if (!result) { noteFail(key); return res.status(401).json({ error: "Invalid username or password" }); }
-    failMap.delete(key); // reset on success
+    if (!result) return res.status(401).json({ error: "Invalid username or password" });
     res.json(result);
   } catch (e) { next(e); }
 });
