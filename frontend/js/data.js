@@ -206,6 +206,9 @@
     // supervisor/admin: record finished stock made — deducts raws by BOM,
     // adds the produced qty to a warehouse. payload: { itemId, qty, wh }
     addFinishedStock(payload) { return http("POST", "/production/finished", payload); },
+    // supervisor/admin: report extra raw material drawn from store — deducts each
+    // line from the store. payload: { woId?, lines:[{ itemId, qty, location, reason }] }
+    recordExcess(payload) { return http("POST", "/production/excess-material", payload); },
     // office/admin: delete a work order
     remove(woId) { return http("DELETE", "/production/wo/" + enc(woId)); },
   };

@@ -193,6 +193,27 @@
 .s-info{background:var(--info-soft);color:var(--info)}
 .s-mut{background:var(--panel-3);color:var(--text-mut)}
 .s-violet{background:var(--violet-soft);color:var(--violet)}
+/* inline text link (accent colour + hover underline; overrides the global bare <a>) */
+.a-link{color:var(--accent);text-decoration:none;overflow-wrap:anywhere;cursor:pointer;transition:var(--tr)}
+.a-link:hover{text-decoration:underline}
+/* clickable contacts: phone (call) + WhatsApp button, and the mail-app chooser popover */
+.contact-line{color:var(--text-mut)}
+.contact-cell{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;vertical-align:middle}
+.wa-btn{display:inline-flex;align-items:center;justify-content:center;width:23px;height:23px;border-radius:7px;
+  background:var(--ok-soft);text-decoration:none;font-size:12px;line-height:1;flex:0 0 auto;transition:var(--tr)}
+.wa-btn:hover{filter:brightness(1.12)}
+.contact-pop{position:absolute;z-index:9999;min-width:232px;max-width:min(300px,92vw);
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-pop);
+  padding:6px;display:flex;flex-direction:column;gap:2px;animation:fadein .14s ease}
+.contact-pop-head{padding:7px 11px 5px;font-size:10.5px;font-weight:800;color:var(--text-mut);
+  text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mail-opt{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:9px 11px;border:none;
+  border-radius:9px;background:none;color:var(--text);font:inherit;cursor:pointer;transition:var(--tr)}
+.mail-opt:hover{background:var(--panel-2)}
+.mail-opt-ic{font-size:17px;flex:0 0 auto;width:22px;text-align:center}
+.mail-opt-tx{display:flex;flex-direction:column;gap:1px;min-width:0;line-height:1.25}
+.mail-opt-tx b{font-size:13px;font-weight:700}
+.mail-opt-tx .muted{font-size:11px;color:var(--text-mut)}
 
 /* tables */
 .table-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--line);background:var(--panel);
@@ -634,6 +655,38 @@ canvas{display:block;width:100%}
 .fade-in{animation:fadein .35s ease}
 @keyframes fadein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
+/* ---------- PHONE: attendance muster becomes per-worker cards ----------
+   The month matrix (31 day-columns) is unreadable on a phone — either a
+   cramped sticky-column scroller or, worse, mangled into a vertical block
+   stack by the generic .tbl card rule. On ≤640px we hide the matrix and
+   show one card per worker: full-width name + P/OT summary, and the whole
+   month as a single horizontally-scrolling strip of tappable day cells.
+   Uses full phone width (no 150px sticky column) and scopes horizontal
+   scrolling to each worker instead of one giant grid. Desktop untouched. */
+.muster-mobile{display:none}
+@media(max-width:640px){
+  .muster-full{display:none}
+  .muster-mobile{display:block}
+  .mcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:var(--shadow-1),var(--inset-top);padding:10px 0 4px;margin-bottom:12px;overflow:hidden}
+  .mcard-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 8px}
+  .mcard-name{font-weight:700;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mcard-stats{flex:0 0 auto;display:flex;gap:6px}
+  .mstrip{display:flex;gap:6px;overflow-x:auto;padding:2px 14px 10px;
+    scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
+  .mstrip::-webkit-scrollbar{height:5px}
+  .mstrip::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .mcell{flex:0 0 auto;scroll-snap-align:start;display:flex;flex-direction:column;align-items:center;gap:3px;
+    width:38px;padding:6px 0 7px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);
+    color:var(--text);font:inherit;cursor:pointer;transition:var(--tr)}
+  .mcell:active{background:var(--panel-3)}
+  .mcell.sun{background:var(--danger-soft)}
+  .mcell-wd{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--text-mut)}
+  .mcell-d{font-size:12px;font-weight:700;line-height:1}
+  .mcell .badge-s{padding:2px 0;min-width:22px;justify-content:center;font-size:10.5px}
+  .mcell-e{font-size:13px;color:var(--text-mut);line-height:1;height:18px;display:flex;align-items:center}
+}
+
 /* ============================================================
    CRM PIPELINE BOARD (Pipedrive-style horizontal columns)
    ============================================================ */
@@ -731,3 +784,31 @@ canvas{display:block;width:100%}
 /* tablet / PC: multi-column job grid */
 @media(min-width:760px){ .sup-list{grid-template-columns:repeat(2,1fr)} }
 @media(min-width:1180px){ .sup-list{grid-template-columns:repeat(3,1fr)} }
+
+/* ---- Report extra material: a compact button beside the facts (Priority) ---- */
+.sup-facts-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:13px}
+.sup-facts-row .sup-facts{flex:1;margin-bottom:0}
+.sup-excess-mini{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;
+  border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;color:var(--accent);
+  background:var(--accent-soft);border:1px solid var(--accent-line);transition:var(--tr);white-space:nowrap}
+.sup-excess-mini:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.sup-excess-mini .ic{font-size:14px;line-height:1}
+.xm-ctx{display:flex;gap:9px;background:var(--warn-soft);border:1px solid rgba(234,179,8,.3);border-radius:11px;
+  padding:11px 13px;font-size:12.5px;color:var(--text-dim);line-height:1.45;margin-bottom:15px}
+.xm-lines-h{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}
+.xm-t{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim)}
+.xm-lines{display:flex;flex-direction:column;gap:10px}
+.xm-line{padding:11px;border:1px solid var(--line);border-radius:11px;background:var(--panel-2);display:flex;flex-direction:column;gap:9px}
+.xm-grid{display:grid;grid-template-columns:1.4fr .9fr 1fr;gap:9px}
+.xm-grid.r2{grid-template-columns:1fr 1.2fr auto;align-items:end}
+.xm-fld{display:flex;flex-direction:column;gap:5px;min-width:0}
+.xm-fld label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-mut)}
+.xm-fld .select,.xm-fld .input{width:100%}
+.xm-qty{position:relative}
+.xm-qty .input{padding-right:38px}
+.xm-uom{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:11px;font-weight:700;color:var(--text-mut);pointer-events:none}
+.xm-rm{height:38px;width:40px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--text-mut);font-size:15px;cursor:pointer;transition:var(--tr)}
+.xm-rm:hover{color:var(--danger);border-color:var(--danger-soft)}
+.xm-summ{font-size:12.5px;color:var(--text-dim);font-weight:600;margin-right:auto}
+.xm-foot-btns{display:flex;gap:10px}
+@media(max-width:560px){ .xm-grid,.xm-grid.r2{grid-template-columns:1fr} }

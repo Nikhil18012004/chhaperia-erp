@@ -243,6 +243,18 @@
         w.priority && w.priority !== "Normal" ? fact("Priority", H("span", { style: "font-weight:700;color:var(--danger)", text: w.priority })) : null,
       ].filter(Boolean));
 
+      // "Report extra material" — a small button tucked into the space to the right
+      // of the facts (beside Priority). Shown while the job is in this supervisor's
+      // hands, i.e. when they're drawing material from the store.
+      let factsNode = facts;
+      if (w.mine && !w.dispatched) {
+        const xbtn = H("button", { class: "sup-excess-mini", title: "Report extra material taken from the store", onclick: () => this.openExcess(w) }, [
+          H("span", { class: "ic", text: "⚠" }),
+          H("span", { class: "lbl", text: "Extra" }),
+        ]);
+        factsNode = H("div", { class: "sup-facts-row" }, [facts, xbtn]);
+      }
+
       // materials for THIS area's stage (only meaningful while it's their turn)
       let mat = null;
       if (w.mine && w.materials && w.materials.length) {
@@ -274,7 +286,7 @@
         actions.appendChild(H("div", { class: "sup-done-tag", style: "color:var(--text-mut)", text: "⏳ Waiting on " + ((STAGE_META[cur.key] || {}).label || cur.name) }));
       }
 
-      return H("div", { class: "sup-card" + (overdue ? " overdue" : "") }, [head, this.timeline(w), facts, mat, actions].filter(Boolean));
+      return H("div", { class: "sup-card" + (overdue ? " overdue" : "") }, [head, this.timeline(w), factsNode, mat, actions].filter(Boolean));
     },
 
     async act(w, action, btn) {
@@ -289,6 +301,116 @@
         if (btn) btn.disabled = false;
         this.render();
       }
+    },
+
+    /* ============================================================
+       Report extra material — the supervisor drew more raw material
+       from the store than the job was issued. They justify each line
+       (material, qty, location, reason); on submit each quantity is
+       deducted from the store. No free-text note / overall comment.
+       ============================================================ */
+    openExcess(w) {
+      const self = this;
+      const RAW_CATS = ["RM", "PKG", "CON"];
+      // materials this job/product actually uses (falls back to all raw materials)
+      const jobMats = (w.materials || []).map((m) => ({ id: m.id, name: m.name, uom: m.uom || "" }));
+      const mats = jobMats.length ? jobMats : (this.data.stockItems || []).filter((i) => RAW_CATS.includes(i.cat));
+      const whs = this.data.warehouses || [];
+      const stockMap = this.data.materialStock || {}; // itemId -> [{ wh, name, qty }]
+      if (!mats.length) { toast("This job has no materials to report against yet.", { type: "warn" }); return; }
+      const REASONS = ["Wastage / rework", "Machine setup loss", "Spillage / handling loss", "Quality rejection", "Extra coating pass", "Damaged material", "Other"];
+      const uomOf = (id) => { const m = mats.find((x) => x.id === id); return m ? (m.uom || "") : ""; };
+      // stores that actually hold this material (qty > 0); fall back to all warehouses
+      const locsFor = (id) => {
+        const rows = stockMap[id];
+        if (rows && rows.length) return rows.map((r) => ({ id: r.wh, label: r.name + " · " + fmtQty(r.qty) + " " + uomOf(id) }));
+        return whs.map((x) => ({ id: x.id, label: x.name }));
+      };
+
+      const linesBox = H("div", { class: "xm-lines" });
+      const summ = H("span", { class: "xm-summ" });
+      const saveBtn = H("button", { class: "btn primary", onclick: (e) => submit(e.currentTarget), text: "Deduct from store" });
+
+      function rows() { return Array.prototype.slice.call(linesBox.querySelectorAll(".xm-line")); }
+      function sync() {
+        const valid = rows().map((r) => r._read()).filter((r) => r._valid);
+        summ.textContent = valid.length
+          ? valid.length + " material" + (valid.length > 1 ? "s" : "") + " · deducts from store on submit"
+          : "Add a material, quantity and reason";
+        saveBtn.disabled = !valid.length;
+      }
+
+      function addLine() {
+        const matSel = H("select", { class: "select", onchange: () => { uomEl.textContent = uomOf(matSel.value); fillLoc(); } },
+          mats.map((m) => H("option", { value: m.id, text: m.name })));
+        const qtyInp = H("input", { class: "input", type: "number", min: "0", step: "any", placeholder: "0", oninput: sync });
+        const uomEl = H("span", { class: "xm-uom", text: uomOf(matSel.value) });
+        const locSel = H("select", { class: "select" });
+        function fillLoc() { locSel.innerHTML = ""; locsFor(matSel.value).forEach((o) => locSel.appendChild(H("option", { value: o.id, text: o.label }))); }
+        fillLoc();
+        const otherInp = H("input", { class: "input", placeholder: "Type the reason", oninput: sync });
+        const otherWrap = H("div", { class: "xm-fld", style: "display:none" }, [H("label", { text: "Other reason" }), otherInp]);
+        const reasonSel = H("select", { class: "select",
+          onchange: () => { otherWrap.style.display = reasonSel.value === "Other" ? "" : "none"; if (reasonSel.value === "Other") otherInp.focus(); sync(); } },
+          REASONS.map((r) => H("option", { value: r, text: r })));
+        const rm = H("button", { class: "xm-rm", title: "Remove", onclick: () => { row.remove(); sync(); }, text: "✕" });
+
+        const row = H("div", { class: "xm-line" }, [
+          H("div", { class: "xm-grid" }, [
+            H("div", { class: "xm-fld" }, [H("label", { text: "Material" }), matSel]),
+            H("div", { class: "xm-fld" }, [H("label", { text: "Qty" }), H("div", { class: "xm-qty" }, [qtyInp, uomEl])]),
+            H("div", { class: "xm-fld" }, [H("label", { text: "Reason" }), reasonSel]),
+          ]),
+          H("div", { class: "xm-grid r2" }, [
+            H("div", { class: "xm-fld" }, [H("label", { text: "Taken from" }), locSel]),
+            otherWrap,
+            rm,
+          ]),
+        ]);
+        row._read = () => {
+          const isOther = reasonSel.value === "Other";
+          const reason = isOther ? otherInp.value.trim() : reasonSel.value;
+          const qty = +qtyInp.value || 0;
+          return { itemId: matSel.value, qty, location: locSel.value, reason,
+            _valid: qty > 0 && matSel.value && (!isOther || otherInp.value.trim().length > 0) };
+        };
+        linesBox.appendChild(row);
+        sync();
+      }
+
+      async function submit(btn) {
+        const lines = rows().map((r) => r._read()).filter((r) => r._valid).map((r) => ({ itemId: r.itemId, qty: r.qty, location: r.location, reason: r.reason }));
+        if (!lines.length) { toast("Add a material, quantity and reason (type it if you pick “Other”).", { type: "warn" }); return; }
+        if (btn) { btn.disabled = true; btn.textContent = "…"; }
+        try {
+          await DB.production.recordExcess({ woId: w.id, lines });
+          mo.close();
+          toast(lines.length + " material" + (lines.length > 1 ? "s" : "") + " deducted from store", { type: "ok" });
+          await self.refresh();
+        } catch (err) {
+          toast(err.message, { type: "danger" });
+          if (btn) { btn.disabled = false; btn.textContent = "Deduct from store"; }
+        }
+      }
+
+      const body = H("div", {}, [
+        H("div", { class: "xm-ctx", html: "⚠ Log any raw material drawn from the store <b>beyond</b> what this job was issued. Each line is deducted from store on submit." }),
+        H("div", { class: "xm-lines-h" }, [
+          H("span", { class: "xm-t", text: "Materials taken" }),
+          H("button", { class: "btn", onclick: () => addLine(), html: "＋ Add material" }),
+        ]),
+        linesBox,
+      ]);
+      const mo = UI.modal({
+        title: "⚠ Extra material taken",
+        sub: "WO " + w.id + " · deducts from store",
+        body,
+        foot: [summ, H("div", { class: "xm-foot-btns" }, [
+          H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+          saveBtn,
+        ])],
+      });
+      addLine();
     },
 
     /* ============================================================

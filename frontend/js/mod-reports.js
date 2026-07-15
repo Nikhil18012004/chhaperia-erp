@@ -78,8 +78,8 @@
       h("div",{class:"card-head"},h("h3",{text:"🏭 Company Profile"})),
       MW.dl([
         ["Legal Name",org.name],["Group",org.group||org.short],["Established",org.estd||"—"],
-        ["GSTIN",org.gst],["Certification",org.iso],["Website",org.website||"—"],
-        ["Phone",org.phone],["Email",org.email],
+        ["GSTIN",org.gst],["Certification",org.iso],["Website",MW.webLink(org.website)],
+        ["Phone",MW.phoneCell(org.phone,{wa:false})],["Email",MW.emailLink(org.email,{mode:"inbox"})],
       ]),
       h("div",{style:"margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"},[
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"Registered Address"}),

@@ -138,8 +138,8 @@
 
       MW.dl([
         ["Contact", l.contact || "—"],
-        ["Phone", l.phone || "—"],
-        ["Email", l.email || "—"],
+        ["Phone", MW.phoneCell(l.phone)],
+        ["Email", MW.emailLink(l.email, { mode: "compose" })],
         ["City", l.city || "—"],
         ["Product Interest", l.productName || l.product || "—"],
         ["Source", l.source || "—"],

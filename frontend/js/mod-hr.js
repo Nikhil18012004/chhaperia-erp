@@ -264,8 +264,9 @@
       const days = new Date(y, m, 0).getDate();
       const list = workers().filter((w) => w.active !== false && (dept === "all" || w.dept === dept));
       const attMap = {}; attendance().forEach((a) => { attMap[a.workerId + ":" + a.date] = a; });
-      // build a scrolling matrix
-      const wrap = h("div", { style: "overflow-x:auto;border:1px solid var(--line);border-radius:12px" });
+      const WD = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+      // ---- desktop/tablet: scrolling matrix (hidden ≤640px) ----
+      const wrap = h("div", { class: "muster-full", style: "overflow-x:auto;border:1px solid var(--line);border-radius:12px" });
       const tbl = h("table", { class: "tbl muster" });
       const head = h("tr", {}, [h("th", { style: "position:sticky;left:0;background:var(--panel);text-align:left;min-width:150px", text: "Worker" })]);
       for (let d = 1; d <= days; d++) { const wd = new Date(y, m - 1, d).getDay();
@@ -274,10 +275,16 @@
       head.appendChild(h("th", { style: "min-width:56px", text: "OT" }));
       tbl.appendChild(h("thead", {}, head));
       const tbody = h("tbody");
-      if (!list.length) tbody.appendChild(h("tr", {}, h("td", { colspan: days + 3 }, h("div", { class: "empty", style: "padding:24px", text: "No workers" }))));
+      // ---- phone: one card per worker, name header + scrollable day strip ----
+      const mob = h("div", { class: "muster-mobile" });
+      if (!list.length) {
+        tbody.appendChild(h("tr", {}, h("td", { colspan: days + 3 }, h("div", { class: "empty", style: "padding:24px", text: "No workers" }))));
+        mob.appendChild(h("div", { class: "empty", style: "padding:36px 20px", text: "No workers" }));
+      }
       list.forEach((w) => {
         const tr = h("tr");
         tr.appendChild(h("td", { style: "position:sticky;left:0;background:var(--panel);font-weight:600;font-size:12px;min-width:150px", text: U.trim(w.name, 20) }));
+        const strip = h("div", { class: "mstrip" });
         let p = 0, ot = 0;
         for (let d = 1; d <= days; d++) {
           const ds = `${y}-${pad(m)}-${pad(d)}`;
@@ -287,16 +294,31 @@
           if (a) { letter = a.status; const meta = STATUS_META[a.status] || ["mut", ""]; cls = "s-" + meta[0];
             if (a.status === "P") p++; else if (a.status === "HD") p += 0.5; ot += a.otHours || 0; }
           else if (wd === 0) { letter = "·"; cls = "s-mut"; }
-          tr.appendChild(h("td", { style: "text-align:center;padding:2px;cursor:pointer",
-            title: a ? (STATUS_META[a.status] ? STATUS_META[a.status][1] : a.status) + (a.otHours ? " · OT " + a.otHours + "h" : "") : "Mark " + ds,
-            onclick: () => dayEntry(w, ds, a) },
+          const title = a ? (STATUS_META[a.status] ? STATUS_META[a.status][1] : a.status) + (a.otHours ? " · OT " + a.otHours + "h" : "") : "Mark " + ds;
+          tr.appendChild(h("td", { style: "text-align:center;padding:2px;cursor:pointer", title, onclick: () => dayEntry(w, ds, a) },
             letter ? h("span", { class: "badge-s " + cls, style: "min-width:20px;display:inline-block", text: letter }) : h("span", { class: "muted", text: "" })));
+          // phone strip cell: weekday + day number + status pip, tap to edit
+          strip.appendChild(h("button", { class: "mcell" + (wd === 0 ? " sun" : ""), title, onclick: () => dayEntry(w, ds, a) }, [
+            h("span", { class: "mcell-wd", text: WD[wd] }),
+            h("span", { class: "mcell-d", text: d }),
+            letter ? h("span", { class: "badge-s " + cls, text: letter }) : h("span", { class: "mcell-e", text: "–" }),
+          ]));
         }
         tr.appendChild(h("td", { style: "text-align:center;font-weight:700", text: p }));
         tr.appendChild(h("td", { style: "text-align:center", html: ot ? `<span class="badge-s s-warn">${num(ot, 1)}h</span>` : '<span class="muted">—</span>' }));
         tbody.appendChild(tr);
+        const stats = [h("span", { class: "badge-s s-ok", text: "P " + p })];
+        if (ot) stats.push(h("span", { class: "badge-s s-warn", text: "OT " + num(ot, 1) + "h" }));
+        mob.appendChild(h("div", { class: "mcard" }, [
+          h("div", { class: "mcard-head" }, [
+            h("span", { class: "mcard-name", text: U.trim(w.name, 28) }),
+            h("span", { class: "mcard-stats" }, stats),
+          ]),
+          strip,
+        ]));
       });
-      tbl.appendChild(tbody); wrap.appendChild(tbl); grid.appendChild(wrap);
+      tbl.appendChild(tbody); wrap.appendChild(tbl);
+      grid.appendChild(wrap); grid.appendChild(mob);
     }
     draw();
 

@@ -132,6 +132,26 @@ function stateForSupervisor(area) {
   // warehouses the finished stock can be stored in (id/name/type, no locations detail)
   const warehouses = (d.warehouses || []).map((w) => ({ id: w.id, name: w.name, type: w.type || null }));
 
+  // on-hand per (raw material, warehouse), from movements — lets the floor pick, when
+  // reporting excess, only the store(s) that actually hold the chosen material. No costs.
+  const RAW = new Set(["RM", "PKG", "CON"]);
+  const whName = Object.fromEntries((d.warehouses || []).map((w) => [w.id, w.name]));
+  const onHand = {}; // itemId -> { whId -> qty }
+  (d.movements || []).forEach((m) => {
+    const it = itemById[m.itemId];
+    if (!it || !RAW.has(it.cat) || !m.wh) return;
+    (onHand[m.itemId] || (onHand[m.itemId] = {}));
+    onHand[m.itemId][m.wh] = (onHand[m.itemId][m.wh] || 0) + (+m.qty || 0);
+  });
+  const materialStock = {}; // itemId -> [{ wh, name, qty }] (only stores with stock, most first)
+  Object.keys(onHand).forEach((iid) => {
+    const rows = Object.keys(onHand[iid])
+      .map((wh) => ({ wh, name: whName[wh] || wh, qty: Math.round(onHand[iid][wh] * 100) / 100 }))
+      .filter((r) => r.qty > 0.0001)
+      .sort((a, b) => b.qty - a.qty);
+    if (rows.length) materialStock[iid] = rows;
+  });
+
   return {
     role: "supervisor",
     area,
@@ -140,6 +160,7 @@ function stateForSupervisor(area) {
     stockItems: stock,           // names/uom only; live qty comes from /production/stock if needed
     finishedProducts,            // producible FGs + per-unit recipe (for Add to Finished Stock)
     warehouses,                  // storage choices for finished stock
+    materialStock,               // itemId -> stores that hold it (for the excess-material form)
     settings: d.settings || {},
     generatedAt: new Date().toISOString(),
   };

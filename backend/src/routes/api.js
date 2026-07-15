@@ -55,6 +55,13 @@ router.post("/production/finished", requireAuth, requireRole("supervisor", "admi
   catch (e) { next(e); }
 });
 
+// Supervisor/admin/office: report raw material drawn from the store beyond what the
+// job was issued (material/qty/location/reason). Deducts each quantity from the store.
+router.post("/production/excess-material", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.status(201).json(production.recordExcessMaterial(req.user, req.body || {})); }
+  catch (e) { next(e); }
+});
+
 // ---- Granular inventory writes (avoid rewriting the whole dataset) ----
 // Create or update a single stock item.
 router.post("/items", requireAuth, requireRole("admin", "office"), (req, res, next) => {

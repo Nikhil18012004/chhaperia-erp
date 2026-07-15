@@ -141,6 +141,100 @@
       ])));
   }
 
+  /* ============================================================
+     CLICKABLE CONTACTS — call / WhatsApp / webmail
+     Phone → tap-to-call (tel:) + a WhatsApp action (wa.me).
+     Email → a small "Gmail / Outlook / default app" chooser so each
+     user opens mail in their own webmail. Client emails compose a new
+     message (To = client, account = ours); the company address opens
+     the inbox instead. Rendered as a lightweight body-level popover so
+     it works even when invoked from inside a modal (e.g. lead detail).
+     ============================================================ */
+  // Our own address (used as the Gmail sending account for client compose).
+  function ourEmail(){ try{ return (global.ENG && ENG.data && ENG.data.org && ENG.data.org.email) || ""; }catch(e){ return ""; } }
+  // International digit string for wa.me / tel (assume +91 when no country code).
+  function phoneDigits(raw){
+    let d = String(raw==null?"":raw).replace(/\D/g, "");
+    if(!d) return "";
+    if(d.length === 10) d = "91" + d;                 // bare 10-digit Indian mobile
+    else if(d.length === 11 && d[0] === "0") d = "91" + d.slice(1);
+    return d;
+  }
+  function qs(o){ return Object.entries(o).filter(([,v]) => v != null && v !== "").map(([k,v]) => k + "=" + encodeURIComponent(v)).join("&"); }
+
+  function mailUrls(address, opts){
+    opts = opts || {};
+    const inbox = opts.mode === "inbox";
+    const from = opts.from || ourEmail();
+    const su = opts.subject || "", bd = opts.body || "";
+    return {
+      gmail: inbox ? "https://mail.google.com/mail/u/0/#inbox"
+                   : "https://mail.google.com/mail/?" + qs({ view:"cm", fs:1, to:address, su, body:bd, authuser:from }),
+      outlook: inbox ? "https://outlook.office.com/mail/"
+                     : "https://outlook.office.com/mail/deeplink/compose?" + qs({ to:address, subject:su, body:bd }),
+      mailto: inbox ? "mailto:" + address
+                    : "mailto:" + address + (su || bd ? "?" + qs({ subject:su, body:bd }) : ""),
+    };
+  }
+
+  let _openPop = null;
+  function closePop(){ if(_openPop){ _openPop.remove(); _openPop = null; document.removeEventListener("mousedown", _onDoc, true); document.removeEventListener("keydown", _onKey, true); window.removeEventListener("resize", closePop); window.removeEventListener("scroll", closePop, true); } }
+  function _onDoc(e){ if(_openPop && !_openPop.contains(e.target)) closePop(); }
+  function _onKey(e){ if(e.key === "Escape") closePop(); }
+
+  function mailChooser(anchor, address, opts){
+    closePop();
+    opts = opts || {};
+    const inbox = opts.mode === "inbox";
+    const u = mailUrls(address, opts);
+    const open = (url, web) => { closePop(); if(web) window.open(url, "_blank", "noopener,noreferrer"); else window.location.href = url; };
+    const row = (icon, label, meta, fn) => h("button", { class:"mail-opt", onclick: fn }, [
+      h("span", { class:"mail-opt-ic", text: icon }),
+      h("span", { class:"mail-opt-tx" }, [ h("b", { text: label }), h("span", { class:"muted", text: meta }) ]),
+    ]);
+    const pop = h("div", { class:"contact-pop", role:"menu" }, [
+      h("div", { class:"contact-pop-head", text: (inbox ? "Open mailbox · " : "New email · ") + address }),
+      row("✉️", "Gmail", inbox ? "Open inbox" : "Compose in browser", () => open(u.gmail, true)),
+      row("📧", "Outlook", inbox ? "Open inbox" : "Compose in browser", () => open(u.outlook, true)),
+      row("💻", "Default mail app", inbox ? address : "New message", () => open(u.mailto, false)),
+    ]);
+    document.body.appendChild(pop);
+    _openPop = pop;
+    // position under the anchor, clamped to the viewport
+    const r = anchor.getBoundingClientRect();
+    const pw = pop.offsetWidth || 240;
+    let left = r.left; if(left + pw > document.documentElement.clientWidth - 8) left = document.documentElement.clientWidth - pw - 8;
+    pop.style.left = Math.max(8, left) + window.scrollX + "px";
+    pop.style.top = (r.bottom + 6) + window.scrollY + "px";
+    setTimeout(() => { document.addEventListener("mousedown", _onDoc, true); document.addEventListener("keydown", _onKey, true);
+      window.addEventListener("resize", closePop); window.addEventListener("scroll", closePop, true); }, 0);
+  }
+
+  // <a> that opens the mail chooser. opts.mode: "compose" (default) | "inbox".
+  function emailLink(address, opts){
+    if(!address) return "—";
+    return h("a", { href:"#", class:"a-link", role:"button", onclick:(e) => { e.preventDefault(); mailChooser(e.currentTarget, address, opts); }, text: address });
+  }
+  // <a> that opens a website (adds https:// when the stored value has no scheme).
+  function webLink(url){
+    if(!url) return "—";
+    const href = /^https?:\/\//i.test(url) ? url : "https://" + url;
+    return h("a", { href, target:"_blank", rel:"noopener noreferrer", class:"a-link", text: url });
+  }
+  // number as tap-to-call, plus a WhatsApp button (opts.wa:false to hide WhatsApp).
+  function phoneCell(raw, opts){
+    if(!raw) return "—";
+    opts = opts || {};
+    const cell = h("span", { class:"contact-cell" }, [
+      h("a", { href:"tel:" + String(raw).replace(/[^\d+]/g, ""), class:"a-link", text: String(raw) }),
+    ]);
+    const d = phoneDigits(raw);
+    if(opts.wa !== false && d) cell.appendChild(
+      h("a", { href:"https://wa.me/" + d, target:"_blank", rel:"noopener noreferrer", class:"wa-btn", title:"Message on WhatsApp", "aria-label":"Message on WhatsApp", text:"💬" })
+    );
+    return cell;
+  }
+
   global.M = M;
-  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl };
+  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell };
 })(window);

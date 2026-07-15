@@ -360,7 +360,10 @@
           h("span",{class:"muted",text:items.length+" items supplied"}),
           h("span",{class:"strong",text:ENG.money(spendMap[s.id]||0)+" / yr"})
         ]),
-        h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px",html:`👤 ${esc(s.contact)} · ${esc(s.phone)}`})
+        h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
+          "👤 "+(s.contact||"—")+" · ", MW.phoneCell(s.phone),
+          ...(s.email ? [" · ", MW.emailLink(s.email,{mode:"compose"})] : []),
+        ])
       ]));
     });
     root.appendChild(grid);
@@ -385,7 +388,11 @@
         h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
           h("span",{class:"muted",text:"Lifetime value"}), h("span",{class:"strong",text:ENG.money(total)})
         ]),
-        h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px",html:`👤 ${esc(c.contact)} · ${esc(c.phone)} · ${c.terms}`})
+        h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
+          "👤 "+(c.contact||"—")+" · ", MW.phoneCell(c.phone),
+          ...(c.email ? [" · ", MW.emailLink(c.email,{mode:"compose"})] : []),
+          " · "+c.terms,
+        ])
       ]));
     });
     root.appendChild(grid);

@@ -209,6 +209,48 @@ function produceFinished(user, body) {
   };
 }
 
+/* ============================================================
+   Excess material — a supervisor reports raw material drawn from
+   the store BEYOND what the job was issued for, justifying each
+   line (material, quantity, location, reason). Each quantity is
+   deducted from the store as an ISSUE movement.
+   body: { woId?, lines:[{ itemId, qty, location, reason }] }
+   ============================================================ */
+function recordExcessMaterial(user, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
+  body = body || {};
+  const lines = Array.isArray(body.lines) ? body.lines : [];
+  if (!lines.length) throw err("Add at least one material to justify", 400);
+
+  const data = fullState();
+  const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+  const whById = Object.fromEntries((data.warehouses || []).map((w) => [w.id, w]));
+  const by = user.username;
+  const date = todayISO();
+  const ref = "EX-" + Date.now().toString(36).toUpperCase();  // excess-material batch ref
+  const woRef = body.woId ? String(body.woId) : "";
+
+  const moves = [];
+  const deducted = [];
+  lines.forEach((ln) => {
+    const it = itemsById[ln && ln.itemId];
+    const qty = r2(ln && ln.qty);
+    if (!it || !qty || qty <= 0) return;
+    const reason = String((ln && ln.reason) || "").trim() || "Unspecified";
+    const wh = whById[ln.location] ? ln.location : RAW_STORE;  // deduct from the chosen store, else the raw store
+    const locName = (whById[wh] || {}).name || wh;
+    moves.push({ id: mvId(), date, itemId: it.id, wh, type: "ISSUE",
+      qty: -Math.abs(qty), rate: it.cost || 0, ref,
+      note: "Excess material" + (woRef ? " (" + woRef + ")" : "") + " — " + reason, by });
+    deducted.push({ id: it.id, name: it.name || it.id, qty, uom: it.uom || "", location: locName, reason });
+  });
+
+  if (!moves.length) throw err("No valid material lines — check the material and quantity", 400);
+  repo.addMovements(moves);
+  return { ok: true, ref, woId: woRef, deducted };
+}
+
 /* ---- legacy status-based endpoint kept working (maps to actions) ---- */
 function updateWorkOrderStatus(user, woId, status) {
   const map = {
@@ -234,4 +276,4 @@ function summarize(wo) {
   };
 }
 
-module.exports = { advance, createWorkOrder, produceFinished, updateWorkOrderStatus, ACTIONS };
+module.exports = { advance, createWorkOrder, produceFinished, recordExcessMaterial, updateWorkOrderStatus, ACTIONS };
