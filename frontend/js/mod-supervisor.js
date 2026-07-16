@@ -103,6 +103,8 @@
       if (g.incoming.length) items.push({ id: "incoming", ic: "⏳", label: "Coming Up", pill: g.incoming.length });
       items.push({ id: "done", ic: "✅", label: "Completed" });
       items.push({ id: "all", ic: "📋", label: "All Jobs" });
+      items.push({ sec: "Store" });
+      items.push({ id: "warehouses", ic: "🏬", label: "Warehouses" });
 
       const nav = UI.$("#nav"); nav.innerHTML = "";
       items.forEach((n) => {
@@ -119,6 +121,8 @@
     render() {
       const view = UI.$("#view"); view.innerHTML = "";
       view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in");
+
+      if (this.filter === "warehouses") { this.renderWarehouses(view); view.scrollTop = 0; return; }
 
       const g = this.buckets();
       const hasIncoming = g.incoming.length > 0;
@@ -163,6 +167,94 @@
       }
       view.appendChild(list);
       view.scrollTop = 0;
+    },
+
+    /* ============================================================
+       Warehouses — VIEW ONLY. Stock by location for the floor:
+       what each store holds and how much. Quantities only (the
+       server never sends costs/values to supervisors) and no
+       actions — no move, adjust or receive from here.
+       ============================================================ */
+    renderWarehouses(view) {
+      UI.$("#crumbs").innerHTML = '<span>Chhaperia</span><span class="sep">/</span><span class="cur">Warehouses</span>';
+
+      const whs = this.data.warehouses || [];
+      const stockByWh = this.data.warehouseStock || {};
+      const WH_ICON = { "Raw Material": "🧱", "WIP": "⚙️", "Finished Goods": "🎁", "Quarantine": "🔬" };
+      const CAT_LABEL = { RM: "Raw Material", WIP: "Work in Progress", FG: "Finished Goods", PKG: "Packaging", CON: "Consumables" };
+
+      view.appendChild(pageHead(
+        "🏬 Warehouses",
+        "What each store holds right now — view only. Tap a warehouse to see every material inside.",
+        [H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" })]
+      ));
+
+      if (!whs.length) {
+        view.appendChild(H("div", { class: "sup-empty" }, [
+          H("div", { class: "big", text: "🏬" }),
+          H("div", { text: "No warehouses set up yet." }),
+        ]));
+        return;
+      }
+
+      const grid = H("div", { class: "grid cols-2" });
+      whs.forEach((w) => {
+        const rows = stockByWh[w.id] || [];
+        const top = rows.slice(0, 5);
+        grid.appendChild(H("div", { class: "card hover", style: "cursor:pointer", onclick: () => detail(w), title: "View all materials in " + w.name }, [
+          H("div", { class: "flex between aic" }, [
+            H("div", {}, [
+              H("h3", { style: "font-size:16px", text: w.name }),
+              H("div", { class: "muted", style: "font-size:12px", text: [w.city, w.type].filter(Boolean).join(" · ") || w.id }),
+            ]),
+            H("div", { class: "kpi-ic", text: WH_ICON[w.type] || "🏬" }),
+          ]),
+          H("div", { class: "flex between", style: "margin:16px 0;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)" }, [
+            stat("Materials", rows.length ? String(rows.length) : "Empty"),
+            stat("Type", w.type || "—"),
+            stat("Access", "👁 View only"),
+          ]),
+          H("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px", text: "Top items" }),
+          H("div", {}, top.length ? top.map((r) => H("div", { class: "flex between", style: "font-size:12.5px;padding:4px 0" }, [
+            H("span", { text: trim(r.name, 30) }),
+            H("span", { class: "mono muted", text: fmtQty(r.qty) + " " + (r.uom || "") }),
+          ])) : [H("div", { class: "muted", text: "No stock" })]),
+          H("div", { class: "muted", style: "font-size:11.5px;margin-top:10px;text-align:right", text: "View all materials →" }),
+        ]));
+      });
+      view.appendChild(grid);
+
+      /* drill-down: every material held in this warehouse (read-only) */
+      function detail(w) {
+        const rows = stockByWh[w.id] || [];
+        let q = "";
+        const tableHost = H("div", { style: "max-height:56vh;overflow:auto" });
+        const countChip = H("span", { class: "chip" });
+        function draw() {
+          const data = q ? rows.filter((r) => (r.name + " " + r.id + " " + (CAT_LABEL[r.cat] || r.cat)).toLowerCase().includes(q)) : rows;
+          countChip.textContent = data.length + " material" + (data.length === 1 ? "" : "s");
+          tableHost.innerHTML = "";
+          tableHost.appendChild(UI.table(data, [
+            { key: "item", label: "Material", render: (r) => `<div class="cell-main">${esc(trim(r.name, 36))}</div><div class="cell-sub">${esc(r.id)}</div>`, sort: (r) => r.name },
+            { key: "cat", label: "Category", render: (r) => `<span class="muted">${esc(CAT_LABEL[r.cat] || r.cat || "—")}</span>`, sort: (r) => r.cat },
+            { key: "qty", label: "Quantity", num: true, render: (r) => `<span style="font-weight:700">${fmtQty(r.qty)}</span> <span class="muted">${esc(r.uom || "")}</span>`, sort: (r) => r.qty },
+          ], { empty: q ? "No materials match" : "No stock in this warehouse", sort: "qty", dir: -1 }));
+        }
+        const body = H("div", {}, [
+          H("div", { class: "toolbar", style: "margin-bottom:10px" }, [
+            MW.searchInput("Search material, code, category…", (v) => { q = v.toLowerCase(); draw(); }),
+            H("div", { style: "margin-left:auto" }, countChip),
+          ]),
+          tableHost,
+        ]);
+        const mo = UI.modal({
+          title: (WH_ICON[w.type] || "🏬") + " " + w.name,
+          sub: [w.city, w.type].filter(Boolean).join(" · ") + " — all materials on hand · view only",
+          body,
+          foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Close" })],
+        });
+        draw();
+      }
     },
 
     assignmentStamp(w) {
@@ -501,6 +593,13 @@
     ]);
   }
   function fmtQty(n) { n = +n || 0; return n % 1 === 0 ? n.toLocaleString("en-IN") : n.toLocaleString("en-IN", { maximumFractionDigits: 1 }); }
+  function stat(label, val) {
+    return UI.h("div", {}, [
+      UI.h("div", { class: "muted", style: "font-size:11px", text: label }),
+      UI.h("div", { style: "font-weight:700;font-size:15px;margin-top:2px", text: String(val) }),
+    ]);
+  }
+  function trim(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
   global.SUP = SUP;
 })(window);

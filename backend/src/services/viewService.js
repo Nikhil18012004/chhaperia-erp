@@ -129,28 +129,45 @@ function stateForSupervisor(area) {
         })),
       };
     });
-  // warehouses the finished stock can be stored in (id/name/type, no locations detail)
-  const warehouses = (d.warehouses || []).map((w) => ({ id: w.id, name: w.name, type: w.type || null }));
+  // warehouses the finished stock can be stored in (id/name/type/city, no locations detail)
+  const warehouses = (d.warehouses || []).map((w) => ({ id: w.id, name: w.name, type: w.type || null, city: w.city || null }));
 
-  // on-hand per (raw material, warehouse), from movements — lets the floor pick, when
-  // reporting excess, only the store(s) that actually hold the chosen material. No costs.
+  // on-hand per (item, warehouse), from movements — quantities only, never costs
   const RAW = new Set(["RM", "PKG", "CON"]);
   const whName = Object.fromEntries((d.warehouses || []).map((w) => [w.id, w.name]));
   const onHand = {}; // itemId -> { whId -> qty }
   (d.movements || []).forEach((m) => {
     const it = itemById[m.itemId];
-    if (!it || !RAW.has(it.cat) || !m.wh) return;
+    if (!it || !m.wh) return;
     (onHand[m.itemId] || (onHand[m.itemId] = {}));
     onHand[m.itemId][m.wh] = (onHand[m.itemId][m.wh] || 0) + (+m.qty || 0);
   });
+  // raw materials only — lets the floor pick, when reporting excess,
+  // only the store(s) that actually hold the chosen material
   const materialStock = {}; // itemId -> [{ wh, name, qty }] (only stores with stock, most first)
   Object.keys(onHand).forEach((iid) => {
+    if (!RAW.has((itemById[iid] || {}).cat)) return;
     const rows = Object.keys(onHand[iid])
       .map((wh) => ({ wh, name: whName[wh] || wh, qty: Math.round(onHand[iid][wh] * 100) / 100 }))
       .filter((r) => r.qty > 0.0001)
       .sort((a, b) => b.qty - a.qty);
     if (rows.length) materialStock[iid] = rows;
   });
+
+  // everything each warehouse holds (all categories) — feeds the supervisor's
+  // view-only Warehouses page. Quantities only, no valuation.
+  const warehouseStock = {}; // whId -> [{ id, name, cat, uom, qty }] (biggest first)
+  Object.keys(onHand).forEach((iid) => {
+    const it = itemById[iid] || {};
+    Object.keys(onHand[iid]).forEach((wh) => {
+      const qty = Math.round(onHand[iid][wh] * 100) / 100;
+      if (qty <= 0.0001) return;
+      (warehouseStock[wh] || (warehouseStock[wh] = [])).push({
+        id: iid, name: it.name || iid, cat: it.cat || "", uom: it.uom || "", qty,
+      });
+    });
+  });
+  Object.values(warehouseStock).forEach((rows) => rows.sort((a, b) => b.qty - a.qty));
 
   return {
     role: "supervisor",
@@ -161,6 +178,7 @@ function stateForSupervisor(area) {
     finishedProducts,            // producible FGs + per-unit recipe (for Add to Finished Stock)
     warehouses,                  // storage choices for finished stock
     materialStock,               // itemId -> stores that hold it (for the excess-material form)
+    warehouseStock,              // whId -> everything it holds (view-only Warehouses page)
     settings: d.settings || {},
     generatedAt: new Date().toISOString(),
   };
