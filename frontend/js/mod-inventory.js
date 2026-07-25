@@ -471,43 +471,48 @@
     const canEdit = App.isAdmin();
 
     function editWhName(w){
-      if (!canEdit) { toast("Only admin users can edit warehouse names", { type: "warn" }); return; }
+      if (!App.isAdmin()) { toast("Only admin users can edit warehouse names", { type: "warn" }); return; }
       let nameInput;
-      const body = h("div", {}, [
-        h("p", { class: "muted", style: "font-size:12px;margin-bottom:12px", text: "ID: " + w.id + " · " + (w.city || "") + " · " + (w.type || "") }),
-        field("Warehouse Name", nameInput = h("input", { class: "input", value: w.name, placeholder: "Enter new warehouse name", autofocus: true }))
+      const body = h("div", { style: "padding:6px 0" }, [
+        h("p", { class: "muted", style: "font-size:12px;margin-bottom:14px", text: "Warehouse ID: " + w.id + " · " + (w.city || "") + " · " + (w.type || "") }),
+        field("Warehouse Name", nameInput = h("input", {
+          class: "input",
+          value: w.name,
+          placeholder: "Enter new warehouse name",
+          autofocus: true,
+          style: "font-size:15px;font-weight:600;",
+          onkeydown: (e) => { if (e.key === "Enter") save(); }
+        }))
       ]);
+      async function save(){
+        const newName = nameInput.value.trim();
+        if (!newName) { toast("Warehouse name cannot be empty", { type: "warn" }); return; }
+        if (newName === w.name) { mo.close(); return; }
+        const oldName = w.name;
+        w.name = newName;
+        mo.close();
+        toast("Warehouse name updated to " + newName, { type: "ok" });
+        try {
+          await App.saveDelta(async () => {
+            if (DB.warehouses && DB.warehouses.update) {
+              await DB.warehouses.update(w.id, { name: newName });
+            } else {
+              await DB.save(ENG.data);
+            }
+          });
+          App.refreshView();
+        } catch (e) {
+          w.name = oldName;
+          App.refreshView();
+        }
+      }
       const mo = modal({
         title: "Edit Warehouse Name",
-        sub: "Update display name for " + w.id,
+        sub: "Update display label for warehouse " + w.id,
         body,
         foot: [
           h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
-          h("button", {
-            class: "btn primary",
-            onclick: async () => {
-              const newName = nameInput.value.trim();
-              if (!newName) { toast("Warehouse name cannot be empty", { type: "warn" }); return; }
-              if (newName === w.name) { mo.close(); return; }
-              const oldName = w.name;
-              w.name = newName;
-              mo.close();
-              toast("Warehouse name updated", { type: "ok" });
-              try {
-                await App.saveDelta(async () => {
-                  if (DB.warehouses && DB.warehouses.update) {
-                    await DB.warehouses.update(w.id, { name: newName });
-                  } else {
-                    await DB.save(ENG.data);
-                  }
-                });
-              } catch (e) {
-                w.name = oldName;
-                App.refreshView();
-              }
-            },
-            text: "Save Name"
-          })
+          h("button", { class: "btn primary", onclick: save, text: "Save Name" })
         ]
       });
     }
@@ -517,17 +522,22 @@
       let val=0, items=0;
       ENG.data.items.forEach(it=>{ const q=ENG.stock(it.id).byWh[w.id]||0; if(q>0.001){ val+=q*ENG.stock(it.id).avgCost; items++; } });
       const top=ENG.data.items.map(it=>({it,q:ENG.stock(it.id).byWh[w.id]||0})).filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q).slice(0,5);
-      grid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:()=>whDetail(w),title:"Click to view all materials in "+w.name},[
+      grid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:()=>whDetail(w),title:"Click card for stock breakdown"},[
         h("div",{class:"flex between aic"},[
           h("div",{},[
-            h("div",{class:"flex aic",style:"gap:6px"},[
-              h("h3",{style:"font-size:16px",text:w.name}),
+            h("div",{class:"flex aic",style:"gap:8px"},[
+              h("h3",{
+                style: "font-size:16px;" + (canEdit ? "cursor:pointer;" : ""),
+                title: canEdit ? "Click to edit warehouse name" : w.name,
+                onclick: (e) => { if (canEdit) { e.stopPropagation(); editWhName(w); } },
+                text: w.name
+              }),
               canEdit ? h("button",{
-                class:"icon-btn",
-                title:"Edit warehouse name (Admin)",
-                style:"font-size:13px;padding:2px 6px;cursor:pointer;opacity:0.85;border:none;background:transparent;",
+                class:"btn secondary sm",
+                title:"Edit warehouse name (Admin only)",
+                style:"font-size:11px;padding:2px 8px;cursor:pointer;",
                 onclick:(e)=>{ e.stopPropagation(); editWhName(w); },
-                text:"✏️"
+                text:"✏️ Edit Name"
               }) : null
             ]),
             h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})
