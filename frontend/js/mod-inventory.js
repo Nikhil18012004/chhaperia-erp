@@ -470,51 +470,76 @@
 
     const canEdit = App.isAdmin();
 
-    function editWhName(w){
-      if (!App.isAdmin()) { toast("Only admin users can edit warehouse names", { type: "warn" }); return; }
-      let nameInput;
-      const body = h("div", { style: "padding:6px 0" }, [
-        h("p", { class: "muted", style: "font-size:12px;margin-bottom:14px", text: "Warehouse ID: " + w.id + " · " + (w.city || "") + " · " + (w.type || "") }),
-        field("Warehouse Name", nameInput = h("input", {
-          class: "input",
-          value: w.name,
-          placeholder: "Enter new warehouse name",
-          autofocus: true,
-          style: "font-size:15px;font-weight:600;",
-          onkeydown: (e) => { if (e.key === "Enter") save(); }
-        }))
-      ]);
+    function editWhName(w, el){
+      if (!canEdit) { toast("Only admin users can edit warehouse names", { type: "warn" }); return; }
+      const oldName = w.name || "";
+      const input = h("input", {
+        class: "input",
+        value: oldName,
+        style: "font-size:15px;font-weight:600;padding:4px 8px;width:100%;max-width:220px;",
+        onkeydown: (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        },
+        onblur: () => save()
+      });
+      const host = el.parentNode;
+      host.innerHTML = "";
+      host.appendChild(input);
+      input.focus();
+      input.select();
       async function save(){
-        const newName = nameInput.value.trim();
-        if (!newName) { toast("Warehouse name cannot be empty", { type: "warn" }); return; }
-        if (newName === w.name) { mo.close(); return; }
-        const oldName = w.name;
-        w.name = newName;
-        mo.close();
-        toast("Warehouse name updated to " + newName, { type: "ok" });
-        try {
-          await App.saveDelta(async () => {
-            if (DB.warehouses && DB.warehouses.update) {
-              await DB.warehouses.update(w.id, { name: newName });
-            } else {
-              await DB.save(ENG.data);
-            }
-          });
-          App.refreshView();
-        } catch (e) {
+        const newName = (input.value || "").trim();
+        if (!newName) {
           w.name = oldName;
-          App.refreshView();
+          renderName();
+          toast("Warehouse name cannot be empty", { type: "warn" });
+          return;
+        }
+        if (newName === oldName) {
+          renderName();
+          return;
+        }
+        const prevName = w.name;
+        w.name = newName;
+        renderName();
+        try {
+          await App.saveDelta(() => DB.warehouses.update(w.id, { name: newName }));
+          toast("Warehouse name updated", { type: "ok" });
+        } catch (e) {
+          w.name = prevName;
+          renderName();
+          toast("Could not update warehouse name", { type: "danger" });
         }
       }
-      const mo = modal({
-        title: "Edit Warehouse Name",
-        sub: "Update display label for warehouse " + w.id,
-        body,
-        foot: [
-          h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
-          h("button", { class: "btn primary", onclick: save, text: "Save Name" })
-        ]
-      });
+      function cancel(){
+        w.name = oldName;
+        renderName();
+      }
+      function renderName(){
+        host.innerHTML = "";
+        host.appendChild(h("div", { class: "flex aic", style: "gap:8px" }, [
+          h("h3", {
+            style: "font-size:16px;",
+            text: w.name || oldName
+          }),
+          h("button", {
+            class: "btn secondary sm",
+            title: "Edit warehouse name",
+            style: "font-size:11px;padding:2px 8px;cursor:pointer;",
+            onclick: (e) => {
+              e.stopPropagation();
+              editWhName(w, host);
+            },
+            text: "✏️ Edit"
+          })
+        ]));
+      }
     }
 
     const grid=h("div",{class:"grid cols-2"});
@@ -526,19 +551,24 @@
         h("div",{class:"flex between aic"},[
           h("div",{},[
             h("div",{class:"flex aic",style:"gap:8px"},[
-              h("h3",{
-                style: "font-size:16px;" + (canEdit ? "cursor:pointer;" : ""),
-                title: canEdit ? "Click to edit warehouse name" : w.name,
-                onclick: (e) => { if (canEdit) { e.stopPropagation(); editWhName(w); } },
-                text: w.name
-              }),
-              canEdit ? h("button",{
-                class:"btn secondary sm",
-                title:"Edit warehouse name (Admin only)",
-                style:"font-size:11px;padding:2px 8px;cursor:pointer;",
-                onclick:(e)=>{ e.stopPropagation(); editWhName(w); },
-                text:"✏️ Edit Name"
-              }) : null
+              h("div", { class: "warehouse-name-host" }, [
+                h("div", { class: "flex aic", style: "gap:8px" }, [
+                  h("h3", {
+                    style: "font-size:16px;",
+                    text: w.name
+                  }),
+                  canEdit ? h("button", {
+                    class: "btn secondary sm",
+                    title: "Edit warehouse name",
+                    style: "font-size:11px;padding:2px 8px;cursor:pointer;",
+                    onclick: (e) => {
+                      e.stopPropagation();
+                      editWhName(w, e.currentTarget.parentNode.parentNode);
+                    },
+                    text: "✏️ Edit"
+                  }) : null
+                ])
+              ])
             ]),
             h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})
           ]),
@@ -589,7 +619,6 @@
       ]);
       const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body,
         foot:[
-          canEdit ? h("button",{class:"btn secondary",style:"margin-right:auto",onclick:()=>{mo.close();editWhName(w);},text:"✏️ Edit Warehouse Name"}) : null,
           h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})
         ]});
       draw();
