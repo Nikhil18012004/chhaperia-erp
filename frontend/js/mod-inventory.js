@@ -468,17 +468,18 @@
       h("button",{class:"btn primary",onclick:()=>transferForm(),html:"🔀 Move Stock"})
     ]));
 
+    const canEdit = App.isAdmin();
+
     function editWhName(w){
+      if (!canEdit) { toast("Only admin users can edit warehouse names", { type: "warn" }); return; }
       let nameInput;
       const body = h("div", {}, [
-        field("Warehouse ID (Read-only)", h("input", { class: "input", value: w.id, disabled: true })),
-        field("Warehouse Type (Read-only)", h("input", { class: "input", value: w.type || "—", disabled: true })),
-        field("City (Read-only)", h("input", { class: "input", value: w.city || "—", disabled: true })),
-        field("Warehouse Name", nameInput = h("input", { class: "input", value: w.name, placeholder: "Enter warehouse name", autofocus: true }))
+        h("p", { class: "muted", style: "font-size:12px;margin-bottom:12px", text: "ID: " + w.id + " · " + (w.city || "") + " · " + (w.type || "") }),
+        field("Warehouse Name", nameInput = h("input", { class: "input", value: w.name, placeholder: "Enter new warehouse name", autofocus: true }))
       ]);
       const mo = modal({
         title: "Edit Warehouse Name",
-        sub: "Update name for " + w.name + " (" + w.id + ")",
+        sub: "Update display name for " + w.id,
         body,
         foot: [
           h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
@@ -502,6 +503,7 @@
                 });
               } catch (e) {
                 w.name = oldName;
+                App.refreshView();
               }
             },
             text: "Save Name"
@@ -520,13 +522,13 @@
           h("div",{},[
             h("div",{class:"flex aic",style:"gap:6px"},[
               h("h3",{style:"font-size:16px",text:w.name}),
-              h("button",{
+              canEdit ? h("button",{
                 class:"icon-btn",
-                title:"Edit warehouse name",
+                title:"Edit warehouse name (Admin)",
                 style:"font-size:13px;padding:2px 6px;cursor:pointer;opacity:0.85;border:none;background:transparent;",
                 onclick:(e)=>{ e.stopPropagation(); editWhName(w); },
                 text:"✏️"
-              })
+              }) : null
             ]),
             h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})
           ]),
@@ -577,7 +579,7 @@
       ]);
       const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body,
         foot:[
-          h("button",{class:"btn secondary",style:"margin-right:auto",onclick:()=>{mo.close();editWhName(w);},text:"✏️ Edit Warehouse Name"}),
+          canEdit ? h("button",{class:"btn secondary",style:"margin-right:auto",onclick:()=>{mo.close();editWhName(w);},text:"✏️ Edit Warehouse Name"}) : null,
           h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})
         ]});
       draw();
