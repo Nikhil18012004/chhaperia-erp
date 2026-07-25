@@ -235,6 +235,17 @@ function isEmpty() {
    order). These avoid rewriting the ENTIRE dataset on every tap,
    which was slow and caused last-writer-wins races between panels. */
 
+function updateWarehouse(id, patch) {
+  const db = getDb();
+  const existing = db.prepare("SELECT id, name, type, city FROM warehouses WHERE id = ?").get(id);
+  if (!existing) throw new Error("Warehouse " + id + " not found");
+  const name = patch.name !== undefined ? String(patch.name).trim() : existing.name;
+  if (!name) throw new Error("Warehouse name cannot be empty");
+  db.prepare("UPDATE warehouses SET name = ? WHERE id = ?").run(name, id);
+  return db.prepare("SELECT id, name, type, city FROM warehouses WHERE id = ?").get(id);
+}
+
+
 /** Read one work order in the frontend document shape (or null). */
 function getWorkOrder(id) {
   const db = getDb();
@@ -663,7 +674,7 @@ function deletePayrun(id) {
 }
 function hrIsEmpty() { return getDb().prepare("SELECT COUNT(*) AS c FROM hr_workers").pluck().get() === 0; }
 
-module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
+module.exports = { getState, saveState, isEmpty, updateSettings, updateWarehouse, getWorkOrder, putWorkOrder,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getSalesOrder, putSalesOrder, deleteSalesOrder,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,

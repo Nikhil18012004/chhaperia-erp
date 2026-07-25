@@ -348,10 +348,24 @@ function deleteWorkOrder(id) {
   return repo.deleteWorkOrder(id);
 }
 
-module.exports = { getState, saveState, updateSettings, reset, ensureStageModel, ensureCrm,
+/* ---- Warehouse management ---- */
+function updateWarehouse(id, patch) {
+  if (!id) throw err("Warehouse ID required", 400);
+  if (patch.name != null) {
+    if (typeof patch.name !== "string" || !patch.name.trim()) throw err("Warehouse name must be a non-empty string", 400);
+  }
+  try {
+    return repo.updateWarehouse(id, patch);
+  } catch (e) {
+    throw err(e.message || "Failed to update warehouse", 400);
+  }
+}
+
+module.exports = { getState, saveState, updateSettings, updateWarehouse, reset, ensureStageModel, ensureCrm,
   upsertItem, addMovement, receivePurchaseOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createSalesOrder, updateSalesOrder, deleteSalesOrder, dispatchSalesOrder,
   saveBom, deleteBom, createLead, updateLead, deleteLead, upsertCustomer,
   deleteItem, deleteWorkOrder, nextId,
   createTransporter, updateTransporter, deleteTransporter, ensureDispatch };
+

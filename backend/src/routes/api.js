@@ -135,6 +135,10 @@ router.patch("/transporters/:id", requireAuth, rw, (req, res, next) => {
 router.delete("/transporters/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(erp.deleteTransporter(req.params.id)); } catch (e) { next(e); }
 });
+// Warehouses: update warehouse name
+router.patch("/warehouses/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateWarehouse(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
 // ---- Lab reports: QC product master + test certificates ----
 // Product master (create/update/delete + hidden spec) — admin/office.
 router.post("/lab/products", requireAuth, rw, (req, res, next) => {

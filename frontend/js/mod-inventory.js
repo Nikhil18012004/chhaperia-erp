@@ -467,6 +467,49 @@
     root.appendChild(pageHead("Warehouses","Stock distribution across plant locations",[
       h("button",{class:"btn primary",onclick:()=>transferForm(),html:"🔀 Move Stock"})
     ]));
+
+    function editWhName(w){
+      let nameInput;
+      const body = h("div", {}, [
+        field("Warehouse ID (Read-only)", h("input", { class: "input", value: w.id, disabled: true })),
+        field("Warehouse Type (Read-only)", h("input", { class: "input", value: w.type || "—", disabled: true })),
+        field("City (Read-only)", h("input", { class: "input", value: w.city || "—", disabled: true })),
+        field("Warehouse Name", nameInput = h("input", { class: "input", value: w.name, placeholder: "Enter warehouse name", autofocus: true }))
+      ]);
+      const mo = modal({
+        title: "Edit Warehouse Name",
+        sub: "Update name for " + w.name + " (" + w.id + ")",
+        body,
+        foot: [
+          h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+          h("button", {
+            class: "btn primary",
+            onclick: async () => {
+              const newName = nameInput.value.trim();
+              if (!newName) { toast("Warehouse name cannot be empty", { type: "warn" }); return; }
+              if (newName === w.name) { mo.close(); return; }
+              const oldName = w.name;
+              w.name = newName;
+              mo.close();
+              toast("Warehouse name updated", { type: "ok" });
+              try {
+                await App.saveDelta(async () => {
+                  if (DB.warehouses && DB.warehouses.update) {
+                    await DB.warehouses.update(w.id, { name: newName });
+                  } else {
+                    await DB.save(ENG.data);
+                  }
+                });
+              } catch (e) {
+                w.name = oldName;
+              }
+            },
+            text: "Save Name"
+          })
+        ]
+      });
+    }
+
     const grid=h("div",{class:"grid cols-2"});
     ENG.data.warehouses.forEach(w=>{
       let val=0, items=0;
@@ -474,7 +517,19 @@
       const top=ENG.data.items.map(it=>({it,q:ENG.stock(it.id).byWh[w.id]||0})).filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q).slice(0,5);
       grid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:()=>whDetail(w),title:"Click to view all materials in "+w.name},[
         h("div",{class:"flex between aic"},[
-          h("div",{},[h("h3",{style:"font-size:16px",text:w.name}),h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})]),
+          h("div",{},[
+            h("div",{class:"flex aic",style:"gap:6px"},[
+              h("h3",{style:"font-size:16px",text:w.name}),
+              h("button",{
+                class:"icon-btn",
+                title:"Edit warehouse name",
+                style:"font-size:13px;padding:2px 6px;cursor:pointer;opacity:0.85;border:none;background:transparent;",
+                onclick:(e)=>{ e.stopPropagation(); editWhName(w); },
+                text:"✏️"
+              })
+            ]),
+            h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})
+          ]),
           h("div",{class:"kpi-ic",text:whIcon(w.type)})
         ]),
         h("div",{class:"flex between",style:"margin:16px 0;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)"},[
@@ -521,7 +576,10 @@
         tableHost
       ]);
       const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
+        foot:[
+          h("button",{class:"btn secondary",style:"margin-right:auto",onclick:()=>{mo.close();editWhName(w);},text:"✏️ Edit Warehouse Name"}),
+          h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})
+        ]});
       draw();
     }
 

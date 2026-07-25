@@ -73,6 +73,12 @@ try {
     ok("receive unknown PO 404s", throws(() => erp.receivePurchaseOrder("PO-NOPE", { lines: [{ i: 0, qty: 1 }] })));
   }
 
+  section("Granular: updateWarehouse");
+  const whUpdated = erp.updateWarehouse("WH-PNY", { name: "Renamed Main Store" });
+  ok("warehouse name updated", whUpdated && whUpdated.name === "Renamed Main Store");
+  ok("type and city unchanged", whUpdated && whUpdated.type === "Raw Material" && whUpdated.city === "Doddaballapur");
+  ok("updateWarehouse rejects empty name", throws(() => erp.updateWarehouse("WH-PNY", { name: "   " })));
+
   section("Reset");
   const reseed = erp.reset();
   ok("reset returns a fresh dataset", Array.isArray(reseed.items) && reseed.items.length > 0);

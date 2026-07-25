@@ -111,6 +111,9 @@ async function run() {
   ok("update lead stage", (await call("PATCH", "/leads/" + lead.id, A, { stage: "Quoted" })).d.stage === "Quoted");
   ok("delete lead 200", (await call("DELETE", "/leads/" + lead.id, A)).status === 200);
 
+  const whRes = await call("PATCH", "/warehouses/WH-PNY", A, { name: "Penanya Central Store" });
+  ok("patch warehouse name 200", whRes.status === 200 && whRes.d.name === "Penanya Central Store");
+
   section("Validation rejects bad input");
   ok("SO with empty lines → 400", (await call("POST", "/sales-orders", A, { customerId: cust, lines: [] })).status === 400);
   ok("delete unknown SO → 404", (await call("DELETE", "/sales-orders/SO-NOPE", A)).status === 404);
