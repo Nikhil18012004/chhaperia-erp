@@ -150,7 +150,8 @@
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
-        {key:"item",label:"Product",render:r=>{const it=ENG.item(r.itemId);return `<div class="cell-main">${esc(it.name)}</div><div class="cell-sub">${r.itemId}</div>`;},sort:r=>r.itemId},
+        {key:"item",label:"Product",render:r=>`<div class="cell-main">${esc((ENG.item(r.itemId)||{}).name||r.itemId)}</div>`,sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
+        {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.itemId)}</span>`,sort:r=>r.itemId},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
         {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
         {key:"stage",label:"Stage",render:r=>stageCell(r),sort:r=>(r.stageIdx||0)},
@@ -216,7 +217,8 @@
         stageTimeline(wo),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Material Requirements (auto from BOM)"}),
         table(rows,[
-          {key:"name",label:"Component",render:r=>`<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${r.rid}</div>`,noSort:true},
+          {key:"name",label:"Component",render:r=>`<div class="cell-main">${esc(r.name)}</div>`,noSort:true},
+          {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.rid)}</span>`,noSort:true},
           {key:"per",label:"Per kg",num:true,render:r=>ENG.num(r.per,3),noSort:true},
           {key:"need",label:"Required",num:true,render:r=>`<span class="strong">${ENG.num(r.need,2)}</span> ${r.uom}`,noSort:true},
           {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1),noSort:true},
@@ -315,10 +317,7 @@
         BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).forEach(([rid,per])=>{
           const need=per*qty/bom.yield; const have=ENG.stock(rid).onHand||0; const ok=have>=need; const r=ENG.item(rid)||{};
           matHost.appendChild(h("div",{class:"flex between aic",style:"gap:10px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
-            h("div",{style:"min-width:0"},[
-              h("div",{style:"font-weight:600",text:r.name||rid}),
-              h("div",{class:"muted mono",style:"font-size:10.5px",text:rid})
-            ]),
+            h("div",{style:"min-width:0;font-weight:600",text:r.name||rid}),
             h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
               h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(need,2)+" "+(r.uom||"")})]),
               h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||"")})]),
@@ -449,8 +448,8 @@
     function marginOf(fg){ return fg.price? ((fg.price-fg.cost)/fg.price*100):0; }
     function productTable(list){
       return table(list,[
-        {key:"product",label:"Product",render:fg=>`<div class="cell-main">${esc(fg.name)}</div><div class="cell-sub">${fg.id}${fg.hsn?" · HSN "+esc(fg.hsn):""}</div>`,sort:fg=>fg.name},
-        {key:"code",label:"Code",render:fg=>fg.typeCode?`<span class="chip"><b>${esc(fg.typeCode)}</b></span>`:'<span class="muted">—</span>',sort:fg=>fg.typeCode||""},
+        {key:"product",label:"Product",render:fg=>`<div class="cell-main">${esc(fg.name)}</div>`,sort:fg=>fg.name},
+        {key:"code",label:"Code",render:fg=>`<span class="chip"><b>${esc(fg.typeCode||fg.id)}</b></span>`,sort:fg=>fg.typeCode||fg.id},
         {key:"mat",label:"Material Cost",num:true,render:fg=>"₹"+ENG.num(matCostOf(fg),0),sort:matCostOf},
         {key:"cost",label:"Std Cost",num:true,render:fg=>"₹"+ENG.num(fg.cost,0),sort:fg=>fg.cost},
         {key:"price",label:"Price",num:true,render:fg=>"₹"+ENG.num(fg.price,0),sort:fg=>fg.price},
@@ -511,23 +510,22 @@
         }
 
         tblHost.innerHTML="";
-        const tbl=h("table",{class:"tbl",style:"width:100%;min-width:760px"});
+        const tbl=h("table",{class:"tbl",style:"width:100%;min-width:820px"});
         tbl.appendChild(h("thead",{},[h("tr",{},
-          ["Raw material","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm"].map((t,i)=>
-            h("th",{style:"font-size:11px;"+(i>=1?"text-align:right":""),text:t})))]));
+          ["Raw material","Code","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm"].map((t,i)=>
+            h("th",{style:"font-size:11px;"+(i>=2?"text-align:right":""),text:t})))]));
         const tb=h("tbody");
         c.lines.forEach(cl=>{
           const r=cl.id?ENG.item(cl.id):null;
           const label=(r&&r.name)||cl.rm||cl.id||"—";
-          const sub=cl.id||[cl.rm,cl.rmType].filter(Boolean).join(" · ");
           tb.appendChild(h("tr",{},[
-            h("td",{style:"min-width:220px"},[
+            h("td",{style:"min-width:200px"},[
               h("div",{class:"flex aic",style:"gap:6px"},[
                 h("span",{style:"font-weight:600",text:label}),
                 cl.ranged?h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged"}):null
-              ]),
-              sub?h("div",{class:"muted mono",style:"font-size:10.5px",text:sub}):null
+              ])
             ]),
+            h("td",{class:"mono muted",style:"font-size:11px",text:cl.id||[cl.rm,cl.rmType].filter(Boolean).join(" · ")||"—"}),
             h("td",{class:"mono",style:"text-align:right",text:n(cl.qty,3)}),
             h("td",{style:"text-align:right",text:cl.unit||"—"}),
             h("td",{class:"mono",style:"text-align:right",text:cl.rmGsm!=null?cl.rmGsm:"—"}),

@@ -545,7 +545,8 @@
         countChip.textContent=data.length+" materials · "+ENG.money(totalVal)+" total";
         tableHost.innerHTML="";
         tableHost.appendChild(table(data,[
-          {key:"item",label:"Material",render:r=>`<div class="cell-main">${esc(trim(r.it.name,36))}</div><div class="cell-sub">${r.it.id}</div>`,sort:r=>r.it.name},
+          {key:"item",label:"Material",render:r=>`<div class="cell-main">${esc(r.it.name)}</div>`,sort:r=>r.it.name},
+          {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.it.id)}</span>`,sort:r=>r.it.id},
           {key:"cat",label:"Category",render:r=>`<span class="muted">${esc(catName(r.it.cat))}</span>`,sort:r=>r.it.cat},
           {key:"qty",label:"Quantity",num:true,render:r=>`<span style="font-weight:700">${ENG.num(r.q,2)}</span> <span class="muted">${esc(r.it.uom||"")}</span>`,sort:r=>r.q},
           {key:"cost",label:"Avg Cost",num:true,render:r=>"₹"+ENG.num(r.cost,2),sort:r=>r.cost},
