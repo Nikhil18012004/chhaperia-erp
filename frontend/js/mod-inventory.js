@@ -472,15 +472,43 @@
       let val=0, items=0;
       ENG.data.items.forEach(it=>{ const q=ENG.stock(it.id).byWh[w.id]||0; if(q>0.001){ val+=q*ENG.stock(it.id).avgCost; items++; } });
       const top=ENG.data.items.map(it=>({it,q:ENG.stock(it.id).byWh[w.id]||0})).filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q).slice(0,5);
+      /* the name edits IN PLACE: ✎ swaps the heading for an input right there —
+         Enter or clicking away saves, Escape cancels. No dialog. */
+      const nameEl=h("h3",{style:"font-size:16px",text:w.name});
+      const editBtn=canEditWh()?h("button",{class:"btn sm ghost",style:"padding:2px 8px;font-size:11px;line-height:1.4",
+        title:"Edit the name of this warehouse",
+        onclick:e=>{ e.stopPropagation(); startEdit(); },html:"✎"}):null;
+      const nameWrap=h("div",{class:"flex aic",style:"gap:7px"},[nameEl,editBtn]);
+      function startEdit(){
+        if(nameWrap._editing) return; nameWrap._editing=true;
+        if(editBtn) editBtn.style.display="none";
+        const input=h("input",{class:"input",value:w.name,
+          style:"font-size:14px;font-weight:700;padding:4px 9px;max-width:240px"});
+        nameWrap.replaceChild(input,nameEl);
+        let done=false;
+        const finish=(saveIt)=>{
+          if(done) return; done=true;
+          const name=(input.value||"").trim();
+          nameWrap.replaceChild(nameEl,input);
+          if(editBtn) editBtn.style.display="";
+          nameWrap._editing=false;
+          if(saveIt && name && name!==w.name){
+            w.name=name; nameEl.textContent=name;   // w IS the row in ENG.data.warehouses
+            toast("Warehouse renamed to "+name,{type:"ok"});
+            App.saveDelta(()=>DB.warehouses.update(w.id,{name}));
+          }
+        };
+        input.addEventListener("click",e=>e.stopPropagation());
+        input.addEventListener("keydown",e=>{ e.stopPropagation();
+          if(e.key==="Enter"){ e.preventDefault(); finish(true); }
+          else if(e.key==="Escape"){ finish(false); } });
+        input.addEventListener("blur",()=>finish(true));
+        input.focus(); input.select();
+      }
       grid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:()=>whDetail(w),title:"Click to view all materials in "+w.name},[
         h("div",{class:"flex between aic"},[
           h("div",{},[
-            h("div",{class:"flex aic",style:"gap:7px"},[
-              h("h3",{style:"font-size:16px",text:w.name}),
-              canEditWh()?h("button",{class:"btn sm ghost",style:"padding:2px 8px;font-size:11px;line-height:1.4",
-                title:"Edit the name of this warehouse",
-                onclick:e=>{ e.stopPropagation(); whEdit(w); },html:"✎"}):null
-            ]),
+            nameWrap,
             h("div",{class:"muted",style:"font-size:12px",text:w.city+" · "+w.type})
           ]),
           h("div",{class:"kpi-ic",text:whIcon(w.type)})
@@ -497,27 +525,9 @@
     });
     root.appendChild(grid);
 
-    /* rename a warehouse — the id (and every movement pointing at it) stays */
+    /* renames touch only the display name — the warehouse id (and every
+       movement pointing at it) stays */
     function canEditWh(){ const r=(App.user&&App.user.role)||""; return r==="admin"||r==="office"; }
-    function whEdit(w){
-      const body=h("div",{},[
-        field("Warehouse name",`<input class="input" id="wh_name" value="${esc(w.name)}">`),
-        h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px",text:w.id+" · "+(w.city||"—")+" · "+(w.type||"—")})
-      ]);
-      const mo=modal({title:"✎ Edit Warehouse", sub:w.id, body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-          h("button",{class:"btn primary",onclick:save,text:"Save"})]});
-      setTimeout(()=>{ const i=UI.$("#wh_name"); if(i){ i.focus(); i.select(); } },50);
-      function save(){
-        const name=(UI.$("#wh_name").value||"").trim();
-        if(!name){ toast("Enter a warehouse name",{type:"warn"}); return; }
-        if(name===w.name){ mo.close(); return; }
-        w.name=name;                       // w IS the row in ENG.data.warehouses
-        mo.close();
-        toast("Warehouse renamed to "+name,{type:"ok"});
-        App.saveDelta(()=>DB.warehouses.update(w.id,{name}));
-      }
-    }
 
     /* drill-down: every material held in this warehouse */
     function whDetail(w){
