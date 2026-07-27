@@ -81,7 +81,7 @@
         MW.dl([["Supplier",ENG.sup(po.supplierId)],["Status",badge(po.status==="Received"?"ok":"info",po.status)],["Ordered",po.date],["ETA",po.eta],["Total Value",ENG.money(po.value)]]),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Order Lines"}),
         table(po.lines,[
-          {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(U.trim(it.name||r.itemId,32))}</div><div class="cell-sub">${r.itemId}</div>`;},noSort:true},
+          {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(it.name||r.itemId)}</div><div class="cell-sub">${r.itemId}</div>`;},noSort:true},
           {key:"qty",label:"Ordered",num:true,render:r=>ENG.num(r.qty),noSort:true},
           {key:"recd",label:"Received",num:true,render:r=>ENG.num(r.recd||0),noSort:true},
           {key:"pend",label:"Pending",num:true,render:r=>{const p=r.qty-(r.recd||0);return p>0?`<span class="badge-s s-warn">${ENG.num(p)}</span>`:'<span class="muted">—</span>';},noSort:true},
@@ -115,7 +115,7 @@
       const body = sugg.length? h("div",{},[
         h("p",{class:"dim",style:"margin-bottom:14px",text:`${sugg.length} item(s) are at or below their reorder point. Suggested quantities account for current stock + pending POs against target levels.`}),
         table(sugg,[
-          {key:"item",label:"Item",render:r=>`<div class="cell-main">${esc(U.trim(r.it.name,30))}</div><div class="cell-sub">${r.it.id} · ${ENG.sup(r.it.supplierId)}</div>`,noSort:true},
+          {key:"item",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div><div class="cell-sub">${r.it.id} · ${ENG.sup(r.it.supplierId)}</div>`,noSort:true},
           {key:"onHand",label:"On Hand",num:true,render:r=>ENG.num(r.st.onHand,1),noSort:true},
           {key:"reorder",label:"Reorder Pt",num:true,render:r=>ENG.num(r.it.reorder),noSort:true},
           {key:"suggest",label:"Suggested",num:true,render:r=>`<span class="strong" style="color:var(--accent)">${ENG.num(r.st.suggest)} ${r.it.uom}</span>`,noSort:true},
@@ -162,7 +162,7 @@
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:(typeof seed==="string"?ENG.status(seed).suggest:"");
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(typeof seed==="string"?ENG.item(seed).cost:"");
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:U.trim(i.id+" — "+i.name,34)})),itemId,"Search material…"),style:"flex:2"}),
+          h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:i.id+" — "+i.name})),itemId,"Search material…"),style:"flex:2"}),
           h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"Qty",style:"flex:1",value:qtyVal}),
           h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:rateVal}),
           h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})

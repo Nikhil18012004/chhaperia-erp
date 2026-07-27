@@ -122,11 +122,21 @@ function parseProducts(rows) {
       out.push(cur);
     }
     if (rmName && cur) {
-      cur.lines.push({ row: r + 1, rm: rmName, rmType: g(r, C.rmType), rmThk: g(r, C.rmThk),
-        rmGsm: g(r, C.rmGsm), qty: g(r, C.qty), unit: g(r, C.unit) });
+      cur.lines.push(canonRm({ row: r + 1, rm: rmName, rmType: g(r, C.rmType), rmThk: g(r, C.rmThk),
+        rmGsm: g(r, C.rmGsm), qty: g(r, C.qty), unit: g(r, C.unit) }));
     }
   }
   return out;
+}
+
+/* The sheet spells a few materials inconsistently ("CLOFT913" vs "CLOFT 913",
+   bare "BONDEX" vs "BONDEX 8060", "TC" vs "T C"). Canonicalise at ingestion so
+   one physical material never becomes two catalogue items. */
+function canonRm(l) {
+  if (/^T\.?\s*C\.?$/i.test(l.rm)) l.rm = "T C";
+  if (/^BONDEX$/i.test(l.rm) && BOM.isBlank(l.rmType)) l.rmType = "8060";
+  l.rmType = String(l.rmType || "").replace(/CLOFT\s*(\d{3})/gi, "CLOFT $1");
+  return l;
 }
 
 /* ============================================================
