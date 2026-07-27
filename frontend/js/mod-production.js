@@ -231,7 +231,7 @@
     function woForm(){
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       const body=h("div",{class:"form-grid"},[
-        U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:i.name})),fgs[0].id,"Search product…"),"full"),
+        U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:i.id+" — "+i.name})),fgs[0].id,"Search product…"),"full"),
         U.field("Quantity (kg)",`<input class="input" id="w_qty" type="number" value="100">`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"Coating Line 1",l:"Coating Line 1"},{v:"Coating Line 2",l:"Coating Line 2"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Coating Line 1")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
@@ -267,7 +267,7 @@
             const sel=h("select",{class:"select",style:"max-width:340px",
               onchange:e=>{ matChoices[i]=e.target.value; recalc(); }},
               usable.map(c=>h("option",{value:c.id,selected:matChoices[i]===c.id,
-                text:(c.item.name? c.id+" — "+c.item.name : c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
+                text:(c.item.name||c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" · "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
@@ -276,12 +276,24 @@
           });
         }
 
-        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:12px 0 8px",text:"Materials to be consumed"}));
+        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",text:"Materials to be consumed"}));
+        const mt=h("table",{class:"tbl",style:"width:100%"});
+        mt.appendChild(h("thead",{},[h("tr",{},[
+          h("th",{style:"font-size:11px",text:"Material"}),
+          h("th",{style:"font-size:11px;text-align:right",text:"Required"}),
+          h("th",{style:"font-size:11px;text-align:right",text:"In store"}),
+          h("th",{style:"font-size:11px;text-align:right",text:"Status"})
+        ])]));
+        const mtb=h("tbody");
         BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).forEach(([rid,per])=>{ const need=per*qty/bom.yield; const have=ENG.stock(rid).onHand; const ok=have>=need; const r=ENG.item(rid)||{};
-          matHost.appendChild(h("div",{class:"flex between",style:"font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"},[
-            h("span",{text:r.name? rid+" — "+r.name : rid}),
-            h("span",{html:`<span class="mono" style="color:${ok?'var(--text)':'var(--danger)'}">${ENG.num(need,2)} / ${ENG.num(have,1)}</span> ${badge(ok?"ok":"danger",ok?"OK":"Short")}`})
+          mtb.appendChild(h("tr",{style:ok?"":"background:color-mix(in srgb, var(--danger) 8%, transparent)"},[
+            h("td",{},[h("div",{class:"cell-main",text:r.name||rid}),h("div",{class:"cell-sub",text:rid})]),
+            h("td",{class:"mono",style:"text-align:right;white-space:nowrap",text:ENG.num(need,2)+" "+(r.uom||"")}),
+            h("td",{class:"mono",style:"text-align:right;white-space:nowrap;color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||"")}),
+            h("td",{style:"text-align:right",html:badge(ok?"ok":"danger",ok?"OK":"Short")})
           ])); });
+        mt.appendChild(mtb);
+        matHost.appendChild(mt);
       };
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
@@ -597,19 +609,19 @@
       }
 
       /* Options for the component picker.
-         The label carries EVERY aspect that can tell two materials apart —
-         code, full name (which carries the grade), thickness, GSM and unit —
-         and is never truncated: identical-looking prefixes once made
-         "RM-COTTON-FABRIC-DEVESH / …DOLLAR / …DOLLER" read as the same
-         material three times over. The id stays searchable (searchSelect
-         matches on value as well as label).
+         The label leads with the NAME (which already carries the grade) plus
+         whatever distinguishes it — thickness and GSM. It used to lead with the
+         item id and was trimmed, so "RM-COTTON-FABRIC-DEVESH / …DOLLAR
+         / …DOLLER" all rendered as an identical "COTTON FABR…" and looked like the
+         same material three times over. Never truncate a material label — shown
+         in full. The id stays searchable (searchSelect matches on value as well
+         as label).
          WIP items are excluded: the stage engine inserts those itself, and 204
          auto-generated ones drown the list. Any WIP already on a line is kept. */
       function matLabel(i){
-        const bits=[i.name? i.id+" — "+i.name : i.id];
+        const bits=[i.name||i.id];
         if(i.thicknessMM!=null) bits.push(i.thicknessMM+" mm");
         if(i.gsm!=null) bits.push(i.gsm+" g/m²");
-        if(i.uom) bits.push(String(i.uom).toUpperCase());
         return bits.join(" · ");
       }
       function matOptions(currentId){
