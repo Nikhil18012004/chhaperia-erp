@@ -232,7 +232,7 @@
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       const body=h("div",{class:"form-grid"},[
         U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:i.id+" — "+i.name})),fgs[0].id,"Search product…"),"full"),
-        U.field("Quantity (kg)",`<input class="input" id="w_qty" type="number" value="100">`),
+        U.field("Quantity",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"Coating Line 1",l:"Coating Line 1"},{v:"Coating Line 2",l:"Coating Line 2"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Coating Line 1")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
         U.field("Priority",U.selectHTML("w_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
@@ -242,7 +242,22 @@
       const matHost=h("div",{style:"margin-top:16px"});
       body.appendChild(matHost);
       let matChoices={};        // ranged line index -> chosen stock item id
-      const recalc=()=>{ const id=UI.$("#w_item").value, qty=+UI.$("#w_qty").value||0; const bom=ENG.data.boms[id];
+      /* The run size can be entered in kg or sqm; the engine (and the server)
+         work in kg, so a sqm entry is converted through the FG's GSM
+         (kg = sqm × g/m² / 1000). Returns null when sqm is chosen but the
+         product has no GSM to convert with. */
+      const qtyKg=()=>{ const q=+UI.$("#w_qty").value||0;
+        if((UI.$("#w_unit")||{}).value!=="SQM") return q;
+        const gsm=BOMCALC.metaFromItem(ENG.item(UI.$("#w_item").value)||{}).fgGsm;
+        return gsm? q*gsm/1000 : null; };
+      const convHint=()=>{ const el=UI.$("#w_conv"); if(!el) return;
+        const q=+UI.$("#w_qty").value||0, unit=UI.$("#w_unit").value;
+        const gsm=BOMCALC.metaFromItem(ENG.item(UI.$("#w_item").value)||{}).fgGsm;
+        if(!gsm){ el.textContent = unit==="SQM" ? "This product has no GSM — cannot convert sqm to kg. Enter the quantity in kg." : ""; el.style.color=unit==="SQM"?"var(--danger)":""; return; }
+        el.style.color="";
+        el.textContent = unit==="SQM" ? ("= "+ENG.num(q*gsm/1000,1)+" kg · FG "+gsm+" g/m²")
+                                      : ("= "+ENG.num(q*1000/gsm,0)+" sqm · FG "+gsm+" g/m²"); };
+      const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         // per-order production spec (e.g. copper-wire count) for products that need it
         specHost.innerHTML="";
         const spec=ORDER_SPEC[id];
@@ -276,31 +291,48 @@
           });
         }
 
-        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",text:"Materials to be consumed"}));
-        const mt=h("table",{class:"tbl",style:"width:100%"});
-        mt.appendChild(h("thead",{},[h("tr",{},[
-          h("th",{style:"font-size:11px",text:"Material"}),
-          h("th",{style:"font-size:11px;text-align:right",text:"Required"}),
-          h("th",{style:"font-size:11px;text-align:right",text:"In store"}),
-          h("th",{style:"font-size:11px;text-align:right",text:"Status"})
-        ])]));
-        const mtb=h("tbody");
-        BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).forEach(([rid,per])=>{ const need=per*qty/bom.yield; const have=ENG.stock(rid).onHand; const ok=have>=need; const r=ENG.item(rid)||{};
-          mtb.appendChild(h("tr",{style:ok?"":"background:color-mix(in srgb, var(--danger) 8%, transparent)"},[
-            h("td",{},[h("div",{class:"cell-main",text:r.name||rid}),h("div",{class:"cell-sub",text:rid})]),
-            h("td",{class:"mono",style:"text-align:right;white-space:nowrap",text:ENG.num(need,2)+" "+(r.uom||"")}),
-            h("td",{class:"mono",style:"text-align:right;white-space:nowrap;color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||"")}),
-            h("td",{style:"text-align:right",html:badge(ok?"ok":"danger",ok?"OK":"Short")})
-          ])); });
-        mt.appendChild(mtb);
-        matHost.appendChild(mt);
+        /* Each material is a card: name + code, an OK/Short badge, and a
+           coverage meter (how much of the requirement the store can supply)
+           with the need / have figures spelled out beneath it. */
+        const reqs=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).map(([rid,per])=>{
+          const need=per*qty/bom.yield, have=ENG.stock(rid).onHand||0, r=ENG.item(rid)||{};
+          return {rid, name:r.name||rid, uom:r.uom||"", need, have, ok:have>=need};
+        });
+        const shortN=reqs.filter(x=>!x.ok).length;
+        matHost.appendChild(h("div",{class:"flex between aic",style:"margin:16px 0 8px;gap:8px"},[
+          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase",text:"Materials to be consumed"}),
+          h("span",{html:reqs.length? (shortN? badge("danger",shortN+" of "+reqs.length+" short") : badge("ok","all "+reqs.length+" in stock")) : ""})
+        ]));
+        const grid=h("div",{style:"display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px"});
+        reqs.forEach(x=>{
+          const cover=x.need>0? Math.min(100,x.have/x.need*100) : 100;
+          grid.appendChild(h("div",{style:"background:var(--panel);border:1px solid var(--line);border-left:3px solid "
+              +(x.ok?"var(--ok)":"var(--danger)")+";border-radius:10px;padding:10px 12px"},[
+            h("div",{class:"flex between",style:"gap:8px;align-items:flex-start"},[
+              h("div",{style:"min-width:0"},[
+                h("div",{style:"font-weight:700;font-size:12.5px;line-height:1.35",text:x.name}),
+                h("div",{class:"muted mono",style:"font-size:10px;margin-top:1px",text:x.rid})
+              ]),
+              h("span",{style:"flex:0 0 auto",html:badge(x.ok?"ok":"danger",x.ok?"OK":"Short")})
+            ]),
+            h("div",{style:"margin:9px 0 5px",html:meter(cover, x.ok?"ok":(cover>=60?"warn":"danger"))}),
+            h("div",{class:"flex between",style:"font-size:11px"},[
+              h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(x.need,2)+" "+x.uom})]),
+              h("span",{class:"muted",text:x.ok?"In store ":"Short by "},[h("b",{class:"mono",
+                style:"color:"+(x.ok?"var(--ok)":"var(--danger)"),
+                text:(x.ok? ENG.num(x.have,1) : ENG.num(x.need-x.have,2))+" "+x.uom})])
+            ])
+          ]));
+        });
+        matHost.appendChild(grid);
       };
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn primary",onclick:save,text:"Create Work Order"})]});
-      setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); recalc(); },50);
+      setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); recalc(); },50);
       async function save(){
-        const itemId=UI.$("#w_item").value, qty=+UI.$("#w_qty").value;
+        const itemId=UI.$("#w_item").value, qty=qtyKg();
+        if(qty==null){ toast("This product has no GSM — enter the quantity in kg",{type:"warn"}); return; }
         if(!qty||qty<=0){ toast("Enter a valid quantity",{type:"warn"}); return; }
         const payload={itemId, qty, line:UI.$("#w_line").value, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
         // which material was picked for each ranged BOM line — travels with the
@@ -366,22 +398,33 @@
         h("p",{class:"dim",style:"margin-bottom:12px",text:"Pick a finished product and a target production quantity to see the raw materials required (per the current BOM), with available stock and any shortfall."}),
         h("div",{class:"form-grid"},[
           U.field("Product (Finished Good)", U.searchSelect("bc_fg", withBom.map(f=>({v:f.id,l:f.id+" — "+f.name})), withBom[0].id, "Search product…"), "full"),
-          U.field("Quantity to produce (kg)", `<input class="input" id="bc_qty" type="number" step="0.1" min="0" value="100">`),
+          U.field("Quantity to produce", `<div class="flex" style="gap:6px"><input class="input" id="bc_qty" type="number" step="0.1" min="0" value="100" style="flex:1"><select class="select" id="bc_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="bc_conv" style="font-size:11px;margin-top:3px"></div>`),
         ]),
         h("div",{id:"bc_out",style:"margin-top:14px"})
       ]);
       const mo=modal({title:"🧮 BOM Calculator", sub:"Material requirement for a production run — uses the current BOM", wide:true, body,
         foot:[h("button",{class:"btn primary",onclick:()=>mo.close(),text:"Close"})]});
       function recalc(){
-        const id=UI.$("#bc_fg").value, qty=+UI.$("#bc_qty").value||0;
+        const id=UI.$("#bc_fg").value, raw=+UI.$("#bc_qty").value||0, unit=UI.$("#bc_unit").value;
         const bom=ENG.data.boms[id], out=UI.$("#bc_out"); if(!out) return; out.innerHTML="";
         if(!bom){ out.appendChild(h("div",{class:"muted",text:"No BOM for this product."})); return; }
         const fg=ENG.item(id)||{name:id};
+        // the engine works in kg; a sqm entry converts through the FG's GSM
+        const gsm=BOMCALC.metaFromItem(fg).fgGsm;
+        const conv=UI.$("#bc_conv");
+        if(unit==="SQM" && !gsm){
+          if(conv){ conv.textContent="This product has no GSM — cannot convert sqm to kg. Enter the quantity in kg."; conv.style.color="var(--danger)"; }
+          out.appendChild(h("div",{class:"muted",text:"Pick kg, or set the product's GSM to calculate from sqm."})); return;
+        }
+        if(conv){ conv.style.color="";
+          conv.textContent = !gsm ? "" : unit==="SQM" ? ("= "+ENG.num(raw*gsm/1000,1)+" kg · FG "+gsm+" g/m²")
+                                                      : ("= "+ENG.num(raw*1000/gsm,0)+" sqm · FG "+gsm+" g/m²"); }
+        const qty = unit==="SQM" ? raw*gsm/1000 : raw;
         const rows=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg)).map(([rid,per])=>{ const need=per*qty/bom.yield; const st=ENG.stock(rid)||{}; const have=st.onHand||0;
           const r=ENG.item(rid)||{}; return {rid, name:r.name||rid, uom:r.uom||"", per, need, have, short:Math.max(0,need-have), avgCost:st.avgCost||r.cost||0}; });
         const totCost=rows.reduce((s,x)=>s+x.need*x.avgCost,0);
         out.appendChild(h("div",{class:"flex between aic wrap",style:"margin-bottom:10px;gap:8px"},[
-          h("div",{style:"font-weight:700",text:fg.name+" · "+ENG.num(qty,1)+" kg @ "+Math.round(bom.yield*100)+"% yield"}),
+          h("div",{style:"font-weight:700",text:fg.name+" · "+(unit==="SQM"? ENG.num(raw,0)+" sqm ("+ENG.num(qty,1)+" kg)" : ENG.num(qty,1)+" kg")+" @ "+Math.round(bom.yield*100)+"% yield"}),
           h("span",{class:"chip",text:rows.length+" materials · est. ₹"+ENG.num(totCost,0)})
         ]));
         out.appendChild(table(rows,[
@@ -392,7 +435,7 @@
           {key:"short",label:"Shortfall",num:true,render:r=> r.short>0? badge("danger",ENG.num(r.short,2)+" "+r.uom): badge("ok","OK"),sort:r=>r.short},
         ],{empty:"No components"}));
       }
-      setTimeout(()=>{ const s=UI.$("#bc_fg"); if(s) s.addEventListener("change",recalc); const q=UI.$("#bc_qty"); if(q) q.addEventListener("input",recalc); recalc(); },50);
+      setTimeout(()=>{ const s=UI.$("#bc_fg"); if(s) s.addEventListener("change",recalc); const q=UI.$("#bc_qty"); if(q) q.addEventListener("input",recalc); const u=UI.$("#bc_unit"); if(u) u.addEventListener("change",recalc); recalc(); },50);
     }
 
     function productCard(fg){
