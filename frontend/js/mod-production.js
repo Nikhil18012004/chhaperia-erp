@@ -445,19 +445,107 @@
           h("span",{class:"muted",style:"font-size:12px",text:"Gross Margin"}),
           h("span",{html:badge(margin>30?"ok":margin>15?"warn":"danger",margin.toFixed(1)+"%")})
         ]),
-        bom?(()=>{ const R=BOMCALC.normalize(bom.lines); return h("details",{},[
-          h("summary",{style:"cursor:pointer;font-size:12.5px;font-weight:700;color:var(--accent)",text:`Recipe · ${R.length} components · ${(bom.yield*100).toFixed(0)}% yield`}),
-          h("div",{style:"margin-top:10px"}, R.map(l=>{ const r=l.id?ENG.item(l.id):null;
-            const label=(r&&r.name)||l.rm||l.id||"—";
-            return h("div",{class:"flex between",style:"font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)"},[
-              h("span",{text:label+(l.ranged?"  ⟡":"")}),
-              h("span",{class:"mono muted",text:ENG.num(l.qty,3)+" "+(l.unit||(r||{}).uom||"")+(l.pickupPct!=null?"  ·  "+l.pickupPct+"%":"")})
-            ]); }))
-        ]); })():h("div",{class:"muted",style:"font-size:12px",text:"No BOM defined"}),
+        bom?h("div",{style:"cursor:pointer;font-size:12.5px;font-weight:700;color:var(--accent)",
+          title:"View the full BOM — components, pickup %, consumptions and batch totals",
+          onclick:()=>bomView(fg.id),
+          text:`Recipe · ${BOMCALC.normalize(bom.lines).length} components · ${(bom.yield*100).toFixed(0)}% yield  ›`})
+        :h("div",{class:"muted",style:"font-size:12px",text:"No BOM defined"}),
         h("div",{class:"flex",style:"justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"},[
           h("button",{class:"btn sm ghost",title:bom?"Edit this BOM":"Add a BOM",onclick:()=>bomForm(fg.id),html:bom?"✎ Edit BOM":"＋ Add BOM"})
         ])
       ]);
+    }
+
+    /* ----- read-only BOM details ------------------------------------------
+       Everything Edit BOM derives, without the inputs: per-component qty,
+       GSM, pickup %, consumption per kg / per sqm, and the batch totals —
+       switchable between alternate approved recipes. */
+    function bomView(fgId){
+      const fg=ENG.item(fgId)||{id:fgId,name:fgId};
+      const bom=ENG.data.boms[fgId];
+      if(!bom){ toast("No BOM for this product",{type:"warn"}); return; }
+      const meta=BOMCALC.metaFromItem(fg);
+      const n=(v,d)=> v==null||isNaN(v) ? "—" : ENG.num(v,d);
+      let altIdx=0;
+      const basisHost=h("div",{class:"muted",style:"font-size:12px;margin-bottom:10px"});
+      const altHost=h("div",{style:"margin-bottom:10px"});
+      const tblHost=h("div",{style:"overflow-x:auto"});
+      const totHost=h("div",{style:"margin-top:14px"});
+      const body=h("div",{},[basisHost,altHost,
+        h("h3",{style:"margin:4px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
+        tblHost,totHost]);
+      const mo=modal({title:"BOM · "+fgId, sub:fg.name, wide:true, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
+          App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
+
+      function draw(){
+        const src=(bom.alternates && bom.alternates[altIdx])||bom;
+        const c=BOMCALC.compute({lines:BOMCALC.normalize(src.lines)}, meta);
+
+        basisHost.textContent=`Batch ${meta.batchWidthMM} mm × ${meta.batchLengthM} m = ${n(c.batchSqm,0)} sqm`
+          +(c.fgGsm!=null?` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch`:" · FG GSM not set")
+          +` · yield ${(bom.yield*100).toFixed(0)}%`;
+
+        altHost.innerHTML="";
+        if(bom.alternates && bom.alternates.length>1){
+          altHost.appendChild(h("div",{class:"flex aic gap wrap"},[
+            h("span",{class:"muted",style:"font-size:12px;font-weight:700",text:"Approved recipe:"}),
+            ...bom.alternates.map((a,i)=>h("button",{
+              class:"btn sm"+(i===altIdx?" primary":" ghost"),
+              onclick:()=>{ altIdx=i; draw(); },
+              text:a.label||("Variant "+(i+1))
+            }))
+          ]));
+        }
+
+        tblHost.innerHTML="";
+        const tbl=h("table",{class:"tbl",style:"width:100%;min-width:760px"});
+        tbl.appendChild(h("thead",{},[h("tr",{},
+          ["Raw material","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm"].map((t,i)=>
+            h("th",{style:"font-size:11px;"+(i>=1?"text-align:right":""),text:t})))]));
+        const tb=h("tbody");
+        c.lines.forEach(cl=>{
+          const r=cl.id?ENG.item(cl.id):null;
+          const label=(r&&r.name)||cl.rm||cl.id||"—";
+          const sub=cl.id||[cl.rm,cl.rmType].filter(Boolean).join(" · ");
+          tb.appendChild(h("tr",{},[
+            h("td",{style:"min-width:220px"},[
+              h("div",{class:"flex aic",style:"gap:6px"},[
+                h("span",{style:"font-weight:600",text:label}),
+                cl.ranged?h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged"}):null
+              ]),
+              sub?h("div",{class:"muted mono",style:"font-size:10.5px",text:sub}):null
+            ]),
+            h("td",{class:"mono",style:"text-align:right",text:n(cl.qty,3)}),
+            h("td",{style:"text-align:right",text:cl.unit||"—"}),
+            h("td",{class:"mono",style:"text-align:right",text:cl.rmGsm!=null?cl.rmGsm:"—"}),
+            h("td",{class:"mono",style:"text-align:right",text:cl.fabric?"substrate":(cl.pickupPct!=null?cl.pickupPct+"%":"—")}),
+            h("td",{class:"mono",style:"text-align:right",text:cl.consumptionPerKg==null?"—":n(cl.consumptionPerKg,3)}),
+            h("td",{class:"mono",style:"text-align:right",text:cl.consumptionPerSqm==null?"—":n(cl.consumptionPerSqm,4)})
+          ]));
+        });
+        tbl.appendChild(tb);
+        tblHost.appendChild(tbl);
+
+        totHost.innerHTML="";
+        const row=(label,val,strong)=>h("div",{class:"flex between",
+          style:"padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px"+(strong?";font-weight:800":"")},[
+          h("span",{class:strong?"":"muted",text:label}), h("span",{class:"mono",text:val})]);
+        const box=h("div",{class:"card",style:"background:var(--panel-2);box-shadow:none;padding:12px"});
+        box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"Batch totals"}));
+        box.appendChild(row("Total qty used (batch, mass basis)", n(c.totalQtyKg,2)+" kg"));
+        box.appendChild(row("Total pickup qty", c.totalPickupQty==null?"— set pickup %":n(c.totalPickupQty,2)+" kg"));
+        box.appendChild(row("Total pickup — per kg of FG", c.totalPickupPerKg==null?"—":n(c.totalPickupPerKg,4)));
+        box.appendChild(row("Total pickup — per sqm", c.totalPickupPerSqm==null?"—":n(c.totalPickupPerSqm,4)+" kg/sqm"));
+        box.appendChild(row(`Fabric GSM${c.fabricCount?" ("+c.fabricCount+" layer"+(c.fabricCount>1?"s":"")+")":""}`,
+          c.fabricGsm==null?"—":n(c.fabricGsm,1)+" g/m²"));
+        box.appendChild(row("Pickup GSM  (FG − fabric)", c.pickupGsm==null?"—":n(c.pickupGsm,1)+" g/m²"));
+        box.appendChild(row("TOTAL PRODUCTION", c.totalProductionSqm==null?"—":n(c.totalProductionSqm,0)+" sqm", true));
+        let cost=0; BOMCALC.toLegacy({lines:src.lines},meta).forEach(([rid,per])=>{ cost+=per*(ENG.stock(rid).avgCost||0)/bom.yield; });
+        box.appendChild(row("Est. material cost — per kg of FG","₹"+n(cost,2)));
+        totHost.appendChild(box);
+      }
+      draw();
     }
 
     /* ----- create / edit / delete a product's BOM -------------------------
