@@ -385,9 +385,7 @@
         h("span",{class:"muted",style:"font-size:12.5px",text:"· "+g.sub}),
         h("span",{class:"chip",style:"margin-left:auto",text:list.length+" products"})
       ]));
-      const grid=h("div",{class:"grid cols-2"});
-      list.forEach(fg=> grid.appendChild(productCard(fg)));
-      root.appendChild(grid);
+      root.appendChild(productTable(list));
     });
     if(params&&params.openNew){ params.openNew=false; bomForm(); }
 
@@ -439,39 +437,33 @@
       setTimeout(()=>{ const s=UI.$("#bc_fg"); if(s) s.addEventListener("change",recalc); const q=UI.$("#bc_qty"); if(q) q.addEventListener("input",recalc); const u=UI.$("#bc_unit"); if(u) u.addEventListener("change",recalc); recalc(); },50);
     }
 
-    function productCard(fg){
-      const bom=ENG.data.boms[fg.id];
-      let matCost=0; if(bom) BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg)).forEach(([rid,per])=>{ matCost+=per*ENG.stock(rid).avgCost/bom.yield; });
-      const margin = fg.price? ((fg.price-fg.cost)/fg.price*100):0;
-      const specChips=[];
-      if(fg.typeCode) specChips.push(`<span class="chip"><b>${esc(fg.typeCode)}</b></span>`);
-      if(fg.flameC) specChips.push(`<span class="chip" style="color:var(--danger)">🔥 ${fg.flameC}°C</span>`);
-      if(fg.widthMM && fg.widthMM[0]) specChips.push(`<span class="chip">↔ ${fg.widthMM.join("/")} mm</span>`);
-      return h("div",{class:"card hover"},[
-        h("div",{class:"flex between aic"},[
-          h("div",{},[h("h3",{style:"font-size:15px",text:fg.name}),h("div",{class:"muted",style:"font-size:11.5px",text:fg.id+" · HSN "+(fg.hsn||"—")})]),
-          h("div",{class:"kpi-ic",text:"🎞️"})
-        ]),
-        specChips.length?h("div",{class:"flex gap wrap",style:"margin-top:10px",html:specChips.join("")}):null,
-        fg.std?h("div",{class:"muted",style:"font-size:11px;margin-top:8px",text:"Standard: "+fg.std}):null,
-        h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
-          stat("Material Cost","₹"+ENG.num(matCost,0)),
-          stat("Std Cost","₹"+ENG.num(fg.cost,0)),
-          stat("Price","₹"+ENG.num(fg.price,0)),
-        ]),
-        h("div",{class:"flex between aic",style:"margin-bottom:10px"},[
-          h("span",{class:"muted",style:"font-size:12px",text:"Gross Margin"}),
-          h("span",{html:badge(margin>30?"ok":margin>15?"warn":"danger",margin.toFixed(1)+"%")})
-        ]),
-        bom?h("div",{style:"cursor:pointer;font-size:12.5px;font-weight:700;color:var(--accent)",
-          title:"View the full BOM — components, pickup %, consumptions and batch totals",
-          onclick:()=>bomView(fg.id),
-          text:`Recipe · ${BOMCALC.normalize(bom.lines).length} components · ${(bom.yield*100).toFixed(0)}% yield  ›`})
-        :h("div",{class:"muted",style:"font-size:12px",text:"No BOM defined"}),
-        h("div",{class:"flex",style:"justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"},[
-          h("button",{class:"btn sm ghost",title:bom?"Edit this BOM":"Add a BOM",onclick:()=>bomForm(fg.id),html:bom?"✎ Edit BOM":"＋ Add BOM"})
-        ])
-      ]);
+    /* ----- Table View (clean & structured) --------------------------------
+       One sortable row per product: cost roll-up, margin, yield and the BOM
+       at a glance. Clicking a row opens the full BOM details; the pencil
+       edits (or adds) the recipe. */
+    function matCostOf(fg){
+      const bom=ENG.data.boms[fg.id]; let c=0;
+      if(bom) BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg)).forEach(([rid,per])=>{ c+=per*ENG.stock(rid).avgCost/bom.yield; });
+      return c;
+    }
+    function marginOf(fg){ return fg.price? ((fg.price-fg.cost)/fg.price*100):0; }
+    function productTable(list){
+      return table(list,[
+        {key:"product",label:"Product",render:fg=>`<div class="cell-main">${esc(fg.name)}</div><div class="cell-sub">${fg.id}${fg.hsn?" · HSN "+esc(fg.hsn):""}</div>`,sort:fg=>fg.name},
+        {key:"code",label:"Code",render:fg=>fg.typeCode?`<span class="chip"><b>${esc(fg.typeCode)}</b></span>`:'<span class="muted">—</span>',sort:fg=>fg.typeCode||""},
+        {key:"mat",label:"Material Cost",num:true,render:fg=>"₹"+ENG.num(matCostOf(fg),0),sort:matCostOf},
+        {key:"cost",label:"Std Cost",num:true,render:fg=>"₹"+ENG.num(fg.cost,0),sort:fg=>fg.cost},
+        {key:"price",label:"Price",num:true,render:fg=>"₹"+ENG.num(fg.price,0),sort:fg=>fg.price},
+        {key:"margin",label:"Gross Margin",num:true,render:fg=>{const m=marginOf(fg);return badge(m>30?"ok":m>15?"warn":"danger",m.toFixed(1)+"%");},sort:marginOf},
+        {key:"yield",label:"Yield",num:true,render:fg=>{const b=ENG.data.boms[fg.id];
+          return b?`<span style="color:var(--ok);font-weight:700">${(b.yield*100).toFixed(0)}%</span>`:'<span class="muted">—</span>';},
+          sort:fg=>(ENG.data.boms[fg.id]||{}).yield||0},
+        {key:"bom",label:"BOM",render:fg=>{const b=ENG.data.boms[fg.id];
+          return b?`<span style="color:var(--accent);font-weight:600;font-size:12px">${BOMCALC.normalize(b.lines).length} components ›</span>`:'<span class="muted">No BOM</span>';},noSort:true},
+        {key:"act",label:"",noSort:true,render:fg=>{const b=ENG.data.boms[fg.id];
+          return h("button",{class:"btn sm ghost",title:b?"Edit this BOM":"Add a BOM",onclick:()=>bomForm(fg.id),html:b?"✎":"＋"});}},
+      ],{empty:"No products in this series",
+         onRow:fg=>{ if(ENG.data.boms[fg.id]) bomView(fg.id); else bomForm(fg.id); }});
     }
 
     /* ----- read-only BOM details ------------------------------------------
@@ -842,7 +834,6 @@
     }
   }};
 
-  function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
 
   // register ⌘K quick actions for Production & BOM
   window.ERPActions = Object.assign(window.ERPActions||{}, {
