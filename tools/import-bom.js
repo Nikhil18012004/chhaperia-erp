@@ -130,12 +130,18 @@ function parseProducts(rows) {
 }
 
 /* The sheet spells a few materials inconsistently ("CLOFT913" vs "CLOFT 913",
-   bare "BONDEX" vs "BONDEX 8060", "TC" vs "T C"). Canonicalise at ingestion so
-   one physical material never becomes two catalogue items. */
+   bare "BONDEX" vs "BONDEX 8060", "TC" vs "T C", "KUSUMGHAR"/"KUSUMGARH" vs
+   "KHUSUMGHAR", "FIRBER GLOSS" vs "FIBER GLASS", "180 N" vs "180N").
+   Canonicalise at ingestion so one physical material never becomes two
+   catalogue items. */
 function canonRm(l) {
   if (/^T\.?\s*C\.?$/i.test(l.rm)) l.rm = "T C";
   if (/^BONDEX$/i.test(l.rm) && BOM.isBlank(l.rmType)) l.rmType = "8060";
-  l.rmType = String(l.rmType || "").replace(/CLOFT\s*(\d{3})/gi, "CLOFT $1");
+  l.rm = String(l.rm || "").replace(/^FIR?BER\s+(GLOSS|GLASS)\s+CLOTH$/i, "FIBER GLASS CLOTH");
+  l.rmType = String(l.rmType || "")
+    .replace(/CLOFT\s*(\d{3})/gi, "CLOFT $1")
+    .replace(/KH?USUMG(?:ARH|AHR|HAR)/gi, "KHUSUMGHAR");
+  if (/^SAP$/i.test(l.rm)) l.rmType = l.rmType.replace(/^180\s*N$/i, "180N");
   return l;
 }
 
