@@ -376,16 +376,34 @@
       ...PREFERRED.filter(k=>present.includes(k)),
       ...present.filter(k=>!PREFERRED.includes(k)).sort(),
     ].map(k=>Object.assign({key:k, label:k==="—"?"Ungrouped":k, sub:""}, GROUP_META[k]));
-    groups.forEach(g=>{
-      const list=fgs.filter(f=>(f.group||"—")===g.key);
-      if(!list.length) return;
-      root.appendChild(h("div",{class:"flex aic gap",style:"margin:20px 0 12px"},[
-        h("h2",{style:"font-size:17px;font-weight:800",text:g.label}),
-        h("span",{class:"muted",style:"font-size:12.5px",text:"· "+g.sub}),
-        h("span",{class:"chip",style:"margin-left:auto",text:list.length+" products"})
-      ]));
-      root.appendChild(productTable(list));
-    });
+
+    /* search across every series — no scrolling needed to find a product */
+    let bomQ="";
+    root.appendChild(h("div",{class:"toolbar"},[
+      MW.searchInput("Search products by name, code, series or thickness…", v=>{bomQ=v.toLowerCase().trim(); drawGroups();}),
+      h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"bomCount"}))
+    ]));
+    const groupHost=h("div");
+    root.appendChild(groupHost);
+    function drawGroups(){
+      groupHost.innerHTML="";
+      const match=fgs.filter(f=>!bomQ ||
+        (f.name+" "+f.id+" "+(f.group||"")+" "+(f.typeCode||"")+" "+(f.hsn||"")).toLowerCase().includes(bomQ));
+      const cnt=UI.$("#bomCount"); if(cnt) cnt.textContent=match.length+" of "+fgs.length+" products";
+      groups.forEach(g=>{
+        const list=match.filter(f=>(f.group||"—")===g.key);
+        if(!list.length) return;
+        groupHost.appendChild(h("div",{class:"flex aic gap",style:"margin:20px 0 12px"},[
+          h("h2",{style:"font-size:17px;font-weight:800",text:g.label}),
+          h("span",{class:"muted",style:"font-size:12.5px",text:"· "+g.sub}),
+          h("span",{class:"chip",style:"margin-left:auto",text:list.length+" products"})
+        ]));
+        groupHost.appendChild(productTable(list));
+      });
+      if(!match.length) groupHost.appendChild(h("div",{class:"empty"},[
+        h("div",{class:"big",text:"∅"}),h("div",{text:"No products match “"+bomQ+"”"})]));
+    }
+    drawGroups();
     if(params&&params.openNew){ params.openNew=false; bomForm(); }
 
     /* ----- BOM Calculator: material requirement for a production run ----- */

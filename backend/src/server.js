@@ -26,6 +26,12 @@ app.use(express.json({ limit: "25mb" }));
 
 // Auth (login, me, user management)
 app.use("/api/auth", authRoutes);
+// Cross-verified INR exchange rates (multi-source; no business data — public)
+app.get("/api/fx", (req, res, next) => {
+  require("./services/fxService").getRates()
+    .then((payload) => { res.set("Cache-Control", "no-store"); res.json(payload); })
+    .catch(next);
+});
 // Human Resources (workers, attendance, leave, payroll + device punch ingest)
 app.use("/api/hr", hrRoutes);
 // API (protected, role-scoped)

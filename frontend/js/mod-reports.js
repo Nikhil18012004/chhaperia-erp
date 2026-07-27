@@ -27,9 +27,9 @@
         h("div",{class:"kpi-ic",style:`background:color-mix(in srgb, var(${r.accent}) 16%, transparent);color:var(${r.accent})`,text:r.ic}),
         h("h3",{style:"font-size:14.5px;margin-top:12px",text:r.name}),
         h("div",{class:"muted",style:"font-size:12px;margin-top:4px;line-height:1.5",text:r.desc}),
-        h("div",{class:"flex gap",style:"margin-top:14px"},[
+        h("div",{class:"flex gap",style:"margin-top:14px",onclick:e=>e.stopPropagation()},[
           h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();r.fn();},html:"👁 Preview"}),
-          h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn(true);},html:"⬇ CSV"})
+          MW.csvMenu(()=>r.fn(true),{small:true,primary:true})
         ])
       ]));
     });
@@ -134,16 +134,32 @@
     root.appendChild(h("div",{class:"card",style:"margin-top:16px"},[
       h("div",{class:"card-head"},h("h3",{text:"📑 CSV Import / Export"})),
       h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",text:"Export any table to a spreadsheet-friendly CSV, edit it, and import it back. Imports show a preview (new / updated) before anything is saved — nothing is deleted. Imported work orders are automatically routed through Coating → Slitting → Packing."}),
-      h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Export a table"}),
-      h("div",{class:"flex gap wrap",style:"margin-bottom:16px"}, Object.keys(CSVIO.ENTITIES).map(k=>
-        h("button",{class:"btn sm",onclick:()=>{ const n=CSVIO.exportEntity(k); toast(CSVIO.ENTITIES[k].label+" exported ("+n+" rows)",{type:"ok",title:"Download started"}); },html:"⬇ "+CSVIO.ENTITIES[k].label}))),
-      h("div",{style:"border-top:1px solid var(--line);padding-top:14px"},[
-        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Import a CSV"}),
-        h("button",{class:"btn primary",onclick:csvImport,html:"⬆ Import CSV…"}),
-      ])
+      h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Tables — click a button for Import / Export"}),
+      h("div",{class:"flex gap wrap"}, Object.keys(CSVIO.ENTITIES).map(k=>
+        MW.csvMenu(()=>{ const n=CSVIO.exportEntity(k); toast(CSVIO.ENTITIES[k].label+" exported ("+n+" rows)",{type:"ok",title:"Download started"}); },
+          {small:true, label:CSVIO.ENTITIES[k].label})))
     ]));
 
-    function csvImport(){
+    function refreshSeg(e){ [...e.target.parentElement.children].forEach(c=>c.classList.remove("on")); e.target.classList.add("on"); }
+    function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#2f7fe0",teal:"#0fb5ae",violet:"#7c5cff",green:"#16a34a",pink:"#ec4899",amber:"#e0a000"}; return map[a]; }
+    function backup(){ const blob=new Blob([JSON.stringify(ENG.data,null,2)],{type:"application/json"});
+      const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="chhaperia_erp_backup_"+DB.helpers.iso(DB.helpers.today())+".json"; a.click();
+      toast("Backup exported",{type:"ok"}); }
+    function restore(){ const inp=h("input",{type:"file",accept:".json",style:"display:none"});
+      inp.onchange=e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
+        r.onload=async ()=>{ try{ const d=JSON.parse(r.result); if(!d.items||!d.movements) throw 0;
+          await DB.save(d); toast("Backup restored — reloading",{type:"ok"}); setTimeout(()=>location.reload(),800);
+        }catch(_){ toast("Invalid backup file",{type:"danger"}); } };
+        r.readAsText(f); };
+      document.body.appendChild(inp); inp.click(); inp.remove(); }
+    async function reset(){ if(await confirm("Reset all data to the seeded demo dataset? Your current changes will be lost.",{title:"Reset Data",danger:true})){
+      toast("Resetting…",{type:"info"});
+      try{ await DB.reset(); setTimeout(()=>location.reload(),500); }
+      catch(e){ toast("Reset failed: "+e.message,{type:"danger"}); } } }
+  }};
+
+  /* ============== SHARED CSV IMPORT (any page's CSV ▾ menu) ============== */
+  function csvImport(){
       const inp=h("input",{type:"file",accept:".csv,text/csv",style:"display:none"});
       inp.onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
         r.onload=()=>{ try{
@@ -155,12 +171,12 @@
           }catch(err){ toast("Import failed: "+err.message,{type:"danger"}); } };
         r.readAsText(f); };
       document.body.appendChild(inp); inp.click(); inp.remove();
-    }
+  }
 
-    function statPill(txt,col){ return h("span",{style:`padding:6px 12px;border-radius:999px;border:1.5px solid ${col};color:${col};font-weight:700;font-size:13px`,text:txt}); }
-    function previewVal(o,col){ const v=o[col.k]; if(Array.isArray(v)) return v.join("|"); if(v&&typeof v==="object") return JSON.stringify(v); return v==null?"":v; }
+  function statPill(txt,col){ return h("span",{style:`padding:6px 12px;border-radius:999px;border:1.5px solid ${col};color:${col};font-weight:700;font-size:13px`,text:txt}); }
+  function previewVal(o,col){ const v=o[col.k]; if(Array.isArray(v)) return v.join("|"); if(v&&typeof v==="object") return JSON.stringify(v); return v==null?"":v; }
 
-    function showImportPreview(key, parsed){
+  function showImportPreview(key, parsed){
       let curKey=key;
       const host=h("div");
       const mo=modal({title:"Import CSV", sub:"Review changes before saving", wide:true, body:host,
@@ -200,28 +216,12 @@
             try{ CSVIO.apply(diff); await DB.save(ENG.data);
               const fresh=await DB.loadAsync(); ENG.init(fresh); App.buildNav(); App.refreshAlerts();
               mo.close(); toast(CSVIO.ENTITIES[curKey].label+" imported — "+total+" rows saved",{type:"ok",title:"Import complete"});
-              App.go("settings");
+              App.refreshView();
             }catch(err){ toast("Save failed: "+err.message,{type:"danger"}); applyBtn.disabled=false; applyBtn.textContent="Apply Import"; } };
         }
       }
       render();
-    }
+  }
 
-    function refreshSeg(e){ [...e.target.parentElement.children].forEach(c=>c.classList.remove("on")); e.target.classList.add("on"); }
-    function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#2f7fe0",teal:"#0fb5ae",violet:"#7c5cff",green:"#16a34a",pink:"#ec4899",amber:"#e0a000"}; return map[a]; }
-    function backup(){ const blob=new Blob([JSON.stringify(ENG.data,null,2)],{type:"application/json"});
-      const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="chhaperia_erp_backup_"+DB.helpers.iso(DB.helpers.today())+".json"; a.click();
-      toast("Backup exported",{type:"ok"}); }
-    function restore(){ const inp=h("input",{type:"file",accept:".json",style:"display:none"});
-      inp.onchange=e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-        r.onload=async ()=>{ try{ const d=JSON.parse(r.result); if(!d.items||!d.movements) throw 0;
-          await DB.save(d); toast("Backup restored — reloading",{type:"ok"}); setTimeout(()=>location.reload(),800);
-        }catch(_){ toast("Invalid backup file",{type:"danger"}); } };
-        r.readAsText(f); };
-      document.body.appendChild(inp); inp.click(); inp.remove(); }
-    async function reset(){ if(await confirm("Reset all data to the seeded demo dataset? Your current changes will be lost.",{title:"Reset Data",danger:true})){
-      toast("Resetting…",{type:"info"});
-      try{ await DB.reset(); setTimeout(()=>location.reload(),500); }
-      catch(e){ toast("Reset failed: "+e.message,{type:"danger"}); } } }
-  }};
+  window.CSVImportUI = { open: csvImport };
 })();

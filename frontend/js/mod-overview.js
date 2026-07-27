@@ -37,22 +37,42 @@
 
     /* main charts row */
     const row1=h("div",{class:"grid cols-12",style:"margin-bottom:16px"});
-    const flow=chartCard("Production · Sales · Receipts","Last 30 days (kg)",[
-      legendDot("var(--c1)","Produced"), legendDot("var(--c3)","Sold"), legendDot("var(--c2)","Received")
+    const flowLegend=()=>h("div",{class:"chart-legend-row"},[
+      legendDot("var(--c1)","Production"), legendDot("var(--c3)","Sales"), legendDot("var(--c2)","Receipts")
+    ]);
+    const flowSeries=()=>[
+      {name:"Production", data:ser.prod, color:cssv("--c1")},
+      {name:"Sales", data:ser.sold, color:cssv("--c3")},
+      {name:"Receipts", data:ser.recv, color:cssv("--c2")},
+    ];
+    const flow=chartCard("Movements","Last 30 days (kg)",[
+      h("button",{class:"btn sm ghost",title:"Expand chart",onclick:expandFlow,text:"⤢"})
     ],260);
-    flow.classList.add("span-8");
+    flow.insertBefore(flowLegend(), flow._canvas.parentElement);
+    flow.classList.add("span-4");
     row1.appendChild(flow);
+
+    function expandFlow(){
+      const cv=h("canvas",{"data-h":400});
+      const body=h("div",{},[
+        h("div",{style:"margin-bottom:12px"},flowLegend()),
+        h("div",{class:"chart-box"},cv)
+      ]);
+      const mo=UI.modal({title:"Movements", sub:"Production · Sales · Receipts — last 30 days (kg)", body, wide:true,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
+      requestAnimationFrame(()=>Charts.line(cv,{labels:ser.labels, series:flowSeries()}));
+    }
+
+    const fx=fxCard();
+    fx.classList.add("span-4");
+    row1.appendChild(fx);
 
     const catData=ENG.stockByCategory();
     const dn=donutCard("Stock Value by Category", catData, ENG.money(catData.reduce((s,d)=>s+d.value,0)), "total");
     dn.classList.add("span-4");
     row1.appendChild(dn);
     root.appendChild(row1);
-    requestAnimationFrame(()=>Charts.line(flow._canvas,{labels:ser.labels, series:[
-      {name:"Produced", data:ser.prod, color:cssv("--c1")},
-      {name:"Sold", data:ser.sold, color:cssv("--c3")},
-      {name:"Received", data:ser.recv, color:cssv("--c2")},
-    ]}));
+    requestAnimationFrame(()=>Charts.line(flow._canvas,{labels:ser.labels, series:flowSeries()}));
 
     /* row 2: top products + alerts + pending */
     const row2=h("div",{class:"grid cols-12"});
@@ -174,7 +194,7 @@
     const counts={A:0,B:0,C:0}; abc.forEach(r=>counts[r.class]++);
     const abcCard=h("div",{class:"card",style:"margin-top:16px"},[
       h("div",{class:"card-head"},[h("div",{},[h("h3",{text:"ABC Inventory Classification"}),
-        h("div",{class:"sub",text:"Pareto by annualised consumption value"})]),
+        h("div",{class:"sub",text:"Pareto by purchase + sales volume · re-ranks automatically as entries are recorded"})]),
         h("div",{class:"flex gap"},[
           h("span",{class:"chip",html:`<span class="d" style="background:var(--danger)"></span>A · ${counts.A}`}),
           h("span",{class:"chip",html:`<span class="d" style="background:var(--warn)"></span>B · ${counts.B}`}),
@@ -184,6 +204,7 @@
       abcTableWrap(table(abc, [
         {key:"name", label:"Item", render:r=>`<div class="cell-main">${esc(trim(r.it.name,40))}</div><div class="cell-sub">${r.it.id}</div>`, sort:r=>r.it.name},
         {key:"class", label:"Class", render:r=>badge(r.class==="A"?"danger":r.class==="B"?"warn":"ok", "Class "+r.class), sort:r=>r.class},
+        {key:"vol90", label:"90d Volume", num:true, render:r=>ENG.num(r.vol90,1)+" "+(r.it.uom||""), sort:r=>r.vol90},
         {key:"annualVal", label:"Annual Value", num:true, render:r=>ENG.money(r.annualVal), sort:r=>r.annualVal},
         {key:"onHandVal", label:"On-hand Value", num:true, render:r=>ENG.money(r.onHandVal), sort:r=>r.onHandVal},
         {key:"cumPct", label:"Cumulative %", num:true, render:r=>r.cumPct.toFixed(1)+"%", sort:r=>r.cumPct},
@@ -213,7 +234,8 @@
           ["Item Code", it.id],
           ["Category", catLabel(it.cat)],
           ["Classification", clsName],
-          ["Annual Consumption Value", ENG.money(r.annualVal)],
+          ["90d Purchase + Sales Volume", ENG.num(r.vol90,1)+" "+(it.uom||"")],
+          ["Annualised Activity Value", ENG.money(r.annualVal)],
           ["On-hand Value", ENG.money(r.onHandVal)],
           ["On-hand Qty", ENG.num(st.onHand,2)+" "+(it.uom||"")],
           ["Cumulative %", r.cumPct.toFixed(1)+"%"],
@@ -237,6 +259,111 @@
         {name:"Forecast",data:fc.projected,color:cssv("--violet")}],fmt:v=>ENG.num(v,1)}));
     }
   }};
+
+  /* ----- live currency exchange (INR base) ----- */
+  const FX_LIST=[
+    {code:"USD", name:"US Dollar",      flag:"🇺🇸"},
+    {code:"EUR", name:"Euro",           flag:"🇪🇺"},
+    {code:"GBP", name:"British Pound",  flag:"🇬🇧"},
+    {code:"AED", name:"UAE Dirham",     flag:"🇦🇪"},
+    {code:"CNY", name:"Chinese Yuan",   flag:"🇨🇳"},
+    {code:"JPY", name:"Japanese Yen",   flag:"🇯🇵"},
+  ];
+  const FX_POLL_MS=60000;
+  // fxRates = ₹ per 1 unit of each currency, served by our backend which
+  // cross-verifies a LIVE market feed against 3 independent daily sources
+  let fxRates=null, fxPrev=null, fxFetchedAt=0, fxInfo="";
+
+  function fxCard(){
+    const stamp=h("div",{class:"sub",text:"Fetching live rates…"});
+    const list=h("div",{class:"fx-list"});
+
+    /* converter — box 1: amount + from-currency; box 2: result, INR by default */
+    const amt=h("input",{class:"input fx-amt",type:"number",value:"1",min:"0",step:"any","aria-label":"Amount"});
+    const selFrom=h("select",{class:"select fx-sel","aria-label":"From currency"});
+    const selTo=h("select",{class:"select fx-sel","aria-label":"To currency"});
+    const out=h("div",{class:"input fx-out",text:"—"});
+    const conv=h("div",{class:"fx-conv"},[
+      h("div",{class:"fx-conv-row"},[amt, selFrom]),
+      h("button",{class:"btn sm ghost fx-swap",title:"Swap currencies",onclick:()=>{
+        const a=selFrom.value; selFrom.value=selTo.value; selTo.value=a; convert();
+      },text:"⇅"}),
+      h("div",{class:"fx-conv-row"},[out, selTo]),
+    ]);
+    amt.oninput=convert; selFrom.onchange=convert; selTo.onchange=convert;
+
+    function fillSelects(){
+      if(selFrom.options.length) return;               // populate once
+      Object.keys(fxRates).sort().forEach(c=>{
+        selFrom.appendChild(h("option",{value:c,text:c}));
+        selTo.appendChild(h("option",{value:c,text:c}));
+      });
+      selFrom.value="USD"; selTo.value="INR";
+    }
+    function convert(){
+      if(!fxRates){ out.textContent="—"; return; }
+      const v=parseFloat(amt.value);
+      const rf=fxRates[selFrom.value], rt=fxRates[selTo.value];   // ₹ per unit
+      if(!isFinite(v)||!rf||!rt){ out.textContent="—"; return; }
+      const res=v*rf/rt;
+      out.textContent=res.toLocaleString("en-IN",{maximumFractionDigits:res<1?6:2})+" "+selTo.value;
+      out.title=`1 ${selFrom.value} = ${(rf/rt).toLocaleString("en-IN",{maximumFractionDigits:6})} ${selTo.value}`;
+    }
+
+    const card=h("div",{class:"card"},[
+      h("div",{class:"card-head"},[h("div",{},[h("h3",{text:"Currency Exchange"}), stamp])]),
+      conv,
+      h("div",{class:"fx-divider"}),
+      list
+    ]);
+
+    function paint(){
+      list.innerHTML="";
+      FX_LIST.forEach(c=>{
+        const perUnit=fxRates[c.code];                       // ₹ per 1 unit of foreign currency
+        if(!perUnit) return;
+        const prev=fxPrev? fxPrev[c.code] : null;
+        const dir=prev==null||Math.abs(perUnit-prev)<1e-6 ? 0 : (perUnit>prev?1:-1);
+        list.appendChild(h("div",{class:"fx-row"},[
+          h("span",{class:"fx-flag",text:c.flag}),
+          h("span",{class:"fx-code",text:c.code}),
+          h("span",{class:"fx-name",text:c.name}),
+          h("span",{class:"fx-val"},[
+            document.createTextNode("₹"+perUnit.toFixed(perUnit<1?4:2)),
+            h("span",{class:"fx-dir "+(dir>0?"up":dir<0?"down":"flat"),
+              text:dir>0?"▲":dir<0?"▼":"–"})
+          ])
+        ]));
+      });
+      stamp.textContent=fxInfo+" · updated "+
+        new Date(fxFetchedAt).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+      fillSelects(); convert();
+    }
+
+    async function load(force){
+      if(!force && fxRates && Date.now()-fxFetchedAt<FX_POLL_MS){ paint(); return; }
+      try{
+        const res=await fetch("/api/fx");
+        if(!res.ok) throw new Error("HTTP "+res.status);
+        const j=await res.json();
+        if(!j.rates||!j.rates.USD) throw new Error("bad response");
+        fxPrev=fxRates; fxRates=j.rates; fxFetchedAt=j.fetchedAt||Date.now();
+        fxInfo=(j.liveCount?"✓ live market rate ("+j.liveCount+" pairs)":"daily reference rate")+
+          " · verified vs "+(j.dailySources||[]).length+" sources"+(j.stale?" · STALE":"");
+        paint();
+      }catch(e){
+        if(fxRates){ paint(); stamp.textContent+=" · refresh failed, showing last rates"; }
+        else stamp.textContent="Live rates unavailable — retrying…";
+      }
+    }
+
+    load(false);
+    const t=setInterval(()=>{
+      if(!card.isConnected){ clearInterval(t); return; }
+      load(true);
+    }, FX_POLL_MS);
+    return card;
+  }
 
   /* helpers */
   function cssv(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }

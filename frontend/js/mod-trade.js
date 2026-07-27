@@ -48,7 +48,10 @@
         {key:"date",label:"Ordered",render:r=>r.date,sort:r=>r.date},
         {key:"eta",label:"ETA",render:r=>{const late=r.status!=="Received"&&r.eta<DB.helpers.iso(DB.helpers.today());return `<span style="color:${late?'var(--danger)':'inherit'}">${r.eta}${late?" ⏰":""}</span>`;},sort:r=>r.eta},
         {key:"status",label:"Status",render:r=>badge(r.status==="Received"?"ok":r.status==="Partially Received"?"warn":"info",r.status),sort:r=>r.status},
-        {key:"act",label:"",noSort:true,render:r=>r.status!=="Received"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();receivePO(r);},text:"Receive"}):h("span",{class:"muted",text:"✓"})},
+        {key:"act",label:"",noSort:true,render:r=>h("div",{class:"flex gap aic",style:"gap:6px;justify-content:flex-end"},[
+          printBtn("po",r),
+          r.status!=="Received"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();receivePO(r);},text:"Receive"}):h("span",{class:"muted",text:"✓"})
+        ])},
       ],{onRow:r=>poDetail(r),empty:"No purchase orders"}));
     }
     draw();
@@ -90,7 +93,8 @@
         ],{empty:"No lines"})
       ]);
       const anyRecd=po.lines.some(l=>(l.recd||0)>0);
-      const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"})];
+      const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
+        h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"})];
       if(!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
       if(po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
@@ -154,7 +158,22 @@
         h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add line"})
       ]);
       const mo=modal({title:editPo?("Edit "+editPo.id):"New Purchase Order", sub:editPo?"Update this purchase order":"Raise a PO to a supplier", wide:true, body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),h("button",{class:"btn primary",onclick:save,text:editPo?"Save Changes":"Create PO"})]});
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn",onclick:printDraft,html:PRINT_IC+" Print"}),
+          h("button",{class:"btn primary",onclick:save,text:editPo?"Save Changes":"Create PO"})]});
+      function collect(){ const out=[];
+        lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#pl_item_"+i); if(!iEl) return;
+          const id=iEl.value, qty=+UI.$("#pl_qty_"+i).value, rate=+UI.$("#pl_rate_"+i).value;
+          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).cost, recd:0}); });
+        return out; }
+      function printDraft(){
+        const out=collect();
+        if(!out.length){ toast("Add at least one line with qty to print",{type:"warn"}); return; }
+        printDoc("po",{ id:editPo?editPo.id:U.nextSeqId(ENG.data.purchaseorders,"PO-"),
+          date:DB.helpers.iso(DB.helpers.today()), supplierId:UI.$("#po_sup").value, lines:out,
+          status:editPo?editPo.status:"Draft — not saved", eta:UI.$("#po_eta").value,
+          value:out.reduce((s,l)=>s+l.qty*l.rate,0) });
+      }
       function addLine(seed){
         const rms=ENG.data.items.filter(i=>i.cat!=="FG");
         const idx=lines.length; lines.push({});
@@ -171,10 +190,7 @@
       }
       if(editPo) editPo.lines.forEach(l=>addLine(l)); else addLine(presetItem);
       function save(){
-        const sup=UI.$("#po_sup").value; const out=[];
-        lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#pl_item_"+i); if(!iEl) return;
-          const id=iEl.value, qty=+UI.$("#pl_qty_"+i).value, rate=+UI.$("#pl_rate_"+i).value;
-          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).cost, recd:0}); });
+        const sup=UI.$("#po_sup").value; const out=collect();
         if(!out.length){ toast("Add at least one line with qty",{type:"warn"}); return; }
         const eta=UI.$("#po_eta").value, value=out.reduce((s,l)=>s+l.qty*l.rate,0);
         if(editPo){
@@ -233,7 +249,10 @@
         {key:"promised",label:"Promised",render:r=>{const late=r.status!=="Dispatched"&&r.promised<DB.helpers.iso(DB.helpers.today());return `<span style="color:${late?'var(--danger)':'inherit'}">${r.promised}${late?" ⏰":""}</span>`;},sort:r=>r.promised},
         {key:"atp",label:"Fulfillable",render:r=>fulfillBadge(r),noSort:true},
         {key:"status",label:"Status",render:r=>badge(r.status==="Dispatched"?"ok":r.status==="In Production"?"info":"warn",r.status),sort:r=>r.status},
-        {key:"act",label:"",noSort:true,render:r=>r.status!=="Dispatched"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();dispatchSO(r);},text:"Dispatch"}):h("span",{class:"muted",text:"✓"})},
+        {key:"act",label:"",noSort:true,render:r=>h("div",{class:"flex gap aic",style:"gap:6px;justify-content:flex-end"},[
+          printBtn("so",r),
+          r.status!=="Dispatched"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();dispatchSO(r);},text:"Dispatch"}):h("span",{class:"muted",text:"✓"})
+        ])},
       ],{onRow:r=>soDetail(r),empty:"No sales orders"}));
     }
     draw();
@@ -269,7 +288,8 @@
           {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate),noSort:true},
         ],{empty:"No lines"})
       ]);
-      const foot=[h("button",{class:"btn danger",onclick:()=>deleteSO(so),text:"🗑 Delete"})];
+      const foot=[h("button",{class:"btn danger",onclick:()=>deleteSO(so),text:"🗑 Delete"}),
+        h("button",{class:"btn",onclick:()=>printDoc("so",so),html:PRINT_IC+" Print Invoice"})];
       if(so.status!=="Dispatched"){
         foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;soForm(so);},text:"✎ Edit"}));
         foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;dispatchSO(so);},text:"Dispatch"}));
@@ -304,7 +324,22 @@
         h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add line"})
       ]);
       const mo=modal({title:editSo?("Edit "+editSo.id):"New Sales Order", sub:editSo?"Update this sales order":"Capture customer demand", wide:true, body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),h("button",{class:"btn primary",onclick:save,text:editSo?"Save Changes":"Create Order"})]});
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn",onclick:printDraft,html:PRINT_IC+" Print"}),
+          h("button",{class:"btn primary",onclick:save,text:editSo?"Save Changes":"Create Order"})]});
+      function collect(){ const out=[];
+        lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#sl_item_"+i); if(!iEl) return;
+          const id=iEl.value, qty=+UI.$("#sl_qty_"+i).value, rate=+UI.$("#sl_rate_"+i).value;
+          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).price, width:(ENG.item(id).widthMM||[25])[0]}); });
+        return out; }
+      function printDraft(){
+        const out=collect();
+        if(!out.length){ toast("Add at least one line with qty to print",{type:"warn"}); return; }
+        printDoc("so",{ id:editSo?editSo.id:U.nextSeqId(ENG.data.salesorders,"SO-"),
+          date:DB.helpers.iso(DB.helpers.today()), customerId:UI.$("#so_cust").value, lines:out,
+          status:editSo?editSo.status:"Draft — not saved", promised:UI.$("#so_prom").value,
+          priority:UI.$("#so_prio").value, value:out.reduce((s,l)=>s+l.qty*l.rate,0) });
+      }
       function addLine(seed){ const idx=lines.length; lines.push({});
         const itemId=seed?seed.itemId:(fgs[0]&&fgs[0].id);
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
@@ -317,10 +352,7 @@
         ]); UI.$("#so_lines").appendChild(row); }
       if(editSo) editSo.lines.forEach(l=>addLine(l)); else addLine();
       function save(){
-        const cust=UI.$("#so_cust").value; const out=[];
-        lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#sl_item_"+i); if(!iEl) return;
-          const id=iEl.value, qty=+UI.$("#sl_qty_"+i).value, rate=+UI.$("#sl_rate_"+i).value;
-          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).price, width:(ENG.item(id).widthMM||[25])[0]}); });
+        const cust=UI.$("#so_cust").value; const out=collect();
         if(!out.length){ toast("Add at least one line",{type:"warn"}); return; }
         const value=out.reduce((s,l)=>s+l.qty*l.rate,0);
         if(editSo){
@@ -341,7 +373,9 @@
 
   /* ============== SUPPLIERS ============== */
   M.suppliers = { title:"Suppliers", sub:"Vendor master & performance", render(root){
-    root.appendChild(pageHead("Suppliers","Vendor performance, spend and supplied items"));
+    root.appendChild(pageHead("Suppliers","Vendor performance, spend and supplied items",[
+      h("button",{class:"btn primary",onclick:()=>supplierForm(),html:"＋ New Supplier"})
+    ]));
     const spend=ENG.purchaseBySupplier(365);
     const spendMap={}; spend.forEach(s=>spendMap[s.id]=s.value);
     const grid=h("div",{class:"grid cols-2"});
@@ -371,7 +405,9 @@
 
   /* ============== CUSTOMERS ============== */
   M.customers = { title:"Customers", sub:"Client master & orders", render(root){
-    root.appendChild(pageHead("Customers","HT cable manufacturers and order history"));
+    root.appendChild(pageHead("Customers","HT cable manufacturers and order history",[
+      h("button",{class:"btn primary",onclick:()=>customerForm(),html:"＋ New Customer"})
+    ]));
     const grid=h("div",{class:"grid cols-2"});
     ENG.data.customers.forEach(c=>{
       const orders=ENG.data.salesorders.filter(s=>s.customerId===c.id);
@@ -399,6 +435,139 @@
   }};
 
   function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
+
+  /* ----- New Supplier / New Customer ----- */
+  function supplierForm(){
+    const body=h("div",{class:"form-grid"},[
+      U.field("Supplier Name *",`<input class="input" id="sp_name" placeholder="e.g. Axar Mica Industries">`,"full"),
+      U.field("Category",`<input class="input" id="sp_cat" placeholder="e.g. Mica / Adhesives / Fabric">`),
+      U.field("GSTIN",`<input class="input" id="sp_gst" placeholder="e.g. 29ABCDE1234F1Z5">`),
+      U.field("City",`<input class="input" id="sp_city">`),
+      U.field("Country",`<input class="input" id="sp_country" value="India">`),
+      U.field("Contact Person",`<input class="input" id="sp_contact">`),
+      U.field("Phone",`<input class="input" id="sp_phone" placeholder="+91…">`),
+      U.field("Email",`<input class="input" id="sp_email" type="email">`),
+      U.field("Payment Terms",`<input class="input" id="sp_terms" value="30 days">`),
+    ]);
+    const mo=modal({title:"＋ New Supplier", sub:"Add a vendor to the supplier master", body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn primary",onclick:save,text:"Add Supplier"})]});
+    function save(){
+      const name=UI.$("#sp_name").value.trim();
+      if(!name){ toast("Supplier name is required",{type:"warn"}); return; }
+      ENG.data.suppliers.push({ id:U.nextSeqId(ENG.data.suppliers,"SUP-"), name,
+        category:UI.$("#sp_cat").value.trim()||"General", gst:UI.$("#sp_gst").value.trim(),
+        city:UI.$("#sp_city").value.trim(), country:UI.$("#sp_country").value.trim()||"India",
+        contact:UI.$("#sp_contact").value.trim(), phone:UI.$("#sp_phone").value.trim(),
+        email:UI.$("#sp_email").value.trim(), terms:UI.$("#sp_terms").value.trim()||"30 days",
+        rating:4.0, onTime:95 });
+      mo.close(); toast(name+" added to suppliers",{type:"ok"});
+      App.persistAndRefresh();
+    }
+  }
+  function customerForm(){
+    const yr=String(DB.helpers.today().getFullYear());
+    const body=h("div",{class:"form-grid"},[
+      U.field("Customer Name *",`<input class="input" id="cu_name" placeholder="e.g. Apar Industries Ltd.">`,"full"),
+      U.field("Segment",`<input class="input" id="cu_seg" value="HT Cables">`),
+      U.field("GSTIN",`<input class="input" id="cu_gst" placeholder="e.g. 27ABCDE1234F1Z5">`),
+      U.field("City",`<input class="input" id="cu_city">`),
+      U.field("Grade",U.selectHTML("cu_rating",[{v:"A",l:"A — key account"},{v:"B",l:"B — regular"},{v:"C",l:"C — occasional"}],"B")),
+      U.field("Contact Person",`<input class="input" id="cu_contact">`),
+      U.field("Phone",`<input class="input" id="cu_phone" placeholder="+91…">`),
+      U.field("Email",`<input class="input" id="cu_email" type="email">`),
+      U.field("Payment Terms",`<input class="input" id="cu_terms" value="30 days">`),
+      U.field("Customer Since",`<input class="input" id="cu_since" value="${yr}">`),
+    ]);
+    const mo=modal({title:"＋ New Customer", sub:"Add a client to the customer master", body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn primary",onclick:save,text:"Add Customer"})]});
+    function save(){
+      const name=UI.$("#cu_name").value.trim();
+      if(!name){ toast("Customer name is required",{type:"warn"}); return; }
+      ENG.data.customers.push({ id:U.nextSeqId(ENG.data.customers,"CUS-"), name,
+        segment:UI.$("#cu_seg").value.trim()||"HT Cables", gst:UI.$("#cu_gst").value.trim(),
+        city:UI.$("#cu_city").value.trim(), rating:UI.$("#cu_rating").value,
+        contact:UI.$("#cu_contact").value.trim(), phone:UI.$("#cu_phone").value.trim(),
+        email:UI.$("#cu_email").value.trim(), terms:UI.$("#cu_terms").value.trim()||"30 days",
+        since:UI.$("#cu_since").value.trim()||yr });
+      mo.close(); toast(name+" added to customers",{type:"ok"});
+      App.persistAndRefresh();
+    }
+  }
+
+  /* ----- printable document (PO / SO invoice) -----
+     Basic default layout with company details; a user-configurable
+     invoice layout designer is on the backlog and will replace the
+     styling below as the template for every downloaded document. */
+  function printDoc(kind, o){
+    const org=ENG.data.org||{};
+    const isPO=kind==="po";
+    const party=isPO ? (ENG.data.suppliers.find(s=>s.id===o.supplierId)||{name:o.supplierId})
+                     : (ENG.data.customers.find(c=>c.id===o.customerId)||{name:o.customerId});
+    const total=o.lines.reduce((s,l)=>s+l.qty*l.rate,0);
+    const rows=o.lines.map((l,i)=>{ const it=ENG.item(l.itemId)||{};
+      return `<tr><td>${i+1}</td><td>${esc(it.name||l.itemId)}<div class="sub">${esc(l.itemId)}${it.hsn?" · HSN "+esc(it.hsn):""}</div></td>`+
+        `<td class="r">${ENG.num(l.qty,2)}</td><td>${esc(it.uom||"KG")}</td>`+
+        `<td class="r">${(+l.rate).toLocaleString("en-IN",{minimumFractionDigits:2})}</td>`+
+        `<td class="r">${(l.qty*l.rate).toLocaleString("en-IN",{minimumFractionDigits:2})}</td></tr>`; }).join("");
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>${isPO?"Purchase Order":"Invoice"} ${esc(o.id)}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box} body{font:13px/1.5 "Segoe UI",Arial,sans-serif;color:#111;padding:28px;max-width:820px;margin:0 auto}
+  .head{display:flex;justify-content:space-between;gap:16px;border-bottom:3px solid #F06820;padding-bottom:14px;margin-bottom:16px}
+  .co h1{font-size:20px;color:#F06820} .co div{font-size:11.5px;color:#444;margin-top:2px}
+  .doc{text-align:right} .doc .t{font-size:22px;font-weight:800;letter-spacing:1px} .doc div{font-size:12px;margin-top:2px}
+  .parties{display:flex;gap:16px;margin-bottom:16px} .party{flex:1;border:1px solid #ddd;border-radius:8px;padding:10px 12px}
+  .party .lbl{font-size:10.5px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:4px}
+  .party .nm{font-weight:700;font-size:14px}.party div{font-size:12px;color:#333}
+  table{width:100%;border-collapse:collapse;margin-bottom:14px} th{background:#f5f5f5;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  th,td{border:1px solid #ddd;padding:7px 9px;text-align:left;vertical-align:top} td.r,th.r{text-align:right}
+  td .sub{font-size:10.5px;color:#777} .tot td{font-weight:800;font-size:14px;background:#fafafa}
+  .foot{display:flex;justify-content:space-between;margin-top:34px;font-size:11.5px;color:#555}
+  .sig{text-align:center} .sig .ln{border-top:1px solid #999;margin-top:44px;padding-top:4px;min-width:180px}
+  .note{margin-top:16px;font-size:10.5px;color:#999;text-align:center}
+  @media print{ body{padding:8mm} .note{display:none} }
+</style></head><body>
+  <div class="head">
+    <div class="co"><h1>${esc(org.name||"")}</h1>
+      <div>${esc(org.address||"")}</div>
+      <div>GSTIN: ${esc(org.gst||"—")} · ${esc(org.iso||"")}</div>
+      <div>${esc(org.phone||"")} · ${esc(org.email||"")} · ${esc(org.website||"")}</div></div>
+    <div class="doc"><div class="t">${isPO?"PURCHASE ORDER":"INVOICE"}</div>
+      <div><b>${esc(o.id)}</b></div><div>Date: ${esc(o.date||"")}</div>
+      <div>${isPO?("ETA: "+esc(o.eta||"—")):("Promised: "+esc(o.promised||"—"))}</div>
+      <div>Status: ${esc(o.status||"")}</div></div>
+  </div>
+  <div class="parties">
+    <div class="party"><div class="lbl">${isPO?"Supplier / Vendor":"Bill To / Ship To"}</div>
+      <div class="nm">${esc(party.name||"")}</div>
+      <div>${esc([party.city,party.country].filter(Boolean).join(", "))}</div>
+      ${party.gst?`<div>GSTIN: ${esc(party.gst)}</div>`:""}
+      <div>${esc([party.contact,party.phone].filter(Boolean).join(" · "))}</div>
+      ${party.email?`<div>${esc(party.email)}</div>`:""}
+      ${party.terms?`<div>Terms: ${esc(party.terms)}</div>`:""}</div>
+    <div class="party"><div class="lbl">${isPO?"Deliver To":"From"}</div>
+      <div class="nm">${esc(org.name||"")}</div><div>${esc(org.address||"")}</div>
+      <div>GSTIN: ${esc(org.gst||"—")}</div></div>
+  </div>
+  <table><thead><tr><th>#</th><th>Item Description</th><th class="r">Qty</th><th>UoM</th><th class="r">Rate (₹)</th><th class="r">Amount (₹)</th></tr></thead>
+  <tbody>${rows}
+    <tr class="tot"><td colspan="5" class="r">TOTAL</td><td class="r">₹ ${total.toLocaleString("en-IN",{minimumFractionDigits:2})}</td></tr>
+  </tbody></table>
+  <div class="foot">
+    <div>Payment terms: ${esc(party.terms||"as agreed")}<br>Subject to Bangalore jurisdiction.</div>
+    <div class="sig">For ${esc(org.name||"")}<div class="ln">Authorised Signatory</div></div>
+  </div>
+  <div class="note">Computer-generated document · default layout (custom invoice designer pending) · use your browser's "Save as PDF" to download</div>
+  <script>window.onload=function(){window.print();}</script>
+</body></html>`;
+    const w=window.open("","_blank");
+    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+    w.document.write(html); w.document.close();
+  }
+  const PRINT_IC='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1.5px" aria-hidden="true"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="15" width="12" height="7" rx="1"/></svg>';
+  function printBtn(kind,r){ return h("button",{class:"btn sm ghost",title:(kind==="po"?"Print / download PO":"Print / download invoice"),
+    onclick:e=>{e.stopPropagation();printDoc(kind,r);},html:PRINT_IC}); }
 
   // register ⌘K quick actions for Procurement & Sales
   window.ERPActions = Object.assign(window.ERPActions||{}, {

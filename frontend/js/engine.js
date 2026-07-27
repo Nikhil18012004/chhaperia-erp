@@ -254,12 +254,16 @@
     return Object.entries(map).filter(([,v])=>v>0).map(([id,v])=>({id, name:catName(id), value:v})).sort((a,b)=>b.value-a.value);
   }
 
-  /* ABC analysis by annualised consumption value */
+  /* ABC analysis by annualised transaction value. Purchases (GRN),
+     sales (SALE) and production issues (ISSUE) all count, so the moment
+     a new entry is saved (every save path calls rebuild()) the volumes
+     change and items re-rank across A/B/C automatically. */
   function abcAnalysis(){
     const rows = D.items.map(it=>{
       const u=USAGE[it.id];
-      const annual = (it.cat==="FG"? u.sold90 : u.used90)*(365/90);
-      return {it, annualVal: annual*(it.cost||0), onHandVal:STOCK[it.id].value};
+      const vol90 = u.recv90 + u.sold90 + u.used90;   // purchase + sales + consumption volume
+      const annual = vol90*(365/90);
+      return {it, vol90, annualVal: annual*(it.cost||0), onHandVal:STOCK[it.id].value};
     }).sort((a,b)=>b.annualVal-a.annualVal);
     const tot = rows.reduce((s,r)=>s+r.annualVal,0)||1;
     let cum=0;

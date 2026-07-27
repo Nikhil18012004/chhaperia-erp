@@ -235,6 +235,26 @@
     return cell;
   }
 
+  /* ----- CSV split-button: hover (or tap) → Import / Export ----- */
+  // onExport: required download handler. opts.onImport overrides the generic
+  // auto-detecting import dialog (CSVImportUI, defined in mod-reports.js).
+  function csvMenu(onExport, opts){
+    opts = opts || {};
+    const menu = h("div",{class:"ni-menu csv-drop",hidden:true},[
+      h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();
+        (opts.onImport || (window.CSVImportUI && CSVImportUI.open) || (()=>UI.toast("Import unavailable",{type:"warn"})))();},html:"⬆ Import…"}),
+      h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();onExport&&onExport();},html:"⬇ Export"}),
+    ]);
+    const trigger = h("button",{class:"btn"+(opts.small?" sm":"")+(opts.primary?" primary":""),
+      html:"🗎 "+(opts.label||"CSV")+' <span class="caret">▾</span>'});
+    const wrap = h("div",{class:"ni-drop csv-menu"},[trigger,menu]);
+    function onDoc(e){ if(!wrap.contains(e.target)) close(); }
+    function close(){ menu.hidden=true; trigger.classList.remove("open"); document.removeEventListener("click",onDoc); }
+    function open(){ if(!menu.hidden) return; menu.hidden=false; trigger.classList.add("open"); setTimeout(()=>document.addEventListener("click",onDoc),0); }
+    trigger.addEventListener("click",e=>{ e.stopPropagation(); menu.hidden?open():close(); });
+    return wrap;
+  }
+
   global.M = M;
-  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell };
+  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu };
 })(window);

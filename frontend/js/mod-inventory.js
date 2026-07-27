@@ -10,7 +10,7 @@
   M.inventory = { title:"Stock Items", sub:"Auto-calculated inventory", render(root){
     let filter={q:"", cat:"all", state:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
-      h("button",{class:"btn",onclick:exportCSV,html:"⬇ Export CSV"}),
+      MW.csvMenu(exportCSV),
       newItemMenu()
     ]));
 
@@ -47,6 +47,10 @@
         const st=ENG.status(it.id), u=ENG.usage(it.id), stock=ENG.stock(it.id);
         return {it, st, u, stock};
       }).filter(r=>{
+        // WIP items are auto-generated stage plumbing (the server re-creates
+        // them per product at boot) — keep them out of the list until they
+        // actually carry stock, unless the WIP category is explicitly chosen
+        if(r.it.cat==="WIP" && filter.cat!=="WIP" && !r.stock.lastMove && !r.st.onHand) return false;
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
         if(filter.state!=="all" && stockClass(r.st)!==filter.state) return false;
         if(!MW.inDateRange(r.stock.lastMove, filter)) return false;
