@@ -237,9 +237,11 @@
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
         U.field("Priority",U.selectHTML("w_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
       ]);
-      const specHost=h("div",{style:"margin-top:4px"});
+      // the form body is a 2-column grid — without an explicit span these
+      // hosts land in ONE column and the materials list gets half the modal
+      const specHost=h("div",{style:"margin-top:4px;grid-column:1/-1"});
       body.appendChild(specHost);
-      const matHost=h("div",{style:"margin-top:16px"});
+      const matHost=h("div",{style:"margin-top:4px;grid-column:1/-1"});
       body.appendChild(matHost);
       let matChoices={};        // ranged line index -> chosen stock item id
       /* The run size can be entered in kg or sqm; the engine (and the server)
