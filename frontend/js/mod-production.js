@@ -291,40 +291,21 @@
           });
         }
 
-        /* Each material is a card: name + code, an OK/Short badge, and a
-           coverage meter (how much of the requirement the store can supply)
-           with the need / have figures spelled out beneath it. */
-        const reqs=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).map(([rid,per])=>{
-          const need=per*qty/bom.yield, have=ENG.stock(rid).onHand||0, r=ENG.item(rid)||{};
-          return {rid, name:r.name||rid, uom:r.uom||"", need, have, ok:have>=need};
-        });
-        const shortN=reqs.filter(x=>!x.ok).length;
-        matHost.appendChild(h("div",{class:"flex between aic",style:"margin:16px 0 8px;gap:8px"},[
-          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase",text:"Materials to be consumed"}),
-          h("span",{html:reqs.length? (shortN? badge("danger",shortN+" of "+reqs.length+" short") : badge("ok","all "+reqs.length+" in stock")) : ""})
-        ]));
-        const grid=h("div",{style:"display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px"});
-        reqs.forEach(x=>{
-          const cover=x.need>0? Math.min(100,x.have/x.need*100) : 100;
-          grid.appendChild(h("div",{style:"background:var(--panel);border:1px solid var(--line);border-left:3px solid "
-              +(x.ok?"var(--ok)":"var(--danger)")+";border-radius:10px;padding:10px 12px"},[
-            h("div",{class:"flex between",style:"gap:8px;align-items:flex-start"},[
-              h("div",{style:"min-width:0"},[
-                h("div",{style:"font-weight:700;font-size:12.5px;line-height:1.35",text:x.name}),
-                h("div",{class:"muted mono",style:"font-size:10px;margin-top:1px",text:x.rid})
-              ]),
-              h("span",{style:"flex:0 0 auto",html:badge(x.ok?"ok":"danger",x.ok?"OK":"Short")})
+        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",text:"Materials to be consumed"}));
+        BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).forEach(([rid,per])=>{
+          const need=per*qty/bom.yield; const have=ENG.stock(rid).onHand||0; const ok=have>=need; const r=ENG.item(rid)||{};
+          matHost.appendChild(h("div",{class:"flex between aic",style:"gap:10px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+            h("div",{style:"min-width:0"},[
+              h("div",{style:"font-weight:600",text:r.name||rid}),
+              h("div",{class:"muted mono",style:"font-size:10.5px",text:rid})
             ]),
-            h("div",{style:"margin:9px 0 5px",html:meter(cover, x.ok?"ok":(cover>=60?"warn":"danger"))}),
-            h("div",{class:"flex between",style:"font-size:11px"},[
-              h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(x.need,2)+" "+x.uom})]),
-              h("span",{class:"muted",text:x.ok?"In store ":"Short by "},[h("b",{class:"mono",
-                style:"color:"+(x.ok?"var(--ok)":"var(--danger)"),
-                text:(x.ok? ENG.num(x.have,1) : ENG.num(x.need-x.have,2))+" "+x.uom})])
+            h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
+              h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(need,2)+" "+(r.uom||"")})]),
+              h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||"")})]),
+              h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(need-have,2))})
             ])
           ]));
         });
-        matHost.appendChild(grid);
       };
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
