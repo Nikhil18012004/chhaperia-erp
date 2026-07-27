@@ -140,7 +140,7 @@
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
-        {key:"item",label:"Product",render:r=>{const it=ENG.item(r.itemId);return `<div class="cell-main">${esc(U.trim(it.name,34))}</div><div class="cell-sub">${r.itemId}</div>`;},sort:r=>r.itemId},
+        {key:"item",label:"Product",render:r=>{const it=ENG.item(r.itemId);return `<div class="cell-main">${esc(it.name)}</div><div class="cell-sub">${r.itemId}</div>`;},sort:r=>r.itemId},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
         {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
         {key:"stage",label:"Stage",render:r=>stageCell(r),sort:r=>(r.stageIdx||0)},
@@ -231,7 +231,7 @@
     function woForm(){
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       const body=h("div",{class:"form-grid"},[
-        U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:U.trim(i.name,36)})),fgs[0].id,"Search product…"),"full"),
+        U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:i.name})),fgs[0].id,"Search product…"),"full"),
         U.field("Quantity (kg)",`<input class="input" id="w_qty" type="number" value="100">`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"Coating Line 1",l:"Coating Line 1"},{v:"Coating Line 2",l:"Coating Line 2"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Coating Line 1")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
@@ -353,7 +353,7 @@
       const body=h("div",{},[
         h("p",{class:"dim",style:"margin-bottom:12px",text:"Pick a finished product and a target production quantity to see the raw materials required (per the current BOM), with available stock and any shortfall."}),
         h("div",{class:"form-grid"},[
-          U.field("Product (Finished Good)", U.searchSelect("bc_fg", withBom.map(f=>({v:f.id,l:U.trim(f.id+" — "+f.name,44)})), withBom[0].id, "Search product…"), "full"),
+          U.field("Product (Finished Good)", U.searchSelect("bc_fg", withBom.map(f=>({v:f.id,l:f.id+" — "+f.name})), withBom[0].id, "Search product…"), "full"),
           U.field("Quantity to produce (kg)", `<input class="input" id="bc_qty" type="number" step="0.1" min="0" value="100">`),
         ]),
         h("div",{id:"bc_out",style:"margin-top:14px"})
@@ -459,7 +459,7 @@
 
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Product (Finished Good)", U.searchSelect("bm_fg", fgs.map(f=>({v:f.id,l:U.trim(f.id+" — "+f.name,42)})), curFg, "Search product…")),
+          U.field("Product (Finished Good)", U.searchSelect("bm_fg", fgs.map(f=>({v:f.id,l:f.id+" — "+f.name})), curFg, "Search product…")),
           U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
         ]),
         basisHost, altHost,
@@ -535,13 +535,20 @@
           // never loses the caret.
           const reclass=(fn)=>(e)=>{ const before=BOMCALC.isFabric(l); fn(e);
             if(BOMCALC.isFabric(l)!==before) draw(); else refresh(); };
+          // The GSM cell only exists on MTR lines, so a unit edit that crosses
+          // the MTR boundary needs a redraw even before a GSM makes it a fabric.
           const unitIn=h("input",{class:"input",value:l.unit||"KG",style:"width:74px",
-            oninput:reclass(e=>{ l.unit=e.target.value.toUpperCase(); })});
+            oninput:e=>{ const wasMtr=(BOMCALC.normUnit(l.unit)==="MTR"), wasFab=BOMCALC.isFabric(l);
+              l.unit=e.target.value.toUpperCase();
+              if((BOMCALC.normUnit(l.unit)==="MTR")!==wasMtr || BOMCALC.isFabric(l)!==wasFab) draw(); else refresh(); }});
           // A fabric IS the substrate, and its GSM is what pickup GSM is measured
           // against — so it has to be typeable, not just whatever the import found.
           // Entering a GSM on an MTR line is what makes it count as a layer.
+          // Only fabrics and tapes are metre-measured, so only MTR lines get the
+          // input at all — a GSM is meaningless on a chemical.
+          const isMtr=(BOMCALC.normUnit(l.unit)==="MTR");
           const gsmIn=h("input",{class:"input",type:"number",step:"0.1",min:"0",
-            value:(l.rmGsm==null?"":l.rmGsm), placeholder:"fabric only",
+            value:(l.rmGsm==null?"":l.rmGsm), placeholder:"g/m²",
             style:"width:96px;text-align:right",
             oninput:reclass(e=>{ const v=e.target.value.trim(); l.rmGsm = v===""?null:v; })});
           gsmIn.title="Give a fabric its GSM (with unit MTR) to count it as a layer in the pickup-GSM calculation";
@@ -557,7 +564,7 @@
             nameCell,
             h("td",{style:"text-align:right"},[qtyIn]),
             h("td",{style:"text-align:right"},[unitIn]),
-            h("td",{style:"text-align:right"},[gsmIn]),
+            h("td",{style:"text-align:right"}, isMtr?[gsmIn]:[h("span",{class:"muted",title:"GSM applies only to fabrics and tapes (unit MTR)",text:"—"})]),
             h("td",{style:"text-align:right"},[pickIn]),
             cKg, cSq,
             h("td",{},[h("button",{class:"btn sm ghost",title:"Remove component",
