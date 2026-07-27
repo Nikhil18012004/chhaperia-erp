@@ -149,7 +149,25 @@ function setProductSpec(id, spec) {
    ============================================================ */
 function listReports() { return repo.getState().labReports || []; }
 
-function buildReport(body, existing) {
+/* A batch is measured TWICE: once on the floor as it is produced, and again
+   by the lab incharge after slitting. Both sets live on the same report and
+   are graded independently against the same hidden spec, so the two can be
+   compared side by side. `values` remains the report's headline set (the lab
+   reading once it exists, else the production one) so every existing caller
+   keeps working. */
+function pickValues(raw, flags) {
+  const out = {};
+  applicableParams(flags).forEach((p) => { const v = num((raw || {})[p.key]); if (v != null) out[p.key] = v; });
+  return out;
+}
+/** Which measurement set a writer owns, from their role. */
+function sourceForUser(user) {
+  if (!user) return "lab";
+  if (user.role === "supervisor") return "production";
+  return user.role === "lab" ? "lab" : null;   // admin/office may write either
+}
+
+function buildReport(body, existing, user) {
   body = body || {};
   const product = repo.getLabProduct(body.productId);
   if (!product) throw err("Unknown product " + (body.productId || ""), 400);
@@ -157,11 +175,37 @@ function buildReport(body, existing) {
   // product's derived flags); fall back to the product's flags.
   const src = body.flags && typeof body.flags === "object" ? body.flags : (product.flags || deriveFlags(product.name));
   const flags = { mica: !!src.mica, waterBlocking: !!src.waterBlocking, semiConductive: !!src.semiConductive };
-  // keep only values for parameters that actually apply to this product
-  const values = {};
-  applicableParams(flags).forEach((p) => { const v = num((body.values || {})[p.key]); if (v != null) values[p.key] = v; });
-  const graded = evaluate(values, product.spec, flags);
   const base = existing || {};
+
+  // Which set is this write? Explicit `source` wins, else infer from the role.
+  const owned = sourceForUser(user);
+  const target = body.source === "production" || body.source === "lab" ? body.source : (owned || "lab");
+
+  let prodValues = base.prodValues || {};
+  let labValues = base.labValues || {};
+  if (body.prodValues) prodValues = pickValues(body.prodValues, flags);
+  if (body.labValues) labValues = pickValues(body.labValues, flags);
+  if (body.values) {
+    // A plain `values` write lands in the set the writer owns. A supervisor
+    // can never overwrite the lab's reading, and the lab can never overwrite
+    // the floor's — they are separate records of the same batch.
+    if (target === "production") prodValues = pickValues(body.values, flags);
+    else labValues = pickValues(body.values, flags);
+  }
+  if (owned && user && user.role === "supervisor" && body.labValues) {
+    throw err("Production entry cannot write the lab incharge's measurements", 403);
+  }
+  if (owned === "lab" && user && user.role === "lab" && body.prodValues) {
+    throw err("Lab entry cannot write the production floor's measurements", 403);
+  }
+
+  const prodGraded = evaluate(prodValues, product.spec, flags);
+  const labGraded = evaluate(labValues, product.spec, flags);
+  // headline = the lab reading once present, otherwise the floor's
+  const hasLab = Object.keys(labValues).length > 0;
+  const values = hasLab ? labValues : prodValues;
+  const graded = hasLab ? labGraded : prodGraded;
+
   return {
     id: base.id || body.id || nextId(listReports(), "LR-", 4),
     productId: product.id,
@@ -175,6 +219,14 @@ function buildReport(body, existing) {
     values,
     results: graded.results,
     result: graded.result,
+    // the two independent measurement sets + their own grades
+    prodValues, prodResults: prodGraded.results, prodResult: prodGraded.result,
+    labValues, labResults: labGraded.results, labResult: labGraded.result,
+    prodBy: body.prodBy != null ? String(body.prodBy).trim()
+      : (target === "production" && user ? user.username : (base.prodBy || "")),
+    labBy: body.labBy != null ? String(body.labBy).trim()
+      : (target === "lab" && user ? user.username : (base.labBy || "")),
+    woId: body.woId != null ? String(body.woId).trim() : (base.woId || ""),
     assignee: body.assignee != null ? (String(body.assignee).trim() || "Pending") : (base.assignee || "Pending"),
     testedBy: body.testedBy != null ? String(body.testedBy).trim() : (base.testedBy || ""),
     remarks: body.remarks != null ? String(body.remarks).trim() : (base.remarks || ""),
@@ -182,13 +234,26 @@ function buildReport(body, existing) {
   };
 }
 
-function createReport(body) { return repo.putLabReport(buildReport(body, null)); }
-function updateReport(id, patch) {
+/** Find an existing report for the same batch/lot so the two stages merge. */
+function findByRef(productId, refNo) {
+  const ref = String(refNo || "").trim();
+  if (!ref) return null;
+  return listReports().find((r) => r.productId === productId && String(r.refNo || "").trim() === ref) || null;
+}
+
+function createReport(body, user) {
+  // Second stage of the SAME batch updates the first report instead of
+  // creating a duplicate certificate for it.
+  const existing = findByRef((body || {}).productId, (body || {}).refNo);
+  if (existing) return repo.putLabReport(buildReport(Object.assign({}, body, { id: existing.id }), existing, user));
+  return repo.putLabReport(buildReport(body, null, user));
+}
+function updateReport(id, patch, user) {
   const existing = repo.getLabReport(id);
   if (!existing) throw err("Report not found", 404);
   // merge so a partial patch (e.g. just assignee) keeps productId/values
   const merged = Object.assign({}, existing, patch || {}, { id });
-  return repo.putLabReport(buildReport(merged, existing));
+  return repo.putLabReport(buildReport(merged, existing, user));
 }
 function deleteReport(id) {
   if (!repo.getLabReport(id)) throw err("Report not found", 404);

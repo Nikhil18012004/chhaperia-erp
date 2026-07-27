@@ -55,6 +55,16 @@ router.post("/production/finished", requireAuth, requireRole("supervisor", "admi
   catch (e) { next(e); }
 });
 
+// Floor action: send material back to a store (unused issue / over-draw / FG off the line).
+router.post("/production/return", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.status(201).json(production.returnStock(req.user, req.body || {})); } catch (e) { next(e); }
+});
+
+// Floor action: record a run made without a planned work order (rolls/length/width → sqm & kg).
+router.post("/production/adhoc", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.status(201).json(production.createAdhocProduction(req.user, req.body || {})); } catch (e) { next(e); }
+});
+
 // Supervisor/admin/office: report raw material drawn from the store beyond what the
 // job was issued (material/qty/location/reason). Deducts each quantity from the store.
 router.post("/production/excess-material", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
@@ -150,13 +160,17 @@ router.delete("/lab/products/:id", requireAuth, rw, (req, res, next) => {
 router.put("/lab/products/:id/spec", requireAuth, requireRole("admin"), (req, res, next) => {
   try { res.json(lab.setProductSpec(req.params.id, (req.body || {}).spec || req.body || {})); } catch (e) { next(e); }
 });
-// Test reports: create / update / delete. Pass/Fail is graded server-side.
-router.post("/lab/reports", requireAuth, rw, (req, res, next) => {
-  try { res.status(201).json(lab.createReport(req.body || {})); } catch (e) { next(e); }
+// Test reports: create / update. The lab incharge may write REPORTS ONLY —
+// never the product master and never the spec (those stay admin/office above),
+// so the yardstick cannot be edited by the person being measured against it.
+const rwLab = requireRole("admin", "office", "lab");
+router.post("/lab/reports", requireAuth, rwLab, (req, res, next) => {
+  try { res.status(201).json(lab.createReport(req.body || {}, req.user)); } catch (e) { next(e); }
 });
-router.patch("/lab/reports/:id", requireAuth, rw, (req, res, next) => {
-  try { res.json(lab.updateReport(req.params.id, req.body || {})); } catch (e) { next(e); }
+router.patch("/lab/reports/:id", requireAuth, rwLab, (req, res, next) => {
+  try { res.json(lab.updateReport(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
 });
+// Deleting a certificate is a records decision — kept with admin/office.
 router.delete("/lab/reports/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(lab.deleteReport(req.params.id)); } catch (e) { next(e); }
 });

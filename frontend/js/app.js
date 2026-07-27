@@ -168,7 +168,7 @@
       const u=this.user||{};
       const nameEl=$("#userName"), roleEl=$("#userRole"), av=$("#userAvatar");
       if(nameEl) nameEl.textContent = u.name || u.username || "User";
-      if(roleEl) roleEl.textContent = ({admin:"Administrator",office:"Office Desk",supervisor:"Supervisor"})[u.role] || u.role || "";
+      if(roleEl) roleEl.textContent = ({admin:"Administrator",office:"Office Desk",lab:"Lab Incharge (QC)",supervisor:"Supervisor"})[u.role] || u.role || "";
       if(av) av.textContent = (u.name||u.username||"U").split(" ").map(x=>x[0]).slice(0,2).join("").toUpperCase();
       const logout=$("#logoutBtn"); if(logout) logout.onclick=()=>this.logout();
       // theme + accent are system settings — only admin may change them
@@ -179,8 +179,12 @@
     buildNav(){
       const nav=$("#nav"); nav.innerHTML="";
       const isAdmin = this.user && this.user.role === "admin";
+      const isLab = this.isLab();
       UI.NAV.forEach(n=>{
-        if(n.adminOnly && !isAdmin) return; // hide admin-only items from office
+        // the lab incharge gets an explicit allowlist, not "everything minus
+        // admin-only" — the server enforces the same shape (viewService.stateForLab)
+        if(isLab){ if(!n.labOk) return; }
+        else if(n.adminOnly && !isAdmin) return; // hide admin-only items from office
         if(n.sec){ nav.appendChild(h("div",{class:"nav-section",text:n.sec})); return; }
         const item=h("div",{class:"nav-item"+(n.id===this.current?" active":""),"data-id":n.id,
           role:"button",tabindex:"0","aria-label":n.label,
@@ -198,14 +202,26 @@
     },
 
     /* ---- role-based module access ----
-       Admin sees everything. Other roles (office) are denied any NAV item
-       flagged adminOnly — currently the Overview and System sections. */
+       Admin sees everything. Office is denied any NAV item flagged adminOnly
+       (the Overview and System sections). The lab incharge is the other way
+       round — an explicit allowlist (labOk), read-only everywhere except Lab
+       Reports (labWrite). This is presentation only: the server independently
+       scopes both the payload and every write. */
     isAdmin(){ return !!(this.user && this.user.role === "admin"); },
+    isLab(){ return !!(this.user && this.user.role === "lab"); },
     canAccess(id){
       const meta = UI.NAV.find(n => n.id === id);
+      if(this.isLab()) return !!(meta && meta.labOk);
       return meta ? !(meta.adminOnly && !this.isAdmin()) : true;
     },
+    /** May the current user create/edit inside this module? */
+    canWrite(id){
+      if(!this.isLab()) return true;
+      const meta = UI.NAV.find(n => n.id === (id || this.current));
+      return !!(meta && meta.labWrite);
+    },
     homeId(){
+      if(this.isLab()) return "lab-reports";
       const first = UI.NAV.find(n => n.id && !(n.adminOnly && !this.isAdmin()));
       return first ? first.id : "dashboard";
     },

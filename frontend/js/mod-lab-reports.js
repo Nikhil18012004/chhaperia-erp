@@ -132,14 +132,61 @@
     draw();
   }
 
+  /* A batch is measured twice — on the floor as it is produced, and again by
+     the lab incharge after slitting. Both sets are graded against the same
+     hidden TDS spec, so they are shown side by side: the TDS column states
+     the requirement, the other two show what each stage actually measured.
+     The TDS limits are only present for admin (the server withholds them from
+     everyone else), so that column degrades to the verdict alone. */
+  function specText(sp, unit) {
+    if (!sp) return `<span class="muted">—</span>`;
+    if (sp.unparsed) return `<span class="muted" title="Two thresholds in the source — left ungraded">${esc(sp.unparsed)}</span>`;
+    const u = unit ? ` <span class="muted" style="font-size:10px">${unit}</span>` : "";
+    if (sp.min != null && sp.max != null) return `${sp.min} – ${sp.max}${u}`;
+    if (sp.min != null) return `≥ ${sp.min}${u}`;
+    if (sp.max != null) return `≤ ${sp.max}${u}`;
+    if (sp.nominal != null) return `${sp.nominal}${u}`;
+    return `<span class="muted">—</span>`;
+  }
+  function verdictOf(res) {
+    return res === "pass" ? badge("ok", "Pass") : res === "fail" ? badge("danger", "Fail")
+      : res === "na" ? `<span class="muted" style="font-size:11px">no spec</span>` : "";
+  }
+  function measCell(vals, results, key, unit) {
+    const v = (vals || {})[key];
+    if (v == null || v === "") return `<span class="muted">—</span>`;
+    const res = (results || {})[key];
+    const tint = res === "fail" ? "color:var(--danger);font-weight:700" : res === "pass" ? "font-weight:700" : "";
+    return `<span style="${tint}">${esc(String(v))}</span> <span class="muted" style="font-size:10.5px">${unit}</span> ${verdictOf(res)}`;
+  }
+
   function reportDetail(r) {
+    const prod = r.prodValues || {}, lab = r.labValues || {};
+    const hasProd = Object.keys(prod).length > 0, hasLab = Object.keys(lab).length > 0;
+    const twoStage = hasProd || hasLab;
+    // the merged TDS | Production | Lab view is for admin/office only; the lab
+    // and production logins each see just their own reading
+    const merged = twoStage && !App.isLab();
+    const products = (ENG.data.labProducts || []);
+    const spec = ((products.find((p) => p.id === r.productId) || {}).spec) || {};
+
     const rowsHtml = applicable(r.flags).map((p) => {
-      const v = (r.values || {})[p.key];
-      const res = (r.results || {})[p.key];
-      const cell = v == null || v === "" ? `<span class="muted">—</span>` : `${esc(String(v))} <span class="muted" style="font-size:10.5px">${p.unit}</span>`;
-      const verdict = res === "pass" ? badge("ok", "Pass") : res === "fail" ? badge("danger", "Fail") : res === "na" ? `<span class="muted" style="font-size:11px">no spec</span>` : "";
-      return `<tr><td style="padding:6px 10px">${esc(p.label)}</td><td class="num" style="padding:6px 10px">${cell}</td><td style="padding:6px 10px">${verdict}</td></tr>`;
+      if (!merged) {
+        const vals = App.isLab() ? (hasLab ? lab : r.values) : r.values;
+        const res = App.isLab() ? (hasLab ? r.labResults : r.results) : r.results;
+        return `<tr><td style="padding:6px 10px">${esc(p.label)}</td>`
+          + `<td class="num" style="padding:6px 10px">${measCell(vals, res, p.key, p.unit)}</td></tr>`;
+      }
+      return `<tr><td style="padding:6px 10px">${esc(p.label)}</td>`
+        + `<td class="num" style="padding:6px 10px">${specText(spec[p.key], p.unit)}</td>`
+        + `<td class="num" style="padding:6px 10px">${measCell(prod, r.prodResults, p.key, p.unit)}</td>`
+        + `<td class="num" style="padding:6px 10px">${measCell(lab, r.labResults, p.key, p.unit)}</td></tr>`;
     }).join("");
+    const headHtml = merged
+      ? `<tr><th style="text-align:left">Parameter</th><th class="num">TDS spec</th>`
+        + `<th class="num">Production${r.prodBy ? ` <span class="muted" style="font-weight:400">· ${esc(r.prodBy)}</span>` : ""}</th>`
+        + `<th class="num">Lab${r.labBy ? ` <span class="muted" style="font-weight:400">· ${esc(r.labBy)}</span>` : ""}</th></tr>`
+      : `<tr><th style="text-align:left">Parameter</th><th class="num">Measured</th></tr>`;
     const body = h("div", {}, [
       h("div", { class: "flex between aic", style: "margin-bottom:12px" }, [
         h("div", {}, [h("div", { style: "font-weight:700;font-size:15px", text: r.productCode + " · " + r.productName }),
@@ -147,12 +194,20 @@
         h("div", { html: resultBadge(r.result) }),
       ]),
       h("div", { class: "flex gap wrap", style: "margin-bottom:12px", html: typeChips(r.flags) }),
-      h("div", { class: "table-wrap" }, h("div", { html: `<table class="tbl"><thead><tr><th style="text-align:left">Parameter</th><th class="num">Measured</th><th style="text-align:left">Verdict</th></tr></thead><tbody>${rowsHtml}</tbody></table>` })),
+      h("div", { class: "table-wrap" }, h("div", { html: `<table class="tbl"><thead>${headHtml}</thead><tbody>${rowsHtml}</tbody></table>` })),
+      merged ? h("div", { class: "flex gap wrap", style: "margin-top:10px;font-size:12px" }, [
+        h("span", { class: "muted", text: "Stage result:" }),
+        h("span", { html: "Production " + (hasProd ? resultBadge(r.prodResult) : `<span class="muted">not entered</span>`) }),
+        h("span", { html: "Lab " + (hasLab ? resultBadge(r.labResult) : `<span class="muted">awaiting slitting</span>`) }),
+      ]) : null,
       r.result === "Pending" ? h("div", { class: "muted", style: "font-size:12px;margin-top:10px", text: "⏳ No lab spec set for these parameters yet — result will grade automatically once the spec (from the TDS) is loaded." }) : null,
-      MW.dl([["Assignee", r.assignee || "Pending"], ["Tested by", r.testedBy || "—"], ["Remarks", r.remarks || "—"]]),
+      MW.dl([["Assignee", r.assignee || "Pending"], ["Tested by", r.testedBy || "—"],
+        ["Work order", r.woId || "—"], ["Remarks", r.remarks || "—"]]),
     ]);
     const mo = modal({ title: "Lab Report " + r.id, sub: r.productCode + " · " + r.reportDate, wide: true, body,
-      foot: [h("button", { class: "btn danger", onclick: () => delReport(r, mo), text: "🗑 Delete" }),
+      // the lab incharge writes readings, but deleting a certificate is a
+      // records decision — the server enforces the same split
+      foot: [App.isLab() ? null : h("button", { class: "btn danger", onclick: () => delReport(r, mo), text: "🗑 Delete" }),
         h("button", { class: "btn ghost", onclick: () => { mo.close(); reportForm(r); }, text: "✎ Edit" }),
         h("button", { class: "btn primary", onclick: () => mo.close(), text: "Close" })] });
   }
@@ -290,7 +345,9 @@
         { key: "series", label: "Series", width: "130px", render: (p) => esc(p.series || "—") },
         { key: "type", label: "Type", noSort: true, render: (p) => `<div class="flex gap wrap">${typeChips(p.flags)}</div>` },
         { key: "ref", label: "Ref", width: "84px", render: (p) => refLabel(p.refMode).replace(" No.", ""), sort: (p) => p.refMode },
-        { key: "spec", label: "Spec", width: "70px", noSort: true, render: (p) => p.spec && Object.keys(p.spec).length ? badge("ok", "set") : badge("mut", "—") },
+        // `specSet` is what non-admins receive — the limits themselves are
+        // withheld so a tester cannot grade against them by eye.
+        { key: "spec", label: "Spec", width: "70px", noSort: true, render: (p) => (p.specSet || (p.spec && Object.keys(p.spec).length)) ? badge("ok", "set") : badge("mut", "—") },
         { key: "act", label: "", noSort: true, width: "80px", render: (p) => actionCell([["Edit", () => productForm(p)]]) },
       ], { onRow: (p) => productForm(p), empty: "No products match your filters" }));
     }

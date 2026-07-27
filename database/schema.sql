@@ -81,9 +81,17 @@ CREATE INDEX IF NOT EXISTS idx_items_supplier ON items(supplier_id);
 
 -- Bill of materials — one row per finished good, lines as JSON
 CREATE TABLE IF NOT EXISTS boms (
-  item_id   TEXT PRIMARY KEY,
-  yield     REAL DEFAULT 1,
-  lines     TEXT NOT NULL,            -- JSON: [[rawId, perKg], …]
+  item_id    TEXT PRIMARY KEY,
+  yield      REAL DEFAULT 1,
+  -- JSON. Two shapes are accepted (see frontend/js/bomcalc.js):
+  --   legacy tuples  [[rawId, perKgOfFG], …]
+  --   rich objects   [{id,rm,rmType,rmThk,rmGsm,qty,unit,pickupPct,ranged,options}, …]
+  -- The rich form arrived with the real BOM import: qty is PER BATCH and each
+  -- line carries its own pickup % and material spec.
+  lines      TEXT NOT NULL,
+  -- JSON [{label, lines}] — alternate approved recipes for the same product
+  -- (e.g. a different fabric supplier), or NULL when there is only one.
+  alternates TEXT,
   FOREIGN KEY (item_id) REFERENCES items(id)
 );
 

@@ -9,8 +9,8 @@
   const { h, esc, table, badge, toast, modal, confirm } = UI;
   const { pageHead } = MW;
 
-  const ROLE_LABEL = { admin: "Administrator", office: "Office (Sales/Purchase/Finance)", supervisor: "Production Supervisor" };
-  const ROLE_BADGE = { admin: "danger", office: "info", supervisor: "ok" };
+  const ROLE_LABEL = { admin: "Administrator", office: "Office (Sales/Purchase/Finance)", lab: "Lab Incharge (QC)", supervisor: "Production Supervisor" };
+  const ROLE_BADGE = { admin: "danger", office: "info", lab: "violet", supervisor: "ok" };
   const AREA_LABEL = { coating: "Coating / Lamination", slitting: "Slitting + Pack/Dispatch", fiberglass: "Fibre-Glass + Slitting/Dispatch" };
 
   M.users = { title: "Users & Access", sub: "Logins & permissions", render(root, params) {
@@ -69,7 +69,7 @@
     const f = (k, d) => (u[k] != null ? u[k] : d);
 
     const roleSel = `<select class="select" id="u_role">` +
-      ["admin", "office", "supervisor"].map(r => `<option value="${r}" ${f("role") === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("") + `</select>`;
+      ["admin", "office", "lab", "supervisor"].map(r => `<option value="${r}" ${f("role") === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("") + `</select>`;
     const areaSel = `<select class="select" id="u_area">` +
       ["coating", "slitting", "fiberglass"].map(a => `<option value="${a}" ${f("area", "coating") === a ? "selected" : ""}>${AREA_LABEL[a]}</option>`).join("") + `</select>`;
 

@@ -10,6 +10,7 @@
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
+const BC = require("../../../frontend/js/bomcalc");
 
 /* map a work order's free-text line to a production area */
 function lineToArea(line) {
@@ -25,9 +26,22 @@ function fullState() {
   return repo.getState();
 }
 
-/* ---- ADMIN / OFFICE: full data (office could be trimmed later) ---- */
-function stateForOfficer() {
-  return fullState();
+/* ---- ADMIN / OFFICE: full data (office could be trimmed later) ----
+   One exception: the lab SPEC (the TDS min/max limits) is the yardstick a
+   report is graded against, and the people entering reports must not be able
+   to read it — otherwise a measured value can be tuned until it passes.
+   Grading happens server-side, so office only needs to know WHETHER a spec
+   exists, never what it says. Admin owns the spec editor and keeps the values. */
+function stateForOfficer(user) {
+  const d = fullState();
+  const isAdmin = user && user.role === "admin";
+  if (!isAdmin && Array.isArray(d.labProducts)) {
+    d.labProducts = d.labProducts.map((p) => Object.assign({}, p, {
+      spec: {},
+      specSet: !!(p.spec && Object.keys(p.spec).length),
+    }));
+  }
+  return d;
 }
 
 /* ============================================================
@@ -66,7 +80,7 @@ function stateForSupervisor(area) {
 
   // materials THIS area needs for the WO's current stage (quantities only, no cost)
   function stageMaterials(wo, stage) {
-    const plan = S.computeStagePlan(wo.itemId, wo.qty, d);
+    const plan = S.computeStagePlan(wo.itemId, wo.qty, d, wo.materialChoices);
     if (!plan || !plan[stage.key]) return [];
     return plan[stage.key].consume.map(([rid, q]) => ({
       id: rid, name: (itemById[rid] || {}).name || rid,
@@ -123,7 +137,9 @@ function stateForSupervisor(area) {
       const Y = bom.yield || 1;
       return {
         id: i.id, name: i.name, uom: i.uom || "KG",
-        recipe: (bom.lines || []).map(([rid, per]) => ({
+        // Lines may be legacy [id, qty] tuples OR rich objects from the real
+        // BOM import — toLegacy() flattens both to [id, perUnitOfFG].
+        recipe: BC.toLegacy(bom, BC.metaFromItem(i)).map(([rid, per]) => ({
           id: rid, name: (itemById[rid] || {}).name || rid,
           uom: (itemById[rid] || {}).uom || "", perUnit: per / Y,
         })),
@@ -184,11 +200,48 @@ function stateForSupervisor(area) {
   };
 }
 
+/* ============================================================
+   LAB VIEW — QC incharge.
+   Sees stock, production, BOMs and the trade documents needed to
+   trace a batch, plus the lab module. Deliberately built as an
+   ALLOWLIST: a role that simply fell through to the full dataset
+   would receive payroll, CRM and every cost in the business
+   (which is exactly how an earlier "sales desk" role leaked the
+   whole database while the UI merely hid its menus).
+   Excluded: HR/payroll, CRM leads, transporters, and the lab spec
+   limits themselves — grading is server-side, so the person
+   entering measurements must not see the thresholds.
+   ============================================================ */
+function stateForLab() {
+  const d = fullState();
+  return {
+    role: "lab",
+    org: d.org,
+    settings: d.settings || {},
+    warehouses: d.warehouses || [],
+    categories: d.categories || [],
+    items: d.items || [],
+    boms: d.boms || {},
+    movements: d.movements || [],
+    workorders: d.workorders || [],
+    purchaseorders: d.purchaseorders || [],
+    salesorders: d.salesorders || [],
+    suppliers: d.suppliers || [],
+    customers: d.customers || [],          // sales orders reference them by id
+    labProducts: (d.labProducts || []).map((p) => Object.assign({}, p, {
+      spec: {}, specSet: !!(p.spec && Object.keys(p.spec).length),
+    })),
+    labReports: d.labReports || [],
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 /** Top-level dispatcher by user. */
 function stateForUser(user) {
   if (!user) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
   if (user.role === "supervisor") return stateForSupervisor(user.area || "all");
-  return stateForOfficer(); // admin + office
+  if (user.role === "lab") return stateForLab();
+  return stateForOfficer(user); // admin + office (office gets no lab spec values)
 }
 
-module.exports = { stateForUser, stateForSupervisor, stateForOfficer, lineToArea };
+module.exports = { stateForUser, stateForSupervisor, stateForOfficer, stateForLab, lineToArea };

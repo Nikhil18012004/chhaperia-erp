@@ -135,6 +135,8 @@
         "Tap a job to move it to the next stage. Once you complete a stage it hands off to the next team automatically.",
         [
           H("button", { class: "btn primary", onclick: () => this.openProduce(), html: "➕ Add to Finished Stock" }),
+          H("button", { class: "btn", onclick: () => this.openAdhoc(), html: "🏭 Production Entry" }),
+          H("button", { class: "btn", onclick: () => this.openReturn(), html: "↩ Return" }),
           H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" }),
         ]
       ));
@@ -510,6 +512,113 @@
        Deducts raw materials from the store per the product's BOM and
        adds the produced quantity to the warehouse the supervisor picks.
        ============================================================ */
+    /* ---- Return: send material back to a store -------------------------
+       Unused issue, over-draw, or finished stock coming back off the line.
+       Posts a single RET movement — never a silent adjustment. */
+    openReturn() {
+      const self = this;
+      const items = (this.data.stockItems || []).filter((i) => ["RM", "PKG", "CON", "FG", "WIP"].includes(i.cat));
+      const warehouses = this.data.warehouses || [];
+      if (!items.length) { toast("No materials available to return.", { type: "warn" }); return; }
+
+      const itemSel = MW.select(items.map((i) => ({ value: i.id, label: i.name + (i.cat ? " · " + i.cat : "") })), () => {}, items[0].id);
+      const qtyInp = H("input", { class: "input", type: "number", min: "0", step: "any", value: "" });
+      const whSel = MW.select(warehouses.map((w) => ({ value: w.id, label: w.name + (w.type ? " · " + w.type : "") })), () => {}, (warehouses[0] || {}).id);
+      const reasonInp = H("input", { class: "input", placeholder: "e.g. unused issue, roll rejected" });
+      [itemSel, qtyInp, whSel, reasonInp].forEach((el) => { el.style.width = "100%"; });
+
+      const body = H("div", {}, [
+        field("Material", itemSel),
+        field("Quantity returned", qtyInp),
+        field("Return to store", whSel),
+        field("Reason", reasonInp),
+      ]);
+      const mo = UI.modal({
+        title: "↩ Return to Store", sub: "Posts a return movement against the chosen store", body,
+        foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+          H("button", { class: "btn primary", onclick: (e) => save(e.currentTarget), text: "Record Return" })],
+      });
+      async function save(btn) {
+        const qty = +qtyInp.value || 0;
+        if (!qty || qty <= 0) { toast("Enter a valid quantity", { type: "warn" }); return; }
+        if (btn) { btn.disabled = true; btn.textContent = "…"; }
+        try {
+          await DB.production.returnStock({ itemId: itemSel.value, qty, wh: whSel.value, reason: reasonInp.value });
+          mo.close(); toast("Return recorded", { type: "ok" }); await self.refresh();
+        } catch (err) {
+          if (btn) { btn.disabled = false; btn.textContent = "Record Return"; }
+          toast("Could not record the return: " + (err && err.message ? err.message : err), { type: "danger" });
+        }
+      }
+    },
+
+    /* ---- Production Entry: a run made without a planned work order ------
+       Rolls are measured, not weighed, so kg is derived from the geometry:
+         sqm = length x (width/1000) x rolls ;  kg = sqm x gsm / 1000 */
+    openAdhoc() {
+      const self = this;
+      const products = (this.data.stockItems || []).filter((i) => i.cat === "FG");
+      const warehouses = this.data.warehouses || [];
+      if (!products.length) { toast("No finished products available.", { type: "warn" }); return; }
+      const fgWh = warehouses.find((w) => String(w.type || "").toLowerCase().includes("finish")) || warehouses[0];
+
+      const prodSel = MW.select(products.map((p) => ({ value: p.id, label: p.name })), () => draw(), products[0].id);
+      const rollsInp = H("input", { class: "input", type: "number", min: "1", step: "1", value: "1", oninput: () => draw() });
+      const lenInp = H("input", { class: "input", type: "number", min: "0", step: "any", value: "1000", oninput: () => draw() });
+      const widInp = H("input", { class: "input", type: "number", min: "0", step: "any", value: "1000", oninput: () => draw() });
+      const gsmInp = H("input", { class: "input", type: "number", min: "0", step: "any", placeholder: "product GSM", oninput: () => draw() });
+      const batchInp = H("input", { class: "input", placeholder: "batch / lot no (for the lab report)" });
+      const whSel = MW.select(warehouses.map((w) => ({ value: w.id, label: w.name + (w.type ? " · " + w.type : "") })), () => {}, fgWh ? fgWh.id : (warehouses[0] || {}).id);
+      [prodSel, rollsInp, lenInp, widInp, gsmInp, batchInp, whSel].forEach((el) => { el.style.width = "100%"; });
+      const readout = H("div", { style: "margin-top:14px;padding:12px;border-radius:12px;background:var(--panel-2);font-weight:700" });
+
+      function calc() {
+        const rolls = +rollsInp.value || 0, len = +lenInp.value || 0, wid = +widInp.value || 0, gsm = +gsmInp.value || 0;
+        const sqm = len * (wid / 1000) * rolls;
+        return { rolls, len, wid, gsm, sqm, kg: (sqm * gsm) / 1000 };
+      }
+      function draw() {
+        const c = calc();
+        readout.innerHTML = "";
+        readout.appendChild(H("div", { text: fmtQty(c.sqm) + " sqm" + (c.gsm ? "  ·  " + fmtQty(c.kg) + " kg" : "") }));
+        if (!c.gsm) readout.appendChild(H("div", { class: "muted", style: "font-weight:400;font-size:11.5px;margin-top:4px", text: "Enter the GSM to get the weight." }));
+      }
+
+      const body = H("div", {}, [
+        field("Finished product", prodSel),
+        field("Rolls", rollsInp),
+        field("Length per roll (m)", lenInp),
+        field("Width (mm)", widInp),
+        field("GSM (g/m²)", gsmInp),
+        field("Batch / lot no", batchInp),
+        field("Store finished stock in", whSel),
+        readout,
+      ]);
+      const mo = UI.modal({
+        title: "🏭 Production Entry", sub: "Records an unplanned run · creates a work order and adds the output", body,
+        foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+          H("button", { class: "btn primary", onclick: (e) => save(e.currentTarget), text: "Record Production" })],
+      });
+      draw();
+
+      async function save(btn) {
+        const c = calc();
+        if (!c.kg || c.kg <= 0) { toast("Enter rolls, length, width and GSM", { type: "warn" }); return; }
+        if (btn) { btn.disabled = true; btn.textContent = "…"; }
+        try {
+          const res = await DB.production.adhoc({ itemId: prodSel.value, rolls: c.rolls, lengthM: c.len,
+            widthMM: c.wid, gsm: c.gsm, wh: whSel.value, refNo: batchInp.value });
+          mo.close();
+          toast((res.workOrder || "Production") + " recorded — " + fmtQty(res.kg) + " kg"
+            + (res.deducted ? " (raw materials deducted)" : " (no BOM — materials not deducted)"), { type: "ok" });
+          await self.refresh();
+        } catch (err) {
+          if (btn) { btn.disabled = false; btn.textContent = "Record Production"; }
+          toast("Could not record production: " + (err && err.message ? err.message : err), { type: "danger" });
+        }
+      }
+    },
+
     openProduce() {
       const products = this.data.finishedProducts || [];
       const warehouses = this.data.warehouses || [];

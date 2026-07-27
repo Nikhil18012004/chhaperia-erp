@@ -16,6 +16,7 @@ const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const { getLineForItem } = require("./routing");
+const BC = require("../../../frontend/js/bomcalc");
 
 const ACTIONS = ["start", "pause", "complete", "dispatch"];
 
@@ -94,7 +95,7 @@ function advance(user, woId, action) {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
     // post this stage's stock movements (skip for legacy WOs — old flow already did)
     if (!wo.legacy && !stage.posted) {
-      const plan = S.computeStagePlan(wo.itemId, wo.qty, data);
+      const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices);
       if (plan && plan[stage.key]) {
         const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO());
         if (moves.length) repo.addMovements(moves);
@@ -148,6 +149,17 @@ function createWorkOrder(user, body) {
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId);
   if (spec && body[spec.key] != null && body[spec.key] !== "") wo[spec.key] = body[spec.key];
+  // A ranged BOM line names a choice or a span, not one material. Whichever was
+  // picked against live store stock at issue is recorded here, so every later
+  // stage posts the material actually chosen rather than re-guessing.
+  if (body.materialChoices && typeof body.materialChoices === "object") {
+    const byId = Object.fromEntries((data.items || []).map((i) => [i.id, true]));
+    const picks = {};
+    Object.entries(body.materialChoices).forEach(([k, v]) => {
+      if (/^\d+$/.test(String(k)) && typeof v === "string" && byId[v]) picks[k] = v;
+    });
+    if (Object.keys(picks).length) wo.materialChoices = picks;
+  }
   wo.status = S.rollupStatus(wo);
   repo.putWorkOrder(wo);
   return summarize(wo);
@@ -188,7 +200,8 @@ function produceFinished(user, body) {
   const moves = [];
   const consumed = [];
   // 1) deduct each raw material from the store, scaled by the BOM + overall yield
-  (bom.lines || []).forEach(([rid, per]) => {
+  //    (toLegacy handles both legacy tuples and rich imported lines)
+  BC.toLegacy(bom, BC.metaFromItem(item)).forEach(([rid, per]) => {
     const need = r2(per * qty / Y);
     if (!need || !itemsById[rid]) return;
     moves.push({ id: mvId(), date, itemId: rid, wh: RAW_STORE, type: "ISSUE",
@@ -243,7 +256,7 @@ function recordExcessMaterial(user, body) {
   //    Legacy WOs with no derivable BOM plan → null (fall back to any raw material,
   //    still bounded by the category + on-hand checks below).
   const RAW = new Set(["RM", "PKG", "CON"]);
-  const plan = S.computeStagePlan(wo.itemId, wo.qty, data);
+  const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices);
   const jobMaterials = plan
     ? new Set(Object.keys(plan).flatMap((k) => (plan[k].consume || []).map(([rid]) => rid)))
     : null;
@@ -317,4 +330,118 @@ function summarize(wo) {
   };
 }
 
-module.exports = { advance, createWorkOrder, produceFinished, recordExcessMaterial, updateWorkOrderStatus, ACTIONS };
+/* ============================================================
+   returnStock — floor action: send material BACK to a store.
+   Unused issue, over-draw, or finished stock coming back off the
+   line. Posts a single RET movement; never negative, never a
+   silent adjustment of someone else's numbers.
+   ============================================================ */
+const FG_STORE = "WH-FG";
+
+function returnStock(user, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
+  body = body || {};
+  const data = fullState();
+  const item = (data.items || []).find((i) => i.id === body.itemId);
+  if (!item) throw err("Unknown material", 400);
+  const qty = +body.qty;
+  if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
+
+  // default the destination from the material's own category
+  const isFinished = item.cat === "FG";
+  const wh = body.wh || (isFinished ? FG_STORE : RAW_STORE);
+  if (!(data.warehouses || []).some((w) => w.id === wh)) throw err("Choose a valid store", 400);
+
+  const mv = {
+    id: mvId(), date: todayISO(), itemId: item.id, wh, type: "RET",
+    qty: Math.abs(r2(qty)), rate: item.cost || 0,
+    ref: "RET-" + Date.now().toString(36).toUpperCase(),
+    note: (body.reason ? String(body.reason).slice(0, 140) : "Returned from floor"),
+    by: user.username,
+  };
+  repo.addMovements([mv]);
+  return { ok: true, movement: mv, item: { id: item.id, name: item.name, uom: item.uom } };
+}
+
+/* ============================================================
+   createAdhocProduction — floor action: record a run that was
+   made without a planned work order.
+   Rolls are measured, not weighed, so kg is derived:
+     sqm  = length_m x (width_mm / 1000) x rolls
+     kg   = sqm x gsm / 1000
+   A routed work order is created so the run appears on the normal
+   job boards. Raw materials are only deducted when the product
+   actually has a BOM — otherwise the run is recorded and flagged,
+   rather than inventing a consumption.
+   ============================================================ */
+function createAdhocProduction(user, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
+  body = body || {};
+  const data = fullState();
+  const item = (data.items || []).find((i) => i.id === body.itemId);
+  if (!item) throw err("Unknown product", 400);
+  if (item.cat !== "FG") throw err("Only finished goods can be recorded as production", 400);
+
+  const rolls = +body.rolls || 1;
+  const lengthM = +body.lengthM || 0;
+  const widthMM = +body.widthMM || 0;
+  const gsm = +body.gsm || +item.gsm || 0;
+  let sqm = +body.sqm || 0, kg = +body.kg || 0;
+  if (!sqm && lengthM > 0 && widthMM > 0) sqm = lengthM * (widthMM / 1000) * rolls;
+  if (!kg && sqm && gsm) kg = (sqm * gsm) / 1000;
+  sqm = r2(sqm); kg = r2(kg);
+  if (!kg || kg <= 0) throw err("Enter rolls/length/width (with a GSM) or a direct quantity", 400);
+
+  const wh = body.wh || FG_STORE;
+  if (!(data.warehouses || []).some((w) => w.id === wh)) throw err("Choose a valid store", 400);
+
+  // a routed WO so the run shows on the same boards as planned work
+  let max = 0;
+  (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
+  const now = new Date().toISOString();
+  const line = body.line || getLineForItem(item) || "Coating Line 1";
+  const wo = {
+    id: "WO-" + String(max + 1).padStart(4, "0"),
+    date: todayISO(), itemId: item.id, qty: kg, status: "Released",
+    due: null, line, progress: 0, priority: "Normal",
+    route: S.freshRoute({ line, itemId: item.id }), stageIdx: 0, legacy: false,
+    adhoc: true, rolls, lengthM, widthMM, gsm, sqm,
+    createdBy: user.username, createdAt: now,
+  };
+  wo.status = S.rollupStatus(wo);
+  repo.putWorkOrder(wo);
+
+  const ref = "AP-" + Date.now().toString(36).toUpperCase();
+  const moves = [{ id: mvId(), date: todayISO(), itemId: item.id, wh, type: "PROD",
+    qty: Math.abs(kg), rate: item.cost || 0, ref, note: "Ad-hoc production " + wo.id, by: user.username }];
+
+  const bom = (data.boms || {})[item.id];
+  const consumed = [];
+  let deducted = false;
+  if (bom && (bom.lines || []).length) {
+    const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+    const Y = bom.yield || 1;
+    BC.toLegacy(bom, BC.metaFromItem(item)).forEach(([rid, per]) => {
+      const need = r2(per * kg / Y);
+      if (!need || !itemsById[rid]) return;
+      moves.push({ id: mvId(), date: todayISO(), itemId: rid, wh: RAW_STORE, type: "ISSUE",
+        qty: -Math.abs(need), rate: itemsById[rid].cost || 0, ref,
+        note: "Ad-hoc issue → " + item.id, by: user.username });
+      consumed.push({ id: rid, name: itemsById[rid].name || rid, qty: need, uom: itemsById[rid].uom || "" });
+    });
+    deducted = consumed.length > 0;
+  }
+  repo.addMovements(moves);
+
+  return {
+    ok: true, workOrder: wo.id, itemId: item.id, name: item.name,
+    rolls, lengthM, widthMM, gsm, sqm, kg, wh,
+    consumed, deducted,
+    note: deducted ? null : "No BOM for this product — production recorded, raw materials not deducted",
+  };
+}
+
+module.exports = { advance, createWorkOrder, produceFinished, recordExcessMaterial,
+  updateWorkOrderStatus, returnStock, createAdhocProduction, ACTIONS };

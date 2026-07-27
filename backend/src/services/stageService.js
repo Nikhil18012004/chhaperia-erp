@@ -38,6 +38,7 @@
    brand-new work orders get the full per-stage posting.
    ============================================================ */
 "use strict";
+const BC = require("../../../frontend/js/bomcalc");
 
 /* ---- yields ---- */
 const Y_SLIT = 0.98;   // slitting trim loss (kept for reference / callers)
@@ -133,7 +134,9 @@ function areaCovers(userArea, stageArea) {
    Each stage consumes the previous stage's WIP + its role materials;
    the final stage produces the finished good. Returns null (no BOM).
    ============================================================ */
-function computeStagePlan(fgId, qty, data) {
+/* `choices` maps a ranged BOM line index -> the stock item actually chosen
+   for this work order (see BOMCALC.candidatesFor / resolve). */
+function computeStagePlan(fgId, qty, data, choices) {
   const bom = (data.boms || {})[fgId];
   if (!bom) return null;
   const itemsById = indexBy(data.items || [], "id");
@@ -143,7 +146,10 @@ function computeStagePlan(fgId, qty, data) {
 
   // assign each BOM line to the first stage that consumes its role (else stage 0)
   const perStage = stages.map(() => []);
-  (bom.lines || []).forEach(([rid, per]) => {
+  // toLegacy() accepts both the legacy [id, qty] tuple and the rich object
+  // form the real BOM import produces, so neither shape can reach the
+  // array-destructuring below unconverted.
+  BC.toLegacy(bom, BC.metaFromItem(itemsById[fgId]), choices).forEach(([rid, per]) => {
     const role = materialRole(rid);
     let si = stages.findIndex((s) => (s.roles || []).includes(role));
     if (si < 0) si = 0;
@@ -305,7 +311,7 @@ function ensureStageModel(data) {
 
     // material cost per role (per kg FG), then accumulate per stage for WIP valuation
     const roleCost = { base: 0, paste: 0, pack: 0 };
-    (boms[fgId].lines || []).forEach(([rid, per]) => { roleCost[materialRole(rid)] += per * ((itemsById[rid] || {}).cost || 0); });
+    BC.toLegacy(boms[fgId], BC.metaFromItem(fg)).forEach(([rid, per]) => { roleCost[materialRole(rid)] += per * ((itemsById[rid] || {}).cost || 0); });
     const cumCost = {}; let cum = 0;
     tpl.stages.forEach((s) => { (s.roles || []).forEach((role) => { cum += roleCost[role] || 0; }); if (s.wip) cumCost[s.wip] = Math.round(cum / Y); });
 

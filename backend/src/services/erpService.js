@@ -8,6 +8,7 @@
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
+const BC = require("../../../frontend/js/bomcalc");
 
 /** Load the full dataset; seed automatically on first run. */
 function getState() {
@@ -259,14 +260,26 @@ function saveBom(itemId, bom) {
   if (!repo.getItem(itemId)) throw err("Unknown product " + itemId, 400);
   bom = bom || {};
   if (!Array.isArray(bom.lines) || !bom.lines.length) throw err("A BOM needs at least one component", 400);
-  const clean = bom.lines
-    .map((l) => (Array.isArray(l) ? [l[0], num(l[1])] : [l.rawId || l.id, num(l.per || l.qty)]))
-    .filter((l) => l[0] && l[1] > 0);
+  // Normalise to the rich line shape and KEEP it. Flattening to [id, qty]
+  // here would silently discard pickup %, the material's type/thickness/GSM
+  // and the ranged flag on every save — i.e. lose the recipe's real content.
+  // A ranged line has no single id yet (it resolves against stock at issue),
+  // so it is valid as long as it carries candidate options.
+  const clean = BC.normalize(bom.lines)
+    .filter((l) => (l.id || (l.options && l.options.length)) && l.qty > 0);
   if (!clean.length) throw err("A BOM needs at least one component with a positive quantity", 400);
   let y = num(bom.yield) || 1;
   if (y > 1) y = y / 100;                       // accept 0-1 fraction or 1-100 percent
   y = Math.min(1, Math.max(0.01, y));
-  return repo.putBom(itemId, { yield: y, lines: clean });
+  const out = { yield: y, lines: clean };
+  // alternate approved recipes (different fabric supplier) travel with the BOM
+  if (Array.isArray(bom.alternates) && bom.alternates.length) {
+    out.alternates = bom.alternates.map((a) => ({
+      label: String(a.label || "").slice(0, 60) || "Variant",
+      lines: BC.normalize(a.lines).filter((l) => (l.id || (l.options && l.options.length)) && l.qty > 0),
+    })).filter((a) => a.lines.length);
+  }
+  return repo.putBom(itemId, out);
 }
 function deleteBom(itemId) {
   if (!repo.getBom(itemId)) throw err("No BOM for " + itemId, 404);

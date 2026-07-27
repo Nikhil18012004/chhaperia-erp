@@ -77,6 +77,59 @@ try {
   const reseed = erp.reset();
   ok("reset returns a fresh dataset", Array.isArray(reseed.items) && reseed.items.length > 0);
   ok("reset dropped the smoke item", !repo.getItem("RM-SMOKE"));
+
+  /* ============================================================
+     BOM production maths (frontend/js/bomcalc.js — shared with the UI).
+     Worked by hand from the real sheet row for CHDSW-25, so these
+     numbers are the specification, not a snapshot of the code.
+       fabric   : 2 x NON-WOVEN @ 20 g/m²  -> 40 g/m²
+       FG       : 100 g/m²                 -> pickup GSM 60
+       pickup   : carbon 60x50 + SAP 40x100 + bondex 7x80 + carbon 6x50
+                = 30 + 40 + 5.6 + 3        -> 78.6 kg
+       total    : 78.6 x 1000 / 60         -> 1310 sqm
+     ============================================================ */
+  section("BOM production maths");
+  const BC = require("../../frontend/js/bomcalc");
+  const L = [
+    { rm: "NON-WOVEN FABRIC", rmGsm: "20", qty: 1000, unit: "MTR" },
+    { rm: "CARBON PASTE", qty: 60, unit: "KG" },
+    { rm: "SAP", qty: 40, unit: "KG" },
+    { rm: "WATER RO", qty: 100, unit: "KG" },
+    { rm: "BONDEX", qty: 7, unit: "KG" },
+    { rm: "BPO", qty: 40, unit: "GRAM" },
+    { rm: "NON-WOVEN FABRIC", rmType: "COMPRESSED/THERMAL BONDING", rmGsm: "20", qty: 1000, unit: "MTR" },
+    { rm: "CARBON PASTE", qty: 6, unit: "KG" },
+  ].map((l) => Object.assign({}, l, { pickupPct: BC.defaultPickup(l.rm) }));
+  const calc = BC.compute({ lines: L }, { fgGsm: 100 });
+
+  ok("pickup % defaults applied (carbon 50 / SAP 100 / bondex 80 / solvent 0)",
+    BC.defaultPickup("CARBON PASTE") === 50 && BC.defaultPickup("SAP") === 100 &&
+    BC.defaultPickup("BONDEX") === 80 && BC.defaultPickup("WATER RO") === 0);
+  ok("layer count derived from GSM-bearing fabric lines (2)", calc.fabricCount === 2 && calc.layers === 2);
+  ok("fabric GSM sums both layers (40)", calc.fabricGsm === 40);
+  ok("pickup GSM = FG − fabric (60)", calc.pickupGsm === 60);
+  ok("FG kg per 1000 sqm batch (100)", calc.fgKgPerBatch === 100);
+  ok("total pickup qty (78.6 kg)", Math.abs(calc.totalPickupQty - 78.6) < 1e-9, String(calc.totalPickupQty));
+  ok("TOTAL PRODUCTION = 1310 sqm", Math.round(calc.totalProductionSqm) === 1310, String(calc.totalProductionSqm));
+  ok("consumption/kg = qty / fgKgPerBatch", Math.abs(calc.lines[1].consumptionPerKg - 0.6) < 1e-9);
+  ok("consumption/sqm = qty / batch sqm", Math.abs(calc.lines[1].consumptionPerSqm - 0.06) < 1e-9);
+  ok("fabric excluded from pickup mass (substrate, not pickup)", calc.lines[0].pickupQty == null);
+  ok("ranged line detected from a '/' choice", calc.rangedLines === 1 && calc.lines[6].ranged === true);
+
+  // both line shapes must survive the same reader
+  ok("legacy tuples still normalise", BC.normalize([["RM-X", 2]])[0].id === "RM-X");
+  // 60 kg of carbon in a batch that yields 100 kg of FG = 0.6 per kg
+  const legacy = BC.toLegacy({ lines: [{ id: "RM-CARBON", rm: "CARBON PASTE", qty: 60, unit: "KG" }] }, { fgGsm: 100 });
+  ok("batch qty converts to per-unit of FG for legacy consumers (0.6)",
+    legacy.length === 1 && legacy[0][0] === "RM-CARBON" && Math.abs(legacy[0][1] - 0.6) < 1e-9,
+    JSON.stringify(legacy));
+  // a ranged line resolves to the operator's pick
+  const resolved = BC.resolve({ lines: L }, { 6: "RM-PICKED" });
+  ok("operator's material choice resolves the ranged line",
+    resolved[6].id === "RM-PICKED" && resolved[6].ranged === false);
+  // Excel's scientific notation must not be read as a whole number
+  ok("scientific notation parses (3.3E-2 = 0.033 mm, not 3.3)",
+    Math.abs(BC.numLoose("3.3000000000000002E-2") - 0.033) < 1e-9);
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

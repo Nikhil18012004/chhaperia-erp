@@ -44,8 +44,10 @@ function getState() {
   });
 
   const boms = {};
-  db.prepare("SELECT item_id,yield,lines FROM boms").all().forEach((r) => {
+  db.prepare("SELECT item_id,yield,lines,alternates FROM boms").all().forEach((r) => {
     boms[r.item_id] = { yield: r.yield, lines: P(r.lines, []) };
+    const alt = P(r.alternates, null);
+    if (alt && alt.length) boms[r.item_id].alternates = alt;
   });
 
   const movements = db.prepare(
@@ -171,8 +173,9 @@ function saveState(data) {
       });
     });
 
-    const bom = db.prepare("INSERT INTO boms(item_id,yield,lines) VALUES(?,?,?)");
-    Object.entries(d.boms || {}).forEach(([itemId, b]) => bom.run(itemId, b.yield || 1, J(b.lines || [])));
+    const bom = db.prepare("INSERT INTO boms(item_id,yield,lines,alternates) VALUES(?,?,?,?)");
+    Object.entries(d.boms || {}).forEach(([itemId, b]) => bom.run(itemId, b.yield || 1, J(b.lines || []),
+      (Array.isArray(b.alternates) && b.alternates.length) ? J(b.alternates) : null));
 
     const mv = db.prepare(`INSERT INTO movements
       (id,date,item_id,wh,type,qty,rate,ref,note,by_who,supplier_id)
@@ -392,15 +395,20 @@ function deleteSalesOrder(id) {
 /* ---------- BILL OF MATERIALS (granular) ---------- */
 function getBom(itemId) {
   const db = getDb();
-  const b = db.prepare("SELECT item_id,yield,lines FROM boms WHERE item_id=?").get(itemId);
+  const b = db.prepare("SELECT item_id,yield,lines,alternates FROM boms WHERE item_id=?").get(itemId);
   if (!b) return null;
-  return { itemId: b.item_id, yield: b.yield, lines: P(b.lines, []) };
+  const out = { itemId: b.item_id, yield: b.yield, lines: P(b.lines, []) };
+  const alt = P(b.alternates, null);
+  if (alt && alt.length) out.alternates = alt;
+  return out;
 }
 function putBom(itemId, bom) {
   const db = getDb();
-  db.prepare(`INSERT INTO boms(item_id,yield,lines) VALUES(?,?,?)
-      ON CONFLICT(item_id) DO UPDATE SET yield=excluded.yield, lines=excluded.lines`)
-    .run(itemId, (bom && bom.yield) || 1, J((bom && bom.lines) || []));
+  const alt = (bom && Array.isArray(bom.alternates) && bom.alternates.length) ? J(bom.alternates) : null;
+  db.prepare(`INSERT INTO boms(item_id,yield,lines,alternates) VALUES(?,?,?,?)
+      ON CONFLICT(item_id) DO UPDATE SET yield=excluded.yield, lines=excluded.lines,
+        alternates=excluded.alternates`)
+    .run(itemId, (bom && bom.yield) || 1, J((bom && bom.lines) || []), alt);
   return getBom(itemId);
 }
 function deleteBom(itemId) {

@@ -112,6 +112,7 @@ function userFromToken(token) {
 const DEFAULT_USERS = [
   { id: "U-ADMIN", username: "admin", name: "Administrator", role: "admin", area: null },
   { id: "U-OFFICE", username: "office", name: "Office Desk (Sales/Purchase/Finance)", role: "office", area: null },
+  { id: "U-LAB", username: "lab", name: "Lab Incharge (QC)", role: "lab", area: null },
   { id: "U-SUP-COAT1", username: "coating1", name: "Coating Supervisor 1", role: "supervisor", area: "coating" },
   { id: "U-SUP-COAT2", username: "coating2", name: "Coating Supervisor 2", role: "supervisor", area: "coating" },
   { id: "U-SUP-SLIT1", username: "slitting1", name: "Slitting Supervisor 1", role: "supervisor", area: "slitting" },
@@ -132,7 +133,7 @@ function seedDefaultUsers() {
 /* ============================================================
    USER MANAGEMENT helpers (used by admin routes)
    ============================================================ */
-const VALID_ROLES = ["admin", "office", "supervisor"];
+const VALID_ROLES = ["admin", "office", "lab", "supervisor"];
 const VALID_AREAS = ["coating", "slitting", "fiberglass"];
 
 function createUserAccount({ username, name, role, area, password }) {

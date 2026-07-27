@@ -104,12 +104,92 @@ async function run() {
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
 
   section("Granular BOM + CRM endpoints");
+  // Lines are stored in the rich shape now (see frontend/js/bomcalc.js): a
+  // legacy [id, qty] tuple is accepted on input and normalised on the way in,
+  // because flattening back to a tuple would discard pickup % and the
+  // material's type/thickness/GSM on every save.
   const bom = await call("PUT", "/boms/" + fg, A, { yield: 90, lines: [[rm, 0.7]] });
-  ok("save BOM (percent yield → fraction)", bom.d.yield === 0.9 && bom.d.lines[0][0] === rm);
+  ok("save BOM (percent yield → fraction)", bom.d.yield === 0.9);
+  ok("legacy tuple input is normalised to a rich line", bom.d.lines[0].id === rm && bom.d.lines[0].qty === 0.7);
+  const rich = await call("PUT", "/boms/" + fg, A, { yield: 100, lines: [
+    { id: rm, rm: "TEST RM", rmType: "GRADE-A", rmGsm: "20", qty: 60, unit: "KG", pickupPct: 50 },
+  ] });
+  const rl = rich.d.lines[0];
+  ok("rich line survives a save round-trip (pickup % + material spec kept)",
+    rl.pickupPct === 50 && rl.rmType === "GRADE-A" && rl.unit === "KG" && rl.qty === 60);
+  const ranged = await call("PUT", "/boms/" + fg, A, { yield: 100, lines: [
+    { rm: "CARBON PASTE", rmType: "CLOFT 912/ CLOFT 913", qty: 60, unit: "KG", options: [rm], ranged: true },
+  ] });
+  ok("ranged line (no fixed id) is accepted and flagged", ranged.status === 200 && ranged.d.lines[0].ranged === true);
+  await call("PUT", "/boms/" + fg, A, { yield: 90, lines: [[rm, 0.7]] });   // restore for later assertions
   const lead = (await call("POST", "/leads", A, { company: "HTTP Test Co", value: 250000, product: fg })).d;
   ok("create lead 201", !!lead.id);
   ok("update lead stage", (await call("PATCH", "/leads/" + lead.id, A, { stage: "Quoted" })).d.stage === "Quoted");
   ok("delete lead 200", (await call("DELETE", "/leads/" + lead.id, A)).status === 200);
+
+  /* ============================================================
+     LAB INCHARGE — a low-trust role. The earlier "sales desk" role
+     leaked the entire database because stateForUser() fell through
+     to the full dataset while the UI merely hid its menus; these
+     assertions exist so that cannot happen again unnoticed.
+     ============================================================ */
+  section("Lab role: scoped payload + write limits");
+  const lab = await login("lab", "lab@123");
+  const LB = lab.token;
+  ok("lab login returns a token + role", !!(lab && LB && lab.user.role === "lab"));
+
+  const labState = (await call("GET", "/state", LB)).d;
+  ok("lab payload is the scoped lab view", labState.role === "lab");
+  ok("lab gets NO HR/payroll data", !labState.hrWorkers && !labState.hrPayslips);
+  ok("lab gets NO CRM leads", !labState.leads);
+  ok("lab still sees items + BOMs (needed to trace a batch)",
+    Array.isArray(labState.items) && labState.items.length > 0 && !!labState.boms);
+  const labProd = (labState.labProducts || [])[0];
+  ok("lab gets NO spec limits, only whether one is set",
+    !labProd || (Object.keys(labProd.spec || {}).length === 0 && "specSet" in labProd));
+
+  ok("lab CANNOT list users (403)", (await call("GET", "/auth/users", LB)).status === 403);
+  ok("lab CANNOT write items (403)", (await call("POST", "/items", LB, { id: "RM-LAB", name: "x", cat: "RM" })).status === 403);
+  ok("lab CANNOT create purchase orders (403)", (await call("POST", "/purchase-orders", LB, { supplierId: "SUP-01", lines: [] })).status === 403);
+  ok("lab CANNOT PUT full state (403)", (await call("PUT", "/state", LB, {})).status === 403);
+  ok("lab CANNOT edit the lab product master (403)",
+    (await call("POST", "/lab/products", LB, { name: "X" })).status === 403);
+  ok("lab CANNOT set a spec — it is the yardstick it is graded by (403)",
+    (await call("PUT", "/lab/products/LP-0001/spec", LB, { spec: {} })).status === 403);
+
+  /* ---- two-stage measurement of one batch ---- */
+  section("Two-stage lab measurement (production + lab on one batch)");
+  const lpId = (labState.labProducts || [])[0] && labState.labProducts[0].id;
+  if (lpId) {
+    await call("PUT", "/lab/products/" + lpId + "/spec", A, { spec: { thickness: { min: 0.1, max: 0.3 }, tensile: { min: 35 } } });
+    const batch = "BATCH-2STAGE";
+    const p1 = await call("POST", "/lab/reports", O, { productId: lpId, refNo: batch, source: "production", values: { thickness: 0.2, tensile: 40 } });
+    ok("production stage recorded", p1.status === 201 && p1.d.prodResult === "Pass", JSON.stringify(p1.d && p1.d.prodResult));
+    const p2 = await call("POST", "/lab/reports", LB, { productId: lpId, refNo: batch, values: { thickness: 0.2, tensile: 20 } });
+    ok("lab stage merges into the SAME report (no duplicate certificate)", p2.d.id === p1.d.id);
+    ok("both measurement sets are kept side by side",
+      Object.keys(p2.d.prodValues || {}).length > 0 && Object.keys(p2.d.labValues || {}).length > 0);
+    ok("each stage grades independently (production Pass, lab Fail)",
+      p2.d.prodResult === "Pass" && p2.d.labResult === "Fail",
+      p2.d.prodResult + "/" + p2.d.labResult);
+    ok("headline result follows the lab reading once present", p2.d.result === "Fail");
+    ok("lab writer is attributed", p2.d.labBy === "lab");
+    ok("lab CANNOT delete a certificate (403)", (await call("DELETE", "/lab/reports/" + p1.d.id, LB)).status === 403);
+  }
+
+  /* ---- supervisor floor actions ---- */
+  section("Floor actions: return + unplanned production");
+  const ret = await call("POST", "/production/return", C, { itemId: "RM-HTTP", qty: 5, reason: "unused issue" });
+  ok("supervisor can return material to store", ret.status === 201 && ret.d.movement.type === "RET" && ret.d.movement.qty === 5);
+  ok("return rejects a zero quantity", (await call("POST", "/production/return", C, { itemId: "RM-HTTP", qty: 0 })).status === 400);
+  const adhoc = await call("POST", "/production/adhoc", C, { itemId: fg, rolls: 2, lengthM: 1000, widthMM: 1000, gsm: 100 });
+  // 2 rolls x 1000 m x 1.0 m = 2000 sqm ; x 100 g/m² / 1000 = 200 kg
+  ok("unplanned production derives sqm + kg from the roll geometry",
+    adhoc.status === 201 && adhoc.d.sqm === 2000 && adhoc.d.kg === 200,
+    JSON.stringify({ sqm: adhoc.d && adhoc.d.sqm, kg: adhoc.d && adhoc.d.kg }));
+  ok("unplanned production creates a routed work order", !!(adhoc.d && adhoc.d.workOrder));
+  ok("adhoc needs enough geometry to weigh the run",
+    (await call("POST", "/production/adhoc", C, { itemId: fg, rolls: 1 })).status === 400);
 
   section("Validation rejects bad input");
   ok("SO with empty lines → 400", (await call("POST", "/sales-orders", A, { customerId: cust, lines: [] })).status === 400);
