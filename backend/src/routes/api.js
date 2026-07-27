@@ -135,6 +135,10 @@ router.delete("/leads/:id", requireAuth, rw, (req, res, next) => {
 router.post("/customers", requireAuth, rw, (req, res, next) => {
   try { res.status(201).json(erp.upsertCustomer(req.body || {})); } catch (e) { next(e); }
 });
+// Warehouses: master-data edits (rename etc.)
+router.patch("/warehouses/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateWarehouse(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
 // Transporters (dispatch providers): create / update / delete
 router.post("/transporters", requireAuth, rw, (req, res, next) => {
   try { res.status(201).json(erp.createTransporter(req.body || {})); } catch (e) { next(e); }

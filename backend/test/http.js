@@ -103,6 +103,16 @@ async function run() {
   ok("create PO 201", po.id && po.value === 2000);
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
 
+  // Warehouse master-data edit (rename) — admin/office only
+  const wh0 = st.warehouses[0];
+  const ren = await call("PATCH", "/warehouses/" + wh0.id, A, { name: "Renamed Store" });
+  ok("rename warehouse 200", ren.status === 200 && ren.d.name === "Renamed Store");
+  ok("rename persisted in state", (await call("GET", "/state", A)).d.warehouses.find((w) => w.id === wh0.id).name === "Renamed Store");
+  ok("supervisor cannot rename warehouse (403)", (await call("PATCH", "/warehouses/" + wh0.id, C, { name: "X" })).status === 403);
+  ok("rename unknown warehouse 404", (await call("PATCH", "/warehouses/WH-NOPE", A, { name: "X" })).status === 404);
+  ok("rename to blank rejected 400", (await call("PATCH", "/warehouses/" + wh0.id, A, { name: "  " })).status === 400);
+  await call("PATCH", "/warehouses/" + wh0.id, A, { name: wh0.name });
+
   section("Granular BOM + CRM endpoints");
   // Lines are stored in the rich shape now (see frontend/js/bomcalc.js): a
   // legacy [id, qty] tuple is accepted on input and normalised on the way in,

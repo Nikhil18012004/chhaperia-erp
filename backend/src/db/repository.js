@@ -474,6 +474,17 @@ function deleteWorkOrder(id) {
   return { id };
 }
 
+/* ---------- WAREHOUSES ---------- */
+function getWarehouse(id) {
+  return getDb().prepare("SELECT id,name,type,city FROM warehouses WHERE id=?").get(id) || null;
+}
+function putWarehouse(w) {
+  getDb().prepare("INSERT INTO warehouses(id,name,type,city) VALUES(@id,@name,@type,@city) " +
+    "ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,city=excluded.city")
+    .run({ id: w.id, name: w.name, type: w.type || null, city: w.city || null });
+  return w;
+}
+
 /* ---------- TRANSPORTERS (dispatch providers) ---------- */
 function getTransporter(id) {
   const db = getDb();
@@ -677,6 +688,7 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
   getCustomer, putCustomer, deleteItem, deleteWorkOrder,
   getSettings, categoryExists,
+  getWarehouse, putWarehouse,
   getTransporter, putTransporter, deleteTransporter,
   // HR
   getWorker, getWorkerByDevice, putWorker, deleteWorker,

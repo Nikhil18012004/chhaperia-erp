@@ -315,6 +315,16 @@ function upsertCustomer(cust) {
   return repo.putCustomer(cust);
 }
 
+/* ---- Warehouses: master-data edits (rename etc.) ---- */
+function updateWarehouse(id, patch) {
+  const existing = repo.getWarehouse(id);
+  if (!existing) throw err("Warehouse not found", 404);
+  const merged = Object.assign({}, existing, patch || {}, { id });
+  merged.name = String(merged.name || "").trim();
+  if (!merged.name) throw err("Warehouse needs a name", 400);
+  return repo.putWarehouse(merged);
+}
+
 /* ---- Transporters (dispatch providers) ---- */
 function createTransporter(t) {
   t = t || {};
@@ -366,5 +376,5 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createSalesOrder, updateSalesOrder, deleteSalesOrder, dispatchSalesOrder,
   saveBom, deleteBom, createLead, updateLead, deleteLead, upsertCustomer,
-  deleteItem, deleteWorkOrder, nextId,
+  deleteItem, deleteWorkOrder, nextId, updateWarehouse,
   createTransporter, updateTransporter, deleteTransporter, ensureDispatch };

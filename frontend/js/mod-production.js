@@ -14,6 +14,16 @@
   // products that carry a per-order production spec (mirrors backend stageService)
   const ORDER_SPEC={ "FG-CU-WBT": { key:"copperWires", label:"Copper wires (per tape)" } };
   function curStage(w){ const rt=w.route; if(!rt||!rt.length) return null; const i=Math.min(Math.max(w.stageIdx||0,0),rt.length-1); return rt[i]; }
+  /* The source sheet's LAYERS column ("TOP LAYER", "DIP COAT", "DOUBLE BLADE
+     DOUBLE SIDE"…) travels on the FG item as layersText, alongside the layer
+     count derived from the recipe's GSM-bearing fabric lines. */
+  function layersLabel(fg){
+    if(!fg) return null;
+    const bits=[];
+    if(fg.layersText) bits.push(fg.layersText);
+    if(fg.layerCount!=null) bits.push(fg.layerCount+" layer"+(fg.layerCount>1?"s":""));
+    return bits.length? bits.join(" · ") : null;
+  }
   function stageCell(w){
     if(w.dispatched) return `<span class="chip" style="color:var(--ok);border-color:var(--ok)">🚚 Dispatched</span>`;
     const rt=w.route||[]; if(!rt.length) return `<span class="muted">—</span>`;
@@ -266,6 +276,14 @@
         if(spec){ specHost.appendChild(U.field(spec.label,`<input class="input" id="w_spec" type="number" min="0" placeholder="as per order">`)); }
         matHost.innerHTML=""; if(!bom) return;
 
+        // the sheet's layer/coating note for this product, so the operator
+        // sees how the run is built up (e.g. TOP LAYER · 2 layers)
+        const lay=layersLabel(ENG.item(id));
+        if(lay) matHost.appendChild(h("div",{class:"flex aic",style:"gap:6px;margin-bottom:10px"},[
+          h("span",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase",text:"Layers"}),
+          h("span",{class:"chip",style:"font-size:11px",text:"≡ "+lay})
+        ]));
+
         /* ---- ranged materials: pick the real one from what the store holds ----
            The BOM records a choice ("CLOFT 912 / CLOFT 913") or a span
            ("0.08-0.10") rather than one material. Which is actually issued is
@@ -482,9 +500,11 @@
         const src=(bom.alternates && bom.alternates[altIdx])||bom;
         const c=BOMCALC.compute({lines:BOMCALC.normalize(src.lines)}, meta);
 
+        const lay=layersLabel(fg);
         basisHost.textContent=`Batch ${meta.batchWidthMM} mm × ${meta.batchLengthM} m = ${n(c.batchSqm,0)} sqm`
           +(c.fgGsm!=null?` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch`:" · FG GSM not set")
-          +` · yield ${(bom.yield*100).toFixed(0)}%`;
+          +` · yield ${(bom.yield*100).toFixed(0)}%`
+          +(lay?` · Layers: ${lay}`:"");
 
         altHost.innerHTML="";
         if(bom.alternates && bom.alternates.length>1){
@@ -612,9 +632,11 @@
 
         /* ---- batch basis banner ---- */
         basisHost.innerHTML="";
+        const lay=layersLabel(fg);
         basisHost.appendChild(h("span",{text:
           `Batch ${meta.batchWidthMM} mm × ${meta.batchLengthM} m = ${n(c.batchSqm,0)} sqm`
           + (c.fgGsm!=null ? ` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch` : " · FG GSM not set — per-kg figures unavailable")
+          + (lay ? ` · Layers: ${lay}` : "")
         }));
 
         /* ---- alternate approved recipes ---- */

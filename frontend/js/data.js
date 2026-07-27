@@ -148,6 +148,9 @@
     update(id, patch) { return http("PATCH", "/transporters/" + enc(id), patch); },
     remove(id) { return http("DELETE", "/transporters/" + enc(id)); },
   };
+  const warehouses = {
+    update(id, patch) { return http("PATCH", "/warehouses/" + enc(id), patch); },
+  };
 
   /* ---- Human Resources ---- */
   const hr = {
@@ -218,7 +221,7 @@
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
-    items, movements, purchase, sales, boms, leads, customers, transporters, hr,
+    items, movements, purchase, sales, boms, leads, customers, transporters, warehouses, hr,
     labProducts, labReports,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
