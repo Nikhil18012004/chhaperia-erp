@@ -415,9 +415,7 @@
   /* ============== STOCK LEDGER ============== */
   M.ledger = { title:"Stock Ledger", sub:"Every movement, running balance", render(root, params){
     let filter={q:params&&params.item?params.item:"", type:"all", wh:"all", from:"", to:""};
-    root.appendChild(pageHead("Stock Ledger","Complete audit trail — receipts, issues, production, sales & adjustments with auto running balance",[
-      h("button",{class:"btn",onclick:()=>adjForm(),html:"⚖ Stock Adjustment"}),
-    ]));
+    root.appendChild(pageHead("Stock Ledger","Complete audit trail — receipts, issues, production, sales & adjustments with auto running balance"));
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search item, reference…", v=>{filter.q=v.toLowerCase();draw();}),

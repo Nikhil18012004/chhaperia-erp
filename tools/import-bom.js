@@ -103,6 +103,10 @@ function parseProducts(rows) {
     if (g(r, C.series)) series = g(r, C.series);
     if (g(r, C.product)) product = g(r, C.product);
     const code = g(r, C.code), rmName = g(r, C.rm);
+    // A LAYERS cell starts a layer section: every RM row from here down
+    // belongs to that layer until the next label (or the next product).
+    // "-" means the product has no layer sections.
+    const layCell = g(r, C.layers);
     if (code) {
       cur = { row: r + 1, series, product, code, fgThk: g(r, C.fgThk), layersText: g(r, C.layers),
         // Spec keys MUST match labService.PARAMS exactly, or evaluate() finds
@@ -119,11 +123,13 @@ function parseProducts(rows) {
           volumeResistance: g(r, C.sVolRes),
           bdv: g(r, C.sBdv),
         } };
+      cur._layer = null;
       out.push(cur);
     }
+    if (cur && layCell) cur._layer = /^-+$/.test(layCell) ? null : layCell.replace(/\s+/g, " ").trim();
     if (rmName && cur) {
       cur.lines.push(canonRm({ row: r + 1, rm: rmName, rmType: g(r, C.rmType), rmThk: g(r, C.rmThk),
-        rmGsm: g(r, C.rmGsm), qty: g(r, C.qty), unit: g(r, C.unit) }));
+        rmGsm: g(r, C.rmGsm), qty: g(r, C.qty), unit: g(r, C.unit), layer: cur._layer }));
     }
   }
   return out;
@@ -288,6 +294,7 @@ function build(products) {
       qty: qty == null ? 0 : qty, unit: BOM.normUnit(l.unit) || "KG",
       pickupPct: BOM.defaultPickup(l.rm),
       ranged: rangedType || BOM.isRanged(l.rmThk) || BOM.isRanged(l.rmGsm),
+      layer: l.layer || null,
     };
   });
 

@@ -118,7 +118,7 @@
       var q = num(l[1]);
       return { id: l[0] || null, rm: null, rmType: null, rmThk: null, rmGsm: null,
         qty: q == null ? 0 : q, unit: "KG", pickupPct: null,
-        ranged: false, rangedOn: [], options: [], legacy: true };
+        ranged: false, rangedOn: [], options: [], layer: null, legacy: true };
     }
     if (typeof l !== "object") return null;
     var rangedOn = [];
@@ -136,6 +136,9 @@
       ranged: rangedOn.length > 0 || !!l.ranged,
       rangedOn: rangedOn,
       options: Array.isArray(l.options) ? l.options.slice() : [],
+      // the sheet's layer section this line belongs to (e.g. "TOP LAYER");
+      // must survive normalisation or every save strips the layer grouping
+      layer: isBlank(l.layer) ? null : String(l.layer).replace(/\s+/g, " ").trim(),
       legacy: false,
     };
   }

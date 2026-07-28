@@ -30,17 +30,34 @@
   }
 
   /* ---- layer build-up panel ----
-     Each metre-measured (MTR) recipe line IS one physical web layer — that
-     count matches the sheet's layer count on all 102 imported products. The
-     KG/GRAM lines (adhesive, solvent, hardener) are the coating/bonding
-     chemistry between the webs, so they're listed under the stack, not as
-     layers. Returns null for single-layer products — no layer UI at all. */
+     Format: the LAYER NAME as a heading, and beneath it every raw material
+     that belongs to that layer; then the next layer's heading, and so on.
+     Real layer names come from the sheet's LAYERS column carried on each
+     BOM line (line.layer — "TOP LAYER", "BOTTOM LAYER", …). Where a product
+     has no layer labels, each metre-measured (fabric/tape) line starts a
+     new "LAYER n" group and the chemicals after it belong to that layer.
+     Products that don't stack more than one layer show no layer UI at all. */
   function layerPanel(fg, rawLines){
     if(!fg || !rawLines) return null;
     const lines=BOMCALC.normalize(rawLines);
-    const layers=lines.filter(l=>BOMCALC.normUnit(l.unit)==="MTR");
-    const nLayers=Math.max(layers.length, fg.layerCount||0);
-    if(nLayers<2) return null;
+    if(!lines.length) return null;
+    const groups=[];
+    if(lines.some(l=>l.layer)){
+      let g=null;
+      lines.forEach(l=>{
+        if(l.layer && (!g || g.label!==l.layer)){ g={label:l.layer, lines:[]}; groups.push(g); }
+        if(!g){ g={label:null, lines:[]}; groups.push(g); }
+        g.lines.push(l);
+      });
+    } else {
+      const pre=[]; let g=null, n=0;
+      lines.forEach(l=>{
+        if(BOMCALC.normUnit(l.unit)==="MTR"){ n++; g={label:"LAYER "+n, lines:[]}; groups.push(g); }
+        if(g) g.lines.push(l); else pre.push(l);
+      });
+      if(pre.length && groups.length) groups[0].lines=pre.concat(groups[0].lines);
+    }
+    if(groups.length<2) return null;   // no layer story to tell
     const nameOf=l=>{ const it=l.id?ENG.item(l.id):null;
       if(it) return U.matDisplay(it);
       return l.rmType? l.rmType+" — "+(l.rm||"") : (l.rm||"—"); };
@@ -48,20 +65,19 @@
       if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
       return bits.join(" · "); };
     const box=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"});
-    box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:8px",
-      text:"≡ Layer build-up · "+nLayers+" layers"+(fg.layersText?" · "+fg.layersText:"")}));
-    layers.forEach((l,i)=>{
-      if(i>0) box.appendChild(h("div",{class:"muted",style:"border-top:1px dashed var(--line);margin:3px 0 3px 70px;font-size:10px;line-height:0.6;text-align:center"},
-        h("span",{style:"background:var(--panel-2);padding:0 8px",text:"— layer break —"})));
-      box.appendChild(h("div",{class:"flex aic",style:"gap:10px;padding:5px 0;font-size:12.5px"},[
-        h("span",{class:"chip",style:"font-size:10px;flex:0 0 auto",text:"Layer "+(i+1)}),
-        h("span",{style:"font-weight:600",text:nameOf(l)}),
-        specOf(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:specOf(l)}):null
-      ]));
+    box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
+      text:"≡ Layer build-up · "+groups.length+" layers"}));
+    groups.forEach((g,gi)=>{
+      box.appendChild(h("div",{style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:"+(gi?12:6)+"px 0 4px;color:var(--accent)",
+        text:g.label||("LAYER "+(gi+1))}));
+      g.lines.forEach(l=>{
+        box.appendChild(h("div",{class:"flex aic",style:"gap:8px;padding:3px 0 3px 14px;font-size:12.5px;border-left:2px solid var(--line);margin-left:2px"},[
+          h("span",{style:"font-weight:600",text:nameOf(l)}),
+          specOf(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:specOf(l)}):null,
+          h("span",{class:"muted mono",style:"margin-left:auto;font-size:11px;flex:0 0 auto",text:ENG.num(l.qty,2)+" "+(l.unit||"")})
+        ]));
+      });
     });
-    const chems=lines.filter(l=>BOMCALC.normUnit(l.unit)!=="MTR");
-    if(chems.length) box.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line)"},
-      [h("b",{text:"Bonding / coating chemistry: "}), h("span",{text:chems.map(nameOf).join(", ")})]));
     return box;
   }
 
@@ -932,7 +948,7 @@
             rm:l.rm, rmType:l.rmType, rmThk:l.rmThk, rmGsm:l.rmGsm,
             qty:+l.qty||0, unit:l.unit||"KG",
             pickupPct: l.pickupPct==null?null:+l.pickupPct,
-            ranged:!!l.ranged, options:l.options||[] };
+            ranged:!!l.ranged, options:l.options||[], layer:l.layer||null };
           return o;
         }).filter(l=>(l.id||l.options.length) && l.qty>0);
         if(!out.length){ toast("Add at least one component with a quantity",{type:"warn"}); return; }
