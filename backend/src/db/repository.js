@@ -468,6 +468,17 @@ function deleteItem(id) {
   db.prepare("DELETE FROM items WHERE id=?").run(id);
   return { id };
 }
+function renameWorkOrder(oldId, newId) {
+  const db = getDb();
+  // the WO number is the row key and the ref every stage movement carries —
+  // both move together or the ledger orphans
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE movements SET ref=? WHERE ref=?").run(newId, oldId);
+    db.prepare("UPDATE work_orders SET id=? WHERE id=?").run(newId, oldId);
+  });
+  tx();
+  return { id: newId };
+}
 function deleteWorkOrder(id) {
   const db = getDb();
   // mirror deleteSalesOrder: the WO's posted stage movements (ISSUE/PROD)
@@ -692,7 +703,7 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getSalesOrder, putSalesOrder, deleteSalesOrder,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
-  getCustomer, putCustomer, deleteItem, deleteWorkOrder,
+  getCustomer, putCustomer, deleteItem, deleteWorkOrder, renameWorkOrder,
   getSettings, categoryExists,
   getWarehouse, putWarehouse,
   getTransporter, putTransporter, deleteTransporter,

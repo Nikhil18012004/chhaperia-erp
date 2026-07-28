@@ -296,21 +296,29 @@
       } else {
         wrap.appendChild(h("button",{class:"btn sm ghost",onclick:e=>{e.stopPropagation();woDetail(r);},text:"View"}));
       }
-      if(!r.dispatched && canPlan()){
-        wrap.appendChild(h("button",{class:"btn sm ghost",title:"Edit this work order",onclick:e=>{e.stopPropagation();woEditForm(r);},html:"✎"}));
-      }
       return wrap;
     }
 
-    /* ---- edit a planned work order (delete lives here too) ---- */
+    /* ---- edit a planned work order (delete lives here too) ----
+       Reachable from the WO detail modal. The WO number is renamable any
+       time before dispatch; product (name → code → thickness) and quantity
+       and line only while nothing has started. */
     function woEditForm(wo){
       const it=ENG.item(wo.itemId)||{};
       const started=(wo.route||[]).some(s=>s.posted||s.status!=="Pending");
+      const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       const LINES=["Coating Line 1","Coating Line 2","Fibre-Glass Line 1","Fibre-Glass Line 2","Slitting A","Slitting B"];
+      const lockedLabel=(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId)
+        +" — "+(it.productName||it.name||wo.itemId)
+        +(it.thicknessMM!=null?" · "+it.thicknessMM+" mm":"");
       const body=h("div",{},[
-        started?h("p",{class:"dim",style:"margin-bottom:10px",text:"Production has started — quantity and line are locked; due date and priority can still change."}):null,
+        started?h("p",{class:"dim",style:"margin-bottom:10px",text:"Production has started — product, quantity and line are locked; the W.O. number, due date and priority can still change."}):null,
         h("div",{class:"form-grid"},[
+          U.field("W.O. Number",`<input class="input" id="we_id" value="${esc(wo.id)}">`),
           U.field("Quantity (kg)",`<input class="input" id="we_qty" type="number" min="0" step="0.1" value="${wo.qty}" ${started?"disabled":""}>`),
+          started
+            ? U.field("Product",`<input type="hidden" id="we_item" value="${esc(wo.itemId)}"><input class="input is-locked" readonly value="${esc(lockedLabel)}">`,"full")
+            : fgPicker("we_item", fgs, wo.itemId),
           U.field("Production Line",U.selectHTML("we_line",LINES.map(l=>({v:l,l})),wo.line)),
           U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
           U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
@@ -318,16 +326,21 @@
       ]);
       if(started){ setTimeout(()=>{ const l=UI.$("#we_line"); if(l) l.disabled=true; },0); }
       const saveBtn=h("button",{class:"btn primary",onclick:save,text:"Save Changes"});
-      const mo=modal({title:"Edit "+wo.id, sub:it.name||wo.itemId, body,
+      const mo=modal({title:"Edit "+wo.id, sub:it.name||wo.itemId, wide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn danger",onclick:del,html:"🗑 Delete WO"}),
           saveBtn]});
       async function save(){
-        const patch={ due:UI.$("#we_due").value, priority:UI.$("#we_prio").value };
-        if(!started){ patch.qty=+UI.$("#we_qty").value; patch.line=UI.$("#we_line").value; }
+        const patch={ id:UI.$("#we_id").value.trim(), due:UI.$("#we_due").value, priority:UI.$("#we_prio").value };
+        if(!patch.id){ toast("Enter a work order number",{type:"warn"}); return; }
+        if(!started){
+          patch.qty=+UI.$("#we_qty").value;
+          patch.line=UI.$("#we_line").value;
+          const itEl=UI.$("#we_item"); if(itEl && itEl.value) patch.itemId=itEl.value;
+        }
         saveBtn.disabled=true; saveBtn.textContent="Saving…";
         try{ await DB.production.update(wo.id, patch);
-          mo.close(); toast(wo.id+" updated",{type:"ok"});
+          mo.close(); toast((patch.id||wo.id)+" updated",{type:"ok"});
           await reloadState(); draw();
         }catch(e){ toast("Update failed: "+e.message,{type:"danger"});
           saveBtn.disabled=false; saveBtn.textContent="Save Changes"; }

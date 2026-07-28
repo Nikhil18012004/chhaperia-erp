@@ -153,6 +153,29 @@ function updateWorkOrder(user, id, body) {
   if (wo.dispatched) throw err("Dispatched work orders cannot be edited", 400);
   const started = (wo.route || []).some((s) => s.posted || s.status !== "Pending");
 
+  // renumber the WO — the row key AND every movement ref move together
+  if (body.id !== undefined) {
+    const newId = String(body.id || "").trim().toUpperCase();
+    if (!newId) throw err("Work order number cannot be empty", 400);
+    if (newId.length > 24) throw err("Work order number is too long", 400);
+    if (newId !== wo.id) {
+      if ((data.workorders || []).some((w) => w.id === newId)) throw err("Work order " + newId + " already exists", 409);
+      repo.renameWorkOrder(wo.id, newId);
+      wo.id = newId;
+    }
+  }
+  // switch the product (name/code/thickness = a different FG item) — only
+  // while nothing has started; the route and materials derive from it
+  if (body.itemId !== undefined && body.itemId !== wo.itemId) {
+    if (started) throw err("Product cannot change after production has started", 400);
+    const newItem = (data.items || []).find((i) => i.id === body.itemId && i.cat === "FG");
+    if (!newItem) throw err("Unknown product", 400);
+    assertMaterialsAvailable(data, newItem, body.qty !== undefined ? +body.qty : wo.qty, null);
+    wo.itemId = body.itemId;
+    delete wo.materialChoices;                 // the picks belonged to the old recipe
+    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId });
+    wo.stageIdx = 0;
+  }
   if (body.due !== undefined) wo.due = body.due || null;
   if (body.priority !== undefined) wo.priority = body.priority || "Normal";
   if (body.qty !== undefined) {
