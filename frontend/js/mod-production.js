@@ -724,11 +724,10 @@
       const n=(v,d)=> v==null||isNaN(v) ? "—" : ENG.num(v,d);
       let altIdx=0;
       const basisHost=h("div",{class:"muted",style:"font-size:12px;margin-bottom:10px"});
-      const layHost=h("div");
       const altHost=h("div",{style:"margin-bottom:10px"});
       const tblHost=h("div",{style:"overflow-x:auto"});
       const totHost=h("div",{style:"margin-top:14px"});
-      const body=h("div",{},[basisHost,layHost,altHost,
+      const body=h("div",{},[basisHost,altHost,
         h("h3",{style:"margin:4px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,totHost]);
       const mo=modal({title:"BOM · "+(U.familyCode(fg.typeCode,fg.thicknessMM)||fg.typeCode||fgId), sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
@@ -744,9 +743,6 @@
           +(c.fgGsm!=null?` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch`:" · FG GSM not set")
           +` · yield ${(bom.yield*100).toFixed(0)}%`
           +(lay?` · Layers: ${lay}`:"");
-        layHost.innerHTML="";
-        const lp=layerPanel(fg, src.lines);
-        if(lp) layHost.appendChild(lp);
 
         altHost.innerHTML="";
         if(bom.alternates && bom.alternates.length>1){
@@ -766,7 +762,23 @@
           ["Raw material","Code","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm"].map((t,i)=>
             h("th",{style:"font-size:11px;"+(i>=2?"text-align:right":""),text:t})))]));
         const tb=h("tbody");
-        c.lines.forEach(cl=>{
+        /* the LAYERS live inside this table: each layer name is a heading
+           row, and its materials sit beneath it */
+        const idxLines=BOMCALC.normalize(src.lines).map((l,i)=>Object.assign({_i:i},l));
+        const grps=layerGroups(idxLines);
+        const multi=grps.length>1;
+        const ordered=[];
+        grps.forEach((grp,gi)=>{
+          if(multi) ordered.push({_head:grp.label||("LAYER "+(gi+1))});
+          grp.lines.forEach(l=>ordered.push(c.lines[l._i]));
+        });
+        (ordered.length?ordered:c.lines).forEach(cl=>{
+          if(cl && cl._head!=null){
+            tb.appendChild(h("tr",{},[h("td",{colspan:"8",
+              style:"font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
+              text:cl._head})]));
+            return;
+          }
           const r=cl.id?ENG.item(cl.id):null;
           // name cell carries ONLY the material name; the code column ONLY its code
           const label=r? (r.material||r.name||"—") : (cl.rm||cl.id||"—");
@@ -842,7 +854,6 @@
       loadLines();
 
       const basisHost=h("div",{class:"muted",style:"font-size:12px;margin:2px 0 12px"});
-      const layHost=h("div");
       const altHost=h("div",{style:"margin-bottom:10px"});
       const tblHost=h("div",{style:"overflow-x:auto"});
       const totHost=h("div",{style:"margin-top:14px"});
@@ -859,7 +870,7 @@
             : fgPicker("bm_fg", fgs, curFg),
           U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
         ]),
-        basisHost, layHost, altHost,
+        basisHost, altHost,
         h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,
         h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>{lines.push(blank());draw();},html:"＋ Add component"}),
@@ -889,9 +900,6 @@
           + (c.fgGsm!=null ? ` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch` : " · FG GSM not set — per-kg figures unavailable")
           + (lay ? ` · Layers: ${lay}` : "")
         }));
-        layHost.innerHTML="";
-        const lp=layerPanel(fg, lines);
-        if(lp) layHost.appendChild(lp);
 
         /* ---- alternate approved recipes ---- */
         altHost.innerHTML="";
@@ -914,8 +922,15 @@
         tbl.appendChild(h("thead",{},[h("tr",{},head.map((t,i)=>
           h("th",{style:"font-size:11px;"+(i>=1&&i<=6?"text-align:right":""),text:t})))]));
         const tb=h("tbody");
+        /* layer names render as heading rows inside the editable table */
+        const grpIdx=layerGroups(lines.map((l,i)=>Object.assign({_i:i},l)));
+        const heads={};
+        if(grpIdx.length>1) grpIdx.forEach((g,gi)=>{ if(g.lines.length) heads[g.lines[0]._i]=g.label||("LAYER "+(gi+1)); });
         c.lines.forEach((cl,i)=>{
           const l=lines[i];
+          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"8",
+            style:"font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
+            text:heads[i]})]));
           const nameCell=h("td",{style:"min-width:250px"});
           if(l.ranged){
             // A ranged line has no single material yet — the real one is chosen
