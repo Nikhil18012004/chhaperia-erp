@@ -131,6 +131,25 @@ function createWorkOrder(user, body) {
   const qty = +body.qty;
   if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
 
+  // A run cannot be released without the materials to make it: reject the
+  // work order outright when any BOM component is short of store stock.
+  const bom = (data.boms || {})[body.itemId];
+  if (bom) {
+    const onHand = {};
+    (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
+    const need = {};
+    BC.toLegacy(bom, BC.metaFromItem(item), body.materialChoices || {}).forEach(([rid, per]) => {
+      need[rid] = (need[rid] || 0) + (per * qty) / (bom.yield || 1);
+    });
+    const short = Object.entries(need)
+      .filter(([rid, n]) => (onHand[rid] || 0) + 1e-6 < n)
+      .map(([rid, n]) => {
+        const it = (data.items || []).find((x) => x.id === rid) || {};
+        return (it.name || rid) + " (need " + n.toFixed(2) + " " + (it.uom || "") + ", in store " + (onHand[rid] || 0).toFixed(2) + ")";
+      });
+    if (short.length) throw err("Materials short — cannot create this work order: " + short.join("; "), 400);
+  }
+
   // next WO id
   let max = 0;
   (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });

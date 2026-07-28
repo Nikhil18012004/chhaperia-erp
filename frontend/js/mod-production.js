@@ -376,6 +376,7 @@
       const matHost=h("div",{style:"margin-top:4px;grid-column:1/-1"});
       body.appendChild(matHost);
       let matChoices={};        // ranged line index -> chosen stock item id
+      let shortages=[];         // materials short of stock — blocks creation
       /* The run size can be entered in kg or sqm; the engine (and the server)
          work in kg, so a sqm entry is converted through the FG's GSM
          (kg = sqm × g/m² / 1000). Returns null when sqm is chosen but the
@@ -396,7 +397,9 @@
         specHost.innerHTML="";
         const spec=ORDER_SPEC[id];
         if(spec){ specHost.appendChild(U.field(spec.label,`<input class="input" id="w_spec" type="number" min="0" placeholder="as per order">`)); }
-        matHost.innerHTML=""; if(!bom) return;
+        matHost.innerHTML="";
+        shortages=[]; if(createBtn) createBtn.disabled=false;
+        if(!bom) return;
 
         // the layer layout below carries the materials AND their live
         // need / in-store figures — no separate consumption list
@@ -468,26 +471,40 @@
             ]));
           });
         });
+        /* a short material blocks creation outright — the run cannot start
+           without the stock to make it */
+        shortages=Object.entries(needBy)
+          .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
+          .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
+        if(qty>0 && shortages.length){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600",
+            text:"⛔ Cannot create this work order — short of: "+shortages.join(", ")+". Add the stock first."}));
+          if(createBtn) createBtn.disabled=true;
+        }
       };
+      const createBtn=h("button",{class:"btn primary",onclick:save,text:"Create Work Order"});
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-          h("button",{class:"btn primary",onclick:save,text:"Create Work Order"})]});
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), createBtn]});
       setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); recalc(); },50);
       async function save(){
         const itemId=UI.$("#w_item").value, qty=qtyKg();
         if(qty==null){ toast("This product has no GSM — enter the quantity in kg",{type:"warn"}); return; }
         if(!qty||qty<=0){ toast("Enter a valid quantity",{type:"warn"}); return; }
+        if(shortages.length){ toast("Materials are short — cannot create this work order: "+shortages.join(", "),{type:"danger",title:"Insufficient stock"}); return; }
         const payload={itemId, qty, line:UI.$("#w_line").value, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
         // which material was picked for each ranged BOM line — travels with the
         // work order so the issue posts the material actually chosen
         if(Object.keys(matChoices).length) payload.materialChoices=matChoices;
         const spec=ORDER_SPEC[itemId], specEl=UI.$("#w_spec");
         if(spec && specEl && specEl.value!=="") payload[spec.key]=+specEl.value;
+        createBtn.disabled=true; createBtn.textContent="Creating…";
         try{
           const res=await DB.production.create(payload);
           const flow=(res.route||[]).map(r=>STAGE_LABEL[r.key]||r.name).join(" → ");
-          await reloadState(); mo.close(); toast((res.id||"Work order")+" created — "+flow,{type:"ok"}); tab="active"; draw();
-        }catch(e){ toast("Create failed: "+e.message,{type:"danger"}); }
+          mo.close(); toast((res.id||"Work order")+" created — "+flow,{type:"ok"});
+          await reloadState(); tab="active"; draw();
+        }catch(e){ toast("Create failed: "+e.message,{type:"danger"});
+          createBtn.disabled=false; createBtn.textContent="Create Work Order"; }
       }
     }
   }};
