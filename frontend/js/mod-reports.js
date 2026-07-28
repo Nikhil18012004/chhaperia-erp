@@ -28,23 +28,18 @@
         h("h3",{style:"font-size:14.5px;margin-top:12px",text:r.name}),
         h("div",{class:"muted",style:"font-size:12px;margin-top:4px;line-height:1.5",text:r.desc}),
         h("div",{class:"flex gap",style:"margin-top:14px",onclick:e=>e.stopPropagation()},[
-          h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn(true);},html:"⬇ Export"})
+          h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn();},html:"🗂 Data"})
         ])
       ]));
     });
     root.appendChild(grid);
 
-    /* preview / export engine — downloads are Excel (.xlsx) */
+    /* data preview engine — the table shows first; the .xlsx download
+       happens from the preview's Download button */
     function show(title, head, rows, csvName){
       const xlsxName=String(csvName||"report.csv").replace(/\.csv$/i,"")+".xlsx";
-      const xl=()=>{ CSVIO.downloadXLSX(xlsxName, head, rows, title);
-        toast(title+" exported",{type:"ok",title:"Download started"}); };
-      const cols=head.map((hd,i)=>({key:"c"+i,label:hd,num:i>0&&!isNaN(parseFloat(rows[0]&&rows[0][i])),render:r=>esc(String(r["c"+i]==null?"—":r["c"+i])),noSort:false,sort:r=>r["c"+i]}));
-      const data=rows.map(r=>{const o={};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
-      modal({title, sub:rows.length+" rows", wide:true,
-        body:table(data,cols,{empty:"No data"}),
-        foot:[h("button",{class:"btn primary",onclick:xl,html:"⬇ Export"})]});
-      return xl;
+      MW.dataPreview({title, head, rows, name:xlsxName, sheet:title});
+      return ()=>{}; // legacy direct-download hook — everything previews now
     }
     function repStock(dl){ const rows=ENG.data.items.map(it=>{const s=ENG.stock(it.id);return [it.id,it.name,it.thicknessMM!=null?it.thicknessMM:"",U.catName(it.cat),it.uom,s.onHand.toFixed(2),s.avgCost.toFixed(2),s.value.toFixed(0)];});
       const c=show("Stock Valuation Report",["Code","Name","Thickness (mm)","Category","UoM","OnHand","AvgCost","Value"],rows,"stock_valuation.csv"); if(dl===true)c(); }
@@ -134,9 +129,10 @@
     root.appendChild(h("div",{class:"card",style:"margin-top:16px"},[
       h("div",{class:"card-head"},h("h3",{text:"📑 Excel Import / Export"})),
       h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",text:"Export any table to an Excel (.xlsx) file, edit it, and import it back. Imports show a preview (new / updated) before anything is saved — nothing is deleted. Imported work orders are automatically routed through Coating → Slitting → Packing."}),
-      h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Tables — click a button for Import / Export"}),
+      h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Tables — click a button for Import / Data"}),
       h("div",{class:"flex gap wrap"}, Object.keys(CSVIO.ENTITIES).map(k=>
-        MW.csvMenu(()=>{ const n=CSVIO.exportEntity(k); toast(CSVIO.ENTITIES[k].label+" exported ("+n+" rows)",{type:"ok",title:"Download started"}); },
+        MW.csvMenu(()=>{ const t=CSVIO.entityTable(k);
+          MW.dataPreview({title:t.label, head:t.header, rows:t.rows, name:"chhaperia_"+k+".xlsx", sheet:t.label}); },
           {small:true, label:CSVIO.ENTITIES[k].label})))
     ]));
 

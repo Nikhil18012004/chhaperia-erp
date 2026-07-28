@@ -142,13 +142,16 @@
     return (data[ent.path] || []).slice();
   }
 
-  function exportEntity(key) {
-    const ent = ENTITIES[key]; if (!ent) return;
+  function entityTable(key) {
+    const ent = ENTITIES[key]; if (!ent) return null;
     const recs = entityRecords(key);
-    const header = ent.cols.map((c) => c.k);
-    const rows = recs.map((o) => ent.cols.map((c) => getVal(o, c)));
-    downloadXLSX("chhaperia_" + key + ".xlsx", header, rows, ent.label);
-    return recs.length;
+    return { label: ent.label, header: ent.cols.map((c) => c.k),
+      rows: recs.map((o) => ent.cols.map((c) => getVal(o, c))) };
+  }
+  function exportEntity(key) {
+    const t = entityTable(key); if (!t) return;
+    downloadXLSX("chhaperia_" + key + ".xlsx", t.header, t.rows, t.label);
+    return t.rows.length;
   }
 
   /* ---- detect which entity a header belongs to ---- */
@@ -209,5 +212,5 @@
     }
   }
 
-  global.CSVIO = { ENTITIES, parse, toCSV, exportEntity, detect, buildDiff, apply, entityRecords, downloadXLSX, parseXLSX };
+  global.CSVIO = { ENTITIES, parse, toCSV, exportEntity, entityTable, detect, buildDiff, apply, entityRecords, downloadXLSX, parseXLSX };
 })(window);

@@ -140,7 +140,7 @@
   /* ============== ANALYTICS ============== */
   M.analytics = { title:"Analytics", sub:"Deep insights & forecasting", render(root){
     root.appendChild(pageHead("Analytics & Insights","Trends, ABC classification and demand forecasting",[
-      h("button",{class:"btn",onclick:()=>App.go("reports"),text:"📄 Export Reports"})
+      h("button",{class:"btn",onclick:()=>App.go("reports"),text:"📄 Reports"})
     ]));
 
     /* trend selector */

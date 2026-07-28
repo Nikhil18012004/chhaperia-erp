@@ -85,8 +85,7 @@
         r.it.id, r.it.name, r.it.thicknessMM!=null?r.it.thicknessMM:"", r.it.cat, r.it.uom, r.stock.lastMove||"", r.st.onHand.toFixed(2), r.st.pIn, r.st.pOut, r.st.atp,
         r.it.reorder, r.it.safety, r.st.avgCost.toFixed(2), r.st.value.toFixed(0), r.st.label
       ]);
-      CSVIO.downloadXLSX("chhaperia_inventory.xlsx", head, out, "Stock Items");
-      toast("Inventory exported to Excel",{type:"ok",title:"Export complete"});
+      MW.dataPreview({title:"Stock Items", head, rows:out, name:"chhaperia_inventory.xlsx", sheet:"Stock Items"});
     }
   }};
 

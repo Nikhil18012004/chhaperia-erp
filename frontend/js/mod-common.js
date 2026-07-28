@@ -235,15 +235,30 @@
     return cell;
   }
 
-  /* ----- Excel split-button: hover (or tap) → Import / Export ----- */
-  // onExport: required download handler. opts.onImport overrides the generic
-  // auto-detecting import dialog (CSVImportUI, defined in mod-reports.js).
+  /* ----- data preview: every "Data" action shows the table FIRST; the
+     actual .xlsx download happens from the preview's Download button ----- */
+  function dataPreview(opts){
+    const head=opts.head||[], rows=opts.rows||[];
+    const cols=head.map((hd,i)=>({key:"c"+i,label:hd,num:i>0&&!isNaN(parseFloat(rows[0]&&rows[0][i])),
+      render:r=>UI.esc(String(r["c"+i]==null||r["c"+i]===""?"—":r["c"+i])),sort:r=>r["c"+i]}));
+    const data=rows.map(r=>{const o={};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
+    UI.modal({title:opts.title, sub:rows.length+" rows", wide:true,
+      body:UI.table(data,cols,{empty:"No data"}),
+      foot:[UI.h("button",{class:"btn primary",onclick:()=>{
+        CSVIO.downloadXLSX(opts.name||"data.xlsx", head, rows, opts.sheet||opts.title);
+        UI.toast(opts.title+" downloaded",{type:"ok",title:"Download started"});
+      },html:"⬇ Download"})]});
+  }
+
+  /* ----- Excel split-button: hover (or tap) → Import / Data ----- */
+  // onExport: opens the data preview (download lives inside it). opts.onImport
+  // overrides the generic auto-detecting import dialog (CSVImportUI).
   function csvMenu(onExport, opts){
     opts = opts || {};
     const menu = h("div",{class:"ni-menu csv-drop",hidden:true},[
       h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();
         (opts.onImport || (window.CSVImportUI && CSVImportUI.open) || (()=>UI.toast("Import unavailable",{type:"warn"})))();},html:"⬆ Import…"}),
-      h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();onExport&&onExport();},html:"⬇ Export"}),
+      h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();onExport&&onExport();},html:"🗂 Data"}),
     ]);
     const trigger = h("button",{class:"btn"+(opts.small?" sm":"")+(opts.primary?" primary":""),
       html:"🗎 "+(opts.label||"Excel")+' <span class="caret">▾</span>'});
@@ -256,5 +271,5 @@
   }
 
   global.M = M;
-  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu };
+  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview };
 })(window);
