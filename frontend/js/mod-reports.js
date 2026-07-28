@@ -28,26 +28,26 @@
         h("h3",{style:"font-size:14.5px;margin-top:12px",text:r.name}),
         h("div",{class:"muted",style:"font-size:12px;margin-top:4px;line-height:1.5",text:r.desc}),
         h("div",{class:"flex gap",style:"margin-top:14px",onclick:e=>e.stopPropagation()},[
-          h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();r.fn();},html:"👁 Preview"}),
-          MW.csvMenu(()=>r.fn(true),{small:true,primary:true})
+          h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn(true);},html:"⬇ Export"})
         ])
       ]));
     });
     root.appendChild(grid);
 
-    /* preview / export engine */
+    /* preview / export engine — downloads are Excel (.xlsx) */
     function show(title, head, rows, csvName){
-      const csv=()=>{ const c=[head.join(",")].concat(rows.map(r=>r.map(x=>typeof x==="string"&&x.includes(",")?'"'+x+'"':x).join(","))).join("\n");
-        U.downloadCSV(csvName, c); toast(title+" exported",{type:"ok",title:"Download started"}); };
+      const xlsxName=String(csvName||"report.csv").replace(/\.csv$/i,"")+".xlsx";
+      const xl=()=>{ CSVIO.downloadXLSX(xlsxName, head, rows, title);
+        toast(title+" exported",{type:"ok",title:"Download started"}); };
       const cols=head.map((hd,i)=>({key:"c"+i,label:hd,num:i>0&&!isNaN(parseFloat(rows[0]&&rows[0][i])),render:r=>esc(String(r["c"+i]==null?"—":r["c"+i])),noSort:false,sort:r=>r["c"+i]}));
       const data=rows.map(r=>{const o={};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
       modal({title, sub:rows.length+" rows", wide:true,
         body:table(data,cols,{empty:"No data"}),
-        foot:[h("button",{class:"btn primary",onclick:csv,html:"⬇ Download CSV"})]});
-      return csv;
+        foot:[h("button",{class:"btn primary",onclick:xl,html:"⬇ Export"})]});
+      return xl;
     }
-    function repStock(dl){ const rows=ENG.data.items.map(it=>{const s=ENG.stock(it.id);return [it.id,it.name,U.catName(it.cat),it.uom,s.onHand.toFixed(2),s.avgCost.toFixed(2),s.value.toFixed(0)];});
-      const c=show("Stock Valuation Report",["Code","Name","Category","UoM","OnHand","AvgCost","Value"],rows,"stock_valuation.csv"); if(dl===true)c(); }
+    function repStock(dl){ const rows=ENG.data.items.map(it=>{const s=ENG.stock(it.id);return [it.id,it.name,it.thicknessMM!=null?it.thicknessMM:"",U.catName(it.cat),it.uom,s.onHand.toFixed(2),s.avgCost.toFixed(2),s.value.toFixed(0)];});
+      const c=show("Stock Valuation Report",["Code","Name","Thickness (mm)","Category","UoM","OnHand","AvgCost","Value"],rows,"stock_valuation.csv"); if(dl===true)c(); }
     function repReorder(dl){ const rows=ENG.data.items.map(it=>({it,st:ENG.status(it.id)})).filter(x=>x.st.suggest>0||["warn","danger"].includes(x.st.state))
         .map(x=>[x.it.id,x.it.name,x.st.onHand.toFixed(1),x.it.reorder,x.it.safety,x.st.suggest,x.st.label,ENG.sup(x.it.supplierId)]);
       const c=show("Reorder / Low-Stock Report",["Code","Name","OnHand","ReorderPt","Safety","Suggested","Status","Supplier"],rows,"reorder_report.csv"); if(dl===true)c(); }
@@ -58,12 +58,12 @@
     function repSO(dl){ const rows=ENG.data.salesorders.filter(s=>s.status!=="Dispatched").map(s=>[s.id,ENG.custName(s.customerId),s.lines.length,s.value.toFixed(0),s.priority,s.promised,s.status]);
       const c=show("Sales Order Backlog",["SO","Customer","Lines","Value","Priority","Promised","Status"],rows,"so_backlog.csv"); if(dl===true)c(); }
     function repBOM(dl){ const rows=ENG.data.items.filter(i=>i.cat==="FG").map(fg=>{const bom=ENG.data.boms[fg.id];let mc=0;if(bom)BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg)).forEach(([rid,per])=>mc+=per*ENG.stock(rid).avgCost/bom.yield);
-        const margin=fg.price?((fg.price-fg.cost)/fg.price*100).toFixed(1):"0";return [fg.id,fg.name,mc.toFixed(0),fg.cost,fg.price,margin+"%"];});
-      const c=show("BOM Cost Roll-up",["Code","Product","MaterialCost","StdCost","Price","Margin"],rows,"bom_costing.csv"); if(dl===true)c(); }
+        const margin=fg.price?((fg.price-fg.cost)/fg.price*100).toFixed(1):"0";return [fg.id,fg.name,fg.thicknessMM!=null?fg.thicknessMM:"",mc.toFixed(0),fg.cost,fg.price,margin+"%"];});
+      const c=show("BOM Cost Roll-up",["Code","Product","Thickness (mm)","MaterialCost","StdCost","Price","Margin"],rows,"bom_costing.csv"); if(dl===true)c(); }
     function repABC(dl){ const rows=ENG.abcAnalysis().map(r=>[r.it.id,r.it.name,r.class,r.annualVal.toFixed(0),r.onHandVal.toFixed(0),r.cumPct.toFixed(1)+"%"]);
       const c=show("ABC Classification",["Code","Name","Class","AnnualValue","OnHandValue","CumulativePct"],rows,"abc_analysis.csv"); if(dl===true)c(); }
-    function repProd(dl){ const rows=ENG.data.workorders.slice().reverse().map(w=>{const it=ENG.item(w.itemId)||{};return [w.id,(it.name||"").slice(0,30),w.qty,w.line,w.date,w.due,w.status,w.progress+"%"];});
-      const c=show("Production Output Report",["WO","Product","Qty","Line","Start","Due","Status","Progress"],rows,"production_output.csv"); if(dl===true)c(); }
+    function repProd(dl){ const rows=ENG.data.workorders.slice().reverse().map(w=>{const it=ENG.item(w.itemId)||{};return [w.id,it.name||"",it.thicknessMM!=null?it.thicknessMM:"",w.qty,w.line,w.date,w.due,w.status,w.progress+"%"];});
+      const c=show("Production Output Report",["WO","Product","Thickness (mm)","Qty","Line","Start","Due","Status","Progress"],rows,"production_output.csv"); if(dl===true)c(); }
   }};
 
   /* ============== SETTINGS ============== */
@@ -130,10 +130,10 @@
       ])
     ]));
 
-    /* CSV import / export */
+    /* Excel import / export */
     root.appendChild(h("div",{class:"card",style:"margin-top:16px"},[
-      h("div",{class:"card-head"},h("h3",{text:"📑 CSV Import / Export"})),
-      h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",text:"Export any table to a spreadsheet-friendly CSV, edit it, and import it back. Imports show a preview (new / updated) before anything is saved — nothing is deleted. Imported work orders are automatically routed through Coating → Slitting → Packing."}),
+      h("div",{class:"card-head"},h("h3",{text:"📑 Excel Import / Export"})),
+      h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",text:"Export any table to an Excel (.xlsx) file, edit it, and import it back. Imports show a preview (new / updated) before anything is saved — nothing is deleted. Imported work orders are automatically routed through Coating → Slitting → Packing."}),
       h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Tables — click a button for Import / Export"}),
       h("div",{class:"flex gap wrap"}, Object.keys(CSVIO.ENTITIES).map(k=>
         MW.csvMenu(()=>{ const n=CSVIO.exportEntity(k); toast(CSVIO.ENTITIES[k].label+" exported ("+n+" rows)",{type:"ok",title:"Download started"}); },
@@ -158,18 +158,20 @@
       catch(e){ toast("Reset failed: "+e.message,{type:"danger"}); } } }
   }};
 
-  /* ============== SHARED CSV IMPORT (any page's CSV ▾ menu) ============== */
+  /* ============== SHARED EXCEL IMPORT (any page's Excel ▾ menu) ============== */
   function csvImport(){
-      const inp=h("input",{type:"file",accept:".csv,text/csv",style:"display:none"});
-      inp.onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+      const inp=h("input",{type:"file",accept:".xlsx,.xls",style:"display:none"});
+      inp.onchange=e=>{ const f=e.target.files[0]; if(!f) return;
+        if(!/\.xlsx?$/i.test(f.name)){ toast("Only Excel files (.xlsx) are supported — export a table first to get the right columns.",{type:"warn"}); return; }
+        const r=new FileReader();
         r.onload=()=>{ try{
-            const parsed=CSVIO.parse(r.result);
-            if(parsed.length<1){ toast("Empty CSV file",{type:"warn"}); return; }
+            const parsed=CSVIO.parseXLSX(r.result);
+            if(parsed.length<1){ toast("Empty Excel file",{type:"warn"}); return; }
             const detected=CSVIO.detect(parsed[0].map(x=>x.trim()));
-            if(!detected){ toast("Could not recognise this CSV. Export a table first to get the right columns.",{type:"danger"}); return; }
+            if(!detected){ toast("Could not recognise this Excel file. Export a table first to get the right columns.",{type:"danger"}); return; }
             showImportPreview(detected, parsed);
           }catch(err){ toast("Import failed: "+err.message,{type:"danger"}); } };
-        r.readAsText(f); };
+        r.readAsArrayBuffer(f); };
       document.body.appendChild(inp); inp.click(); inp.remove();
   }
 
@@ -179,7 +181,7 @@
   function showImportPreview(key, parsed){
       let curKey=key;
       const host=h("div");
-      const mo=modal({title:"Import CSV", sub:"Review changes before saving", wide:true, body:host,
+      const mo=modal({title:"Import Excel", sub:"Review changes before saving", wide:true, body:host,
         foot:[ h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
                h("button",{class:"btn primary",id:"csvApplyBtn",text:"Apply Import"}) ]});
       const sel=h("select",{class:"select",style:"max-width:240px"}, Object.keys(CSVIO.ENTITIES).map(k=>{

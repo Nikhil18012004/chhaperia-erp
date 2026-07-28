@@ -342,7 +342,7 @@
       field("Phone", `<input class="input" id="l_phone" value="${esc(f("phone", ""))}">`),
       field("Email", `<input class="input" id="l_email" value="${esc(f("email", ""))}">`),
       field("City", `<input class="input" id="l_city" value="${esc(f("city", ""))}">`),
-      field("Product Interest", selectHTML("l_product", fgs.map((i) => ({ v: i.id, l: trim(i.name, 34) })), f("product", fgs[0] && fgs[0].id))),
+      field("Product Interest", selectHTML("l_product", fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })), f("product", fgs[0] && fgs[0].id))),
       field("Estimated Value (₹)", `<input class="input" id="l_value" type="number" value="${f("value", 0)}">`),
       field("Source", selectHTML("l_source", SOURCES.map((s) => ({ v: s, l: s })), f("source", "Website Enquiry"))),
       field("Owner", `<input class="input" id="l_owner" value="${esc(f("owner", "Sales Desk"))}">`),

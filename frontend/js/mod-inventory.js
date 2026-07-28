@@ -64,6 +64,7 @@
       tableHost.innerHTML="";
       tableHost.appendChild(table(data,[
         {key:"name",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div><div class="cell-sub">${r.it.id} · ${catName(r.it.cat)} · HSN ${r.it.hsn||"—"}</div>`,sort:r=>r.it.name},
+        {key:"thk",label:"Thickness",num:true,render:r=>r.it.thicknessMM!=null?`<span class="mono">${ENG.num(r.it.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:r=>r.it.thicknessMM||0},
         {key:"lastMove",label:"Last Move",render:r=>r.stock.lastMove||"—",sort:r=>r.stock.lastMove||""},
         {key:"onHand",label:"On Hand",num:true,render:r=>`<span class="strong">${ENG.num(r.st.onHand,2)}</span> <span class="muted">${r.it.uom}</span>`,sort:r=>r.st.onHand},
         {key:"pIn",label:"Pending In",num:true,render:r=>r.st.pIn?`<span class="badge-s s-ok">▲ ${ENG.num(r.st.pIn)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pIn},
@@ -79,13 +80,13 @@
 
     function exportCSV(){
       const data=rows();
-      const head=["Code","Name","Category","UoM","LastMove","OnHand","PendingIn","PendingOut","ATP","ReorderPt","Safety","AvgCost","Value","Status"];
-      const lines=[head.join(",")].concat(data.map(r=>[
-        r.it.id, '"'+r.it.name+'"', r.it.cat, r.it.uom, r.stock.lastMove||"", r.st.onHand.toFixed(2), r.st.pIn, r.st.pOut, r.st.atp,
+      const head=["Code","Name","Thickness (mm)","Category","UoM","LastMove","OnHand","PendingIn","PendingOut","ATP","ReorderPt","Safety","AvgCost","Value","Status"];
+      const out=data.map(r=>[
+        r.it.id, r.it.name, r.it.thicknessMM!=null?r.it.thicknessMM:"", r.it.cat, r.it.uom, r.stock.lastMove||"", r.st.onHand.toFixed(2), r.st.pIn, r.st.pOut, r.st.atp,
         r.it.reorder, r.it.safety, r.st.avgCost.toFixed(2), r.st.value.toFixed(0), r.st.label
-      ].join(",")));
-      downloadCSV("chhaperia_inventory.csv", lines.join("\n"));
-      toast("Inventory exported to CSV",{type:"ok",title:"Export complete"});
+      ]);
+      CSVIO.downloadXLSX("chhaperia_inventory.xlsx", head, out, "Stock Items");
+      toast("Inventory exported to Excel",{type:"ok",title:"Export complete"});
     }
   }};
 
@@ -123,7 +124,7 @@
       ]),
       MW.dl([
         ["Category", catName(it.cat)],["UoM", it.uom],["HSN", it.hsn||"—"],
-        ...(it.thickness?[["Thickness", it.thickness+" mm"]]:[]),
+        ...((it.thicknessMM!=null||it.thickness)?[["Thickness", (it.thicknessMM!=null?it.thicknessMM:it.thickness)+" mm"]]:[]),
         ...(it.width?[["Width", it.width+" mm"]]:[]),
         ...(it.length?[["Length", it.length+" m"]]:[]),
         ["Reorder Point", ENG.num(it.reorder)+" "+it.uom],["Safety Stock", ENG.num(it.safety)+" "+it.uom],
@@ -278,28 +279,33 @@
 
   /* ----- FEATURE 2: add stock manually (existing item OR create new) ----- */
   function addStockForm(){
-    const items=ENG.data.items, whs=ENG.data.warehouses;
+    const whs=ENG.data.warehouses;
+    /* Manual stock intake is for RAW materials only — finished goods arrive
+       through production, WIPs through the stage engine. Deduped by id so no
+       material shows up twice in the picker. */
+    const rawCatIds=new Set(ENG.data.categories.filter(c=>c.kind==="raw").map(c=>c.id));
+    const rawCats=ENG.data.categories.filter(c=>c.kind==="raw");
+    const items=[]; const seen=new Set();
+    ENG.data.items.forEach(i=>{ if(rawCatIds.has(i.cat) && !seen.has(i.id)){ seen.add(i.id); items.push(i); } });
+    items.sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
     const body=h("div",{},[
-      h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick an item (or create a new one), review or edit its parameters, then enter the quantity to receive. The parameters are saved to the item; the quantity posts to the ledger."}),
+      h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick a raw material (or create a new one), review or edit its parameters, then enter the quantity to receive. The parameters are saved to the item; the quantity posts to the ledger."}),
       h("div",{class:"form-grid"},[
         field("Scan / Barcode",`<input class="input" id="s_scan" placeholder="Scan or type barcode / item code, then press Enter">`,"full"),
-        field("Item", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:trim(i.id+" — "+i.name,40)}))),"__new")),
+        field("Raw Material", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:i.name+" — "+i.id}))),"__new")),
       ]),
       h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Item parameters"}),
       h("div",{id:"s_newblock"},[
         h("div",{class:"form-grid"},[
           field("Item Code",`<input class="input" id="s_code" placeholder="Auto if left blank (e.g. RM-1001)">`),
           field("Item Name",`<input class="input" id="s_name" placeholder="e.g. Copper Foil 0.05mm">`),
-          field("Category",selectHTML("s_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),"RM")),
+          field("Category",selectHTML("s_cat",rawCats.map(c=>({v:c.id,l:c.name})),"RM")),
           field("Unit (per)",selectHTML("s_uom",UNITS,"KG")),
           field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`),
           field("Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="e.g. 25">`),
           field("Length (m)",`<input class="input" id="s_len" type="number" step="0.1" placeholder="e.g. 1000">`),
           field("Reorder Point",`<input class="input" id="s_reorder" type="number" value="0">`),
-          field("Safety Stock",`<input class="input" id="s_safety" type="number" value="0">`),
           field("Lead Time (days)",`<input class="input" id="s_lead" type="number" value="7">`),
-          field("Std Cost (₹)",`<input class="input" id="s_cost" type="number" disabled placeholder="= Rate (set automatically)">`),
-          field("Selling Price (₹)",`<input class="input" id="s_price" type="number" value="0">`),
           field("HSN Code",`<input class="input" id="s_hsn" placeholder="e.g. 74102100">`),
         ])
       ]),
@@ -327,24 +333,22 @@
         if(catEl) catEl.disabled=false;   // category editable only while creating
         setVal("s_code",""); setVal("s_name",""); setSel("s_cat","RM"); setSel("s_uom","KG");
         setVal("s_thk",""); setVal("s_wid",""); setVal("s_len","");
-        setVal("s_reorder","0"); setVal("s_safety","0"); setVal("s_lead","7");
-        setVal("s_cost",""); setVal("s_price","0"); setVal("s_hsn","");
+        setVal("s_reorder","0"); setVal("s_lead","7"); setVal("s_hsn","");
       } else {
         const it=ENG.item(sel.value)||{};
         code.disabled=true; setVal("s_code",it.id||"");
         if(catEl) catEl.disabled=true;    // locked once the item exists
         setVal("s_name",it.name||""); setSel("s_cat",it.cat||"RM"); setSel("s_uom",it.uom||"KG");
-        setVal("s_thk",it.thickness!=null?it.thickness:""); setVal("s_wid",it.width!=null?it.width:""); setVal("s_len",it.length!=null?it.length:"");
-        setVal("s_reorder",it.reorder!=null?it.reorder:"0"); setVal("s_safety",it.safety!=null?it.safety:"0"); setVal("s_lead",it.lead!=null?it.lead:"7");
-        setVal("s_cost",it.cost!=null?it.cost:""); setVal("s_price",it.price!=null?it.price:"0"); setVal("s_hsn",it.hsn||"");
+        setVal("s_thk",it.thicknessMM!=null?it.thicknessMM:(it.thickness!=null?it.thickness:"")); setVal("s_wid",it.width!=null?it.width:""); setVal("s_len",it.length!=null?it.length:"");
+        setVal("s_reorder",it.reorder!=null?it.reorder:"0"); setVal("s_lead",it.lead!=null?it.lead:"7");
+        setVal("s_hsn",it.hsn||"");
       }
     }
     sel.onchange=fillParams; fillParams();
-    /* Std Cost always tracks the entered Rate (rate drives cost) */
-    const rateEl=UI.$("#s_rate"), costEl=UI.$("#s_cost");
-    if(rateEl&&costEl) rateEl.addEventListener("input",()=>{ costEl.value=rateEl.value; });
     /* barcode scan: match by barcode or item code, select it, jump to qty */
-    attachScan(UI.$("#s_scan"), (found)=>{ setSel("s_item",found.id); fillParams(); const q=UI.$("#s_qty"); if(q) q.focus(); });
+    attachScan(UI.$("#s_scan"), (found)=>{
+      if(!rawCatIds.has(found.cat)){ toast(found.name+" is not a raw material — only RM stock can be added here",{type:"warn"}); return; }
+      setSel("s_item",found.id); fillParams(); const q=UI.$("#s_qty"); if(q) q.focus(); });
     function save(){
       const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
       const qty=+g("s_qty"), rate=+g("s_rate")||0, wh=g("s_wh");
@@ -358,19 +362,20 @@
         if(code && ENG.item(code)){ toast("Item code already exists — choose another",{type:"danger"}); return; }
         itemId=code||genItemId(cat);
         it={ id:itemId, name, cat, uom:g("s_uom"),
-          thickness:+g("s_thk")||null, width:+g("s_wid")||null, length:+g("s_len")||null,
-          reorder:+g("s_reorder")||0, safety:+g("s_safety")||0, lead:+g("s_lead")||7,
-          cost:rate||+g("s_cost")||0, price:+g("s_price")||0, hsn:g("s_hsn").trim(), abc:"C", moq:0, active:true,
+          thicknessMM:+g("s_thk")||null, width:+g("s_wid")||null, length:+g("s_len")||null,
+          reorder:+g("s_reorder")||0, safety:0, lead:+g("s_lead")||7,
+          cost:rate||0, price:0, hsn:g("s_hsn").trim(), abc:"C", moq:0, active:true,
           barcode:"890"+Math.floor(Math.random()*1e7) };
         ENG.data.items.push(it);
       } else {
         it=ENG.item(itemId);
-        /* apply edited parameters back to the existing item (category stays locked) */
+        /* apply edited parameters back to the existing item (category stays
+           locked; safety stock and selling price are managed elsewhere) */
         it.name=g("s_name").trim()||it.name;
         it.uom=g("s_uom")||it.uom;
-        it.thickness=+g("s_thk")||null; it.width=+g("s_wid")||null; it.length=+g("s_len")||null;
-        it.reorder=+g("s_reorder")||0; it.safety=+g("s_safety")||0; it.lead=+g("s_lead")||7;
-        it.cost=rate||it.cost||0; it.price=+g("s_price")||0; it.hsn=g("s_hsn").trim();
+        it.thicknessMM=+g("s_thk")||null; it.width=+g("s_wid")||null; it.length=+g("s_len")||null;
+        it.reorder=+g("s_reorder")||0; it.lead=+g("s_lead")||7;
+        it.cost=rate||it.cost||0; it.hsn=g("s_hsn").trim();
       }
       const move={ id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()),
         itemId, wh, type:"GRN", qty, rate, ref:"MANUAL-"+Math.floor(Math.random()*9000+1000),

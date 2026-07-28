@@ -235,7 +235,7 @@
     return cell;
   }
 
-  /* ----- CSV split-button: hover (or tap) → Import / Export ----- */
+  /* ----- Excel split-button: hover (or tap) → Import / Export ----- */
   // onExport: required download handler. opts.onImport overrides the generic
   // auto-detecting import dialog (CSVImportUI, defined in mod-reports.js).
   function csvMenu(onExport, opts){
@@ -246,7 +246,7 @@
       h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();onExport&&onExport();},html:"⬇ Export"}),
     ]);
     const trigger = h("button",{class:"btn"+(opts.small?" sm":"")+(opts.primary?" primary":""),
-      html:"🗎 "+(opts.label||"CSV")+' <span class="caret">▾</span>'});
+      html:"🗎 "+(opts.label||"Excel")+' <span class="caret">▾</span>'});
     const wrap = h("div",{class:"ni-drop csv-menu"},[trigger,menu]);
     function onDoc(e){ if(!wrap.contains(e.target)) close(); }
     function close(){ menu.hidden=true; trigger.classList.remove("open"); document.removeEventListener("click",onDoc); }

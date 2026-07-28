@@ -345,7 +345,7 @@
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(fgs[0]&&fgs[0].price);
         const row=h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"},[
-          h("div",{html:U.searchSelect("sl_item_"+idx,fgs.map(i=>({v:i.id,l:U.trim(i.name,30)})),itemId,"Search product…"),style:"flex:2"}),
+          h("div",{html:U.searchSelect("sl_item_"+idx,fgs.map(i=>({v:i.id,l:i.name+(i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"")+" — "+(i.typeCode||i.id)})),itemId,"Search product…"),style:"flex:2"}),
           h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"Qty (kg)",style:"flex:1",value:qtyVal}),
           h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"Rate",style:"flex:1",value:rateVal}),
           h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".flex.gap").remove();lines[idx]=null;},text:"✕"})

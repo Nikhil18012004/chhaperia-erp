@@ -79,6 +79,35 @@
     },
   };
 
+  /* ---- Excel (.xlsx) read / write — SheetJS, vendored locally ---- */
+  /* A cell that reads as a clean number becomes a real Excel number, so the
+     sheet sorts/sums properly. Leading-zero strings (HSN codes) stay text. */
+  function xlsxCell(v) {
+    if (typeof v !== "string" || v === "") return v;
+    if (/^0\d/.test(v)) return v; // preserve leading zeros
+    return /^-?\d*\.?\d+$/.test(v) ? +v : v;
+  }
+  function downloadXLSX(name, header, rows, sheetName) {
+    const aoa = [header].concat((rows || []).map((r) => r.map(xlsxCell)));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = header.map((hd, i) => ({
+      wch: Math.min(42, Math.max(String(hd).length, ...aoa.slice(1, 200).map((r) => String(r[i] == null ? "" : r[i]).length)) + 2),
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (sheetName || "Sheet1").slice(0, 31));
+    XLSX.writeFile(wb, name);
+  }
+  /* First sheet of a workbook → array-of-arrays of strings (same shape the
+     CSV parser produced, so detect/buildDiff work unchanged). */
+  function parseXLSX(arrayBuffer) {
+    const wb = XLSX.read(arrayBuffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return [];
+    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" })
+      .map((r) => r.map((x) => (x == null ? "" : String(x).trim())))
+      .filter((r) => r.length && r.some((x) => x !== ""));
+  }
+
   /* ---- CSV parse / serialize (RFC-4180-ish) ---- */
   function parse(text) {
     text = String(text || "").replace(/^﻿/, "");
@@ -118,10 +147,7 @@
     const recs = entityRecords(key);
     const header = ent.cols.map((c) => c.k);
     const rows = recs.map((o) => ent.cols.map((c) => getVal(o, c)));
-    const csv = toCSV(header, rows);
-    const name = "chhaperia_" + key + ".csv";
-    if (global._erpUtil && _erpUtil.downloadCSV) _erpUtil.downloadCSV(name, csv);
-    else { const b = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name; a.click(); }
+    downloadXLSX("chhaperia_" + key + ".xlsx", header, rows, ent.label);
     return recs.length;
   }
 
@@ -183,5 +209,5 @@
     }
   }
 
-  global.CSVIO = { ENTITIES, parse, toCSV, exportEntity, detect, buildDiff, apply, entityRecords };
+  global.CSVIO = { ENTITIES, parse, toCSV, exportEntity, detect, buildDiff, apply, entityRecords, downloadXLSX, parseXLSX };
 })(window);

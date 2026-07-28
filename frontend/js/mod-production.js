@@ -16,13 +16,90 @@
   function curStage(w){ const rt=w.route; if(!rt||!rt.length) return null; const i=Math.min(Math.max(w.stageIdx||0,0),rt.length-1); return rt[i]; }
   /* The source sheet's LAYERS column ("TOP LAYER", "DIP COAT", "DOUBLE BLADE
      DOUBLE SIDE"…) travels on the FG item as layersText, alongside the layer
-     count derived from the recipe's GSM-bearing fabric lines. */
+     count derived from the recipe's GSM-bearing fabric lines.
+     Single-layer products show NOTHING — the layer story only appears when
+     the product actually stacks more than one web. */
   function layersLabel(fg){
     if(!fg) return null;
+    const n=fg.layerCount||0;
+    if(n<2 && !fg.layersText) return null;
     const bits=[];
     if(fg.layersText) bits.push(fg.layersText);
-    if(fg.layerCount!=null) bits.push(fg.layerCount+" layer"+(fg.layerCount>1?"s":""));
+    if(n>1) bits.push(n+" layers");
     return bits.length? bits.join(" · ") : null;
+  }
+
+  /* ---- layer build-up panel ----
+     Each metre-measured (MTR) recipe line IS one physical web layer — that
+     count matches the sheet's layer count on all 102 imported products. The
+     KG/GRAM lines (adhesive, solvent, hardener) are the coating/bonding
+     chemistry between the webs, so they're listed under the stack, not as
+     layers. Returns null for single-layer products — no layer UI at all. */
+  function layerPanel(fg, rawLines){
+    if(!fg || !rawLines) return null;
+    const lines=BOMCALC.normalize(rawLines);
+    const layers=lines.filter(l=>BOMCALC.normUnit(l.unit)==="MTR");
+    const nLayers=Math.max(layers.length, fg.layerCount||0);
+    if(nLayers<2) return null;
+    const nameOf=l=>{ const it=l.id?ENG.item(l.id):null;
+      return (it&&it.name)||[l.rm,l.rmType].filter(Boolean).join(" ")||"—"; };
+    const specOf=l=>{ const bits=[];
+      if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
+      return bits.join(" · "); };
+    const box=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"});
+    box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:8px",
+      text:"≡ Layer build-up · "+nLayers+" layers"+(fg.layersText?" · "+fg.layersText:"")}));
+    layers.forEach((l,i)=>{
+      if(i>0) box.appendChild(h("div",{class:"muted",style:"border-top:1px dashed var(--line);margin:3px 0 3px 70px;font-size:10px;line-height:0.6;text-align:center"},
+        h("span",{style:"background:var(--panel-2);padding:0 8px",text:"— layer break —"})));
+      box.appendChild(h("div",{class:"flex aic",style:"gap:10px;padding:5px 0;font-size:12.5px"},[
+        h("span",{class:"chip",style:"font-size:10px;flex:0 0 auto",text:"Layer "+(i+1)}),
+        h("span",{style:"font-weight:600",text:nameOf(l)}),
+        specOf(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:specOf(l)}):null
+      ]));
+    });
+    const chems=lines.filter(l=>BOMCALC.normUnit(l.unit)!=="MTR");
+    if(chems.length) box.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line)"},
+      [h("b",{text:"Bonding / coating chemistry: "}), h("span",{text:chems.map(nameOf).join(", ")})]));
+    return box;
+  }
+
+  /* ---- two-step product picker: NAME first, then THICKNESS ----
+     The trailing number in a product code is its thickness, so one product
+     name usually exists in several thicknesses. Pick the product, then the
+     thickness variant. A hidden input #<id> holds the chosen item id and
+     fires "change" exactly like the old single select — existing listeners
+     and UI.$("#id").value reads keep working untouched. */
+  function fgPicker(id, fgList, selId){
+    const byName={};
+    fgList.forEach(f=>{ const nm=f.productName||f.name; (byName[nm]=byName[nm]||[]).push(f); });
+    Object.values(byName).forEach(a=>a.sort((x,y)=>(x.thicknessMM||0)-(y.thicknessMM||0)));
+    const names=Object.keys(byName).sort();
+    const init=fgList.find(f=>f.id===selId)||fgList[0];
+    let curName=init?(init.productName||init.name):names[0];
+    const hid=h("input",{type:"hidden",id,value:init?init.id:""});
+    const thkHost=h("div");
+    const wrap=h("div",{style:"display:contents"},[
+      hid,
+      h("div",{class:"field full"},[h("label",{text:"Product"}),
+        h("div",{html:U.searchSelect(id+"_nm", names.map(nm=>({v:nm,l:nm})), curName, "Search product…")})]),
+      h("div",{class:"field"},[h("label",{text:"Thickness"}), thkHost]),
+    ]);
+    function buildThk(keepId, silent){
+      const list=byName[curName]||[];
+      const cur=list.find(f=>f.id===keepId)||list[0];
+      const sel=h("select",{class:"select",onchange:e=>{ hid.value=e.target.value;
+        hid.dispatchEvent(new Event("change",{bubbles:true})); }},
+        list.map(f=>h("option",{value:f.id,selected:cur&&f.id===cur.id?"selected":null,
+          text:(f.thicknessMM!=null? f.thicknessMM+" mm":"(no thickness)")+"  —  "+(f.typeCode||f.id)})));
+      thkHost.innerHTML=""; thkHost.appendChild(sel);
+      hid.value=cur?cur.id:"";
+      if(!silent) hid.dispatchEvent(new Event("change",{bubbles:true}));
+    }
+    buildThk(init?init.id:null, true);
+    const nmHid=wrap.querySelector('input[id="'+id+'_nm"]');
+    if(nmHid) nmHid.addEventListener("change",()=>{ if(nmHid.value && nmHid.value!==curName){ curName=nmHid.value; buildThk(); } });
+    return wrap;
   }
   function stageCell(w){
     if(w.dispatched) return `<span class="chip" style="color:var(--ok);border-color:var(--ok)">🚚 Dispatched</span>`;
@@ -152,6 +229,7 @@
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         {key:"item",label:"Product",render:r=>`<div class="cell-main">${esc((ENG.item(r.itemId)||{}).name||r.itemId)}</div>`,sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
         {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.itemId)}</span>`,sort:r=>r.itemId},
+        {key:"thk",label:"Thickness",num:true,render:r=>{const t=(ENG.item(r.itemId)||{}).thicknessMM; return t!=null?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},sort:r=>(ENG.item(r.itemId)||{}).thicknessMM||0},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
         {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
         {key:"stage",label:"Stage",render:r=>stageCell(r),sort:r=>(r.stageIdx||0)},
@@ -212,9 +290,12 @@
         return {rid, name:r.name||rid, per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
       // ---- Details pane ----
       const detailsPane=h("div",{},[
-        MW.dl([["Product",it.name],["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
+        MW.dl([["Product",it.name],["Code",wo.itemId],
+          ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
+          ["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
+        (()=>{ const lp=bom?layerPanel(it,bom.lines):null; return lp?h("div",{style:"margin-top:14px"},lp):h("span"); })(),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Material Requirements (auto from BOM)"}),
         table(rows,[
           {key:"name",label:"Component",render:r=>`<div class="cell-main">${esc(r.name)}</div>`,noSort:true},
@@ -243,7 +324,7 @@
     function woForm(){
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       const body=h("div",{class:"form-grid"},[
-        U.field("Product",U.searchSelect("w_item",fgs.map(i=>({v:i.id,l:i.id+" — "+i.name})),fgs[0].id,"Search product…"),"full"),
+        fgPicker("w_item", fgs, fgs[0]&&fgs[0].id),
         U.field("Quantity",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"Coating Line 1",l:"Coating Line 1"},{v:"Coating Line 2",l:"Coating Line 2"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Coating Line 1")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
@@ -278,13 +359,10 @@
         if(spec){ specHost.appendChild(U.field(spec.label,`<input class="input" id="w_spec" type="number" min="0" placeholder="as per order">`)); }
         matHost.innerHTML=""; if(!bom) return;
 
-        // the sheet's layer/coating note for this product, so the operator
-        // sees how the run is built up (e.g. TOP LAYER · 2 layers)
-        const lay=layersLabel(ENG.item(id));
-        if(lay) matHost.appendChild(h("div",{class:"flex aic",style:"gap:6px;margin-bottom:10px"},[
-          h("span",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase",text:"Layers"}),
-          h("span",{class:"chip",style:"font-size:11px",text:"≡ "+lay})
-        ]));
+        // how the run is built up: the full layer stack (with layer breaks
+        // and each layer's material) — only for multi-layer products
+        const lay=layerPanel(ENG.item(id), bom.lines);
+        if(lay) matHost.appendChild(lay);
 
         /* ---- ranged materials: pick the real one from what the store holds ----
            The BOM records a choice ("CLOFT 912 / CLOFT 913") or a span
@@ -413,7 +491,7 @@
       const body=h("div",{},[
         h("p",{class:"dim",style:"margin-bottom:12px",text:"Pick a finished product and a target production quantity to see the raw materials required (per the current BOM), with available stock and any shortfall."}),
         h("div",{class:"form-grid"},[
-          U.field("Product (Finished Good)", U.searchSelect("bc_fg", withBom.map(f=>({v:f.id,l:f.id+" — "+f.name})), withBom[0].id, "Search product…"), "full"),
+          fgPicker("bc_fg", withBom, withBom[0].id),
           U.field("Quantity to produce", `<div class="flex" style="gap:6px"><input class="input" id="bc_qty" type="number" step="0.1" min="0" value="100" style="flex:1"><select class="select" id="bc_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="bc_conv" style="font-size:11px;margin-top:3px"></div>`),
         ]),
         h("div",{id:"bc_out",style:"margin-top:14px"})
@@ -468,6 +546,8 @@
       return table(list,[
         {key:"product",label:"Product",render:fg=>`<div class="cell-main">${esc(fg.name)}</div>`,sort:fg=>fg.name},
         {key:"code",label:"Code",render:fg=>`<span class="chip"><b>${esc(fg.typeCode||fg.id)}</b></span>`,sort:fg=>fg.typeCode||fg.id},
+        {key:"thk",label:"Thickness",num:true,render:fg=>fg.thicknessMM!=null?`<span class="mono">${ENG.num(fg.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:fg=>fg.thicknessMM||0},
+        {key:"layers",label:"Layers",num:true,render:fg=>(fg.layerCount||0)>1?`<span class="chip" style="font-size:11px">≡ ${fg.layerCount}</span>`:'<span class="muted">—</span>',sort:fg=>fg.layerCount||0},
         {key:"mat",label:"Material Cost",num:true,render:fg=>"₹"+ENG.num(matCostOf(fg),0),sort:matCostOf},
         {key:"cost",label:"Std Cost",num:true,render:fg=>"₹"+ENG.num(fg.cost,0),sort:fg=>fg.cost},
         {key:"price",label:"Price",num:true,render:fg=>"₹"+ENG.num(fg.price,0),sort:fg=>fg.price},
@@ -495,13 +575,14 @@
       const n=(v,d)=> v==null||isNaN(v) ? "—" : ENG.num(v,d);
       let altIdx=0;
       const basisHost=h("div",{class:"muted",style:"font-size:12px;margin-bottom:10px"});
+      const layHost=h("div");
       const altHost=h("div",{style:"margin-bottom:10px"});
       const tblHost=h("div",{style:"overflow-x:auto"});
       const totHost=h("div",{style:"margin-top:14px"});
-      const body=h("div",{},[basisHost,altHost,
+      const body=h("div",{},[basisHost,layHost,altHost,
         h("h3",{style:"margin:4px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,totHost]);
-      const mo=modal({title:"BOM · "+fgId, sub:fg.name, wide:true, body,
+      const mo=modal({title:"BOM · "+fgId, sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
           App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
 
@@ -514,6 +595,9 @@
           +(c.fgGsm!=null?` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch`:" · FG GSM not set")
           +` · yield ${(bom.yield*100).toFixed(0)}%`
           +(lay?` · Layers: ${lay}`:"");
+        layHost.innerHTML="";
+        const lp=layerPanel(fg, src.lines);
+        if(lp) layHost.appendChild(lp);
 
         altHost.innerHTML="";
         if(bom.alternates && bom.alternates.length>1){
@@ -607,16 +691,24 @@
       loadLines();
 
       const basisHost=h("div",{class:"muted",style:"font-size:12px;margin:2px 0 12px"});
+      const layHost=h("div");
       const altHost=h("div",{style:"margin-bottom:10px"});
       const tblHost=h("div",{style:"overflow-x:auto"});
       const totHost=h("div",{style:"margin-top:14px"});
 
+      const curItem=ENG.item(curFg)||{};
+      const lockedLabel=(curItem.productName||curItem.name||curFg)
+        +(curItem.thicknessMM!=null?" · "+curItem.thicknessMM+" mm":"")
+        +"  —  "+(curItem.typeCode||curFg);
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          U.field("Product (Finished Good)", U.searchSelect("bm_fg", fgs.map(f=>({v:f.id,l:f.id+" — "+f.name})), curFg, "Search product…")),
+          editing
+            ? U.field("Product (Finished Good)",
+                `<input type="hidden" id="bm_fg" value="${esc(curFg)}"><input class="input is-locked" readonly value="${esc(lockedLabel)}">`,"full")
+            : fgPicker("bm_fg", fgs, curFg),
           U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
         ]),
-        basisHost, altHost,
+        basisHost, layHost, altHost,
         h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,
         h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>{lines.push(blank());draw();},html:"＋ Add component"}),
@@ -628,8 +720,8 @@
       foot.push(h("button",{class:"btn primary",onclick:save,text:editing?"Save BOM":"Create BOM"}));
       const mo=modal({title: editing?("Edit BOM · "+curFg):"Create BOM",
         sub:"Material recipe, pickup % and production roll-up", wide:true, body, foot});
-      const fgSel=UI.$("#bm_fg_s"); if(editing && fgSel){ fgSel.readOnly=true; fgSel.classList.add("is-locked"); }
-      if(!editing && fgSel){ fgSel.addEventListener("change",()=>{ const v=UI.$("#bm_fg").value; if(v&&v!==curFg){ curFg=v; altIdx=0; loadLines(); draw(); } }); }
+      if(!editing){ const fgHid=UI.$("#bm_fg");
+        if(fgHid) fgHid.addEventListener("change",()=>{ const v=fgHid.value; if(v&&v!==curFg){ curFg=v; altIdx=0; loadLines(); draw(); } }); }
 
       const n=(v,d)=> v==null||isNaN(v) ? "—" : ENG.num(v,d);
 
@@ -646,6 +738,9 @@
           + (c.fgGsm!=null ? ` · FG ${n(c.fgGsm,0)} g/m² → ${n(c.fgKgPerBatch,1)} kg per batch` : " · FG GSM not set — per-kg figures unavailable")
           + (lay ? ` · Layers: ${lay}` : "")
         }));
+        layHost.innerHTML="";
+        const lp=layerPanel(fg, lines);
+        if(lp) layHost.appendChild(lp);
 
         /* ---- alternate approved recipes ---- */
         altHost.innerHTML="";
