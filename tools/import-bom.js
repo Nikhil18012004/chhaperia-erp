@@ -260,19 +260,25 @@ function build(products) {
   assignIds(products);
 
   const addRm = (name, grade, line) => {
-    const id = rmId(name, grade);
     const isFab = BOM.normUnit(line.unit) === "MTR" && !BOM.isBlank(line.rmGsm);
+    // Each thickness of a fabric/tape is its OWN stock item, so a work
+    // order consumes exactly the thickness the recipe calls for. Ranged
+    // thicknesses ("0.08-0.10") stay on the shared material item.
+    const rawThk = BOM.numLoose(line.rmThk);
+    const thk = isFab && !BOM.isRanged(line.rmThk) && rawThk != null ? +(+rawThk).toFixed(4) : null;
+    const id = rmId(name, grade) + (thk != null ? "-" + Math.round(thk * 1000) + "MIC" : "");
     if (!items.has(id)) {
       // NB: putItem() promotes the known columns and JSON-encodes whatever is
       // LEFT OVER into `doc`. So extra fields go at the top level here —
       // passing a literal `doc:{…}` would store it double-nested as {"doc":{…}}
       // and hide every spec field from the UI.
       items.set(id, {
-        id, name: (name + (grade && !BOM.isBlank(grade) ? " " + grade : "")).replace(/\s+/g, " ").trim(),
+        id, name: (name + (grade && !BOM.isBlank(grade) ? " " + grade : "")
+          + (thk != null ? " " + thk + "MM" : "")).replace(/\s+/g, " ").trim(),
         cat: "RM", uom: BOM.normUnit(line.unit) || "KG", cost: 0, price: 0,
         reorder: 0, safety: 0, lead: 7, group: isFab ? "FABRIC" : "CHEMICAL",
         material: name, grade: (BOM.isBlank(grade) ? null : grade),
-        thicknessMM: BOM.numLoose(line.rmThk), gsm: BOM.numLoose(line.rmGsm),
+        thicknessMM: thk != null ? thk : BOM.numLoose(line.rmThk), gsm: BOM.numLoose(line.rmGsm),
         fabric: isFab, source: "PRODUCT, TYPE WITH BOM FINAL.xlsx",
       });
     }

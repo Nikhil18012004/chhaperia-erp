@@ -287,13 +287,15 @@
     const rawCats=ENG.data.categories.filter(c=>c.kind==="raw");
     const items=[]; const seen=new Set();
     ENG.data.items.forEach(i=>{ if(rawCatIds.has(i.cat) && !seen.has(i.id)){ seen.add(i.id); items.push(i); } });
-    /* label = "material — grade/type" (e.g. POLYESTER FABRIC — PWF11); the
-       item id is NOT repeated in the label — it just restated the name and
-       made every material look like it was listed twice */
-    const rmLabel=i=>(i.material||i.name||i.id)+(i.grade?" — "+i.grade:"");
-    items.sort((a,b)=>rmLabel(a).localeCompare(rmLabel(b)));
     /* thickness + GSM apply only to fabrics and tapes (metre-measured) */
     const isMtr=u=>["M","MTR","METER"].includes(String(u||"").toUpperCase());
+    /* label = "material — grade/type" (e.g. POLYESTER FABRIC — PWF11); the
+       item id is NOT repeated in the label — it just restated the name and
+       made every material look like it was listed twice. Fabrics/tapes add
+       their thickness, since each thickness is its own stock item. */
+    const rmLabel=i=>(i.material||i.name||i.id)+(i.grade?" — "+i.grade:"")
+      +((i.fabric||isMtr(i.uom))&&i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"");
+    items.sort((a,b)=>rmLabel(a).localeCompare(rmLabel(b)));
     const thkField=field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`);
     const gsmField=field("GSM (g/m²)",`<input class="input" id="s_gsm" type="number" step="0.1" placeholder="e.g. 110">`);
     const body=h("div",{},[
@@ -813,12 +815,40 @@
      Only a hyphen+digits tail is removed, so grades like PWF11 or CLOFT 912
      (where the number is part of the grade, not a thickness) stay intact. */
   function baseCode(code){ return String(code||"").replace(/-\s*\d+(\.\d+)?$/,""); }
+  /* family code for a finished good: the type code with its THICKNESS token
+     removed wherever it sits — CP25G-08 → CP25G, CHN-12 WS → CHNWS,
+     CHN-20 TDM → CHNTDM, CHN-25 TDMS → CHNTDMS. A number counts as the
+     thickness token only when it stands alone (the 25 inside CP25G stays)
+     and equals the product's thickness in mm, ×100 or ×1000. Falls back to
+     stripping a trailing -digits tail when nothing matches. */
+  function familyCode(typeCode, thicknessMM){
+    const tc=String(typeCode||"").trim();
+    if(!tc) return "";
+    const th=+thicknessMM;
+    if(!isNaN(th) && th>0){
+      const re=/(\d+(?:\.\d+)?)/g; let m;
+      while((m=re.exec(tc))){
+        const before=tc[m.index-1], after=tc[m.index+m[1].length];
+        if(before && /[A-Za-z0-9.]/.test(before)) continue;   // glued to a word — not a thickness
+        if(after && /[A-Za-z0-9.]/.test(after)) continue;
+        const v=+m[1];
+        if(v===th || Math.abs(v-th*100)<0.001 || Math.abs(v-th*1000)<0.001){
+          let a=m.index, b=m.index+m[1].length;
+          while(a>0 && /[-\s]/.test(tc[a-1])) a--;                       // swallow separators before
+          let b2=b; while(b2<tc.length && /[-\s]/.test(tc[b2])) b2++;    // …and after, but only when a
+          if(b2<tc.length && /[A-Za-z]/.test(tc[b2])) b=b2;              // word follows (CHN-12 WS → CHNWS)
+          return (tc.slice(0,a)+tc.slice(b)).replace(/^[-\s]+|[-\s]+$/g,"");
+        }
+      }
+    }
+    return baseCode(tc);
+  }
   /* material label, code/type FIRST: "CP25G — MICA TAPE" */
   function matDisplay(it){ if(!it) return "—"; const nm=it.material||it.name||it.id;
     return it.grade? it.grade+" — "+nm : nm; }
 
   // expose for other modules
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, matDisplay});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

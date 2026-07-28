@@ -37,11 +37,12 @@
      has no layer labels, each metre-measured (fabric/tape) line starts a
      new "LAYER n" group and the chemicals after it belong to that layer.
      Products that don't stack more than one layer show no layer UI at all. */
-  function layerPanel(fg, rawLines){
-    if(!fg || !rawLines) return null;
-    const lines=BOMCALC.normalize(rawLines);
-    if(!lines.length) return null;
+  /* group normalized BOM lines into layer sections: real labels from the
+     sheet when present; otherwise each metre-measured line starts a
+     "LAYER n" group; a recipe with no fabric at all = one unlabeled group */
+  function layerGroups(lines){
     const groups=[];
+    if(!lines.length) return groups;
     if(lines.some(l=>l.layer)){
       let g=null;
       lines.forEach(l=>{
@@ -50,6 +51,8 @@
         g.lines.push(l);
       });
     } else {
+      const mtrCount=lines.filter(l=>BOMCALC.normUnit(l.unit)==="MTR").length;
+      if(mtrCount<2){ groups.push({label:null, lines:lines.slice()}); return groups; }
       const pre=[]; let g=null, n=0;
       lines.forEach(l=>{
         if(BOMCALC.normUnit(l.unit)==="MTR"){ n++; g={label:"LAYER "+n, lines:[]}; groups.push(g); }
@@ -57,13 +60,22 @@
       });
       if(pre.length && groups.length) groups[0].lines=pre.concat(groups[0].lines);
     }
+    return groups;
+  }
+  function matLineName(l){ const it=l.id?ENG.item(l.id):null;
+    if(it) return U.matDisplay(it);
+    return l.rmType? l.rmType+" — "+(l.rm||"") : (l.rm||"—"); }
+  function matLineSpec(l){ const bits=[];
+    if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
+    return bits.join(" · "); }
+
+  function layerPanel(fg, rawLines){
+    if(!fg || !rawLines) return null;
+    const lines=BOMCALC.normalize(rawLines);
+    if(!lines.length) return null;
+    const groups=layerGroups(lines);
     if(groups.length<2) return null;   // no layer story to tell
-    const nameOf=l=>{ const it=l.id?ENG.item(l.id):null;
-      if(it) return U.matDisplay(it);
-      return l.rmType? l.rmType+" — "+(l.rm||"") : (l.rm||"—"); };
-    const specOf=l=>{ const bits=[];
-      if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
-      return bits.join(" · "); };
+    const nameOf=matLineName, specOf=matLineSpec;
     const box=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"});
     box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
       text:"≡ Layer build-up · "+groups.length+" layers"}));
@@ -88,17 +100,21 @@
      fires "change" exactly like the old single select — existing listeners
      and UI.$("#id").value reads keep working untouched. */
   function fgPicker(id, fgList, selId){
+    /* one picker entry per FAMILY — name + family code — so e.g. the
+       SEMI CONDUCTIVE WOVEN TAPE range splits into CHNWS / CHNTDM /
+       CHNTDMS, each with only its own thicknesses */
+    const famOf=f=>U.familyCode(f.typeCode, f.thicknessMM)||U.baseCode(f.typeCode||"")||"";
+    const keyOf=f=>famOf(f)+"|"+(f.productName||f.name);
     const byName={};
-    fgList.forEach(f=>{ const nm=f.productName||f.name; (byName[nm]=byName[nm]||[]).push(f); });
+    fgList.forEach(f=>{ (byName[keyOf(f)]=byName[keyOf(f)]||[]).push(f); });
     Object.values(byName).forEach(a=>a.sort((x,y)=>(x.thicknessMM||0)-(y.thicknessMM||0)));
     const names=Object.keys(byName).sort();
     const init=fgList.find(f=>f.id===selId)||fgList[0];
-    let curName=init?(init.productName||init.name):names[0];
-    /* option label: base type code FIRST (thickness suffix stripped —
-       CP25G-08 → CP25G), then the product name */
-    const nameLabel=nm=>{
-      const bases=[...new Set((byName[nm]||[]).map(f=>U.baseCode(f.typeCode||"")).filter(Boolean))];
-      return (bases.length? bases.join("/")+" — ":"")+nm;
+    let curName=init?keyOf(init):names[0];
+    /* option label: family code FIRST, then the product name */
+    const nameLabel=key=>{
+      const fam=key.split("|")[0], nm=key.split("|").slice(1).join("|");
+      return (fam? fam+" — ":"")+nm;
     };
     const hid=h("input",{type:"hidden",id,value:init?init.id:""});
     const thkHost=h("div");
@@ -251,7 +267,7 @@
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         {key:"item",label:"Product",render:r=>`<div class="cell-main">${esc((ENG.item(r.itemId)||{}).name||r.itemId)}</div>`,sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
-        {key:"code",label:"Code",render:r=>{const it=ENG.item(r.itemId)||{};return `<span class="mono muted">${esc(U.baseCode(it.typeCode||"")||it.typeCode||r.itemId)}</span>`;},sort:r=>r.itemId},
+        {key:"code",label:"Code",render:r=>{const it=ENG.item(r.itemId)||{};return `<span class="mono muted">${esc(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||r.itemId)}</span>`;},sort:r=>r.itemId},
         {key:"thk",label:"Thickness",num:true,render:r=>{const t=(ENG.item(r.itemId)||{}).thicknessMM; return t!=null?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},sort:r=>(ENG.item(r.itemId)||{}).thicknessMM||0},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
         {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
@@ -313,7 +329,7 @@
         return {rid, name:r.id?U.matDisplay(r):rid, per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
       // ---- Details pane ----
       const detailsPane=h("div",{},[
-        MW.dl([["Product",it.name],["Code",U.baseCode(it.typeCode||"")||it.typeCode||wo.itemId],
+        MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
           ["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
@@ -382,10 +398,8 @@
         if(spec){ specHost.appendChild(U.field(spec.label,`<input class="input" id="w_spec" type="number" min="0" placeholder="as per order">`)); }
         matHost.innerHTML=""; if(!bom) return;
 
-        // how the run is built up: the full layer stack (with layer breaks
-        // and each layer's material) — only for multi-layer products
-        const lay=layerPanel(ENG.item(id), bom.lines);
-        if(lay) matHost.appendChild(lay);
+        // the layer layout below carries the materials AND their live
+        // need / in-store figures — no separate consumption list
 
         /* ---- ranged materials: pick the real one from what the store holds ----
            The BOM records a choice ("CLOFT 912 / CLOFT 913") or a span
@@ -414,17 +428,45 @@
           });
         }
 
-        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",text:"Materials to be consumed"}));
-        BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).forEach(([rid,per])=>{
-          const need=per*qty/bom.yield; const have=ENG.stock(rid).onHand||0; const ok=have>=need; const r=ENG.item(rid)||{};
-          matHost.appendChild(h("div",{class:"flex between aic",style:"gap:10px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
-            h("div",{style:"min-width:0;font-weight:600",text:r.id?U.matDisplay(r):rid}),
-            h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
-              h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(need,2)+" "+(r.uom||"")})]),
-              h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||"")})]),
-              h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(need-have,2))})
-            ])
-          ]));
+        /* ---- materials grouped by layer — the ONE list for every product:
+           the layer name as a heading, that layer's materials beneath it,
+           each row carrying its live need / in-store / short figures.
+           Single-layer and no-layer products use the exact same row
+           layout, just without layer headings. ---- */
+        const fgIt=ENG.item(id);
+        const resolved=BOMCALC.resolve(bom, matChoices);
+        const cc=BOMCALC.compute({lines:resolved}, BOMCALC.metaFromItem(fgIt));
+        const perOf=l=> cc.fgKgPerBatch? l.qty/cc.fgKgPerBatch : l.qty;
+        const needBy={};             // a fabric can sit in two layers — stock is shared
+        resolved.forEach(l=>{ if(l.id) needBy[l.id]=(needBy[l.id]||0)+perOf(l)*qty/bom.yield; });
+        const groups=layerGroups(resolved);
+        const multi=groups.length>1;
+        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",
+          text: multi? "≡ Materials by layer · "+groups.length+" layers" : "Materials to be consumed"}));
+        groups.forEach((grp,gi)=>{
+          if(multi) matHost.appendChild(h("div",{style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:"+(gi?12:2)+"px 0 4px;color:var(--accent)",
+            text:grp.label||("LAYER "+(gi+1))}));
+          grp.lines.forEach(l=>{
+            const rid=l.id;
+            const need=perOf(l)*qty/bom.yield;
+            const r=rid?(ENG.item(rid)||{}):{};
+            const have=rid?(ENG.stock(rid).onHand||0):0;
+            const agg=rid?needBy[rid]:need;
+            const ok=have>=agg-1e-9;
+            const spec=matLineSpec(l);
+            matHost.appendChild(h("div",{class:"flex between aic",
+              style:"gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
+              h("div",{style:"min-width:0"},[
+                h("div",{style:"font-weight:600",text:matLineName(l)}),
+                spec?h("div",{class:"muted mono",style:"font-size:11px",text:spec}):null
+              ]),
+              h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
+                h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(need,2)+" "+(r.uom||l.unit||"")})]),
+                h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||l.unit||"")})]),
+                h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(agg-have,2))})
+              ])
+            ]));
+          });
         });
       };
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
@@ -568,7 +610,7 @@
     function productTable(list){
       return table(list,[
         {key:"product",label:"Product",render:fg=>`<div class="cell-main">${esc(fg.name)}</div>`,sort:fg=>fg.name},
-        {key:"code",label:"Code",render:fg=>`<span class="chip"><b>${esc(U.baseCode(fg.typeCode||"")||fg.typeCode||fg.id)}</b></span>`,sort:fg=>fg.typeCode||fg.id},
+        {key:"code",label:"Code",render:fg=>`<span class="chip"><b>${esc(U.familyCode(fg.typeCode,fg.thicknessMM)||fg.typeCode||fg.id)}</b></span>`,sort:fg=>fg.typeCode||fg.id},
         {key:"thk",label:"Thickness",num:true,render:fg=>fg.thicknessMM!=null?`<span class="mono">${ENG.num(fg.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:fg=>fg.thicknessMM||0},
         {key:"layers",label:"Layers",num:true,render:fg=>(fg.layerCount||0)>1?`<span class="chip" style="font-size:11px">≡ ${fg.layerCount}</span>`:'<span class="muted">—</span>',sort:fg=>fg.layerCount||0},
         {key:"mat",label:"Material Cost",num:true,render:fg=>"₹"+ENG.num(matCostOf(fg),0),sort:matCostOf},
@@ -605,7 +647,7 @@
       const body=h("div",{},[basisHost,layHost,altHost,
         h("h3",{style:"margin:4px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,totHost]);
-      const mo=modal({title:"BOM · "+(U.baseCode(fg.typeCode||"")||fg.typeCode||fgId), sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
+      const mo=modal({title:"BOM · "+(U.familyCode(fg.typeCode,fg.thicknessMM)||fg.typeCode||fgId), sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
           App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
 
@@ -720,7 +762,7 @@
       const totHost=h("div",{style:"margin-top:14px"});
 
       const curItem=ENG.item(curFg)||{};
-      const lockedLabel=(U.baseCode(curItem.typeCode||"")||curItem.typeCode||curFg)
+      const lockedLabel=(U.familyCode(curItem.typeCode,curItem.thicknessMM)||curItem.typeCode||curFg)
         +" — "+(curItem.productName||curItem.name||curFg)
         +(curItem.thicknessMM!=null?" · "+curItem.thicknessMM+" mm":"");
       const body=h("div",{},[
