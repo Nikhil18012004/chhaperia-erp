@@ -880,9 +880,9 @@
     }
     return baseCode(tc);
   }
-  /* material label, code/type FIRST: "CP25G — MICA TAPE" */
+  /* material label for pickers: NAME first, then the code — "MICA TAPE — CP25G" */
   function matDisplay(it){ if(!it) return "—"; const nm=it.material||it.name||it.id;
-    return it.grade? it.grade+" — "+nm : nm; }
+    return it.grade? nm+" — "+it.grade : nm; }
 
   // expose for other modules
   window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay});

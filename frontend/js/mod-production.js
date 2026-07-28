@@ -62,9 +62,14 @@
     }
     return groups;
   }
+  /* raw materials show their NAME and their CODE as separate things:
+     name = the material itself (MICA TAPE), code = its grade/type (CP25G) */
   function matLineName(l){ const it=l.id?ENG.item(l.id):null;
-    if(it) return U.matDisplay(it);
-    return l.rmType? l.rmType+" — "+(l.rm||"") : (l.rm||"—"); }
+    if(it) return it.material||it.name||l.rm||"—";
+    return l.rm||"—"; }
+  function matLineCode(l){ const it=l.id?ENG.item(l.id):null;
+    if(it) return it.grade||"";
+    return l.rmType||""; }
   function matLineSpec(l){ const bits=[];
     if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
     return bits.join(" · "); }
@@ -75,7 +80,6 @@
     if(!lines.length) return null;
     const groups=layerGroups(lines);
     if(groups.length<2) return null;   // no layer story to tell
-    const nameOf=matLineName, specOf=matLineSpec;
     const box=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"});
     box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
       text:"≡ Layer build-up · "+groups.length+" layers"}));
@@ -84,8 +88,9 @@
         text:g.label||("LAYER "+(gi+1))}));
       g.lines.forEach(l=>{
         box.appendChild(h("div",{class:"flex aic",style:"gap:8px;padding:3px 0 3px 14px;font-size:12.5px;border-left:2px solid var(--line);margin-left:2px"},[
-          h("span",{style:"font-weight:600",text:nameOf(l)}),
-          specOf(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:specOf(l)}):null,
+          h("span",{style:"font-weight:600",text:matLineName(l)}),
+          matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null,
+          matLineSpec(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:matLineSpec(l)}):null,
           h("span",{class:"muted mono",style:"margin-left:auto;font-size:11px;flex:0 0 auto",text:ENG.num(l.qty,2)+" "+(l.unit||"")})
         ]));
       });
@@ -385,7 +390,7 @@
     function woDetail(wo){
       const it=ENG.item(wo.itemId); const bom=ENG.data.boms[wo.itemId];
       const rows = bom? BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(it)).map(([rid,per])=>{ const need=per*wo.qty/bom.yield; const st=ENG.stock(rid); const r=ENG.item(rid)||{};
-        return {rid, name:r.id?U.matDisplay(r):rid, per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
+        return {rid, name:r.id?(r.material||r.name):rid, code:r.id?(r.grade||"—"):"—", per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
       // ---- Details pane ----
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
@@ -397,7 +402,7 @@
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Material Requirements (auto from BOM)"}),
         table(rows,[
           {key:"name",label:"Component",render:r=>`<div class="cell-main">${esc(r.name)}</div>`,noSort:true},
-          {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.rid)}</span>`,noSort:true},
+          {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.code)}</span>`,noSort:true},
           {key:"per",label:"Per kg",num:true,render:r=>ENG.num(r.per,3),noSort:true},
           {key:"need",label:"Required",num:true,render:r=>`<span class="strong">${ENG.num(r.need,2)}</span> ${r.uom}`,noSort:true},
           {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1),noSort:true},
@@ -486,7 +491,7 @@
                 text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
-                text:(l.rmType? l.rmType+" — ":"")+(l.rm||"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
+                text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
               usable.length? sel : h("div",{class:"muted",style:"font-size:12px;color:var(--danger)",text:"No matching material found in the store"})
             ]));
           });
@@ -521,7 +526,10 @@
             matHost.appendChild(h("div",{class:"flex between aic",
               style:"gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
               h("div",{style:"min-width:0"},[
-                h("div",{style:"font-weight:600",text:matLineName(l)}),
+                h("div",{class:"flex aic",style:"gap:8px"},[
+                  h("span",{style:"font-weight:600",text:matLineName(l)}),
+                  matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null
+                ]),
                 spec?h("div",{class:"muted mono",style:"font-size:11px",text:spec}):null
               ]),
               h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
@@ -700,8 +708,6 @@
           sort:fg=>(ENG.data.boms[fg.id]||{}).yield||0},
         {key:"bom",label:"BOM",render:fg=>{const b=ENG.data.boms[fg.id];
           return b?`<span style="color:var(--accent);font-weight:600;font-size:12px">${BOMCALC.normalize(b.lines).length} components ›</span>`:'<span class="muted">No BOM</span>';},noSort:true},
-        {key:"act",label:"",noSort:true,render:fg=>{const b=ENG.data.boms[fg.id];
-          return h("button",{class:"btn sm ghost",title:b?"Edit this BOM":"Add a BOM",onclick:()=>bomForm(fg.id),html:b?"✎":"＋"});}},
       ],{empty:"No products in this series",
          onRow:fg=>{ if(ENG.data.boms[fg.id]) bomView(fg.id); else bomForm(fg.id); }});
     }
@@ -762,7 +768,9 @@
         const tb=h("tbody");
         c.lines.forEach(cl=>{
           const r=cl.id?ENG.item(cl.id):null;
-          const label=r? U.matDisplay(r) : (cl.rmType? cl.rmType+" — "+(cl.rm||"") : (cl.rm||cl.id||"—"));
+          // name cell carries ONLY the material name; the code column ONLY its code
+          const label=r? (r.material||r.name||"—") : (cl.rm||cl.id||"—");
+          const codeTxt=r? (r.grade||"—") : (cl.rmType||"—");
           tb.appendChild(h("tr",{},[
             h("td",{style:"min-width:200px"},[
               h("div",{class:"flex aic",style:"gap:6px"},[
@@ -770,7 +778,7 @@
                 cl.ranged?h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged"}):null
               ])
             ]),
-            h("td",{class:"mono muted",style:"font-size:11px",text:cl.id||[cl.rm,cl.rmType].filter(Boolean).join(" · ")||"—"}),
+            h("td",{class:"mono muted",style:"font-size:11px",text:codeTxt}),
             h("td",{class:"mono",style:"text-align:right",text:n(cl.qty,3)}),
             h("td",{style:"text-align:right",text:cl.unit||"—"}),
             h("td",{class:"mono",style:"text-align:right",text:cl.rmGsm!=null?cl.rmGsm:"—"}),
@@ -913,14 +921,14 @@
             // A ranged line has no single material yet — the real one is chosen
             // against live store stock when the work order is issued.
             nameCell.appendChild(h("div",{},[
-              h("div",{style:"font-weight:700;font-size:12.5px",text:(l.rmType? l.rmType+" — ":"")+(l.rm||"—")}),
+              h("div",{style:"font-weight:700;font-size:12.5px",text:(l.rm||"—")+(l.rmType?" — "+l.rmType:"")}),
               h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged — picked at issue"})
             ]));
           } else {
             nameCell.appendChild(h("div",{html:U.searchSelect("bl_rid_"+l._k,
               matOptions(l.id), l.id, "Search material…")}));
             if(l.rm) nameCell.appendChild(h("div",{class:"muted",style:"font-size:10.5px;margin-top:2px",
-              text:(l.rmType? l.rmType+" — ":"")+l.rm+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")+(l.rmThk?" · "+l.rmThk+" mm":"")}));
+              text:l.rm+(l.rmType?" — "+l.rmType:"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")+(l.rmThk?" · "+l.rmThk+" mm":"")}));
           }
           const qtyIn=h("input",{class:"input",type:"number",step:"0.001",value:l.qty,
             style:"width:100px;text-align:right",oninput:e=>{ l.qty=+e.target.value||0; refresh(); }});
