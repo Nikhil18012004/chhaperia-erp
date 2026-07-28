@@ -287,12 +287,20 @@
     const rawCats=ENG.data.categories.filter(c=>c.kind==="raw");
     const items=[]; const seen=new Set();
     ENG.data.items.forEach(i=>{ if(rawCatIds.has(i.cat) && !seen.has(i.id)){ seen.add(i.id); items.push(i); } });
-    items.sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+    /* label = "material — grade/type" (e.g. POLYESTER FABRIC — PWF11); the
+       item id is NOT repeated in the label — it just restated the name and
+       made every material look like it was listed twice */
+    const rmLabel=i=>(i.material||i.name||i.id)+(i.grade?" — "+i.grade:"");
+    items.sort((a,b)=>rmLabel(a).localeCompare(rmLabel(b)));
+    /* thickness + GSM apply only to fabrics and tapes (metre-measured) */
+    const isMtr=u=>["M","MTR","METER"].includes(String(u||"").toUpperCase());
+    const thkField=field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`);
+    const gsmField=field("GSM (g/m²)",`<input class="input" id="s_gsm" type="number" step="0.1" placeholder="e.g. 110">`);
     const body=h("div",{},[
       h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick a raw material (or create a new one), review or edit its parameters, then enter the quantity to receive. The parameters are saved to the item; the quantity posts to the ledger."}),
       h("div",{class:"form-grid"},[
         field("Scan / Barcode",`<input class="input" id="s_scan" placeholder="Scan or type barcode / item code, then press Enter">`,"full"),
-        field("Raw Material", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:i.name+" — "+i.id}))),"__new")),
+        field("Raw Material", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:rmLabel(i)}))),"__new")),
       ]),
       h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Item parameters"}),
       h("div",{id:"s_newblock"},[
@@ -301,11 +309,11 @@
           field("Item Name",`<input class="input" id="s_name" placeholder="e.g. Copper Foil 0.05mm">`),
           field("Category",selectHTML("s_cat",rawCats.map(c=>({v:c.id,l:c.name})),"RM")),
           field("Unit (per)",selectHTML("s_uom",UNITS,"KG")),
-          field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`),
+          thkField,
+          gsmField,
           field("Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="e.g. 25">`),
           field("Length (m)",`<input class="input" id="s_len" type="number" step="0.1" placeholder="e.g. 1000">`),
           field("Reorder Point",`<input class="input" id="s_reorder" type="number" value="0">`),
-          field("Lead Time (days)",`<input class="input" id="s_lead" type="number" value="7">`),
           field("HSN Code",`<input class="input" id="s_hsn" placeholder="e.g. 74102100">`),
         ])
       ]),
@@ -332,19 +340,32 @@
         code.disabled=false; code.placeholder="Auto if left blank (e.g. RM-1001)";
         if(catEl) catEl.disabled=false;   // category editable only while creating
         setVal("s_code",""); setVal("s_name",""); setSel("s_cat","RM"); setSel("s_uom","KG");
-        setVal("s_thk",""); setVal("s_wid",""); setVal("s_len","");
-        setVal("s_reorder","0"); setVal("s_lead","7"); setVal("s_hsn","");
+        setVal("s_thk",""); setVal("s_gsm",""); setVal("s_wid",""); setVal("s_len","");
+        setVal("s_reorder","0"); setVal("s_hsn","");
       } else {
         const it=ENG.item(sel.value)||{};
         code.disabled=true; setVal("s_code",it.id||"");
         if(catEl) catEl.disabled=true;    // locked once the item exists
         setVal("s_name",it.name||""); setSel("s_cat",it.cat||"RM"); setSel("s_uom",it.uom||"KG");
-        setVal("s_thk",it.thicknessMM!=null?it.thicknessMM:(it.thickness!=null?it.thickness:"")); setVal("s_wid",it.width!=null?it.width:""); setVal("s_len",it.length!=null?it.length:"");
-        setVal("s_reorder",it.reorder!=null?it.reorder:"0"); setVal("s_lead",it.lead!=null?it.lead:"7");
+        setVal("s_thk",it.thicknessMM!=null?it.thicknessMM:(it.thickness!=null?it.thickness:"")); setVal("s_gsm",it.gsm!=null?it.gsm:"");
+        setVal("s_wid",it.width!=null?it.width:""); setVal("s_len",it.length!=null?it.length:"");
+        setVal("s_reorder",it.reorder!=null?it.reorder:"0");
         setVal("s_hsn",it.hsn||"");
       }
+      updFab();
+    }
+    /* thickness + GSM fields exist only for fabrics/tapes: an existing item
+       shows them when it IS a fabric (or is metre-measured); a new item shows
+       them as soon as its unit is set to metres */
+    function updFab(){
+      let fab;
+      if(sel.value==="__new"){ const u=UI.$("#s_uom"); fab=isMtr(u&&u.value); }
+      else { const it=ENG.item(sel.value)||{}; fab=!!it.fabric||isMtr(it.uom); }
+      thkField.style.display=fab?"":"none";
+      gsmField.style.display=fab?"":"none";
     }
     sel.onchange=fillParams; fillParams();
+    const uomSel=UI.$("#s_uom"); if(uomSel) uomSel.addEventListener("change",updFab);
     /* barcode scan: match by barcode or item code, select it, jump to qty */
     attachScan(UI.$("#s_scan"), (found)=>{
       if(!rawCatIds.has(found.cat)){ toast(found.name+" is not a raw material — only RM stock can be added here",{type:"warn"}); return; }
@@ -361,20 +382,24 @@
         let code=g("s_code").trim().toUpperCase();
         if(code && ENG.item(code)){ toast("Item code already exists — choose another",{type:"danger"}); return; }
         itemId=code||genItemId(cat);
+        const fab=isMtr(g("s_uom"));
         it={ id:itemId, name, cat, uom:g("s_uom"),
-          thicknessMM:+g("s_thk")||null, width:+g("s_wid")||null, length:+g("s_len")||null,
-          reorder:+g("s_reorder")||0, safety:0, lead:+g("s_lead")||7,
+          thicknessMM:fab?(+g("s_thk")||null):null, gsm:fab?(+g("s_gsm")||null):null, fabric:fab,
+          width:+g("s_wid")||null, length:+g("s_len")||null,
+          reorder:+g("s_reorder")||0, safety:0, lead:7,
           cost:rate||0, price:0, hsn:g("s_hsn").trim(), abc:"C", moq:0, active:true,
           barcode:"890"+Math.floor(Math.random()*1e7) };
         ENG.data.items.push(it);
       } else {
         it=ENG.item(itemId);
         /* apply edited parameters back to the existing item (category stays
-           locked; safety stock and selling price are managed elsewhere) */
+           locked; safety stock, selling price and lead time are managed
+           elsewhere; thickness/GSM belong only to fabrics and tapes) */
         it.name=g("s_name").trim()||it.name;
         it.uom=g("s_uom")||it.uom;
-        it.thicknessMM=+g("s_thk")||null; it.width=+g("s_wid")||null; it.length=+g("s_len")||null;
-        it.reorder=+g("s_reorder")||0; it.lead=+g("s_lead")||7;
+        if(it.fabric||isMtr(it.uom)){ it.thicknessMM=+g("s_thk")||null; it.gsm=+g("s_gsm")||null; }
+        it.width=+g("s_wid")||null; it.length=+g("s_len")||null;
+        it.reorder=+g("s_reorder")||0;
         it.cost=rate||it.cost||0; it.hsn=g("s_hsn").trim();
       }
       const move={ id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()),
@@ -786,8 +811,16 @@
   }
   ssWire();
 
+  /* strip the trailing thickness suffix from a type code: CP25G-08 → CP25G.
+     Only a hyphen+digits tail is removed, so grades like PWF11 or CLOFT 912
+     (where the number is part of the grade, not a thickness) stay intact. */
+  function baseCode(code){ return String(code||"").replace(/-\s*\d+(\.\d+)?$/,""); }
+  /* material label, code/type FIRST: "CP25G — MICA TAPE" */
+  function matDisplay(it){ if(!it) return "—"; const nm=it.material||it.name||it.id;
+    return it.grade? it.grade+" — "+nm : nm; }
+
   // expose for other modules
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, matDisplay});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

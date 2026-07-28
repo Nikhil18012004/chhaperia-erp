@@ -42,7 +42,8 @@
     const nLayers=Math.max(layers.length, fg.layerCount||0);
     if(nLayers<2) return null;
     const nameOf=l=>{ const it=l.id?ENG.item(l.id):null;
-      return (it&&it.name)||[l.rm,l.rmType].filter(Boolean).join(" ")||"—"; };
+      if(it) return U.matDisplay(it);
+      return l.rmType? l.rmType+" — "+(l.rm||"") : (l.rm||"—"); };
     const specOf=l=>{ const bits=[];
       if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
       return bits.join(" · "); };
@@ -77,12 +78,18 @@
     const names=Object.keys(byName).sort();
     const init=fgList.find(f=>f.id===selId)||fgList[0];
     let curName=init?(init.productName||init.name):names[0];
+    /* option label: base type code FIRST (thickness suffix stripped —
+       CP25G-08 → CP25G), then the product name */
+    const nameLabel=nm=>{
+      const bases=[...new Set((byName[nm]||[]).map(f=>U.baseCode(f.typeCode||"")).filter(Boolean))];
+      return (bases.length? bases.join("/")+" — ":"")+nm;
+    };
     const hid=h("input",{type:"hidden",id,value:init?init.id:""});
     const thkHost=h("div");
     const wrap=h("div",{style:"display:contents"},[
       hid,
       h("div",{class:"field full"},[h("label",{text:"Product"}),
-        h("div",{html:U.searchSelect(id+"_nm", names.map(nm=>({v:nm,l:nm})), curName, "Search product…")})]),
+        h("div",{html:U.searchSelect(id+"_nm", names.map(nm=>({v:nm,l:nameLabel(nm)})), curName, "Search product…")})]),
       h("div",{class:"field"},[h("label",{text:"Thickness"}), thkHost]),
     ]);
     function buildThk(keepId, silent){
@@ -91,7 +98,7 @@
       const sel=h("select",{class:"select",onchange:e=>{ hid.value=e.target.value;
         hid.dispatchEvent(new Event("change",{bubbles:true})); }},
         list.map(f=>h("option",{value:f.id,selected:cur&&f.id===cur.id?"selected":null,
-          text:(f.thicknessMM!=null? f.thicknessMM+" mm":"(no thickness)")+"  —  "+(f.typeCode||f.id)})));
+          text:(f.thicknessMM!=null? f.thicknessMM+" mm":(f.typeCode||f.id))})));
       thkHost.innerHTML=""; thkHost.appendChild(sel);
       hid.value=cur?cur.id:"";
       if(!silent) hid.dispatchEvent(new Event("change",{bubbles:true}));
@@ -228,7 +235,7 @@
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         {key:"item",label:"Product",render:r=>`<div class="cell-main">${esc((ENG.item(r.itemId)||{}).name||r.itemId)}</div>`,sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
-        {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.itemId)}</span>`,sort:r=>r.itemId},
+        {key:"code",label:"Code",render:r=>{const it=ENG.item(r.itemId)||{};return `<span class="mono muted">${esc(U.baseCode(it.typeCode||"")||it.typeCode||r.itemId)}</span>`;},sort:r=>r.itemId},
         {key:"thk",label:"Thickness",num:true,render:r=>{const t=(ENG.item(r.itemId)||{}).thicknessMM; return t!=null?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},sort:r=>(ENG.item(r.itemId)||{}).thicknessMM||0},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
         {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
@@ -287,10 +294,10 @@
     function woDetail(wo){
       const it=ENG.item(wo.itemId); const bom=ENG.data.boms[wo.itemId];
       const rows = bom? BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(it)).map(([rid,per])=>{ const need=per*wo.qty/bom.yield; const st=ENG.stock(rid); const r=ENG.item(rid)||{};
-        return {rid, name:r.name||rid, per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
+        return {rid, name:r.id?U.matDisplay(r):rid, per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
       // ---- Details pane ----
       const detailsPane=h("div",{},[
-        MW.dl([["Product",it.name],["Code",wo.itemId],
+        MW.dl([["Product",it.name],["Code",U.baseCode(it.typeCode||"")||it.typeCode||wo.itemId],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
           ["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
@@ -382,10 +389,10 @@
             const sel=h("select",{class:"select",style:"max-width:340px",
               onchange:e=>{ matChoices[i]=e.target.value; recalc(); }},
               usable.map(c=>h("option",{value:c.id,selected:matChoices[i]===c.id,
-                text:(c.item.name||c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
+                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
-                text:(l.rm||"")+(l.rmType?" · "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
+                text:(l.rmType? l.rmType+" — ":"")+(l.rm||"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
               usable.length? sel : h("div",{class:"muted",style:"font-size:12px;color:var(--danger)",text:"No matching material found in the store"})
             ]));
           });
@@ -395,7 +402,7 @@
         BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(id)),matChoices).forEach(([rid,per])=>{
           const need=per*qty/bom.yield; const have=ENG.stock(rid).onHand||0; const ok=have>=need; const r=ENG.item(rid)||{};
           matHost.appendChild(h("div",{class:"flex between aic",style:"gap:10px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
-            h("div",{style:"min-width:0;font-weight:600",text:r.name||rid}),
+            h("div",{style:"min-width:0;font-weight:600",text:r.id?U.matDisplay(r):rid}),
             h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
               h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(need,2)+" "+(r.uom||"")})]),
               h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||"")})]),
@@ -545,7 +552,7 @@
     function productTable(list){
       return table(list,[
         {key:"product",label:"Product",render:fg=>`<div class="cell-main">${esc(fg.name)}</div>`,sort:fg=>fg.name},
-        {key:"code",label:"Code",render:fg=>`<span class="chip"><b>${esc(fg.typeCode||fg.id)}</b></span>`,sort:fg=>fg.typeCode||fg.id},
+        {key:"code",label:"Code",render:fg=>`<span class="chip"><b>${esc(U.baseCode(fg.typeCode||"")||fg.typeCode||fg.id)}</b></span>`,sort:fg=>fg.typeCode||fg.id},
         {key:"thk",label:"Thickness",num:true,render:fg=>fg.thicknessMM!=null?`<span class="mono">${ENG.num(fg.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:fg=>fg.thicknessMM||0},
         {key:"layers",label:"Layers",num:true,render:fg=>(fg.layerCount||0)>1?`<span class="chip" style="font-size:11px">≡ ${fg.layerCount}</span>`:'<span class="muted">—</span>',sort:fg=>fg.layerCount||0},
         {key:"mat",label:"Material Cost",num:true,render:fg=>"₹"+ENG.num(matCostOf(fg),0),sort:matCostOf},
@@ -582,7 +589,7 @@
       const body=h("div",{},[basisHost,layHost,altHost,
         h("h3",{style:"margin:4px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,totHost]);
-      const mo=modal({title:"BOM · "+fgId, sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
+      const mo=modal({title:"BOM · "+(U.baseCode(fg.typeCode||"")||fg.typeCode||fgId), sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
           App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
 
@@ -619,7 +626,7 @@
         const tb=h("tbody");
         c.lines.forEach(cl=>{
           const r=cl.id?ENG.item(cl.id):null;
-          const label=(r&&r.name)||cl.rm||cl.id||"—";
+          const label=r? U.matDisplay(r) : (cl.rmType? cl.rmType+" — "+(cl.rm||"") : (cl.rm||cl.id||"—"));
           tb.appendChild(h("tr",{},[
             h("td",{style:"min-width:200px"},[
               h("div",{class:"flex aic",style:"gap:6px"},[
@@ -697,9 +704,9 @@
       const totHost=h("div",{style:"margin-top:14px"});
 
       const curItem=ENG.item(curFg)||{};
-      const lockedLabel=(curItem.productName||curItem.name||curFg)
-        +(curItem.thicknessMM!=null?" · "+curItem.thicknessMM+" mm":"")
-        +"  —  "+(curItem.typeCode||curFg);
+      const lockedLabel=(U.baseCode(curItem.typeCode||"")||curItem.typeCode||curFg)
+        +" — "+(curItem.productName||curItem.name||curFg)
+        +(curItem.thicknessMM!=null?" · "+curItem.thicknessMM+" mm":"");
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           editing
@@ -770,14 +777,14 @@
             // A ranged line has no single material yet — the real one is chosen
             // against live store stock when the work order is issued.
             nameCell.appendChild(h("div",{},[
-              h("div",{style:"font-weight:700;font-size:12.5px",text:(l.rm||"—")+(l.rmType?" · "+l.rmType:"")}),
+              h("div",{style:"font-weight:700;font-size:12.5px",text:(l.rmType? l.rmType+" — ":"")+(l.rm||"—")}),
               h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged — picked at issue"})
             ]));
           } else {
             nameCell.appendChild(h("div",{html:U.searchSelect("bl_rid_"+l._k,
               matOptions(l.id), l.id, "Search material…")}));
             if(l.rm) nameCell.appendChild(h("div",{class:"muted",style:"font-size:10.5px;margin-top:2px",
-              text:l.rm+(l.rmType?" · "+l.rmType:"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")+(l.rmThk?" · "+l.rmThk+" mm":"")}));
+              text:(l.rmType? l.rmType+" — ":"")+l.rm+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")+(l.rmThk?" · "+l.rmThk+" mm":"")}));
           }
           const qtyIn=h("input",{class:"input",type:"number",step:"0.001",value:l.qty,
             style:"width:100px;text-align:right",oninput:e=>{ l.qty=+e.target.value||0; refresh(); }});
@@ -858,9 +865,13 @@
          WIP items are excluded: the stage engine inserts those itself, and 204
          auto-generated ones drown the list. Any WIP already on a line is kept. */
       function matLabel(i){
-        const bits=[i.name||i.id];
-        if(i.thicknessMM!=null) bits.push(i.thicknessMM+" mm");
-        if(i.gsm!=null) bits.push(i.gsm+" g/m²");
+        // type/code first, then the material; thickness + GSM only belong
+        // to fabrics and tapes (metre-measured), never to chemicals
+        const bits=[U.matDisplay(i)];
+        if(i.fabric || BOMCALC.normUnit(i.uom)==="MTR"){
+          if(i.thicknessMM!=null) bits.push(i.thicknessMM+" mm");
+          if(i.gsm!=null) bits.push(i.gsm+" g/m²");
+        }
         return bits.join(" · ");
       }
       function matOptions(currentId){
