@@ -21,3 +21,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+      - key: NODE_ENV
+        value: production   # engages the AUTH_SECRET fail-fast in authService
+      - key: AUTH_SECRET
+        generateValue: true # Render mints a random secret; never commit one here

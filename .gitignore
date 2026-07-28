@@ -2,14 +2,13 @@
 node_modules/
 **/node_modules/
 
-# Runtime database (SQLite)
-#   The live DB (data/chhaperia.db) IS committed so deploys/clones start
-#   from the real data. Transient WAL/SHM and any other .db files stay ignored.
+# Runtime database (SQLite) — NEVER commit: it holds real product/BOM/TDS
+# data plus password hashes. Deploys/clones auto-seed on first request;
+# real data is restored via the catalogue CSVs / tools/import-bom.js.
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
-!data/chhaperia.db
 
 # OS / editor cruft
 .DS_Store
