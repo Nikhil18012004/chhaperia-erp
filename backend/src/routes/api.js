@@ -186,6 +186,9 @@ router.delete("/items/:id", requireAuth, rw, (req, res, next) => {
 router.delete("/production/wo/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(erp.deleteWorkOrder(req.params.id)); } catch (e) { next(e); }
 });
+router.patch("/production/wo/:id", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json(production.updateWorkOrder(req.user, req.params.id, req.body || {})); } catch (e) { next(e); }
+});
 
 // Only admin/office can write the full dataset.
 router.put("/state", requireAuth, requireRole("admin", "office"), (req, res, next) => {

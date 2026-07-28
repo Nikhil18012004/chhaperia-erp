@@ -282,6 +282,7 @@
     draw();
     if(params&&params.openNew){ params.openNew=false; woForm(); }
 
+    function canPlan(){ return ["admin","office"].includes((App.user&&App.user.role)||""); }
     function woActions(r){
       const wrap=h("div",{class:"flex gap"});
       const finished=r.status==="Completed"||r.status==="Dispatched";
@@ -295,7 +296,52 @@
       } else {
         wrap.appendChild(h("button",{class:"btn sm ghost",onclick:e=>{e.stopPropagation();woDetail(r);},text:"View"}));
       }
+      if(!r.dispatched && canPlan()){
+        wrap.appendChild(h("button",{class:"btn sm ghost",title:"Edit this work order",onclick:e=>{e.stopPropagation();woEditForm(r);},html:"✎"}));
+      }
       return wrap;
+    }
+
+    /* ---- edit a planned work order (delete lives here too) ---- */
+    function woEditForm(wo){
+      const it=ENG.item(wo.itemId)||{};
+      const started=(wo.route||[]).some(s=>s.posted||s.status!=="Pending");
+      const LINES=["Coating Line 1","Coating Line 2","Fibre-Glass Line 1","Fibre-Glass Line 2","Slitting A","Slitting B"];
+      const body=h("div",{},[
+        started?h("p",{class:"dim",style:"margin-bottom:10px",text:"Production has started — quantity and line are locked; due date and priority can still change."}):null,
+        h("div",{class:"form-grid"},[
+          U.field("Quantity (kg)",`<input class="input" id="we_qty" type="number" min="0" step="0.1" value="${wo.qty}" ${started?"disabled":""}>`),
+          U.field("Production Line",U.selectHTML("we_line",LINES.map(l=>({v:l,l})),wo.line)),
+          U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
+          U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
+        ])
+      ]);
+      if(started){ setTimeout(()=>{ const l=UI.$("#we_line"); if(l) l.disabled=true; },0); }
+      const saveBtn=h("button",{class:"btn primary",onclick:save,text:"Save Changes"});
+      const mo=modal({title:"Edit "+wo.id, sub:it.name||wo.itemId, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn danger",onclick:del,html:"🗑 Delete WO"}),
+          saveBtn]});
+      async function save(){
+        const patch={ due:UI.$("#we_due").value, priority:UI.$("#we_prio").value };
+        if(!started){ patch.qty=+UI.$("#we_qty").value; patch.line=UI.$("#we_line").value; }
+        saveBtn.disabled=true; saveBtn.textContent="Saving…";
+        try{ await DB.production.update(wo.id, patch);
+          mo.close(); toast(wo.id+" updated",{type:"ok"});
+          await reloadState(); draw();
+        }catch(e){ toast("Update failed: "+e.message,{type:"danger"});
+          saveBtn.disabled=false; saveBtn.textContent="Save Changes"; }
+      }
+      async function del(){
+        const warn=started
+          ? wo.id+" has posted production movements — deleting it also rolls those stock postings back.\n\nDelete this work order?"
+          : "Delete "+wo.id+"? This cannot be undone.";
+        if(!await confirm(warn,{title:"Delete Work Order",danger:true})) return;
+        try{ await DB.production.remove(wo.id);
+          mo.close(); toast(wo.id+" deleted",{type:"ok",title:"Removed"});
+          await reloadState(); draw();
+        }catch(e){ toast("Delete failed: "+e.message,{type:"danger"}); }
+      }
     }
 
     // advance one stage (start pending / finish active) via the backend engine
@@ -357,7 +403,9 @@
       const body=h("div",{},[tabs,detailsPane,timePane]);
       const finished=wo.status==="Completed"||wo.status==="Dispatched";
       modal({title:wo.id, sub:it.name, wide:true, body,
-        foot:[ (finished||!App.isAdmin())?null:h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;completeWO(wo);},text:"Complete all stages"}) ]});
+        foot:[
+          (!wo.dispatched && canPlan())?h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;woEditForm(wo);},html:"✎ Edit"}):null,
+          (finished||!App.isAdmin())?null:h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;completeWO(wo);},text:"Complete all stages"}) ]});
     }
 
     function woForm(){

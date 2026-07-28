@@ -97,7 +97,7 @@ function advance(user, woId, action) {
     if (!wo.legacy && !stage.posted) {
       const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices);
       if (plan && plan[stage.key]) {
-        const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO());
+        const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements);
         if (moves.length) repo.addMovements(moves);
       }
       stage.posted = true;
@@ -121,6 +121,63 @@ function advance(user, woId, action) {
    Builds a fresh 3-stage route (non-legacy → full per-stage
    posting as it progresses).
    ============================================================ */
+/* Reject when any BOM component's aggregate need exceeds store on-hand. */
+function assertMaterialsAvailable(data, item, qty, materialChoices) {
+  const bom = (data.boms || {})[item.id];
+  if (!bom) return;
+  const onHand = {};
+  (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
+  const need = {};
+  BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}).forEach(([rid, per]) => {
+    need[rid] = (need[rid] || 0) + (per * qty) / (bom.yield || 1);
+  });
+  const short = Object.entries(need)
+    .filter(([rid, n]) => (onHand[rid] || 0) + 1e-6 < n)
+    .map(([rid, n]) => {
+      const it = (data.items || []).find((x) => x.id === rid) || {};
+      return (it.name || rid) + " (need " + n.toFixed(2) + " " + (it.uom || "") + ", in store " + (onHand[rid] || 0).toFixed(2) + ")";
+    });
+  if (short.length) throw err("Materials short — cannot create this work order: " + short.join("; "), 400);
+}
+
+/* updateWorkOrder — edit a planned run. Due date and priority can change
+   any time before dispatch; quantity and line only while NOTHING has been
+   posted or completed (stage movements are derived from them). */
+function updateWorkOrder(user, id, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
+  body = body || {};
+  const data = fullState();
+  const wo = (data.workorders || []).find((w) => w.id === id);
+  if (!wo) throw err("Work order not found", 404);
+  if (wo.dispatched) throw err("Dispatched work orders cannot be edited", 400);
+  const started = (wo.route || []).some((s) => s.posted || s.status !== "Pending");
+
+  if (body.due !== undefined) wo.due = body.due || null;
+  if (body.priority !== undefined) wo.priority = body.priority || "Normal";
+  if (body.qty !== undefined) {
+    const q = +body.qty;
+    if (!q || q <= 0) throw err("Enter a valid quantity", 400);
+    if (started && Math.abs(q - wo.qty) > 1e-9) throw err("Quantity cannot change after production has started", 400);
+    if (Math.abs(q - wo.qty) > 1e-9) {
+      const item = (data.items || []).find((i) => i.id === wo.itemId);
+      if (item) assertMaterialsAvailable(data, item, q, wo.materialChoices);
+      wo.qty = q;
+    }
+  }
+  if (body.line !== undefined && body.line && body.line !== wo.line) {
+    if (started) throw err("Line cannot change after production has started", 400);
+    wo.line = body.line;
+    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId });
+    wo.stageIdx = 0;
+  }
+  wo.progress = calcProgress(wo.route || []);
+  wo.status = S.rollupStatus(wo);
+  wo.updatedBy = user.username; wo.updatedAt = new Date().toISOString();
+  repo.putWorkOrder(wo);
+  return summarize(wo);
+}
+
 function createWorkOrder(user, body) {
   if (!user) throw err("Not authenticated", 401);
   if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
@@ -133,22 +190,7 @@ function createWorkOrder(user, body) {
 
   // A run cannot be released without the materials to make it: reject the
   // work order outright when any BOM component is short of store stock.
-  const bom = (data.boms || {})[body.itemId];
-  if (bom) {
-    const onHand = {};
-    (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
-    const need = {};
-    BC.toLegacy(bom, BC.metaFromItem(item), body.materialChoices || {}).forEach(([rid, per]) => {
-      need[rid] = (need[rid] || 0) + (per * qty) / (bom.yield || 1);
-    });
-    const short = Object.entries(need)
-      .filter(([rid, n]) => (onHand[rid] || 0) + 1e-6 < n)
-      .map(([rid, n]) => {
-        const it = (data.items || []).find((x) => x.id === rid) || {};
-        return (it.name || rid) + " (need " + n.toFixed(2) + " " + (it.uom || "") + ", in store " + (onHand[rid] || 0).toFixed(2) + ")";
-      });
-    if (short.length) throw err("Materials short — cannot create this work order: " + short.join("; "), 400);
-  }
+  assertMaterialsAvailable(data, item, qty, body.materialChoices);
 
   // next WO id
   let max = 0;
@@ -462,5 +504,5 @@ function createAdhocProduction(user, body) {
   };
 }
 
-module.exports = { advance, createWorkOrder, produceFinished, recordExcessMaterial,
+module.exports = { advance, createWorkOrder, updateWorkOrder, produceFinished, recordExcessMaterial,
   updateWorkOrderStatus, returnStock, createAdhocProduction, ACTIONS };

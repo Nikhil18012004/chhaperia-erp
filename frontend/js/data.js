@@ -206,6 +206,10 @@
     setStatus(woId, status) { return http("POST", "/production/wo/" + woId + "/status", { status }); },
     // office/admin: create a new work order (with a fresh multi-stage route)
     create(wo) { return http("POST", "/production/wo", wo); },
+    // office/admin: edit a planned run (due/priority any time; qty/line before start)
+    update(woId, patch) { return http("PATCH", "/production/wo/" + woId, patch); },
+    // office/admin: delete a work order (its posted movements roll back with it)
+    remove(woId) { return http("DELETE", "/production/wo/" + woId); },
     // supervisor/admin: record finished stock made — deducts raws by BOM,
     // adds the produced qty to a warehouse. payload: { itemId, qty, wh }
     addFinishedStock(payload) { return http("POST", "/production/finished", payload); },

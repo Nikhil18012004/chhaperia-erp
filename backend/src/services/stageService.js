@@ -183,13 +183,26 @@ function computeStagePlan(fgId, qty, data, choices) {
 let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
 
-function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO) {
+function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements) {
   const st = plan[stageKey];
   if (!st) return [];
+  /* Raw materials are issued FROM THE WAREHOUSE THAT HOLDS THEM (whichever
+     store they were received into) — issuing everything against WH-WIP hid
+     the deduction from the store's warehouse view. WIP intermediates live
+     (and are consumed) in WH-WIP. */
+  const whFor = (rid) => {
+    const it = itemsById[rid] || {};
+    if (it.cat === "WIP" || /^WIP-/.test(rid)) return "WH-WIP";
+    const byWh = {};
+    (movements || []).forEach((m) => { if (m.itemId === rid) byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0); });
+    let best = null;
+    Object.entries(byWh).forEach(([wh, q]) => { if (best == null || q > byWh[best]) best = wh; });
+    return best || "WH-PNY";
+  };
   const moves = [];
   st.consume.forEach(([rid, q]) => {
     if (!q) return;
-    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: "WH-WIP", type: "ISSUE",
+    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: whFor(rid), type: "ISSUE",
       qty: -Math.abs(q), rate: (itemsById[rid] || {}).cost || 0, ref: wo.id,
       note: "Stage " + stageKey + " → " + wo.itemId, by: byWho });
   });

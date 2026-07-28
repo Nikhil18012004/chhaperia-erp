@@ -470,7 +470,13 @@ function deleteItem(id) {
 }
 function deleteWorkOrder(id) {
   const db = getDb();
-  db.prepare("DELETE FROM work_orders WHERE id=?").run(id);
+  // mirror deleteSalesOrder: the WO's posted stage movements (ISSUE/PROD)
+  // go with it, so stock figures roll back instead of orphaning
+  const tx = db.transaction((wid) => {
+    db.prepare("DELETE FROM movements WHERE ref=?").run(wid);
+    db.prepare("DELETE FROM work_orders WHERE id=?").run(wid);
+  });
+  tx(id);
   return { id };
 }
 
