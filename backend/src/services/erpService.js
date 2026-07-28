@@ -136,7 +136,14 @@ function addMovement(m) {
   if (!m || !m.itemId || !m.type) throw err("Movement needs itemId and type", 400);
   if (m.qty == null || isNaN(+m.qty)) throw err("Movement needs a numeric qty", 400);
   if (!MOVE_TYPES.includes(m.type)) throw err("Invalid movement type '" + m.type + "'", 400);
-  if (!repo.getItem(m.itemId)) throw err("Unknown item " + m.itemId, 400);
+  const mvItem = repo.getItem(m.itemId);
+  if (!mvItem) throw err("Unknown item " + m.itemId, 400);
+  // WIP items are stage-engine plumbing — a manual receipt into one silently
+  // hides the stock from every work order (which consumes the RAW material).
+  // This actually happened: 2000 m of mica tape got booked to WIP-CP25G-08-S.
+  if (m.type === "GRN" && mvItem.cat === "WIP") {
+    throw err("Cannot receive stock into a WIP item (" + m.itemId + "). Receive the raw material itself instead.", 400);
+  }
   m.qty = +m.qty;
   if (m.rate != null && m.rate !== "") m.rate = +m.rate || 0;
   if (!m.id) m.id = "MV-" + Date.now() + "-" + Math.floor(Math.random() * 1e4);
