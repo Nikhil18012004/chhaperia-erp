@@ -984,9 +984,9 @@
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
-  .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:96px}
-  .logo-side{flex:1.05;display:flex;align-items:center;padding:10px 0 10px 20px}
-  .logo-side img{max-height:78px;max-width:360px;object-fit:contain}
+  .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:112px}
+  .logo-side{flex:1.05;display:flex;align-items:center;padding:8px 0 8px 16px}
+  .logo-side img{width:100%;max-height:108px;object-fit:contain;object-position:left center}
   .co-block{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
     padding:12px 20px 10px 58px;text-align:right;font-size:10.5px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
   .conm{font-size:14.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
