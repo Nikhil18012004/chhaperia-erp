@@ -275,12 +275,13 @@
         {key:"code",label:"Code",render:r=>{const it=ENG.item(r.itemId)||{};return `<span class="mono muted">${esc(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||r.itemId)}</span>`;},sort:r=>r.itemId},
         {key:"thk",label:"Thickness",num:true,render:r=>{const t=(ENG.item(r.itemId)||{}).thicknessMM; return t!=null?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},sort:r=>(ENG.item(r.itemId)||{}).thicknessMM||0},
         {key:"qty",label:"Qty",num:true,render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`,sort:r=>r.qty},
-        {key:"date",label:"Start",render:r=>r.date||"—",sort:r=>r.date||""},
+        {key:"date",label:"Start",render:r=>`<span style="white-space:nowrap">${r.date||"—"}</span>`,sort:r=>r.date||""},
         {key:"stage",label:"Stage",render:r=>stageCell(r),sort:r=>(r.stageIdx||0)},
         {key:"line",label:"Line",render:r=>`<span class="chip">${esc(r.line)}</span>`,sort:r=>r.line},
-        {key:"due",label:"Due",render:r=>r.due,sort:r=>r.due},
-        {key:"progress",label:"Progress",render:r=>`<div style="min-width:120px">${meter(r.progress, r.progress>66?"ok":r.progress>33?"warn":"danger")}<div class="muted" style="font-size:11px;margin-top:3px">${r.progress}%</div></div>`,sort:r=>r.progress},
-        {key:"status",label:"Status",render:r=>badge((r.status==="Completed"||r.status==="Dispatched")?"ok":r.status==="In Production"||r.status==="In Progress"?"info":"warn",r.status),sort:r=>r.status},
+        {key:"due",label:"Due",render:r=>`<span style="white-space:nowrap">${r.due||"—"}</span>`,sort:r=>r.due},
+        // progress + status share one column, stacked one over the other, so
+        // the action buttons pull further left and the board fits a single view
+        {key:"progress",label:"Progress",render:r=>`<div style="min-width:86px;display:flex;flex-direction:column;gap:6px;align-items:flex-start"><div style="width:100%">${meter(r.progress, r.progress>66?"ok":r.progress>33?"warn":"danger")}<div class="muted" style="font-size:11px;margin-top:3px">${r.progress}%</div></div>${badge((r.status==="Completed"||r.status==="Dispatched")?"ok":r.status==="In Production"||r.status==="In Progress"?"info":"warn",r.status)}</div>`,sort:r=>r.progress},
         {key:"act",label:"",noSort:true,render:r=>woActions(r)},
       ],{onRow:r=>woDetail(r),empty:"No work orders"}));
     }
@@ -289,7 +290,9 @@
 
     function canPlan(){ return ["admin","office"].includes((App.user&&App.user.role)||""); }
     function woActions(r){
-      const wrap=h("div",{class:"flex gap"});
+      // stack the actions vertically so the column stays narrow (two buttons
+      // side by side were the widest cell and forced the board to scroll)
+      const wrap=h("div",{style:"display:flex;flex-direction:column;gap:5px;align-items:stretch;min-width:104px"});
       const finished=r.status==="Completed"||r.status==="Dispatched";
       // Stage-determining actions (Start / Finish / Complete all) are for
       // supervisors + admin only. Office plans work orders but does not drive
@@ -757,19 +760,19 @@
         }
 
         tblHost.innerHTML="";
-        const tbl=h("table",{class:"tbl",style:"width:100%;min-width:820px"});
+        const tbl=h("table",{class:"tbl",style:"width:100%"});
         tbl.appendChild(h("thead",{},[h("tr",{},
           ["Raw material","Code","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm"].map((t,i)=>
             h("th",{style:"font-size:11px;"+(i>=2?"text-align:right":""),text:t})))]));
         const tb=h("tbody");
         /* the LAYERS live inside this table: each layer name is a heading
-           row, and its materials sit beneath it */
+           row, and its materials sit beneath it. Single-layer products get
+           the same heading row as multi-layer ones so the two read alike. */
         const idxLines=BOMCALC.normalize(src.lines).map((l,i)=>Object.assign({_i:i},l));
         const grps=layerGroups(idxLines);
-        const multi=grps.length>1;
         const ordered=[];
         grps.forEach((grp,gi)=>{
-          if(multi) ordered.push({_head:grp.label||("LAYER "+(gi+1))});
+          ordered.push({_head:grp.label||(grps.length>1?"LAYER "+(gi+1):"LAYER 1")});
           grp.lines.forEach(l=>ordered.push(c.lines[l._i]));
         });
         (ordered.length?ordered:c.lines).forEach(cl=>{
@@ -784,7 +787,7 @@
           const label=r? (r.material||r.name||"—") : (cl.rm||cl.id||"—");
           const codeTxt=r? (r.grade||"—") : (cl.rmType||"—");
           tb.appendChild(h("tr",{},[
-            h("td",{style:"min-width:200px"},[
+            h("td",{style:"min-width:130px"},[
               h("div",{class:"flex aic",style:"gap:6px"},[
                 h("span",{style:"font-weight:600",text:label}),
                 cl.ranged?h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged"}):null
@@ -922,10 +925,12 @@
         tbl.appendChild(h("thead",{},[h("tr",{},head.map((t,i)=>
           h("th",{style:"font-size:11px;"+(i>=1&&i<=6?"text-align:right":""),text:t})))]));
         const tb=h("tbody");
-        /* layer names render as heading rows inside the editable table */
+        /* layer names render as heading rows inside the editable table; a
+           single-layer product gets the same heading so it reads like a
+           multi-layer one */
         const grpIdx=layerGroups(lines.map((l,i)=>Object.assign({_i:i},l)));
         const heads={};
-        if(grpIdx.length>1) grpIdx.forEach((g,gi)=>{ if(g.lines.length) heads[g.lines[0]._i]=g.label||("LAYER "+(gi+1)); });
+        grpIdx.forEach((g,gi)=>{ if(g.lines.length) heads[g.lines[0]._i]=g.label||(grpIdx.length>1?"LAYER "+(gi+1):"LAYER 1"); });
         c.lines.forEach((cl,i)=>{
           const l=lines[i];
           if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"8",

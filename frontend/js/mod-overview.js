@@ -269,6 +269,25 @@
     {code:"CNY", name:"Chinese Yuan",   flag:"🇨🇳"},
     {code:"JPY", name:"Japanese Yen",   flag:"🇯🇵"},
   ];
+  // Real-currency names for the converter dropdowns ("USD — US Dollar").
+  // Only codes listed here appear in the pickers, which also keeps the crypto
+  // and obscure feeds out of the /api/fx payload from cluttering the list.
+  const CCY_NAMES={
+    INR:"Indian Rupee", USD:"US Dollar", EUR:"Euro", GBP:"British Pound",
+    AED:"UAE Dirham", SAR:"Saudi Riyal", JPY:"Japanese Yen", CNY:"Chinese Yuan",
+    SGD:"Singapore Dollar", AUD:"Australian Dollar", CAD:"Canadian Dollar",
+    CHF:"Swiss Franc", HKD:"Hong Kong Dollar", NZD:"New Zealand Dollar",
+    SEK:"Swedish Krona", NOK:"Norwegian Krone", DKK:"Danish Krone",
+    ZAR:"South African Rand", THB:"Thai Baht", MYR:"Malaysian Ringgit",
+    IDR:"Indonesian Rupiah", PHP:"Philippine Peso", KRW:"South Korean Won",
+    TRY:"Turkish Lira", RUB:"Russian Ruble", BRL:"Brazilian Real",
+    MXN:"Mexican Peso", PLN:"Polish Zloty", CZK:"Czech Koruna",
+    HUF:"Hungarian Forint", ILS:"Israeli Shekel", KWD:"Kuwaiti Dinar",
+    BHD:"Bahraini Dinar", OMR:"Omani Rial", QAR:"Qatari Riyal",
+    LKR:"Sri Lankan Rupee", BDT:"Bangladeshi Taka", NPR:"Nepalese Rupee",
+    PKR:"Pakistani Rupee", EGP:"Egyptian Pound", VND:"Vietnamese Dong",
+    TWD:"Taiwan Dollar",
+  };
   const FX_POLL_MS=60000;
   // fxRates = ₹ per 1 unit of each currency, served by our backend which
   // cross-verifies a LIVE market feed against 3 independent daily sources
@@ -294,9 +313,11 @@
 
     function fillSelects(){
       if(selFrom.options.length) return;               // populate once
-      Object.keys(fxRates).sort().forEach(c=>{
-        selFrom.appendChild(h("option",{value:c,text:c}));
-        selTo.appendChild(h("option",{value:c,text:c}));
+      // only real currencies we can name, sorted, labelled "CODE — Full Name"
+      Object.keys(fxRates).filter(c=>CCY_NAMES[c]).sort().forEach(c=>{
+        const label=c+" — "+CCY_NAMES[c];
+        selFrom.appendChild(h("option",{value:c,text:label}));
+        selTo.appendChild(h("option",{value:c,text:label}));
       });
       selFrom.value="USD"; selTo.value="INR";
     }

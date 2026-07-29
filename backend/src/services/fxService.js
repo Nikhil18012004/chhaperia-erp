@@ -6,10 +6,12 @@
      • frankfurter.dev — ECB daily reference rate
      • fawazahmed0 currency-api — daily aggregate
      • open.er-api.com — daily (tie-breaker; known to drift)
-   A currency's published rate is the LIVE market quote when it
-   agrees with the median of the daily sources within 2.5%;
-   otherwise the daily median. Rates are INR per 1 unit of the
-   foreign currency. Cached for 60 s.
+   A currency's published rate is the MEDIAN of all sources — the
+   daily references plus the live market tick — so no single feed
+   can drag it to its own edge. A live tick that disagrees with the
+   daily consensus by >2.5% is dropped as stale and the daily median
+   stands. Rates are INR per 1 unit of the foreign currency.
+   Cached for 60 s.
    ============================================================ */
 "use strict";
 
@@ -90,24 +92,31 @@ async function buildRates() {
     meta[c] = { src: "daily-median", sources: vals.length };
   });
 
-  // overlay live market quotes when they agree with the daily consensus
+  // blend the live market quote INTO the daily consensus (never let one feed win)
+  // The published rate is the median of ALL sources — daily references + the live
+  // tick — so the number can't be dragged to a single feed's low/high edge. A live
+  // tick that disagrees >2.5% with the daily consensus is treated as a bad/stale
+  // tick and dropped, falling back to the daily median.
   LIVE_SET.forEach((c, i) => {
     const r = live[i];
     if (r.status !== "fulfilled") return;
     const { rate, asOf } = r.value;
-    const bench = rates[c];
+    const dailyVals = daily.map((t) => t[c]).filter((v) => v > 0);
+    const bench = dailyVals.length ? median(dailyVals) : null;
     if (bench && Math.abs(rate / bench - 1) > 0.025) {
-      meta[c] = { src: "daily-median", sources: (meta[c] || {}).sources, liveRejected: rate };
-      return; // live tick disagrees >2.5% with 3-source consensus — keep median
+      rates[c] = bench;
+      meta[c] = { src: "daily-median", sources: dailyVals.length, liveRejected: rate };
+      return;
     }
-    rates[c] = rate;
-    meta[c] = { src: "live", asOf };
+    const pool = dailyVals.concat([rate]);   // live tick is one vote among the sources
+    rates[c] = median(pool);
+    meta[c] = { src: "consensus", sources: pool.length, live: true, asOf };
   });
 
   return {
     base: "INR",                 // rates = INR per 1 unit of the listed currency
     rates, meta,
-    liveCount: LIVE_SET.filter((c, i) => live[i].status === "fulfilled").length,
+    liveCount: Object.keys(meta).filter((c) => meta[c].src === "consensus" && meta[c].live).length,
     dailySources: dailyNames,
     fetchedAt: Date.now(),
   };
