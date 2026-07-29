@@ -817,7 +817,7 @@
     const pctSuffix=uniformPct.length===1?` @ ${uniformPct[0]/(interState?1:2)}%`:"";
     const igstSuffix=uniformPct.length===1?` @ ${uniformPct[0]}%`:"";
     const title=isPO?"PURCHASE ORDER":(o.status==="Dispatched"?"TAX INVOICE":"PROFORMA / TAX INVOICE");
-    const logo=location.origin+"/assets/logo-tagline.jpeg";
+    const logo=location.origin+"/assets/logo-invoice.png";
     const bank=co.bank||{};
     const hasBank=bank.name||bank.acNo||bank.ifsc;
     const terms=(co.terms&&co.terms.length)?co.terms:[
@@ -878,57 +878,66 @@
       : partyBlock("SHIP TO (Delivery Address)",p.name,(o.shipTo||p.shipTo||p.address||p.city||""),
           `${p.gst?`<div>GSTIN : <b>${esc(p.gst)}</b></div>`:""}`);
 
-    const colCount=7+(anyBatch?1:0)+(anyDisc?1:0);
+    const totalCols=8+(anyBatch?1:0)+(anyDisc?1:0);
+    let filler="";
+    for(let i=(o.lines||[]).length;i<8;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(totalCols)}</tr>`;
     const html=`<!doctype html><html><head><meta charset="utf-8"><title>${title} ${esc(o.invoiceNo||o.id)}</title>
 <style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#111;max-width:860px;margin:0 auto;padding:20px}
-  .band{display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:3px solid #F06820;padding-bottom:10px}
-  .band img{max-height:74px;max-width:390px;object-fit:contain}
-  .co-i{text-align:right;font-size:11px;color:#333;line-height:1.55}
-  .co-i .conm{font-size:15px;font-weight:800;color:#F06820;text-transform:uppercase}
-  .ids{display:flex;justify-content:center;gap:26px;font-size:11.5px;padding:6px 0;border-bottom:1.5px solid #222;font-weight:600}
-  .title{text-align:center;font-size:19px;font-weight:800;letter-spacing:3px;color:#F06820;margin:10px 0 8px}
-  .info{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 22px;border:1px solid #ccc;border-radius:8px;padding:9px 12px;margin-bottom:10px}
-  .ip{display:flex;justify-content:space-between;gap:8px;font-size:11.5px}.ip span{color:#666}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
+  .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:96px}
+  .logo-side{flex:1.05;display:flex;align-items:center;padding:10px 0 10px 20px}
+  .logo-side img{max-height:78px;max-width:360px;object-fit:contain}
+  .co-block{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
+    padding:12px 20px 10px 58px;text-align:right;font-size:10.5px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
+  .conm{font-size:14.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
+  .co-ids{margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600;font-size:10.5px}
+  .co-ids span{color:#F58024;font-weight:800}
+  .rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -20px 12px}
+  .title-row{display:flex;justify-content:space-between;align-items:center;margin:0 0 10px}
+  .title{font-size:20px;font-weight:800;letter-spacing:4px;color:#26282b;border-left:6px solid #F06820;padding-left:12px}
+  .copy{font-size:9px;font-weight:700;letter-spacing:1px;color:#888;border:1px solid #ccc;border-radius:4px;padding:3px 9px;text-transform:uppercase}
+  .info{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:10px 14px;margin-bottom:10px}
+  .ip{display:flex;justify-content:space-between;gap:8px;font-size:11px}.ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}
   .parties{display:flex;gap:12px;margin-bottom:10px}
-  .party{flex:1;border:1px solid #ccc;border-radius:8px;padding:9px 12px;font-size:11.5px;line-height:1.55}
-  .plbl{font-size:10px;font-weight:800;letter-spacing:.8px;color:#F06820;border-bottom:1px solid #eee;padding-bottom:3px;margin-bottom:5px}
+  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:9px 12px;font-size:11.5px;line-height:1.55}
+  .plbl{display:inline-block;background:#F06820;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:2.5px 10px;border-radius:3px;margin:-19px 0 6px;box-shadow:0 1px 0 rgba(0,0,0,.15)}
   .pnm{font-weight:800;font-size:13px}.paddr{color:#333;white-space:pre-line}
   table.items{width:100%;border-collapse:collapse;margin-bottom:10px}
-  table.items th{background:#26282b;color:#fff;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;padding:6px 7px;border:1px solid #26282b}
-  table.items td{border:1px solid #ccc;padding:5.5px 7px;font-size:11.5px;vertical-align:top}
+  table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:6.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}
+  table.items td{border:1px solid #d8dbde;padding:5.5px 7px;font-size:11.5px;vertical-align:top}
+  table.items tbody tr:nth-child(even) td{background:#f6f7f8}
+  tr.fill td{height:19px;background:#fff !important}
   td.r,th.r{text-align:right} td.c,th.c{text-align:center}
   td .sub{font-size:9.5px;color:#777}
   .bottom{display:flex;gap:12px;align-items:stretch;margin-bottom:10px}
   .bl{flex:1.4;display:flex;flex-direction:column;gap:8px}
-  .words,.bank,.notes{border:1px solid #ccc;border-radius:8px;padding:8px 12px;font-size:11.5px}
-  .words b{display:block;margin-top:2px}
-  .lbl{font-size:10px;font-weight:800;letter-spacing:.8px;color:#F06820}
+  .words,.bank,.notes{border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:7px 12px;font-size:11px;line-height:1.55}
+  .words b{display:block;margin-top:2px;font-size:11.5px}
+  .lbl{font-size:9px;font-weight:800;letter-spacing:1px;color:#F06820;text-transform:uppercase}
   table.tot{flex:1;border-collapse:collapse;height:fit-content}
-  table.tot td{border:1px solid #ccc;padding:6px 10px;font-size:12px}
-  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14px}
-  .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:14px;font-size:11.5px}
-  .sig{text-align:center}.sig .ln{border-top:1px solid #555;margin-top:52px;padding-top:4px;min-width:200px;font-weight:700}
-  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:5px 12px;border-radius:6px;margin-top:14px}
+  table.tot td{border:1px solid #d8dbde;padding:6px 12px;font-size:12px}
+  table.tot td:first-child{color:#555}
+  table.tot tr:nth-child(even) td{background:#f6f7f8}
+  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}
+  .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:14px;font-size:10.5px;color:#777}
+  .sig{text-align:center;color:#1a1c1e}.sig .ln{border-top:1.5px solid #555;margin-top:50px;padding-top:5px;min-width:210px;font-weight:700}
+  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
   .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
-  @media print{ body{padding:6mm} .note{display:none} }
+  @media print{ body{padding:0 6mm 6mm} .band{margin:0 -6mm} .rule{margin:0 -6mm 12px} .note{display:none} }
 </style></head><body>
   <div class="band">
-    <img src="${logo}" alt="${esc(co.name)}">
-    <div class="co-i">
+    <div class="logo-side"><img src="${logo}" alt="${esc(co.name)}"></div>
+    <div class="co-block">
       <div class="conm">${esc(co.name)}</div>
       <div>${esc(co.address||"")}</div>
-      <div>${esc([co.phone,co.email,co.website].filter(Boolean).join(" · "))}</div>
+      <div>${esc([co.phone,co.email,co.website].filter(Boolean).join("  ·  "))}</div>
+      <div class="co-ids"><span>GSTIN</span> ${esc(co.gstin||"—")}${co.cin?`&nbsp; <span>CIN</span> ${esc(co.cin)}`:""}${co.pan?`&nbsp; <span>PAN</span> ${esc(co.pan)}`:""}</div>
     </div>
   </div>
-  <div class="ids">
-    <span>GSTIN : <b>${esc(co.gstin||"—")}</b></span>
-    ${co.cin?`<span>CIN : <b>${esc(co.cin)}</b></span>`:""}
-    ${co.pan?`<span>PAN : <b>${esc(co.pan)}</b></span>`:""}
-  </div>
-  <div class="title">${title}</div>
+  <div class="rule"></div>
+  <div class="title-row"><span class="title">${title}</span>${isPO?"":'<span class="copy">Original for Recipient</span>'}</div>
   <div class="info">${infoCells}</div>
   <div class="parties">${leftParty}${rightParty}</div>
   <table class="items"><thead><tr>
@@ -937,7 +946,7 @@
     <th class="r">Qty</th><th class="c">Unit</th><th class="r">Rate (₹)</th>
     ${anyDisc?'<th class="r">Disc.</th>':""}
     <th class="r">GST %</th><th class="r">Amount (₹)</th>
-  </tr></thead><tbody>${rows}</tbody></table>
+  </tr></thead><tbody>${rows}${filler}</tbody></table>
   <div class="bottom">
     <div class="bl">
       <div class="words"><span class="lbl">AMOUNT IN WORDS</span><b>${esc(GST.amountInWords(calc.grandTotal))}</b></div>
