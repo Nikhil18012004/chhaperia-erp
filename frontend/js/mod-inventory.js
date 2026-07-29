@@ -167,6 +167,7 @@
       field("Std Cost (₹)",`<input class="input" id="f_cost" type="number" value="${f('cost',0)}">`),
       field("Selling Price (₹)",`<input class="input" id="f_price" type="number" value="${f('price',0)}">`),
       field("HSN Code",`<input class="input" id="f_hsn" value="${esc(f('hsn',''))}">`),
+      field("GST Rate (%)",`<input class="input" id="f_gst" type="number" step="0.1" value="${f('gstRate',18)}" placeholder="18">`),
       field("Barcode",`<input class="input" id="f_barcode" value="${esc(f('barcode',''))}" placeholder="Scan/enter, or leave blank to auto-generate">`),
     ]);
     const mo=modal({title:edit?"Edit Item":"New Item", sub:edit?it.id:"Create a stock item", body,
@@ -181,7 +182,8 @@
       const barcode=g("f_barcode").trim() || obj.barcode || ("890"+Math.floor(Math.random()*1e7));
       Object.assign(obj,{ id:code, name:g("f_name").trim(), cat:g("f_cat"), uom:g("f_uom"),
         reorder:+g("f_reorder")||0, safety:+g("f_safety")||0, lead:+g("f_lead")||7,
-        cost:+g("f_cost")||0, price:+g("f_price")||0, hsn:g("f_hsn"), barcode });
+        cost:+g("f_cost")||0, price:+g("f_price")||0, hsn:g("f_hsn"),
+        gstRate:g("f_gst")===""?18:+g("f_gst"), barcode });
       let openMove=null;
       if(!edit){ ENG.data.items.push(obj);
         openMove={id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:code, wh:obj.cat==="FG"?"WH-FG":"WH-PNY", type:"OPEN", qty:0, rate:obj.cost, ref:"NEW", note:"Item created"};

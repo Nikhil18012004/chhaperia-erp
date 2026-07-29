@@ -131,9 +131,29 @@ router.patch("/leads/:id", requireAuth, rw, (req, res, next) => {
 router.delete("/leads/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(erp.deleteLead(req.params.id)); } catch (e) { next(e); }
 });
-// Customer upsert (CRM Won→customer)
+// Customer upsert (CRM Won→customer) + granular edit / delete
 router.post("/customers", requireAuth, rw, (req, res, next) => {
   try { res.status(201).json(erp.upsertCustomer(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/customers/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateCustomer(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/customers/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteCustomer(req.params.id)); } catch (e) { next(e); }
+});
+// Suppliers: create / update / delete (delete blocked while POs/items reference it)
+router.post("/suppliers", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.createSupplier(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/suppliers/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateSupplier(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/suppliers/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteSupplier(req.params.id)); } catch (e) { next(e); }
+});
+// Org / company profile (invoice entities, bank details, taglines)
+router.patch("/org", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateOrg(req.body || {})); } catch (e) { next(e); }
 });
 // Warehouses: master-data edits (rename etc.)
 router.patch("/warehouses/:id", requireAuth, rw, (req, res, next) => {

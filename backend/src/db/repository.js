@@ -461,6 +461,29 @@ function putCustomer(c) {
     .run(c.id, J(c));
   return c;
 }
+function deleteCustomer(id) { getDb().prepare("DELETE FROM customers WHERE id=?").run(id); return { id }; }
+
+/* ---------- SUPPLIERS (granular) ---------- */
+function getSupplier(id) {
+  const s = getDb().prepare("SELECT doc FROM suppliers WHERE id=?").get(id);
+  return s ? P(s.doc) : null;
+}
+function putSupplier(s) {
+  getDb().prepare("INSERT INTO suppliers(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(s.id, J(s));
+  return s;
+}
+function deleteSupplier(id) { getDb().prepare("DELETE FROM suppliers WHERE id=?").run(id); return { id }; }
+
+/* ---------- ORG (company profile — holds the invoice company entities) ---------- */
+function getOrg() {
+  return P(getDb().prepare("SELECT doc FROM org WHERE id=1").pluck().get(), null);
+}
+function putOrg(doc) {
+  getDb().prepare("INSERT INTO org(id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(J(doc || {}));
+  return doc;
+}
 
 /* ---------- ITEM / WORK-ORDER deletes ---------- */
 function deleteItem(id) {
@@ -703,7 +726,10 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getSalesOrder, putSalesOrder, deleteSalesOrder,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
-  getCustomer, putCustomer, deleteItem, deleteWorkOrder, renameWorkOrder,
+  getCustomer, putCustomer, deleteCustomer,
+  getSupplier, putSupplier, deleteSupplier,
+  getOrg, putOrg,
+  deleteItem, deleteWorkOrder, renameWorkOrder,
   getSettings, categoryExists,
   getWarehouse, putWarehouse,
   getTransporter, putTransporter, deleteTransporter,

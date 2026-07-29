@@ -13,17 +13,20 @@
 
     async boot(){
       // 1) gate on authentication — no session ⇒ show login
+      // (the token itself lives in an httpOnly cookie, so only the stored
+      //  user profile signals "probably signed in"; /me verifies for real)
       const sessionUser = DB.auth.user();
-      if(!sessionUser || !DB.auth.token()){
+      if(!sessionUser){
         this.showLogin();
         return;
       }
-      // 2) verify the token is still valid + get fresh user/role
+      // 2) verify the session is still valid + get fresh user/role
       let me;
       try{ me = (await DB.auth.me()).user; }
       catch(err){ this.showLogin(); return; }
 
       this.user = me;
+      if(me.mustChangePassword) setTimeout(()=>this.forcePasswordChange(), 400);
 
       // 3) supervisors get the dedicated panel (rendered inside the shell)
       if(me.role === "supervisor"){
@@ -138,6 +141,7 @@
           const r = await DB.auth.login(user.value.trim(), pass.value);
           if(!r || !r.token) throw new Error("Login failed");
           this.user = r.user;
+          if(r.user.mustChangePassword) setTimeout(()=>this.forcePasswordChange(), 600);
           location.hash = "";
           // route by role
           if(r.user.role === "supervisor"){
@@ -161,6 +165,39 @@
       this.user=null;
       location.hash="";
       this.showLogin("You have been signed out.");
+    },
+
+    /* Seeded / admin-reset passwords are temporary: this dialog re-appears
+       on every sign-in until the password is changed. */
+    forcePasswordChange(){
+      const {h, modal, toast} = UI;
+      const body=h("div",{},[
+        h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",
+          text:"This account is still using a temporary password. Set your own to continue — at least 8 characters."}),
+        h("div",{class:"form-grid"},[
+          h("div",{class:"field full"},[h("label",{text:"Current Password"}),h("input",{class:"input",id:"pw_cur",type:"password",autocomplete:"current-password"})]),
+          h("div",{class:"field full"},[h("label",{text:"New Password"}),h("input",{class:"input",id:"pw_new",type:"password",autocomplete:"new-password"})]),
+          h("div",{class:"field full"},[h("label",{text:"Confirm New Password"}),h("input",{class:"input",id:"pw_new2",type:"password",autocomplete:"new-password"})]),
+        ])
+      ]);
+      const mo=modal({title:"🔒 Change Your Password", sub:"Required before you keep working", body,
+        foot:[h("button",{class:"btn primary",id:"pwBtn",onclick:save,text:"Set New Password"})]});
+      const self=this;
+      async function save(){
+        const cur=UI.$("#pw_cur").value, nw=UI.$("#pw_new").value, nw2=UI.$("#pw_new2").value;
+        if(nw.length<8){ toast("New password must be at least 8 characters",{type:"warn"}); return; }
+        if(nw!==nw2){ toast("New passwords don't match",{type:"warn"}); return; }
+        const btn=UI.$("#pwBtn"); btn.disabled=true; btn.textContent="Saving…";
+        try{
+          const r=await DB.auth.changePassword(cur, nw);
+          self.user=r.user;
+          mo.close();
+          toast("Password updated — old sessions have been signed out",{type:"ok",title:"Secured"});
+        }catch(e){
+          toast(e.message,{type:"danger"});
+          btn.disabled=false; btn.textContent="Set New Password";
+        }
+      }
     },
 
     /* hide admin-only chrome from office; label the user chip */

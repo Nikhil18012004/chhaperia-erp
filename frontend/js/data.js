@@ -23,11 +23,15 @@
   const TOKEN_KEY = "chh_token";
   const USER_KEY = "chh_user";
 
-  /* ---- token store (localStorage so it survives reloads) ---- */
+  /* ---- session store ----
+     The auth token now lives in an httpOnly cookie set by the server (so
+     XSS cannot exfiltrate it); only the non-sensitive user profile is kept
+     in localStorage. A token found in localStorage is a LEGACY session —
+     still honoured via the Bearer header until its owner logs out. */
   function getToken() { try { return localStorage.getItem(TOKEN_KEY) || null; } catch { return null; } }
   function getUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || "null"); } catch { return null; } }
   function setSession(token, user) {
-    try { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
   }
   function clearSession() {
     try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch {}
@@ -97,6 +101,11 @@
     },
     async me() { return http("GET", "/auth/me"); },
     async logout() { try { await http("POST", "/auth/logout", {}, { noAuthRedirect: true }); } catch {} clearSession(); },
+    async changePassword(currentPassword, newPassword) {
+      const r = await http("POST", "/auth/change-password", { currentPassword, newPassword });
+      if (r && r.user) setSession(r.token, r.user);
+      return r;
+    },
   };
 
   /* ---- admin user management ---- */
@@ -142,6 +151,16 @@
   };
   const customers = {
     upsert(cust) { return http("POST", "/customers", cust); },
+    update(id, patch) { return http("PATCH", "/customers/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/customers/" + enc(id)); },
+  };
+  const suppliers = {
+    create(s) { return http("POST", "/suppliers", s); },
+    update(id, patch) { return http("PATCH", "/suppliers/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/suppliers/" + enc(id)); },
+  };
+  const org = {
+    update(patch) { return http("PATCH", "/org", patch); },
   };
   const transporters = {
     create(t) { return http("POST", "/transporters", t); },
@@ -225,7 +244,7 @@
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
-    items, movements, purchase, sales, boms, leads, customers, transporters, warehouses, hr,
+    items, movements, purchase, sales, boms, leads, customers, suppliers, org, transporters, warehouses, hr,
     labProducts, labReports,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };

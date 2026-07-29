@@ -18,10 +18,33 @@ const auth = require("../services/authService");
 const router = express.Router();
 
 /* ---- middleware ---- */
+const COOKIE_NAME = "chh_token";
+const COOKIE_MAX_AGE = 12 * 60 * 60 * 1000; // matches token TTL
+
+/* Minimal cookie parse — avoids a cookie-parser dependency. */
+function parseCookies(req) {
+  const out = {};
+  String(req.headers.cookie || "").split(";").forEach((p) => {
+    const i = p.indexOf("=");
+    if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim());
+  });
+  return out;
+}
+/* The token now travels in an httpOnly cookie (XSS cannot read it).
+   Bearer headers keep working for API scripts and legacy sessions. */
 function getToken(req) {
   const h = req.headers.authorization || "";
   if (h.startsWith("Bearer ")) return h.slice(7);
-  return req.headers["x-auth-token"] || null;
+  return req.headers["x-auth-token"] || parseCookies(req)[COOKIE_NAME] || null;
+}
+function setAuthCookie(res, token) {
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true, sameSite: "strict", secure: auth.IS_PROD,
+    maxAge: COOKIE_MAX_AGE, path: "/",
+  });
+}
+function clearAuthCookie(res) {
+  res.cookie(COOKIE_NAME, "", { httpOnly: true, sameSite: "strict", secure: auth.IS_PROD, maxAge: 0, path: "/" });
 }
 
 function requireAuth(req, res, next) {
@@ -82,11 +105,29 @@ router.post("/login", (req, res, next) => {
     const result = auth.login(username, password);
     if (!result) { noteFail(key); return res.status(401).json({ error: "Invalid username or password" }); }
     failMap.delete(key); // reset on success
+    setAuthCookie(res, result.token);
     res.json(result);
   } catch (e) { next(e); }
 });
 
-router.post("/logout", (req, res) => res.json({ ok: true }));
+// Logout revokes every outstanding token for the user (token_version bump)
+// and clears the cookie — a stolen token dies with the session.
+router.post("/logout", (req, res) => {
+  const user = auth.userFromToken(getToken(req));
+  if (user) { try { auth.revokeTokens(user.id); } catch {} }
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});
+
+// Self-service password change; rotates the session so other devices drop.
+router.post("/change-password", requireAuth, (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    const result = auth.changePassword(req.user.id, currentPassword, newPassword);
+    setAuthCookie(res, result.token);
+    res.json(result);
+  } catch (e) { next(e); }
+});
 
 router.get("/me", requireAuth, (req, res) => res.json({ user: req.user }));
 

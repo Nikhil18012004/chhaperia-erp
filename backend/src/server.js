@@ -22,7 +22,12 @@ const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
 
 const app = express();
-app.use(express.json({ limit: "25mb" }));
+// Lab test-certificate uploads carry embedded images and keep the old 25 MB
+// allowance; everything else gets a tight 1 MB body cap (the JSON payloads
+// are small — a huge body anywhere else is an attack, not a feature).
+app.use("/api/lab", express.json({ limit: "25mb" }));
+app.use("/api/state", express.json({ limit: "25mb" }));   // full-dataset restore
+app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)
 app.use("/api/auth", authRoutes);
@@ -81,6 +86,11 @@ const server = app.listen(PORT, () => {
   let seedInfo = { seeded: false };
   try { seedInfo = authService.seedDefaultUsers(); } catch (e) { console.error("[user seed]", e.message); }
 
+  // flag any account still on its seeded "<username>@123" password so the
+  // UI forces a change at next login
+  try { const fp = authService.flagDefaultPasswords(); if (fp.flagged) console.log("  ├─ Security : " + fp.flagged + " account(s) still on default passwords — change forced at next login"); }
+  catch (e) { console.error("[pw flag]", e.message); }
+
   // ensure the multi-stage routing model is applied to existing data (idempotent)
   try { const m = erpService.ensureStageModel(); if (m.changed) console.log("  ├─ Stages   : migrated data to multi-stage routing"); }
   catch (e) { console.error("[stage migration]", e.message); }
@@ -96,6 +106,10 @@ const server = app.listen(PORT, () => {
   // seed demo transport agencies (dispatch directory) on first run
   try { const dp = erpService.ensureDispatch(); if (dp.changed) console.log("  ├─ Dispatch : seeded " + dp.count + " transport agencies"); }
   catch (e) { console.error("[dispatch seed]", e.message); }
+
+  // seed the two invoice billing entities (Cable Material / International) on first run
+  try { const co = erpService.ensureCompanies(); if (co.changed) console.log("  ├─ Invoice  : seeded " + co.count + " billing companies"); }
+  catch (e) { console.error("[company seed]", e.message); }
 
   // seed the lab-reports product master (finished-goods list) on first run
   try { const lp = labService.ensureLab(); if (lp.changed) console.log("  ├─ Lab      : seeded " + lp.products + " lab products"); }

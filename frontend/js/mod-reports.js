@@ -88,6 +88,76 @@
       ])
     ]));
 
+    /* invoice companies (billing entities used by PO/SO + printed invoices) */
+    const invCard=h("div",{class:"card"},[
+      h("div",{class:"card-head"},h("h3",{text:"🧾 Invoice Companies"})),
+      h("p",{class:"dim",style:"font-size:12.5px;margin-bottom:12px;line-height:1.5",
+        text:"Every PO / SO is billed under one of these entities. Its GSTIN, address, bank details and terms flow straight onto the printed invoice."}),
+      ...(org.companies||[]).map((c,i)=>h("div",{style:"border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px"},[
+        h("div",{class:"flex between aic"},[
+          h("div",{},[h("b",{style:"font-size:13.5px",text:c.name}),
+            h("div",{class:"muted",style:"font-size:11.5px;margin-top:2px",
+              html:(c.gstin?("GSTIN <b>"+esc(c.gstin)+"</b>"):'<span style="color:var(--warn)">GSTIN pending — add it before invoicing</span>')
+                +(c.pan?" · PAN "+esc(c.pan):"")+(c.cin?" · CIN "+esc(c.cin):"")}),
+            h("div",{class:"muted",style:"font-size:11.5px;margin-top:2px",
+              text:(c.bank&&c.bank.name)?("Bank: "+c.bank.name+(c.bank.acNo?" · A/c "+c.bank.acNo:"")):"Bank details not set"})]),
+          h("button",{class:"btn sm ghost",onclick:()=>companyEditForm(i),text:"✎ Edit"})
+        ])
+      ])),
+      (org.companies&&org.companies.length)?null:h("div",{class:"muted",style:"font-size:12px",text:"No billing entities configured yet — they are created automatically on first run."}),
+    ]);
+    grid.appendChild(invCard);
+
+    function companyEditForm(idx){
+      const cs=(org.companies||[]).map(c=>Object.assign({},c,{bank:Object.assign({},c.bank||{})}));
+      const c=cs[idx];
+      const F=window._erpUtil.field, SEL=window._erpUtil.selectHTML;
+      const sv=x=>esc(x==null?"":x);
+      const states=GST.STATES.map(([cd,n])=>({v:cd,l:cd+" — "+n}));
+      const body=h("div",{class:"form-grid"},[
+        F("Company Name *",`<input class="input" id="co_name" value="${sv(c.name)}">`,"full"),
+        F("GSTIN",`<input class="input" id="co_gstin" value="${sv(c.gstin)}" placeholder="e.g. 29AAICC5462H1ZE" style="text-transform:uppercase">`),
+        F("State",SEL("co_state",states,c.stateCode||"29")),
+        F("PAN",`<input class="input" id="co_pan" value="${sv(c.pan)}" style="text-transform:uppercase">`),
+        F("CIN",`<input class="input" id="co_cin" value="${sv(c.cin)}" style="text-transform:uppercase">`),
+        F("Registered Address",`<textarea class="input" id="co_addr" rows="2">${sv(c.address)}</textarea>`,"full"),
+        F("Phone",`<input class="input" id="co_phone" value="${sv(c.phone)}">`),
+        F("Email",`<input class="input" id="co_email" value="${sv(c.email)}">`),
+        F("Website",`<input class="input" id="co_web" value="${sv(c.website)}">`),
+        F("Tagline",`<input class="input" id="co_tag" value="${sv(c.tagline)}">`),
+        F("Bank Name",`<input class="input" id="co_bnk" value="${sv(c.bank.name)}">`),
+        F("Branch",`<input class="input" id="co_brn" value="${sv(c.bank.branch)}">`),
+        F("A/c Holder Name",`<input class="input" id="co_acn" value="${sv(c.bank.acName)}">`),
+        F("A/c Number",`<input class="input" id="co_acc" value="${sv(c.bank.acNo)}">`),
+        F("IFSC Code",`<input class="input" id="co_ifsc" value="${sv(c.bank.ifsc)}" style="text-transform:uppercase">`),
+        F("UPI ID",`<input class="input" id="co_upi" value="${sv(c.bank.upi)}">`),
+        F("Invoice Terms & Conditions (one per line)",`<textarea class="input" id="co_terms" rows="4">${sv((c.terms||[]).join("\n"))}</textarea>`,"full"),
+      ]);
+      const mo=UI.modal({title:"✎ "+c.name, sub:"Billing entity — details printed on every invoice", wide:true, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn primary",onclick:save,text:"Save Company"})]});
+      const gEl=UI.$("#co_gstin");
+      if(gEl) gEl.addEventListener("input",()=>{ const sc=GST.stateFromGSTIN(gEl.value); if(sc) UI.$("#co_state").value=sc; });
+      async function save(){
+        const g=id=>UI.$("#"+id).value.trim();
+        if(!g("co_name")){ toast("Company name is required",{type:"warn"}); return; }
+        const gstin=g("co_gstin").toUpperCase();
+        if(gstin&&!GST.validGSTIN(gstin)){ toast("That GSTIN doesn't look valid (15 chars)",{type:"warn"}); return; }
+        Object.assign(c,{ name:g("co_name"), gstin, pan:g("co_pan").toUpperCase(), cin:g("co_cin").toUpperCase(),
+          address:g("co_addr"), stateCode:UI.$("#co_state").value, state:GST.stateName(UI.$("#co_state").value),
+          phone:g("co_phone"), email:g("co_email"), website:g("co_web"), tagline:g("co_tag"),
+          bank:{ name:g("co_bnk"), branch:g("co_brn"), acName:g("co_acn"), acNo:g("co_acc"),
+            ifsc:g("co_ifsc").toUpperCase(), upi:g("co_upi") },
+          terms:g("co_terms").split("\n").map(s=>s.trim()).filter(Boolean) });
+        try{
+          const fresh=await DB.org.update({companies:cs});
+          ENG.data.org=fresh;
+          mo.close(); toast(c.name+" saved",{type:"ok"});
+          App.refreshView();
+        }catch(e){ toast("Save failed: "+e.message,{type:"danger"}); }
+      }
+    }
+
     /* appearance */
     const accents=["orange","red","blue","teal","violet","green","pink","amber"];
     grid.appendChild(h("div",{class:"card"},[

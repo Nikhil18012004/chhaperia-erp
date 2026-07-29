@@ -321,6 +321,105 @@ function upsertCustomer(cust) {
   if (!cust || !cust.id || !cust.name) throw err("Customer needs an id and name", 400);
   return repo.putCustomer(cust);
 }
+function updateCustomer(id, patch) {
+  const existing = repo.getCustomer(id);
+  if (!existing) throw err("Customer not found", 404);
+  const merged = Object.assign({}, existing, patch || {}, { id });
+  if (!merged.name) throw err("Customer needs a name", 400);
+  return repo.putCustomer(merged);
+}
+function deleteCustomer(id) {
+  if (!repo.getCustomer(id)) throw err("Customer not found", 404);
+  const st = repo.getState();
+  const sos = (st.salesorders || []).filter((s) => s.customerId === id).length;
+  const leads = (st.leads || []).filter((l) => l.customerId === id).length;
+  if (sos) throw err(`Cannot delete: ${sos} sales order(s) reference this customer. Delete or re-point them first.`, 400);
+  if (leads) throw err(`Cannot delete: ${leads} CRM lead(s) reference this customer. Delete or re-point them first.`, 400);
+  return repo.deleteCustomer(id);
+}
+
+/* ---- Suppliers (create / update / delete) ---- */
+function createSupplier(s) {
+  s = s || {};
+  if (!s.name) throw err("Supplier needs a name", 400);
+  if (!s.id) s.id = nextId(repo.getState().suppliers, "SUP-");
+  else if (repo.getSupplier(s.id)) throw err("Supplier " + s.id + " already exists", 409);
+  return repo.putSupplier(s);
+}
+function updateSupplier(id, patch) {
+  const existing = repo.getSupplier(id);
+  if (!existing) throw err("Supplier not found", 404);
+  const merged = Object.assign({}, existing, patch || {}, { id });
+  if (!merged.name) throw err("Supplier needs a name", 400);
+  return repo.putSupplier(merged);
+}
+function deleteSupplier(id) {
+  if (!repo.getSupplier(id)) throw err("Supplier not found", 404);
+  const st = repo.getState();
+  const pos = (st.purchaseorders || []).filter((p) => p.supplierId === id).length;
+  const items = (st.items || []).filter((i) => i.supplierId === id).length;
+  if (pos) throw err(`Cannot delete: ${pos} purchase order(s) reference this supplier. Delete or re-point them first.`, 400);
+  if (items) throw err(`Cannot delete: ${items} item(s) name this supplier as their source. Re-point them first.`, 400);
+  return repo.deleteSupplier(id);
+}
+
+/* Populate-if-empty: the two billing entities every PO/SO invoices under.
+   Cable Material's identifiers come from its own printed invoice template;
+   International's GSTIN is pending from the user (Settings → Invoice
+   Companies shows a warning until it is filled in). */
+function ensureCompanies() {
+  const org = repo.getOrg() || {};
+  if (Array.isArray(org.companies) && org.companies.length) return { changed: false, count: org.companies.length };
+  const ADDRESS = "Sy. No. 18, K.G. Kuntanahalli, Kasaba Hobli, Doddaballapur Taluk, Bangalore Rural District - 561203, Karnataka, India";
+  const TAGLINE = "Material Science Meets Global Demand";
+  org.companies = [
+    { key: "CCM", name: "Chhaperia Cable Material Pvt. Ltd.", tagline: TAGLINE,
+      gstin: "29AAICC5462H1ZE", pan: "AAICC5462H", cin: "U27320KA2008PTC046773",
+      address: ADDRESS, stateCode: "29", state: "Karnataka",
+      phone: "+91 80 2763 0006", email: "info@micagroup.net", website: "www.micagroup.net",
+      bank: { name: "", acName: "", acNo: "", ifsc: "", branch: "", upi: "" }, terms: [] },
+    { key: "CIC", name: "Chhaperia International Company", tagline: TAGLINE,
+      gstin: "", pan: "", cin: "",
+      address: ADDRESS, stateCode: "29", state: "Karnataka",
+      phone: "+91 80 2763 0006", email: "info@micagroup.net", website: "www.micagroup.net",
+      bank: { name: "", acName: "", acNo: "", ifsc: "", branch: "", upi: "" }, terms: [] },
+  ];
+  org.tagline = org.tagline || TAGLINE;
+  org.gst = org.companies[0].gstin;      // legacy single-entity fields follow the primary company
+  repo.putOrg(org);
+  return { changed: true, count: org.companies.length };
+}
+
+/* ---- Org / company profile (invoice entities live in org.companies[]) ---- */
+function updateOrg(patch) {
+  patch = patch || {};
+  if (typeof patch !== "object" || Array.isArray(patch)) throw err("Org patch must be an object", 400);
+  const merged = Object.assign({}, repo.getOrg() || {}, patch);
+  if (Array.isArray(patch.companies)) {
+    merged.companies = patch.companies.map((c) => ({
+      key: String(c.key || "").trim() || "CO",
+      name: String(c.name || "").trim(),
+      tagline: c.tagline || "",
+      gstin: String(c.gstin || "").trim().toUpperCase(),
+      pan: String(c.pan || "").trim().toUpperCase(),
+      cin: String(c.cin || "").trim().toUpperCase(),
+      address: c.address || "",
+      stateCode: String(c.stateCode || "").trim() || (String(c.gstin || "").trim().slice(0, 2) || ""),
+      state: c.state || "",
+      phone: c.phone || "", email: c.email || "", website: c.website || "",
+      bank: {
+        name: (c.bank && c.bank.name) || "",
+        acName: (c.bank && c.bank.acName) || "",
+        acNo: (c.bank && c.bank.acNo) || "",
+        ifsc: (c.bank && c.bank.ifsc) || "",
+        branch: (c.bank && c.bank.branch) || "",
+        upi: (c.bank && c.bank.upi) || "",
+      },
+      terms: Array.isArray(c.terms) ? c.terms.map(String) : [],
+    })).filter((c) => c.name);
+  }
+  return repo.putOrg(merged);
+}
 
 /* ---- Warehouses: master-data edits (rename etc.) ---- */
 function updateWarehouse(id, patch) {
@@ -382,6 +481,8 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   upsertItem, addMovement, receivePurchaseOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createSalesOrder, updateSalesOrder, deleteSalesOrder, dispatchSalesOrder,
-  saveBom, deleteBom, createLead, updateLead, deleteLead, upsertCustomer,
+  saveBom, deleteBom, createLead, updateLead, deleteLead,
+  upsertCustomer, updateCustomer, deleteCustomer,
+  createSupplier, updateSupplier, deleteSupplier, updateOrg, ensureCompanies,
   deleteItem, deleteWorkOrder, nextId, updateWarehouse,
   createTransporter, updateTransporter, deleteTransporter, ensureDispatch };

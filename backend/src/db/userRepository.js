@@ -78,11 +78,20 @@ function touchLogin(id) {
   getDb().prepare("UPDATE users SET last_login=? WHERE id=?").run(new Date().toISOString(), id);
 }
 
+/** Merge fields into the user's doc JSON (tokenVersion, mustChangePassword…). */
+function patchDoc(id, patch) {
+  const cur = getDb().prepare("SELECT doc FROM users WHERE id = ?").get(id);
+  if (!cur) return null;
+  const doc = Object.assign(P(cur.doc, {}), patch || {});
+  getDb().prepare("UPDATE users SET doc=? WHERE id=?").run(J(doc), id);
+  return findById(id);
+}
+
 function deleteUser(id) {
   return getDb().prepare("DELETE FROM users WHERE id = ?").run(id).changes > 0;
 }
 
 module.exports = {
   listUsers, findByUsername, findById, countUsers,
-  createUser, updateUser, touchLogin, deleteUser,
+  createUser, updateUser, touchLogin, deleteUser, patchDoc,
 };

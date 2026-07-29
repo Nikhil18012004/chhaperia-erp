@@ -66,7 +66,10 @@ function sign(payloadStr) {
 }
 
 function issueToken(user) {
-  const payload = { uid: user.id, role: user.role, area: user.area || null, exp: Date.now() + TOKEN_TTL_MS };
+  // v = the user's token version; bumping it (logout / password change /
+  // admin reset) instantly invalidates every previously issued token.
+  const payload = { uid: user.id, role: user.role, area: user.area || null,
+    v: user.tokenVersion || 0, exp: Date.now() + TOKEN_TTL_MS };
   const payloadStr = b64url(JSON.stringify(payload));
   return payloadStr + "." + sign(payloadStr);
 }
@@ -95,13 +98,53 @@ function login(username, password) {
   return { token: issueToken(safe), user: safe };
 }
 
-/** Resolve the user from a token (fresh from DB, so role changes apply). */
+/** Resolve the user from a token (fresh from DB, so role changes apply).
+    A token whose version lags the user's current one has been revoked. */
 function userFromToken(token) {
   const payload = verifyToken(token);
   if (!payload) return null;
   const u = users.findById(payload.uid);
   if (!u || !u.active) return null;
+  if ((payload.v || 0) !== (u.tokenVersion || 0)) return null; // revoked
   return u;
+}
+
+/** Invalidate every outstanding token for a user (logout / pw change). */
+function revokeTokens(userId) {
+  const u = users.findById(userId);
+  if (!u) return null;
+  return users.patchDoc(userId, { tokenVersion: (u.tokenVersion || 0) + 1 });
+}
+
+/** Self-service password change; clears the must-change flag and rotates
+    the token version so old sessions die. Returns { token, user }. */
+function changePassword(userId, currentPassword, newPassword) {
+  const u = users.findById(userId, true);
+  if (!u) throw httpErr("User not found", 404);
+  if (!verifyPassword(currentPassword, u.pass)) throw httpErr("Current password is incorrect", 401);
+  if (!newPassword || String(newPassword).length < 8) throw httpErr("New password must be at least 8 characters", 400);
+  if (String(newPassword) === String(currentPassword)) throw httpErr("New password must be different", 400);
+  users.updateUser(userId, { pass: hashPassword(newPassword) });
+  const fresh = users.patchDoc(userId, {
+    mustChangePassword: false,
+    tokenVersion: (u.tokenVersion || 0) + 1,
+  });
+  return { token: issueToken(fresh), user: fresh };
+}
+
+/** One-time boot sweep: any account still on its seeded "<username>@123"
+    password gets flagged so the UI forces a change at next login. */
+function flagDefaultPasswords() {
+  let flagged = 0;
+  for (const u of users.listUsers()) {
+    if (u.mustChangePassword) continue;
+    const full = users.findById(u.id, true);
+    if (full && verifyPassword(u.username + "@123", full.pass)) {
+      users.patchDoc(u.id, { mustChangePassword: true });
+      flagged++;
+    }
+  }
+  return { flagged };
 }
 
 /* ============================================================
@@ -124,7 +167,8 @@ function seedDefaultUsers() {
   if (users.countUsers() > 0) return { seeded: false, count: users.countUsers() };
   let n = 0;
   for (const du of DEFAULT_USERS) {
-    users.createUser({ ...du, pass: hashPassword(du.username + "@123") });
+    users.createUser({ ...du, pass: hashPassword(du.username + "@123"),
+      doc: { mustChangePassword: true } });
     n++;
   }
   return { seeded: true, count: n };
@@ -166,6 +210,11 @@ function updateUserAccount(id, patch) {
   }
   const u = users.updateUser(id, out);
   if (!u) throw httpErr("User not found", 404);
+  if (patch.password) {
+    // an admin-set password is temporary: the user must change it, and every
+    // session issued under the old password is revoked
+    return users.patchDoc(id, { mustChangePassword: true, tokenVersion: (u.tokenVersion || 0) + 1 });
+  }
   return u;
 }
 
@@ -174,6 +223,7 @@ function httpErr(msg, status) { const e = new Error(msg); e.status = status; ret
 module.exports = {
   hashPassword, verifyPassword, issueToken, verifyToken,
   login, userFromToken, seedDefaultUsers,
+  revokeTokens, changePassword, flagDefaultPasswords, IS_PROD,
   createUserAccount, updateUserAccount,
   listUsers: () => users.listUsers(),
   deleteUser: (id) => users.deleteUser(id),
