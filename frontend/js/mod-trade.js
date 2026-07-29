@@ -204,13 +204,23 @@
       const sups=ENG.data.suppliers;
       let lines=[];
       const totBox=h("div");
+      const ev=k=>esc(editPo?(editPo[k]||""):"");
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           U.field("Billing Company (invoice under) *",U.selectHTML("po_co",companyOpts(),editPo?editPo.company:companies()[0].key)),
           U.field("Supplier",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
           U.field("PO Date",`<input class="input" id="po_date" type="date" value="${editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
           U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
-          U.field("Ref / Quotation No.",`<input class="input" id="po_ref" value="${esc(editPo?(editPo.refNo||""):"")}" placeholder="optional">`),
+          U.field("Valid Upto",`<input class="input" id="po_valid" type="date" value="${ev("validUpto")}">`),
+          U.field("Quotation Ref.",`<input class="input" id="po_ref" value="${ev("refNo")}" placeholder="e.g. Verbal / QTN-77">`),
+          U.field("Vendor Code",`<input class="input" id="po_vcode" value="${ev("vendorCode")}" placeholder="optional">`),
+          U.field("Attn (vendor contact)",`<input class="input" id="po_attn" value="${ev("attn")}" placeholder="e.g. Mr. S. Saravanan">`),
+          U.field("Our Contact (CTC Person)",`<input class="input" id="po_ctc" value="${ev("ctcPerson")}" placeholder="e.g. Mr. Neelmani">`),
+          U.field("GST",U.selectHTML("po_gstmode",[{v:"As Applicable",l:"As Applicable"},{v:"Included",l:"Included"},{v:"Extra",l:"Extra"}],editPo?(editPo.gstMode||"As Applicable"):"As Applicable")),
+          U.field("Packing",`<input class="input" id="po_pack" value="${ev("packing")}" placeholder="e.g. Non-returnable barrels">`),
+          U.field("Delivery",`<input class="input" id="po_deliv" value="${esc(editPo?(editPo.deliveryNote||""):"immediate")}" placeholder="e.g. immediate / ASAP">`),
+          U.field("Destination",`<input class="input" id="po_dest" value="${esc(editPo?(editPo.destination||""):"to our works")}">`),
+          U.field("Notes / Instructions (printed on the PO)",`<textarea class="input" id="po_notes" rows="2" placeholder="e.g. Kindly attach Test Report along with material">${ev("notes")}</textarea>`,"full"),
         ]),
         h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines"}),
         lineHead(false),
@@ -237,6 +247,11 @@
           date:UI.$("#po_date").value||DB.helpers.iso(DB.helpers.today()),
           supplierId:UI.$("#po_sup").value, company:UI.$("#po_co").value,
           refNo:UI.$("#po_ref").value.trim(), lines:out,
+          validUpto:UI.$("#po_valid").value, vendorCode:UI.$("#po_vcode").value.trim(),
+          attn:UI.$("#po_attn").value.trim(), ctcPerson:UI.$("#po_ctc").value.trim(),
+          gstMode:UI.$("#po_gstmode").value, packing:UI.$("#po_pack").value.trim(),
+          deliveryNote:UI.$("#po_deliv").value.trim(), destination:UI.$("#po_dest").value.trim(),
+          notes:UI.$("#po_notes").value.trim(),
           freight:+UI.$("#po_fr")?.value||0,
           status:editPo?editPo.status:"Draft — not saved", eta:UI.$("#po_eta").value };
         o.value=docCalc("po",o).calc.grandTotal;
@@ -279,12 +294,14 @@
       function save(){
         const o=draft();
         if(!o.lines.length){ toast("Add at least one line with qty",{type:"warn"}); return; }
+        const patch={supplierId:o.supplierId, company:o.company, refNo:o.refNo, date:o.date,
+          validUpto:o.validUpto, vendorCode:o.vendorCode, attn:o.attn, ctcPerson:o.ctcPerson,
+          gstMode:o.gstMode, packing:o.packing, deliveryNote:o.deliveryNote, destination:o.destination,
+          notes:o.notes, eta:o.eta, lines:o.lines, freight:o.freight, value:o.value, status:"Open"};
         if(editPo){
-          Object.assign(editPo,{supplierId:o.supplierId, company:o.company, refNo:o.refNo, date:o.date,
-            eta:o.eta, lines:o.lines, freight:o.freight, value:o.value, status:"Open"});
+          Object.assign(editPo,patch);
           mo.close(); toast(editPo.id+" updated",{type:"ok"});
-          App.saveDelta(()=>DB.purchase.update(editPo.id,{supplierId:o.supplierId, company:o.company, refNo:o.refNo,
-            date:o.date, eta:o.eta, lines:o.lines, freight:o.freight, value:o.value, status:"Open"}));
+          App.saveDelta(()=>DB.purchase.update(editPo.id,patch));
         } else {
           const po=Object.assign(o,{status:"Open"});
           ENG.data.purchaseorders.push(po);
@@ -318,6 +335,20 @@
     const insVal= opts.insuranceId ? (keep(opts.insuranceId)!=null?keep(opts.insuranceId):(opts.insurance||"")) : null;
     const row=(l,v,strong)=>`<div style="display:flex;justify-content:space-between;gap:24px;padding:3px 0${strong?";font-weight:800;font-size:15px;border-top:1px solid var(--line);margin-top:4px;padding-top:8px":""}"><span class="${strong?"":"muted"}">${l}</span><span>${v}</span></div>`;
     const inpRow=(l,id,v)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:3px 0"><span class="muted">${l}</span><input class="input" id="${id}" type="number" step="0.01" style="width:110px;text-align:right;padding:4px 8px" value="${v==null?"":v}"></div>`;
+    if(opts.exportCcy){
+      // export supply: line values only — no GST added; IGST note prints on the invoice
+      const S=GST.ccySign(opts.exportCcy), f2=v=>S+(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
+      const sub=calc.taxable, tot=+(sub+(+frVal||0)+(+insVal||0)).toFixed(2);
+      box.innerHTML=`<div style="min-width:300px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
+        <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px">Export supply — commercial invoice, GST not added</div>
+        ${calc.discount?row("Discount","− "+f2(calc.discount)):""}
+        ${row("Sub Total",f2(sub))}
+        ${inpRow("Freight ("+opts.exportCcy+")",opts.freightId,frVal)}
+        ${opts.insuranceId?inpRow("Insurance ("+opts.exportCcy+")",opts.insuranceId,insVal):""}
+        ${row("Total ("+opts.exportCcy+")",f2(tot),true)}
+      </div>`;
+      return;
+    }
     box.innerHTML=`<div style="min-width:300px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
       <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px">
         ${interState?("Inter-state supply → IGST"):("Intra-state ("+(GST.stateName(co.stateCode)||"")+") → CGST + SGST")}
@@ -474,6 +505,8 @@
         ]),
         sec("Invoice Details"),
         h("div",{class:"form-grid"},[
+          U.field("Invoice Type",U.selectHTML("so_itype",[{v:"domestic",l:"Domestic — GST Tax Invoice"},{v:"export",l:"Export — Commercial Invoice"}],editSo?(editSo.invoiceType||"domestic"):"domestic")),
+          U.field("Currency",U.selectHTML("so_ccy",[{v:"INR",l:"INR ₹"},{v:"USD",l:"USD $"},{v:"EUR",l:"EUR €"},{v:"GBP",l:"GBP £"},{v:"AED",l:"AED"},{v:"SAR",l:"SAR"}],editSo?(editSo.currency||"INR"):"INR")),
           U.field("Invoice No.",`<input class="input" id="so_inv" value="${esc(editSo?(editSo.invoiceNo||editSo.id):soId)}">`),
           U.field("Order Date",`<input class="input" id="so_date" type="date" value="${editSo?(editSo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
           U.field("Promised / Due Date",`<input class="input" id="so_prom" type="date" value="${editSo?editSo.promised:DB.helpers.daysAhead(10)}">`),
@@ -489,6 +522,26 @@
           U.field("E-Way Bill No.",`<input class="input" id="so_eway" value="${esc(editSo?(editSo.ewayBill||""):"")}" placeholder="optional">`),
           U.field("LR / RR No.",`<input class="input" id="so_lr" value="${esc(editSo?(editSo.lrNo||""):"")}" placeholder="optional">`),
           U.field("Dispatch Date",`<input class="input" id="so_ddate" type="date" value="${esc(editSo?(editSo.dispatchDate||""):"")}">`),
+        ]),
+        h("div",{id:"so_export",hidden:!(editSo&&editSo.invoiceType==="export")},[
+          sec("Export / Shipment (Commercial Invoice)"),
+          h("div",{class:"form-grid"},[
+            U.field("Other Reference",`<input class="input" id="so_oref" value="${esc(editSo?(editSo.otherRef||""):"")}">`),
+            U.field("Consignee",`<input class="input" id="so_consignee" value="${esc(editSo?(editSo.consignee||"TO THE ORDER"):"TO THE ORDER")}">`),
+            U.field("Notify Party",`<textarea class="input" id="so_notify" rows="2" placeholder="buyer name, address, phone, e-mail">${esc(editSo?(editSo.notifyParty||""):"")}</textarea>`,"full"),
+            U.field("Pre-Carriage By",`<input class="input" id="so_precar" value="${esc(editSo?(editSo.preCarriage||""):"")}">`),
+            U.field("Place of Receipt",`<input class="input" id="so_prcpt" value="${esc(editSo?(editSo.placeReceipt||"Bangalore"):"Bangalore")}">`),
+            U.field("Vessel / Flight No.",`<input class="input" id="so_vessel" value="${esc(editSo?(editSo.vessel||"By Sea"):"By Sea")}">`),
+            U.field("Port of Loading",`<input class="input" id="so_pload" value="${esc(editSo?(editSo.portLoading||"Nhava Sheva, Mumbai, India"):"Nhava Sheva, Mumbai, India")}">`),
+            U.field("Port of Discharge",`<input class="input" id="so_pdis" value="${esc(editSo?(editSo.portDischarge||""):"")}">`),
+            U.field("Final Destination",`<input class="input" id="so_fdest" value="${esc(editSo?(editSo.finalDest||""):"")}">`),
+            U.field("Country of Final Destination",`<input class="input" id="so_cdest" value="${esc(editSo?(editSo.countryDest||""):"")}">`),
+            U.field("Terms of Delivery",`<input class="input" id="so_dterms" value="${esc(editSo?(editSo.deliveryTerms||""):"")}" placeholder="e.g. CIF King Abdulla port">`),
+            U.field("Marks & Nos / Kind of Pkgs",`<input class="input" id="so_marks" value="${esc(editSo?(editSo.marksPkgs||""):"")}" placeholder="e.g. (14) Pallets containing">`),
+            U.field("Net Weight (kgs)",`<input class="input" id="so_netwt" value="${esc(editSo?(editSo.netWt||""):"")}">`),
+            U.field("Gross Weight (kgs)",`<input class="input" id="so_grosswt" value="${esc(editSo?(editSo.grossWt||""):"")}">`),
+            U.field("Export Note (printed bold on the invoice)",`<textarea class="input" id="so_exnote" rows="2">${esc(editSo?(editSo.exportNote!=null?editSo.exportNote:"SUPPLY MEANT FOR EXPORT UNDER PAYMENT OF IGST @ 18%\nEXPORT UNDER DRAWBACK"):"SUPPLY MEANT FOR EXPORT UNDER PAYMENT OF IGST @ 18%\nEXPORT UNDER DRAWBACK")}</textarea>`,"full"),
+          ]),
         ]),
         sec("Lines"),
         lineHead(true),
@@ -506,6 +559,19 @@
           h("button",{class:"btn primary",onclick:save,text:editSo?"Save Changes":"Create Order"})]});
       body.addEventListener("input",recalc);
       body.addEventListener("change",recalc);
+      // invoice-type switch shows/hides the export section; notify party
+      // defaults to the buyer's block the first time export is chosen
+      const itypeEl=UI.$("#so_itype");
+      if(itypeEl) itypeEl.addEventListener("change",()=>{
+        const ex=itypeEl.value==="export";
+        UI.$("#so_export").hidden=!ex;
+        if(ex&&!UI.$("#so_notify").value){
+          const c=custs.find(x=>x.id===UI.$("#so_cust").value)||{};
+          UI.$("#so_notify").value=[c.name,c.address||c.city,c.phone,c.email].filter(Boolean).join("\n");
+        }
+        if(ex&&UI.$("#so_ccy").value==="INR") UI.$("#so_ccy").value="USD";
+        recalc();
+      });
       // customer switch refreshes place of supply, ship-to + payment terms
       const custHid=UI.$("#so_cust");
       if(custHid) custHid.addEventListener("change",()=>{
@@ -528,27 +594,44 @@
             discPct:+UI.$("#sl_disc_"+i).value||0, gstPct:+UI.$("#sl_gst_"+i).value||0}); });
         return out; }
       function draft(){
-        const o={ id:soId, date:UI.$("#so_date").value||DB.helpers.iso(DB.helpers.today()),
-          customerId:UI.$("#so_cust").value, company:UI.$("#so_co").value,
-          invoiceNo:UI.$("#so_inv").value.trim()||soId,
-          placeOfSupply:UI.$("#so_pos").value, shipTo:UI.$("#so_ship").value.trim(),
-          custPoNo:UI.$("#so_cpo").value.trim(), custPoDate:UI.$("#so_cpod").value,
-          transportMode:UI.$("#so_tmode").value, transporterId:UI.$("#so_transp").value,
-          vehicleNo:UI.$("#so_veh").value.trim(), ewayBill:UI.$("#so_eway").value.trim(),
-          lrNo:UI.$("#so_lr").value.trim(), dispatchDate:UI.$("#so_ddate").value,
-          payTerms:UI.$("#so_terms").value.trim(), notes:UI.$("#so_notes").value.trim(),
+        const g=id=>{const el=UI.$("#"+id);return el?el.value:"";};
+        const o={ id:soId, date:g("so_date")||DB.helpers.iso(DB.helpers.today()),
+          customerId:g("so_cust"), company:g("so_co"),
+          invoiceType:g("so_itype"), currency:g("so_ccy"),
+          invoiceNo:g("so_inv").trim()||soId,
+          placeOfSupply:g("so_pos"), shipTo:g("so_ship").trim(),
+          custPoNo:g("so_cpo").trim(), custPoDate:g("so_cpod"),
+          transportMode:g("so_tmode"), transporterId:g("so_transp"),
+          vehicleNo:g("so_veh").trim(), ewayBill:g("so_eway").trim(),
+          lrNo:g("so_lr").trim(), dispatchDate:g("so_ddate"),
+          payTerms:g("so_terms").trim(), notes:g("so_notes").trim(),
+          otherRef:g("so_oref").trim(), consignee:g("so_consignee").trim(),
+          notifyParty:g("so_notify").trim(), preCarriage:g("so_precar").trim(),
+          placeReceipt:g("so_prcpt").trim(), vessel:g("so_vessel").trim(),
+          portLoading:g("so_pload").trim(), portDischarge:g("so_pdis").trim(),
+          finalDest:g("so_fdest").trim(), countryDest:g("so_cdest").trim(),
+          deliveryTerms:g("so_dterms").trim(), marksPkgs:g("so_marks").trim(),
+          netWt:g("so_netwt").trim(), grossWt:g("so_grosswt").trim(),
+          exportNote:g("so_exnote").trim(),
           lines:collect(),
           freight:+(UI.$("#so_fr")&&UI.$("#so_fr").value)||0,
           insurance:+(UI.$("#so_ins")&&UI.$("#so_ins").value)||0,
           status:editSo?editSo.status:"Confirmed",
-          promised:UI.$("#so_prom").value, priority:UI.$("#so_prio").value };
-        o.value=docCalc("so",o).calc.grandTotal;
+          promised:g("so_prom"), priority:g("so_prio") };
+        if(o.invoiceType==="export"){
+          // export supply: line values only, no GST added on top (IGST note prints instead)
+          const sub=o.lines.reduce((s,l)=>s+l.qty*l.rate*(1-(l.discPct||0)/100),0);
+          o.value=+(sub+o.freight+o.insurance).toFixed(2);
+        } else {
+          o.value=docCalc("so",o).calc.grandTotal;
+        }
         return o;
       }
       function recalc(){
         const o=draft();
         renderTotals(totBox, docCalc("so",o),
-          {freightId:"so_fr", freight:o.freight, insuranceId:"so_ins", insurance:o.insurance});
+          {freightId:"so_fr", freight:o.freight, insuranceId:"so_ins", insurance:o.insurance,
+           exportCcy:o.invoiceType==="export"?o.currency:null});
       }
       function printDraft(){
         const o=draft();
@@ -587,10 +670,16 @@
         if(!o.lines.length){ toast("Add at least one line",{type:"warn"}); return; }
         if(editSo){
           const patch={customerId:o.customerId, company:o.company, invoiceNo:o.invoiceNo,
+            invoiceType:o.invoiceType, currency:o.currency,
             placeOfSupply:o.placeOfSupply, shipTo:o.shipTo, custPoNo:o.custPoNo, custPoDate:o.custPoDate,
             transportMode:o.transportMode, transporterId:o.transporterId, vehicleNo:o.vehicleNo,
             ewayBill:o.ewayBill, lrNo:o.lrNo, dispatchDate:o.dispatchDate, payTerms:o.payTerms,
             notes:o.notes, priority:o.priority, promised:o.promised, date:o.date,
+            otherRef:o.otherRef, consignee:o.consignee, notifyParty:o.notifyParty,
+            preCarriage:o.preCarriage, placeReceipt:o.placeReceipt, vessel:o.vessel,
+            portLoading:o.portLoading, portDischarge:o.portDischarge, finalDest:o.finalDest,
+            countryDest:o.countryDest, deliveryTerms:o.deliveryTerms, marksPkgs:o.marksPkgs,
+            netWt:o.netWt, grossWt:o.grossWt, exportNote:o.exportNote,
             lines:o.lines, freight:o.freight, insurance:o.insurance, value:o.value};
           Object.assign(editSo,patch);
           mo.close(); toast(editSo.id+" updated",{type:"ok"});
@@ -805,8 +894,18 @@
      traceability appears ONLY as "Batch No." here.
      ============================================================ */
   const IN=v=>(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmtD=d=>{ if(!d) return "—"; const m=String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}.${m[2]}.${m[1]}`:String(d); };
   function printDoc(kind, o){
-    const isPO=kind==="po";
+    const html = kind==="po" ? poHtml(o)
+               : (o.invoiceType==="export" ? exportHtml(o) : domesticHtml(o));
+    const w=window.open("","_blank");
+    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+    w.document.write(html); w.document.close();
+  }
+
+  /* ---- Domestic GST tax invoice (styled per the approved jpeg samples) ---- */
+  function domesticHtml(o){
+    const kind="so", isPO=false;
     const dc=docCalc(kind,o);
     const {co, party, calc, interState, pos}=dc;
     const p=party||{name:isPO?o.supplierId:o.customerId};
@@ -977,9 +1076,207 @@
   <div class="note">Use your browser's "Save as PDF" to download</div>
   <script>window.onload=function(){window.print();}<\/script>
 </body></html>`;
-    const w=window.open("","_blank");
-    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-    w.document.write(html); w.document.close();
+    return html;
+  }
+
+  /* ---- Purchase order — the company's own working PO format (per the
+     approved sample PDFs): centred logo + company name, boxed To / No. /
+     Billing-address grid with the GST number, "Please supply as under"
+     greeting, Sub Total → CGST/SGST → highlighted Total, payment/GST/
+     packing/insurance boxes, dispute line, general instructions, footer. ---- */
+  function poHtml(o){
+    const dc=docCalc("po",o);
+    const {co, party, calc, interState}=dc;
+    const p=party||{name:o.supplierId};
+    const logo=location.origin+"/assets/logo-invoice.png";
+    const uoms=[...new Set((o.lines||[]).map(l=>((ENG.item(l.itemId)||{}).uom||"KG").toUpperCase()))];
+    const uom=uoms.length===1?uoms[0]:"";
+    const uniformPct=[...new Set(gstLinesOf(o).map(l=>l.gstPct))];
+    const half=uniformPct.length===1?uniformPct[0]/2:null;
+    const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
+      return `<tr><td class="c">${i+1}</td><td><b>${esc((it.name||l.itemId).toUpperCase())}</b>`+
+        `<div class="sub">${esc(l.itemId)}${(l.hsn||it.hsn)?" · HSN "+esc(l.hsn||it.hsn):""}${it.thicknessMM!=null?" · "+it.thicknessMM+" mm":""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
+        `<td class="r">${ENG.num(l.qty,2)}</td><td class="r">${IN(l.rate)}</td>`+
+        `<td class="r">${IN(l.qty*l.rate*(1-(l.discPct||0)/100))}</td></tr>`; }).join("");
+    const noteLines=(o.notes||"").split("\n").map(s=>s.trim()).filter(Boolean);
+    const noteRows=noteLines.map(n=>`<tr><td></td><td class="nt"><b>${esc(n)}</b></td><td></td><td></td><td></td></tr>`).join("");
+    let filler="";
+    for(let i=(o.lines||[]).length+noteLines.length;i<8;i++) filler+=`<tr class="fill"><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`;
+    const taxRows = interState
+      ? `<tr><td colspan="4" class="r tx">IGST${uniformPct.length===1?" @ "+uniformPct[0]+"%":""}</td><td class="r">${IN(calc.igst)}</td></tr>`
+      : `<tr><td colspan="4" class="r tx">CGST${half!=null?" @ "+half+"%":""}</td><td class="r">${IN(calc.cgst)}</td></tr>`+
+        `<tr><td colspan="4" class="r tx">SGST${half!=null?" @ "+half+"%":""}</td><td class="r">${IN(calc.sgst)}</td></tr>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Purchase Order ${esc(o.id)}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#111;max-width:860px;margin:0 auto;padding:16px 22px}
+  .top{text-align:center;margin-bottom:4px}
+  .top img{max-height:60px;max-width:300px;object-fit:contain}
+  .conm{font-size:16px;font-weight:800;margin-top:2px}
+  .doct{font-size:14px;font-weight:800;letter-spacing:2px;margin-top:2px}
+  .badr{text-align:right;font-size:10.5px;font-weight:700;margin-bottom:2px}
+  table.hd{width:100%;border-collapse:collapse;margin-bottom:8px}
+  table.hd td{border:1.2px solid #222;padding:6px 9px;font-size:11.5px;vertical-align:top;line-height:1.55}
+  .gstno{font-weight:800;margin-top:4px}
+  .greet{font-size:11.5px;margin:6px 0 8px;line-height:1.7}
+  table.items{width:100%;border-collapse:collapse;margin-bottom:8px}
+  table.items th{border:1.2px solid #222;padding:5px 8px;font-size:11px;line-height:1.3}
+  table.items td{border:1px solid #444;padding:5px 8px;font-size:11.5px;vertical-align:top}
+  td.r,th.r{text-align:right} td.c,th.c{text-align:center}
+  td .sub{font-size:9.5px;color:#555;font-weight:400}
+  td.nt b{color:#b00} tr.fill td{height:18px}
+  td.tx{font-weight:600}
+  tr.tot td{background:#ffe97a;font-weight:800;font-size:12.5px}
+  table.bx{width:100%;border-collapse:collapse;margin-bottom:8px}
+  table.bx td{border:1.2px solid #222;padding:6px 9px;font-size:11.5px;vertical-align:top;line-height:1.6}
+  table.bx .k{font-weight:800;text-transform:uppercase;font-size:10.5px}
+  .sig{text-align:center}
+  .sig .ln{margin-top:38px;font-weight:700}
+  .disp{text-align:center;font-size:11.5px;text-decoration:underline;margin:10px 0}
+  .gi{font-size:10.8px;line-height:1.7;margin-bottom:10px}
+  .gi u{font-weight:600}
+  .foot{border-top:1.5px solid #222;text-align:center;font-size:10.8px;line-height:1.6;padding-top:6px}
+  .foot b{font-size:12px;letter-spacing:.5px}
+  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
+  @media print{ body{padding:6mm} .note{display:none} }
+</style></head><body>
+  <div class="top"><img src="${logo}" alt="Chhaperia"><div class="conm">${esc(co.name)}</div><div class="doct">PURCHASE ORDER</div></div>
+  <div class="badr">Billing address :</div>
+  <table class="hd"><tr>
+    <td style="width:37%"><b>To</b><br><b><u>${esc((p.name||"").toUpperCase())}</u></b><br>${esc(p.address||[p.city,p.country].filter(Boolean).join(", "))}
+      ${p.phone?`<br>Ph: ${esc(p.phone)}`:""}${p.email?`<br>E-mail: ${esc(p.email)}`:""}${p.gst?`<br>GST: ${esc(p.gst)}`:""}</td>
+    <td style="width:22%">No. <b>${esc(o.id)}</b><br>Date : ${fmtD(o.date)}<br>Valid upto: ${o.validUpto?fmtD(o.validUpto):""}<br>Quotation ref: ${esc(o.refNo||"")}<br>Delivery by: ${fmtD(o.eta)}</td>
+    <td style="width:41%"><b>${esc(co.name.toUpperCase())}</b><br>${esc(co.address||"")}
+      ${o.ctcPerson?`<br>CTC Person : ${esc(o.ctcPerson)}`:""}<br>Mobile no : ${esc(co.phone||"")}<br>E mail : ${esc(co.email||"")}
+      <div class="gstno">GST No : ${esc(co.gstin||"—")}</div></td>
+  </tr></table>
+  <div class="greet"><b>VENDOR CODE:</b> ${esc(o.vendorCode||"")}<br>
+    ${o.attn?`Gentleman: ${esc(o.attn)}<br>`:""}Please supply as under, with the particulars given :</div>
+  <table class="items"><thead><tr>
+    <th class="c" style="width:7%">Sl No.</th><th>Description</th>
+    <th class="r" style="width:12%">Quantity${uom?`<br><span style="font-weight:400">${esc(uom)}</span>`:""}</th>
+    <th class="r" style="width:13%">Unit Price<br><span style="font-weight:400">${uom?"Rs / "+esc(uom):"Rs."}</span></th>
+    <th class="r" style="width:15%">Amount<br><span style="font-weight:400">Rs.</span></th>
+  </tr></thead><tbody>
+    ${rows}${noteRows}${filler}
+    <tr><td colspan="4" class="r tx">Sub Total</td><td class="r">${IN(calc.taxable)}</td></tr>
+    ${taxRows}
+    ${calc.freight?`<tr><td colspan="4" class="r tx">Freight</td><td class="r">${IN(calc.freight)}</td></tr>`:""}
+    <tr class="tot"><td colspan="4" class="r">Total</td><td class="r">${IN(calc.grandTotal)}</td></tr>
+  </tbody></table>
+  <table class="bx"><tr>
+    <td style="width:28%"><span class="k">Payment Terms</span><br>${esc(o.payTermsPo||p.terms||"as agreed")}</td>
+    <td style="width:18%"><span class="k">GST</span><br>${esc(o.gstMode||"As Applicable")}</td>
+    <td style="width:18%"><span class="k">Packing</span><br>${esc(o.packing||"-")}</td>
+    <td style="width:36%" rowspan="2" class="sig">for <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></td>
+  </tr><tr>
+    <td><span class="k">Delivery date:</span> ${esc(o.deliveryNote||"")}</td>
+    <td><span class="k">Destination</span><br>${esc(o.destination||"to our works")}</td>
+    <td><span class="k">Insurance</span><br>${o.insurance?IN(o.insurance):"-"}</td>
+  </tr></table>
+  <div class="disp">Any Dispute Subject to Bangalore Jurisdiction</div>
+  <div class="gi"><u>General instruction :</u><br>
+    1. Shipment documents should be sent by email / post / courier<br>
+    2. All goods supplied against this order will be subjected to inspection and verification<br>
+    3. Inspection / Test certificates are to be supplied along with the supplies</div>
+  <div class="foot"><b>${esc(co.name.toUpperCase())}</b><br>${esc(co.address||"")}<br>
+    PH: ${esc(co.phone||"")} &nbsp; E-mail: ${esc(co.email||"")} &nbsp; Web: ${esc(co.website||"")}</div>
+  <div class="note">Computer generated purchase order · use your browser's "Save as PDF" to download</div>
+  <script>window.onload=function(){window.print();}<\/script>
+</body></html>`;
+  }
+
+  /* ---- Export commercial invoice (per the approved sample PDF): IEC code,
+     consignee / notify party, bank with SWIFT, shipment grid, currency
+     amounts with no GST added, net/gross weight, India-origin certificate. ---- */
+  function exportHtml(o){
+    const co=companyByKey(o.company);
+    const p=ENG.data.customers.find(c=>c.id===o.customerId)||{name:o.customerId};
+    const ccy=(o.currency||"USD").toUpperCase();
+    const F2=v=>(+v||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+    const sub=(o.lines||[]).reduce((s,l)=>s+l.qty*l.rate*(1-(l.discPct||0)/100),0);
+    const total=+(sub+(+o.freight||0)+(+o.insurance||0)).toFixed(2);
+    const hsns=[...new Set((o.lines||[]).map(l=>l.hsn||(ENG.item(l.itemId)||{}).hsn).filter(Boolean))];
+    const bank=co.bank||{};
+    const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
+      return `<tr>${i===0?`<td rowspan="${(o.lines||[]).length}" class="marks">${esc(o.marksPkgs||"")}</td>`:""}`+
+        `<td><b>${esc(it.name||l.itemId)}</b><div class="sub">${it.thicknessMM!=null?"SIZE: "+it.thicknessMM+" mm"+(l.width?" x "+l.width+" mm":""):esc(l.itemId)}${l.batch?" · Batch No. "+esc(l.batch):""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
+        `<td class="r">${ENG.num(l.qty,2)}</td><td class="r">${F2(l.rate)}</td><td class="r">${F2(l.qty*l.rate*(1-(l.discPct||0)/100))}</td></tr>`; }).join("");
+    const exNote=(o.exportNote||"").split("\n").map(s=>s.trim()).filter(Boolean);
+    const words=GST.amountInWordsCcy(total, ccy).toUpperCase();
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Commercial Invoice ${esc(o.invoiceNo||o.id)}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:11.5px/1.5 "Segoe UI",Arial,sans-serif;color:#111;max-width:860px;margin:0 auto;padding:16px 22px}
+  .title{text-align:center;font-size:14px;font-weight:800;letter-spacing:.5px;margin-bottom:4px}
+  .iec{font-weight:800;font-size:11.5px;margin-bottom:2px}
+  table.g{width:100%;border-collapse:collapse}
+  table.g td{border:1.2px solid #222;padding:5px 9px;vertical-align:top;font-size:11px;line-height:1.55}
+  .conm{font-weight:800;font-size:12.5px}
+  .k{font-weight:700}
+  table.items{width:100%;border-collapse:collapse}
+  table.items th{border:1.2px solid #222;padding:5px 8px;font-size:10.5px;line-height:1.3}
+  table.items td{border-left:1.2px solid #222;border-right:1.2px solid #222;padding:4px 8px;font-size:11.5px;vertical-align:top}
+  td.r,th.r{text-align:right} .c{text-align:center}
+  td .sub{font-size:9.8px;color:#444;font-weight:400}
+  td.marks{font-size:11px;width:17%}
+  tr.meta td{font-weight:700;padding-top:8px}
+  tr.tot td{border:1.2px solid #222;font-weight:800;font-size:12.5px;padding:6px 8px}
+  .words{border:1.2px solid #222;border-top:0;padding:6px 10px;font-size:11px}
+  .words b{display:block;font-size:11.5px}
+  .signrow{display:flex;justify-content:flex-end;margin-top:6px}
+  .sig{border:1.2px solid #222;padding:8px 14px 6px;min-width:300px;font-size:11.5px}
+  .sig .ln{margin-top:44px;font-weight:700}
+  .cert{font-size:10.5px;margin-top:8px}
+  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
+  @media print{ body{padding:6mm} .note{display:none} }
+</style></head><body>
+  <div class="title">COMMERCIAL INVOICE</div>
+  <div class="iec">I.E.C Code: ${esc(co.iec||"—")}</div>
+  <table class="g">
+    <tr><td style="width:52%"><span class="conm">${esc(co.name.toUpperCase())}</span><br>${esc(co.address||"")}<br>GSTN/Unique ID: ${esc(co.gstin||"—")}<br>email : ${esc(co.email||"")}</td>
+        <td style="width:48%"><span class="k">Invoice No. &amp; Date</span><br>${esc(o.invoiceNo||o.id)} &nbsp; DT.${fmtD(o.date)}<br>
+          <span class="k">CUSTOMER PO No. &amp; Date</span><br>${esc(o.custPoNo||"—")}${o.custPoDate?" DT."+fmtD(o.custPoDate):""}<br>
+          <span class="k">Other Reference:</span> ${esc(o.otherRef||"")}</td></tr>
+    <tr><td><span class="k">Consignee :</span><br><b>${esc(o.consignee||"TO THE ORDER")}</b><br><br>
+          <span class="k">Notify Party:</span><br><b>${esc(o.notifyParty||p.name||"")}</b></td>
+        <td><span class="k">Bank:</span> ${esc(bank.name||"—")}<br><span class="k">Address:</span> ${esc(bank.address||"—")}<br><br>
+          <span class="k">Swift:</span> ${esc(bank.swift||"—")}<br>
+          <span class="k">Beneficiary a/c no (${esc(ccy)}):</span> ${esc(bank.acNo||"—")}<br>
+          <span class="k">Beneficiary name:</span> ${esc(bank.acName||co.name)}</td></tr>
+  </table>
+  <table class="g" style="border-top:0">
+    <tr><td style="width:20%"><span class="k">Pre-Carriage by</span><br>${esc(o.preCarriage||"")}</td>
+        <td style="width:26%"><span class="k">Place of Receipt by Per-carrier</span><br>${esc(o.placeReceipt||"")}</td>
+        <td style="width:26%"><span class="k">Country of origin of Goods</span><br class=""><span class="c" style="display:block">INDIA</span></td>
+        <td style="width:28%"><span class="k">Country of Final Destination</span><br>${esc(o.countryDest||"")}</td></tr>
+    <tr><td><span class="k">Vessel/Flight No.</span><br>${esc(o.vessel||"")}</td>
+        <td><span class="k">Port of Loading</span><br>${esc(o.portLoading||"")}</td>
+        <td colspan="2" rowspan="2"><span class="k">Terms of Delivery &amp; Payment</span><br>
+          Delivery: ${esc(o.deliveryTerms||"—")}<br>Payment: ${esc(o.payTerms||"—")}</td></tr>
+    <tr><td><span class="k">Port of Discharge</span><br>${esc(o.portDischarge||"")}</td>
+        <td><span class="k">Final Destination</span><br>${esc(o.finalDest||"")}</td></tr>
+  </table>
+  <table class="items">
+    <thead><tr>
+      <th style="width:17%">Marks &amp; Nos/<br>Nos. &amp; Kind of Pkgs.</th><th>Description of Goods</th>
+      <th class="r" style="width:12%">Quantity<br>Kg</th><th class="r" style="width:12%">Rate<br>${esc(ccy)}/Kg</th>
+      <th class="r" style="width:14%">Amount<br>${esc(ccy)}</th>
+    </tr></thead>
+    <tbody>
+      ${rows}
+      <tr class="meta"><td></td><td>${hsns.length?"HSN CODE: "+esc(hsns.join(", ")):""}</td><td></td><td></td><td></td></tr>
+      <tr class="meta"><td></td><td>${o.netWt?"Net Weight : "+esc(o.netWt)+" kgs":""}${o.grossWt?"<br>Gross Weight : "+esc(o.grossWt)+" kgs":""}</td><td></td><td></td><td></td></tr>
+      <tr class="meta"><td style="border-bottom:1.2px solid #222"></td><td style="border-bottom:1.2px solid #222">${exNote.map((n,i)=>`${i===0?"NOTE : ":""}${esc(n)}`).join("<br>")}${o.freight?`<br>FREIGHT : ${esc(ccy)} ${F2(o.freight)}`:""}${o.insurance?`<br>INSURANCE : ${esc(ccy)} ${F2(o.insurance)}`:""}</td><td style="border-bottom:1.2px solid #222"></td><td style="border-bottom:1.2px solid #222"></td><td style="border-bottom:1.2px solid #222"></td></tr>
+      <tr class="tot"><td colspan="4" class="r">Total (${esc(ccy)}):</td><td class="r">${F2(total)}</td></tr>
+    </tbody>
+  </table>
+  <div class="words">Amount Chargeable (In Words) :<b>${esc(words)}</b></div>
+  <div class="signrow"><div class="sig">Signature &amp; Date<br>For <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></div></div>
+  <div class="cert">It is hereby certified that to the best of our Knowledge &amp; belief the above mentioned goods are of India origin.</div>
+  <div class="note">Computer generated commercial invoice · use your browser's "Save as PDF" to download</div>
+  <script>window.onload=function(){window.print();}<\/script>
+</body></html>`;
   }
   const PRINT_IC='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1.5px" aria-hidden="true"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="15" width="12" height="7" rx="1"/></svg>';
   function printBtn(kind,r){ return h("button",{class:"btn sm ghost",title:(kind==="po"?"Print / download PO":"Print / download invoice"),

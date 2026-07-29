@@ -142,7 +142,27 @@
     if (n) parts.push(three(n));
     return parts.join(" ");
   }
-  /** ₹ amount → "Rupees One Lakh Twenty Three Thousand … and Fifty Paise Only" */
+  var CCY_WORDS = {
+    INR: ["Rupees", "Paise"], USD: ["United States Dollar", "Cents"],
+    EUR: ["Euro", "Cents"], GBP: ["Pound Sterling", "Pence"],
+    AED: ["UAE Dirham", "Fils"], SAR: ["Saudi Riyal", "Halalas"],
+  };
+  var CCY_SIGN = { INR: "₹", USD: "$", EUR: "€", GBP: "£", AED: "AED ", SAR: "SAR " };
+  /** Amount → words in the given currency (Indian numbering).
+      USD 18380.29 → "United States Dollar Eighteen Thousand Three Hundred
+      Eighty and Cents Twenty Nine Only" */
+  function amountInWordsCcy(amount, ccy) {
+    ccy = String(ccy || "INR").toUpperCase();
+    var names = CCY_WORDS[ccy] || [ccy, "Cents"];
+    var v = Math.abs(num(amount));
+    var whole = Math.floor(v);
+    var frac = Math.round((v - whole) * 100);
+    if (frac === 100) { whole += 1; frac = 0; }   // 0.999… rounds up a unit
+    var s = names[0] + " " + inWords(whole);
+    if (frac) s += " and " + names[1] + " " + two(frac);
+    return s + " Only";
+  }
+  /** ₹ amount → "Rupees One Lakh Twenty Three Thousand … and Paise Fifty Only" */
   function amountInWords(amount) {
     var v = Math.abs(num(amount));
     var rupees = Math.floor(v);
@@ -151,11 +171,12 @@
     if (paise) s += " and " + two(paise) + " Paise";
     return s + " Only";
   }
+  function ccySign(ccy) { return CCY_SIGN[String(ccy || "INR").toUpperCase()] || (ccy + " "); }
 
   return {
     STATES: STATES, STATE_NAME: STATE_NAME, RATES: RATES,
     validGSTIN: validGSTIN, stateFromGSTIN: stateFromGSTIN, stateName: stateName,
     calcLine: calcLine, calcDoc: calcDoc,
-    amountInWords: amountInWords,
+    amountInWords: amountInWords, amountInWordsCcy: amountInWordsCcy, ccySign: ccySign,
   };
 });

@@ -120,6 +120,7 @@
         F("State",SEL("co_state",states,c.stateCode||"29")),
         F("PAN",`<input class="input" id="co_pan" value="${sv(c.pan)}" style="text-transform:uppercase">`),
         F("CIN",`<input class="input" id="co_cin" value="${sv(c.cin)}" style="text-transform:uppercase">`),
+        F("I.E.C Code (exports)",`<input class="input" id="co_iec" value="${sv(c.iec)}" style="text-transform:uppercase">`),
         F("Registered Address",`<textarea class="input" id="co_addr" rows="2">${sv(c.address)}</textarea>`,"full"),
         F("Phone",`<input class="input" id="co_phone" value="${sv(c.phone)}">`),
         F("Email",`<input class="input" id="co_email" value="${sv(c.email)}">`),
@@ -131,6 +132,8 @@
         F("A/c Number",`<input class="input" id="co_acc" value="${sv(c.bank.acNo)}">`),
         F("IFSC Code",`<input class="input" id="co_ifsc" value="${sv(c.bank.ifsc)}" style="text-transform:uppercase">`),
         F("UPI ID",`<input class="input" id="co_upi" value="${sv(c.bank.upi)}">`),
+        F("SWIFT Code (exports)",`<input class="input" id="co_swift" value="${sv(c.bank.swift)}" style="text-transform:uppercase">`),
+        F("Bank Address",`<input class="input" id="co_baddr" value="${sv(c.bank.address)}">`),
         F("Invoice Terms & Conditions (one per line)",`<textarea class="input" id="co_terms" rows="4">${sv((c.terms||[]).join("\n"))}</textarea>`,"full"),
       ]);
       const mo=UI.modal({title:"✎ "+c.name, sub:"Billing entity — details printed on every invoice", wide:true, body,
@@ -144,10 +147,12 @@
         const gstin=g("co_gstin").toUpperCase();
         if(gstin&&!GST.validGSTIN(gstin)){ toast("That GSTIN doesn't look valid (15 chars)",{type:"warn"}); return; }
         Object.assign(c,{ name:g("co_name"), gstin, pan:g("co_pan").toUpperCase(), cin:g("co_cin").toUpperCase(),
+          iec:g("co_iec").toUpperCase(),
           address:g("co_addr"), stateCode:UI.$("#co_state").value, state:GST.stateName(UI.$("#co_state").value),
           phone:g("co_phone"), email:g("co_email"), website:g("co_web"), tagline:g("co_tag"),
           bank:{ name:g("co_bnk"), branch:g("co_brn"), acName:g("co_acn"), acNo:g("co_acc"),
-            ifsc:g("co_ifsc").toUpperCase(), upi:g("co_upi") },
+            ifsc:g("co_ifsc").toUpperCase(), upi:g("co_upi"),
+            swift:g("co_swift").toUpperCase(), address:g("co_baddr") },
           terms:g("co_terms").split("\n").map(s=>s.trim()).filter(Boolean) });
         try{
           const fresh=await DB.org.update({companies:cs});

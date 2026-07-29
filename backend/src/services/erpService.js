@@ -375,14 +375,16 @@ function ensureCompanies() {
   org.companies = [
     { key: "CCM", name: "Chhaperia Cable Material Pvt. Ltd.", tagline: TAGLINE,
       gstin: "29AAICC5462H1ZE", pan: "AAICC5462H", cin: "U27320KA2008PTC046773",
+      iec: "AAICC5462H",
       address: ADDRESS, stateCode: "29", state: "Karnataka",
       phone: "+91 80 2763 0006", email: "info@micagroup.net", website: "www.micagroup.net",
-      bank: { name: "", acName: "", acNo: "", ifsc: "", branch: "", upi: "" }, terms: [] },
+      bank: { name: "", acName: "", acNo: "", ifsc: "", branch: "", upi: "", swift: "", address: "" }, terms: [] },
     { key: "CIC", name: "Chhaperia International Company", tagline: TAGLINE,
-      gstin: "", pan: "", cin: "",
+      gstin: "29ABIPC4133H1ZV", pan: "ABIPC4133H", cin: "",
+      iec: "",
       address: ADDRESS, stateCode: "29", state: "Karnataka",
       phone: "+91 80 2763 0006", email: "info@micagroup.net", website: "www.micagroup.net",
-      bank: { name: "", acName: "", acNo: "", ifsc: "", branch: "", upi: "" }, terms: [] },
+      bank: { name: "", acName: "", acNo: "", ifsc: "", branch: "", upi: "", swift: "", address: "" }, terms: [] },
   ];
   org.tagline = org.tagline || TAGLINE;
   org.gst = org.companies[0].gstin;      // legacy single-entity fields follow the primary company
@@ -403,6 +405,7 @@ function updateOrg(patch) {
       gstin: String(c.gstin || "").trim().toUpperCase(),
       pan: String(c.pan || "").trim().toUpperCase(),
       cin: String(c.cin || "").trim().toUpperCase(),
+      iec: String(c.iec || "").trim().toUpperCase(),
       address: c.address || "",
       stateCode: String(c.stateCode || "").trim() || (String(c.gstin || "").trim().slice(0, 2) || ""),
       state: c.state || "",
@@ -414,6 +417,8 @@ function updateOrg(patch) {
         ifsc: (c.bank && c.bank.ifsc) || "",
         branch: (c.bank && c.bank.branch) || "",
         upi: (c.bank && c.bank.upi) || "",
+        swift: (c.bank && c.bank.swift) || "",
+        address: (c.bank && c.bank.address) || "",
       },
       terms: Array.isArray(c.terms) ? c.terms.map(String) : [],
     })).filter((c) => c.name);
