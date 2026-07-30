@@ -950,16 +950,19 @@
   const IN=v=>(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtD=d=>{ if(!d) return "—"; const m=String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}.${m[2]}.${m[1]}`:String(d); };
   function printDoc(kind, o){
-    const html = kind==="po" ? poHtml(o)
+    const html = kind==="po" ? domesticHtml(o, true)
                : (o.invoiceType==="export" ? exportHtml(o) : domesticHtml(o));
     const w=window.open("","_blank");
     if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
     w.document.write(html); w.document.close();
   }
 
-  /* ---- Domestic GST tax invoice (styled per the approved jpeg samples) ---- */
-  function domesticHtml(o){
-    const kind="so", isPO=false;
+  /* ---- The styled document sheet, used for BOTH the domestic GST tax invoice
+     and the purchase order: same header band, info grid, item table, totals
+     block, signature and footer strip — only the wording and the fields that
+     belong to each document differ (see the isPO branches below). ---- */
+  function domesticHtml(o, asPO){
+    const kind=asPO?"po":"so", isPO=!!asPO;
     const dc=docCalc(kind,o);
     const {co, party, calc, interState, pos}=dc;
     const p=party||{name:isPO?o.supplierId:o.customerId};
@@ -972,7 +975,7 @@
     const title=isPO?"PURCHASE ORDER":(o.status==="Dispatched"?"TAX INVOICE":"PROFORMA / TAX INVOICE");
     const logo=location.origin+"/assets/logo-invoice.png";
     const bank=co.bank||{};
-    const hasBank=bank.name||bank.acNo||bank.ifsc;
+    const hasBank=!isPO&&(bank.name||bank.acNo||bank.ifsc);
     const terms=(co.terms&&co.terms.length)?co.terms:[
       "Goods once sold will not be taken back or exchanged.",
       "Interest @ 18% p.a. will be charged on delayed payments.",
@@ -1004,8 +1007,10 @@
     ].filter(Boolean).map(([l,v])=>`<tr><td>${l}</td><td class="r">${v}</td></tr>`).join("");
 
     const infoPairs=isPO?[
-      ["PO No.",o.id],["PO Date",o.date||"—"],["Expected Delivery",o.eta||"—"],
-      ["Ref / Quotation",o.refNo||"—"],["Status",o.status||""],["Place of Supply",(co.stateCode||"")+" — "+(GST.stateName(co.stateCode)||"")],
+      ["PO No.",o.id],["PO Date",o.date||"—"],["Valid Upto",o.validUpto||"—"],
+      ["Expected Delivery",o.eta||"—"],["Ref / Quotation",o.refNo||"—"],["Vendor Code",o.vendorCode||"—"],
+      ["Kind Attn.",o.attn||"—"],["Our Contact",o.ctcPerson||"—"],["GST",o.gstMode||"As Applicable"],
+      ["Packing",o.packing||"—"],["Delivery",o.deliveryNote||"—"],["Destination",o.destination||"—"],
     ]:[
       ["Invoice No.",o.invoiceNo||o.id],["Invoice Date",o.date||"—"],["Due Date",o.promised||"—"],
       ["Customer PO No.",o.custPoNo||"—"],["Customer PO Date",o.custPoDate||"—"],
@@ -1032,8 +1037,9 @@
           `${p.gst?`<div>GSTIN : <b>${esc(p.gst)}</b></div>`:""}`);
 
     const totalCols=8+(anyBatch?1:0)+(anyDisc?1:0);
+    // two blank rows after the data — room to add a line by hand, nothing more
     let filler="";
-    for(let i=(o.lines||[]).length;i<8;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(totalCols)}</tr>`;
+    for(let i=0;i<2;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(totalCols)}</tr>`;
     const html=`<!doctype html><html><head><meta charset="utf-8"><title>${title} ${esc(o.invoiceNo||o.id)}</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -1077,6 +1083,7 @@
   .sig{text-align:center;color:#1a1c1e}.sig .ln{border-top:1.5px solid #555;margin-top:50px;padding-top:5px;min-width:210px;font-weight:700}
   .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
+  .greet{font-size:11.5px;margin:-4px 0 9px;color:#444}
   .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
   @media print{ body{padding:0 6mm 6mm} .band{margin:0 -6mm} .rule{margin:0 -6mm 12px} .note{display:none} }
 </style></head><body>
@@ -1090,7 +1097,10 @@
     </div>
   </div>
   <div class="rule"></div>
-  <div class="title-row"><span class="title">${title}</span>${isPO?"":'<span class="copy">Original for Recipient</span>'}</div>
+  <div class="title-row"><span class="title">${title}</span>${isPO
+      ?'<span class="copy">For Supplier</span>'
+      :'<span class="copy">Original for Recipient</span>'}</div>
+  ${isPO?'<div class="greet">Dear Sir / Madam,&nbsp; kindly supply the material as under.</div>':""}
   <div class="info">${infoCells}</div>
   <div class="parties">${leftParty}${rightParty}</div>
   <table class="items"><thead><tr>
@@ -1111,8 +1121,12 @@
         ${bank.upi?`<div>UPI : ${esc(bank.upi)}</div>`:""}</div>`:""}
       <div class="notes"><span class="lbl">${isPO?"NOTES / INSTRUCTIONS":"TERMS & CONDITIONS"}</span>
         ${o.notes?`<div>${esc(o.notes)}</div>`:""}
-        ${isPO?`<div>Please confirm acceptance, quote ${esc(o.id)} on all documents and share the e-invoice / delivery schedule.</div>
-                <div>Payment terms : ${esc(p.terms||"as agreed")}.</div>`
+        ${isPO?`<div>1. Please supply the material as per the specification, quantity and rate stated above.</div>
+                <div>2. Quote our PO No. <b>${esc(o.id)}</b> on the invoice, packing list and test report.</div>
+                <div>3. Material must reach ${esc(o.destination||"our works")} on or before the expected delivery date;
+                     kindly attach the Test / Inspection Report with the consignment.</div>
+                <div>4. Payment terms : ${esc(p.terms||"as agreed")}. GST : ${esc(o.gstMode||"As Applicable")}.</div>
+                <div>5. Any dispute is subject to Bangalore jurisdiction.</div>`
              :terms.map((t,i)=>`<div>${i+1}. ${esc(t)}</div>`).join("")}
       </div>
     </div>
@@ -1131,113 +1145,6 @@
   <script>window.onload=function(){window.print();}<\/script>
 </body></html>`;
     return html;
-  }
-
-  /* ---- Purchase order — the company's own working PO format (per the
-     approved sample PDFs): centred logo + company name, boxed To / No. /
-     Billing-address grid with the GST number, "Please supply as under"
-     greeting, Sub Total → CGST/SGST → highlighted Total, payment/GST/
-     packing/insurance boxes, dispute line, general instructions, footer. ---- */
-  function poHtml(o){
-    const dc=docCalc("po",o);
-    const {co, party, calc, interState}=dc;
-    const p=party||{name:o.supplierId};
-    const logo=location.origin+"/assets/logo-invoice.png";
-    const uoms=[...new Set((o.lines||[]).map(l=>((ENG.item(l.itemId)||{}).uom||"KG").toUpperCase()))];
-    const uom=uoms.length===1?uoms[0]:"";
-    const uniformPct=[...new Set(gstLinesOf(o).map(l=>l.gstPct))];
-    const half=uniformPct.length===1?uniformPct[0]/2:null;
-    const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
-      return `<tr><td class="c">${i+1}</td><td><b>${esc((it.name||l.itemId).toUpperCase())}</b>`+
-        `<div class="sub">${esc(l.itemId)}${(l.hsn||it.hsn)?" · HSN "+esc(l.hsn||it.hsn):""}${it.thicknessMM!=null?" · "+it.thicknessMM+" mm":""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
-        `<td class="r">${ENG.num(l.qty,2)}</td><td class="r">${IN(l.rate)}</td>`+
-        `<td class="r">${IN(l.qty*l.rate*(1-(l.discPct||0)/100))}</td></tr>`; }).join("");
-    const noteLines=(o.notes||"").split("\n").map(s=>s.trim()).filter(Boolean);
-    const noteRows=noteLines.map(n=>`<tr><td></td><td class="nt"><b>${esc(n)}</b></td><td></td><td></td><td></td></tr>`).join("");
-    let filler="";
-    for(let i=(o.lines||[]).length+noteLines.length;i<8;i++) filler+=`<tr class="fill"><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`;
-    const taxRows = interState
-      ? `<tr><td colspan="4" class="r tx">IGST${uniformPct.length===1?" @ "+uniformPct[0]+"%":""}</td><td class="r">${IN(calc.igst)}</td></tr>`
-      : `<tr><td colspan="4" class="r tx">CGST${half!=null?" @ "+half+"%":""}</td><td class="r">${IN(calc.cgst)}</td></tr>`+
-        `<tr><td colspan="4" class="r tx">SGST${half!=null?" @ "+half+"%":""}</td><td class="r">${IN(calc.sgst)}</td></tr>`;
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Purchase Order ${esc(o.id)}</title>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#111;max-width:860px;margin:0 auto;padding:16px 22px}
-  .top{text-align:center;margin-bottom:4px}
-  .top img{max-height:60px;max-width:300px;object-fit:contain}
-  .conm{font-size:16px;font-weight:800;margin-top:2px}
-  .doct{font-size:14px;font-weight:800;letter-spacing:2px;margin-top:2px}
-  .badr{text-align:right;font-size:10.5px;font-weight:700;margin-bottom:2px}
-  table.hd{width:100%;border-collapse:collapse;margin-bottom:8px}
-  table.hd td{border:1.2px solid #222;padding:6px 9px;font-size:11.5px;vertical-align:top;line-height:1.55}
-  .gstno{font-weight:800;margin-top:4px}
-  .greet{font-size:11.5px;margin:6px 0 8px;line-height:1.7}
-  table.items{width:100%;border-collapse:collapse;margin-bottom:8px}
-  table.items th{border:1.2px solid #222;padding:5px 8px;font-size:11px;line-height:1.3}
-  table.items td{border:1px solid #444;padding:5px 8px;font-size:11.5px;vertical-align:top}
-  td.r,th.r{text-align:right} td.c,th.c{text-align:center}
-  td .sub{font-size:9.5px;color:#555;font-weight:400}
-  td.nt b{color:#b00} tr.fill td{height:18px}
-  td.tx{font-weight:600}
-  tr.tot td{background:#ffe97a;font-weight:800;font-size:12.5px}
-  table.bx{width:100%;border-collapse:collapse;margin-bottom:8px}
-  table.bx td{border:1.2px solid #222;padding:6px 9px;font-size:11.5px;vertical-align:top;line-height:1.6}
-  table.bx .k{font-weight:800;text-transform:uppercase;font-size:10.5px}
-  .sig{text-align:center}
-  .sig .ln{margin-top:38px;font-weight:700}
-  .disp{text-align:center;font-size:11.5px;text-decoration:underline;margin:10px 0}
-  .gi{font-size:10.8px;line-height:1.7;margin-bottom:10px}
-  .gi u{font-weight:600}
-  .foot{border-top:1.5px solid #222;text-align:center;font-size:10.8px;line-height:1.6;padding-top:6px}
-  .foot b{font-size:12px;letter-spacing:.5px}
-  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
-  @media print{ body{padding:6mm} .note{display:none} }
-</style></head><body>
-  <div class="top"><img src="${logo}" alt="Chhaperia"><div class="conm">${esc(co.name)}</div><div class="doct">PURCHASE ORDER</div></div>
-  <div class="badr">Billing address :</div>
-  <table class="hd"><tr>
-    <td style="width:37%"><b>To</b><br><b><u>${esc((p.name||"").toUpperCase())}</u></b><br>${esc(p.address||[p.city,p.country].filter(Boolean).join(", "))}
-      ${p.phone?`<br>Ph: ${esc(p.phone)}`:""}${p.email?`<br>E-mail: ${esc(p.email)}`:""}${p.gst?`<br>GST: ${esc(p.gst)}`:""}</td>
-    <td style="width:22%">No. <b>${esc(o.id)}</b><br>Date : ${fmtD(o.date)}<br>Valid upto: ${o.validUpto?fmtD(o.validUpto):""}<br>Quotation ref: ${esc(o.refNo||"")}<br>Delivery by: ${fmtD(o.eta)}</td>
-    <td style="width:41%"><b>${esc(co.name.toUpperCase())}</b><br>${esc(co.address||"")}
-      ${o.ctcPerson?`<br>CTC Person : ${esc(o.ctcPerson)}`:""}<br>Mobile no : ${esc(co.phone||"")}<br>E mail : ${esc(co.email||"")}
-      <div class="gstno">GST No : ${esc(co.gstin||"—")}</div></td>
-  </tr></table>
-  <div class="greet"><b>VENDOR CODE:</b> ${esc(o.vendorCode||"")}<br>
-    ${o.attn?`Gentleman: ${esc(o.attn)}<br>`:""}Please supply as under, with the particulars given :</div>
-  <table class="items"><thead><tr>
-    <th class="c" style="width:7%">Sl No.</th><th>Description</th>
-    <th class="r" style="width:12%">Quantity${uom?`<br><span style="font-weight:400">${esc(uom)}</span>`:""}</th>
-    <th class="r" style="width:13%">Unit Price<br><span style="font-weight:400">${uom?"Rs / "+esc(uom):"Rs."}</span></th>
-    <th class="r" style="width:15%">Amount<br><span style="font-weight:400">Rs.</span></th>
-  </tr></thead><tbody>
-    ${rows}${noteRows}${filler}
-    <tr><td colspan="4" class="r tx">Sub Total</td><td class="r">${IN(calc.taxable)}</td></tr>
-    ${taxRows}
-    ${calc.freight?`<tr><td colspan="4" class="r tx">Freight</td><td class="r">${IN(calc.freight)}</td></tr>`:""}
-    <tr class="tot"><td colspan="4" class="r">Total</td><td class="r">${IN(calc.grandTotal)}</td></tr>
-  </tbody></table>
-  <table class="bx"><tr>
-    <td style="width:28%"><span class="k">Payment Terms</span><br>${esc(o.payTermsPo||p.terms||"as agreed")}</td>
-    <td style="width:18%"><span class="k">GST</span><br>${esc(o.gstMode||"As Applicable")}</td>
-    <td style="width:18%"><span class="k">Packing</span><br>${esc(o.packing||"-")}</td>
-    <td style="width:36%" rowspan="2" class="sig">for <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></td>
-  </tr><tr>
-    <td><span class="k">Delivery date:</span> ${esc(o.deliveryNote||"")}</td>
-    <td><span class="k">Destination</span><br>${esc(o.destination||"to our works")}</td>
-    <td><span class="k">Insurance</span><br>${o.insurance?IN(o.insurance):"-"}</td>
-  </tr></table>
-  <div class="disp">Any Dispute Subject to Bangalore Jurisdiction</div>
-  <div class="gi"><u>General instruction :</u><br>
-    1. Shipment documents should be sent by email / post / courier<br>
-    2. All goods supplied against this order will be subjected to inspection and verification<br>
-    3. Inspection / Test certificates are to be supplied along with the supplies</div>
-  <div class="foot"><b>${esc(co.name.toUpperCase())}</b><br>${esc(co.address||"")}<br>
-    PH: ${esc(co.phone||"")} &nbsp; E-mail: ${esc(co.email||"")} &nbsp; Web: ${esc(co.website||"")}</div>
-  <div class="note">Computer generated purchase order · use your browser's "Save as PDF" to download</div>
-  <script>window.onload=function(){window.print();}<\/script>
-</body></html>`;
   }
 
   /* ---- Export commercial invoice (per the approved sample PDF): IEC code,
