@@ -90,56 +90,178 @@
     ]));
 
     /* ============ PRIORITY 3 — the working surface: the board ============ */
-    root.appendChild(h("div", { class: "card-head", style: "margin:2px 0 12px" }, [h("div", {}, [
-      h("h3", { text: "Pipeline board" }),
-      h("div", { class: "sub", text: "Click a stage header for its breakdown, or a card to open the lead" }),
+    root.appendChild(h("div", { class: "card-head", style: "margin:2px 0 10px" }, [h("div", {}, [
+      h("h3", { text: "Pipeline Board" }),
+      h("div", { class: "sub", text: "Swipe or navigate through stages" }),
     ])]));
 
-    /* ---- pipeline board (Pipedrive-style columns) ---- */
-    const maxColVal = Math.max(1, ...pipeline.map((c) => c.value || 0));
-    const board = h("div", { class: "crm-board" });
-    pipeline.forEach((col) => {
+    /* ---- pipeline board as a CARD CAROUSEL -------------------------------
+       One stage per slide; the middle one is brought forward and its
+       neighbours sit back, so the eye lands on the stage being worked.
+       The track is a real scroller with scroll-snap, which buys native
+       swipe on a touch screen and two-finger scroll on a trackpad for
+       free — the arrows, the dots and the arrow keys all just scroll it.
+       Everything the columns could do still works: the stage header opens
+       its breakdown, a card opens the lead. */
+    const car = h("div", { class: "crm-car" });
+    const rail = h("div", { class: "crm-car-rail" });
+    const view = h("div", { class: "crm-car-view" }, [rail]);
+    const prev = h("button", { class: "crm-car-nav prev", type: "button",
+      "aria-label": "Previous stage", html: "&lsaquo;" });
+    const next = h("button", { class: "crm-car-nav next", type: "button",
+      "aria-label": "Next stage", html: "&rsaquo;" });
+    const dots = h("div", { class: "crm-car-dots", role: "tablist", "aria-label": "Pipeline stages" });
+
+    // leading/trailing spacers centre the first and last slide in the view
+    const padA = h("div", { class: "crm-car-pad" });
+    const padB = h("div", { class: "crm-car-pad" });
+    rail.appendChild(padA);
+
+    const slides = pipeline.map((col, i) => {
       const meta = STAGE_META[col.stage] || { color: "var(--c1)", ic: "•" };
-      const share = Math.round(((col.value || 0) / maxColVal) * 100);
-      const column = h("div", { class: "crm-col", id: "crmcol-" + col.stage, style: "--sc:" + meta.color }, [
-        h("div", { class: "crm-col-head crm-click", title: "Open the " + col.stage + " breakdown",
+      const slide = h("article", { class: "crm-car-slide", style: "--sc:" + meta.color,
+        id: "crmcol-" + col.stage, "data-i": i, "aria-roledescription": "slide",
+        "aria-label": col.stage + ", " + col.count + " leads" }, [
+        h("header", { class: "crm-car-head crm-click", title: "Open the " + col.stage + " breakdown",
           onclick: () => stageDrill(col) }, [
-          h("div", { class: "crm-col-title" }, [
-            h("span", { text: meta.ic }),
-            h("span", { text: col.stage }),
-            h("span", { class: "crm-col-count", text: col.count }),
-          ]),
-          h("div", { class: "crm-col-val", text: money(col.value) }),
-          h("div", { class: "crm-col-share" }, [h("span", { style: "width:" + share + "%" })]),
+          h("span", { class: "crm-car-ic", text: meta.ic }),
+          h("span", { class: "crm-car-stage", text: col.stage }),
+          h("span", { class: "crm-car-n", text: "(" + col.count + (col.count === 1 ? " Lead)" : " Leads)") }),
         ]),
-        h("div", { class: "crm-col-body" },
+        h("div", { class: "crm-car-val", text: money(col.value) }),
+        h("div", { class: "crm-car-body" },
           col.items.length
             ? col.items.map((l) => leadCard(l, meta))
             : [h("div", { class: "crm-empty", text: "No leads here yet" })]
         ),
       ]);
-      board.appendChild(column);
+      rail.appendChild(slide);
+      const dot = h("button", { class: "crm-car-dot", type: "button", role: "tab",
+        title: col.stage + " · " + col.count + " lead" + (col.count === 1 ? "" : "s"),
+        "aria-label": col.stage, onclick: () => goTo(i) });
+      dots.appendChild(dot);
+      return { slide, dot, col };
     });
-    root.appendChild(board);
+    rail.appendChild(padB);
+
+    car.appendChild(prev); car.appendChild(view); car.appendChild(next);
+    root.appendChild(car);
+    root.appendChild(dots);
     if (params && params.openNew) { params.openNew = false; leadForm(); }
+
+    /* --- which slide is centred, and how the carousel is driven --- */
+    // start on the first stage that actually holds leads — the one being worked
+    let active = Math.max(0, slides.findIndex((s) => s.col.count > 0));
+    let raf = 0;
+
+    function slideStep() {
+      if (slides.length < 2) return 0;
+      return slides[1].slide.offsetLeft - slides[0].slide.offsetLeft;   // width + gap
+    }
+    function centreOf(i) {
+      const s = slides[i] && slides[i].slide;
+      if (!s) return 0;
+      return s.offsetLeft - (view.clientWidth - s.offsetWidth) / 2;
+    }
+    // someone who has asked for less motion gets the jump, not the glide
+    const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    function goTo(i, smooth) {
+      i = Math.max(0, Math.min(slides.length - 1, i));
+      view.scrollTo({ left: centreOf(i), behavior: (smooth === false || calm) ? "auto" : "smooth" });
+      mark(i);
+    }
+    /* the slide nearest the middle of the view wins — driven by the scroll
+       position itself, so a swipe lights up the right dot exactly like the
+       arrows do */
+    function nearest() {
+      const mid = view.scrollLeft + view.clientWidth / 2;
+      let best = 0, bestD = Infinity;
+      slides.forEach((s, i) => {
+        const c = s.slide.offsetLeft + s.slide.offsetWidth / 2;
+        const d = Math.abs(c - mid);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      return best;
+    }
+    function mark(i) {
+      active = i;
+      slides.forEach((s, k) => {
+        const near = Math.abs(k - i) === 1;
+        s.slide.classList.toggle("is-active", k === i);
+        s.slide.classList.toggle("is-near", near);
+        s.slide.setAttribute("aria-hidden", k === i ? "false" : "true");
+        s.dot.classList.toggle("on", k === i);
+        s.dot.setAttribute("aria-selected", k === i ? "true" : "false");
+      });
+      prev.disabled = i === 0;
+      next.disabled = i === slides.length - 1;
+    }
+    view.addEventListener("scroll", () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; const i = nearest(); if (i !== active) mark(i); });
+    }, { passive: true });
+    prev.onclick = () => goTo(active - 1);
+    next.onclick = () => goTo(active + 1);
+    // arrow keys move the carousel while it has focus
+    view.tabIndex = 0;
+    view.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight") { e.preventDefault(); goTo(active + 1); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); goTo(active - 1); }
+      else if (e.key === "Home") { e.preventDefault(); goTo(0); }
+      else if (e.key === "End") { e.preventDefault(); goTo(slides.length - 1); }
+    });
+    // a horizontal wheel/trackpad gesture scrolls the rail natively; keep the
+    // page from also scrolling sideways when the rail has nowhere left to go
+    view.addEventListener("wheel", (e) => {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) e.stopPropagation();
+    }, { passive: true });
+
+    /* the spacers depend on the view width, so they are set after layout and
+       kept right when the window resizes */
+    function fit() {
+      const gutter = Math.max(0, (view.clientWidth - (slides[0] ? slides[0].slide.offsetWidth : 0)) / 2);
+      padA.style.flexBasis = gutter + "px";
+      padB.style.flexBasis = gutter + "px";
+      // only a stage that actually overflows gets the bottom fade
+      slides.forEach((s) => {
+        const b = s.slide.querySelector(".crm-car-body");
+        if (b) b.classList.toggle("is-scrollable", b.scrollHeight > b.clientHeight + 2);
+      });
+      goTo(active, false);
+    }
+    /* Do this synchronously: the slides are already in the document, and a
+       rAF that never runs (a background tab, a throttled frame) would leave
+       the board with no stage brought forward at all. The extra pass after
+       the next frame just re-centres once fonts and scrollbars have settled. */
+    mark(active);
+    fit();
+    requestAnimationFrame(fit);
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => fit());
+      ro.observe(view);
+      // stop watching once this render is replaced
+      const stop = new MutationObserver(() => { if (!document.body.contains(view)) { ro.disconnect(); stop.disconnect(); } });
+      stop.observe(document.body, { childList: true, subtree: true });
+    }
+    void slideStep;   // kept for readability of the step maths above
 
     /* a single lead card: initial avatar (stage-tinted), value, product, follow-up */
     function leadCard(l, meta) {
       const overdue = l.nextFollowUp && l.nextFollowUp < todayISO() && l.stage !== "Won" && l.stage !== "Lost";
       const initial = (String(l.company || "?").trim().charAt(0) || "?").toUpperCase();
-      return h("div", { class: "crm-card", style: "--sc:" + meta.color, onclick: () => leadDetail(l.id) }, [
-        h("div", { class: "crm-card-top" }, [
-          h("div", { class: "crm-ava", text: initial }),
-          h("div", { class: "crm-card-co", text: trim(l.company, 24) }),
-          h("div", { class: "crm-card-val", text: money(l.value) }),
+      return h("div", { class: "crm-lead", style: "--sc:" + meta.color, onclick: () => leadDetail(l.id) }, [
+        h("div", { class: "crm-lead-top" }, [
+          h("div", { class: "crm-lead-ava", text: initial }),
+          h("div", { class: "crm-lead-id" }, [
+            h("div", { class: "crm-lead-co", text: trim(l.company, 26) }),
+            h("div", { class: "crm-lead-val", text: money(l.value) }),
+          ]),
         ]),
-        h("div", { class: "crm-card-sub" }, [
-          h("span", { class: "crm-pill", text: trim((l.productName || l.product || "—"), 28) }),
-        ]),
-        h("div", { class: "crm-card-foot" }, [
-          h("span", { class: "muted", text: trim(l.contact || "—", 16) }),
+        h("div", { class: "crm-lead-prod", text: trim((l.productName || l.product || "—"), 34) }),
+        h("div", { class: "crm-lead-foot" }, [
+          h("span", { class: "crm-lead-who", text: trim(l.contact || "—", 18) }),
           l.nextFollowUp
-            ? h("span", { class: "crm-card-due", style: overdue ? "color:var(--danger)" : "color:var(--text-mut)",
+            ? h("span", { class: "crm-lead-due" + (overdue ? " late" : ""),
                 html: (overdue ? "⏰ " : "📅 ") + l.nextFollowUp.slice(5) })
             : h("span", { class: "muted", text: l.stage === "Won" ? "✓ closed" : l.stage === "Lost" ? "lost" : "" }),
         ]),

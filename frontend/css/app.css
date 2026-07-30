@@ -570,8 +570,6 @@ canvas{display:block;width:100%}
   .tbl tbody td{padding:10px 12px}
 
   .barlist .row{grid-template-columns:minmax(92px,1fr) 1.4fr auto;gap:8px}
-  .crm-board{grid-auto-columns:minmax(260px,86vw)}
-  .crm-col-body{max-height:none}
   .crm-hero{grid-template-columns:1fr;gap:14px}
   .crm-gauge{order:-1}
   .crm-funnel{overflow-x:auto;padding-bottom:4px}
@@ -872,49 +870,108 @@ canvas{display:block;width:100%}
 .crm-drill-sub{font-size:11px;color:var(--text-mut);margin-top:2px;font-weight:600}
 .crm-none{color:var(--text-mut);font-size:12px;text-align:center;padding:26px 0;opacity:.75}
 
-/* ---- kanban board ---- */
-/* all five stages share the card width — no horizontal scroll on desktop
-   (≤820px switches to the swipeable 260px carousel further up) */
-.crm-board{display:grid;grid-auto-flow:column;gap:12px;
-  overflow-x:auto;padding-bottom:10px;align-items:start}
-/* Desktop: the five stages share the card width, no horizontal scroll.
-   Phones/tablets keep the swipeable 260px carousel set further up — hence the
-   min-width guard, without which this rule (being later in the file) would win
-   there too and squeeze the columns to a few pixels. */
-/* Five stages only fit side by side once the page is wide enough (~1000px);
-   below that the board becomes a swipeable carousel instead of squeezing the
-   lead cards until their text clips. */
-@media(min-width:1001px){ .crm-board{grid-auto-columns:minmax(0,1fr)} }
-@media(max-width:1000px){ .crm-board{grid-auto-columns:minmax(260px,86vw)} }
-.crm-col{--sc:var(--accent);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);
-  display:flex;flex-direction:column;min-height:130px;box-shadow:var(--inset-top)}
-.crm-col-head{padding:13px 14px 12px;border-bottom:1px solid var(--line);border-radius:var(--radius) var(--radius) 0 0;position:relative;overflow:hidden}
-.crm-col-head::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--sc)}
-.crm-col-title{font-weight:800;font-size:13.5px;display:flex;align-items:center;gap:7px}
-.crm-col-count{margin-left:auto;font-size:11px;font-weight:800;background:color-mix(in srgb,var(--sc) 15%,var(--panel));
-  color:var(--sc);padding:1px 9px;border-radius:20px}
-.crm-col-val{font-size:12px;color:var(--text-mut);font-weight:700;margin-top:6px;font-family:var(--mono)}
-.crm-col-share{height:3px;border-radius:3px;background:var(--line);margin-top:8px;overflow:hidden}
-.crm-col-share>span{display:block;height:100%;background:var(--sc);border-radius:3px}
-.crm-col-body{padding:10px;display:flex;flex-direction:column;gap:9px;overflow-y:auto;max-height:60vh}
+/* ---- pipeline board: a card carousel ----------------------------------
+   One stage per slide. The centred slide is brought forward and its
+   neighbours sit back, so the eye lands on the stage being worked instead
+   of five equal columns competing. The rail is a real scroller with
+   scroll-snap, so a touch swipe and a trackpad gesture work natively; the
+   arrows, dots and arrow keys just scroll it to the next snap point. */
+.crm-car{display:flex;align-items:center;gap:6px}
+/* position:relative makes the view the slides' offsetParent, so their
+   offsetLeft is measured against the scroller itself — that is what the
+   centring maths uses, and offsetLeft (unlike a client rect) ignores the
+   scale transform on the inactive slides */
+.crm-car-view{position:relative;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;
+  scroll-snap-type:x mandatory;scrollbar-width:none;padding:16px 0 12px;outline:none}
+.crm-car-view::-webkit-scrollbar{display:none}
+.crm-car-view:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:var(--radius)}
+.crm-car-rail{display:flex;align-items:stretch;gap:14px;width:max-content}
+.crm-car-pad{flex:0 0 0;pointer-events:none}
+
+.crm-car-slide{--sc:var(--accent);flex:0 0 clamp(230px,25vw,290px);scroll-snap-align:center;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);
+  display:flex;flex-direction:column;padding:12px 12px 10px;
+  transform:scale(.9);opacity:.5;transform-origin:center;
+  transition:transform .38s cubic-bezier(.22,.61,.36,1),opacity .38s ease,
+    box-shadow .38s ease,border-color .38s ease,background .38s ease}
+.crm-car-slide.is-near{transform:scale(.94);opacity:.72}
+.crm-car-slide.is-active{transform:scale(1);opacity:1;background:var(--panel);
+  border-color:color-mix(in srgb,var(--sc) 40%,var(--line));box-shadow:var(--shadow-2)}
+/* the active stage is the only one that gets its accent underline */
+.crm-car-head{display:flex;align-items:baseline;justify-content:center;gap:6px;
+  padding:4px 6px 8px;border-radius:var(--radius-sm);position:relative;text-align:center;flex-wrap:wrap}
+.crm-car-head::after{content:"";position:absolute;left:50%;right:50%;bottom:2px;height:2px;border-radius:2px;
+  background:var(--sc);opacity:0;transition:left .38s ease,right .38s ease,opacity .38s ease}
+.crm-car-slide.is-active .crm-car-head::after{left:22%;right:22%;opacity:.9}
+.crm-car-ic{font-size:12px;line-height:1}
+.crm-car-stage{font-weight:800;font-size:14.5px;color:var(--sc);letter-spacing:.2px}
+.crm-car-n{font-size:11.5px;font-weight:700;color:var(--text-mut)}
+.crm-car-val{text-align:center;font-size:11.5px;font-weight:800;font-family:var(--mono);
+  color:var(--text-mut);margin:-2px 0 9px}
+/* a stage with more leads than fit scrolls; the last card fades out rather
+   than being sliced off, which also says "there is more below" */
+.crm-car-body{display:flex;flex-direction:column;gap:9px;overflow-y:auto;max-height:46vh;
+  padding:1px;scrollbar-width:thin;
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 26px),transparent);
+  mask-image:linear-gradient(#000 calc(100% - 26px),transparent)}
+/* nothing to scroll → no fade */
+.crm-car-body:not(.is-scrollable){-webkit-mask-image:none;mask-image:none}
 .crm-empty{color:var(--text-mut);font-size:12px;text-align:center;padding:22px 0;opacity:.7}
 
-/* ---- lead card ---- */
-.crm-card{--sc:var(--accent);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-sm);
+/* round prev/next, sitting outside the rail like the reference */
+.crm-car-nav{flex:0 0 auto;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+  background:var(--panel);border:1px solid var(--line);color:var(--text-dim);
+  font-size:20px;line-height:1;padding-bottom:3px;cursor:pointer;transition:var(--tr);box-shadow:var(--shadow-1)}
+.crm-car-nav:hover:not(:disabled){background:var(--panel-3);color:var(--accent);
+  border-color:var(--accent-line);transform:scale(1.08);box-shadow:var(--shadow-2)}
+.crm-car-nav:active:not(:disabled){transform:scale(.96)}
+.crm-car-nav:disabled{opacity:.3;cursor:default}
+
+/* dot strip under the rail */
+.crm-car-dots{display:flex;justify-content:center;align-items:center;gap:7px;
+  margin:2px auto 4px;padding:6px 14px;width:max-content;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:20px}
+.crm-car-dot{width:7px;height:7px;border-radius:50%;border:none;padding:0;cursor:pointer;
+  background:var(--line-strong);transition:width .3s ease,background .3s ease}
+.crm-car-dot:hover{background:var(--text-mut)}
+.crm-car-dot.on{width:20px;border-radius:20px;background:var(--accent)}
+
+@media(max-width:640px){
+  .crm-car-slide{flex-basis:min(78vw,290px)}
+  .crm-car-body{max-height:52vh}
+  .crm-car-nav{width:30px;height:30px;font-size:18px}
+}
+@media(prefers-reduced-motion:reduce){
+  .crm-car-slide,.crm-car-head::after,.crm-car-dot,.crm-car-nav{transition:none}
+  .crm-car-view{scroll-behavior:auto}
+}
+
+/* ---- lead card (inside a carousel slide) ---- */
+.crm-lead{--sc:var(--accent);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-sm);
   padding:11px 12px 10px;cursor:pointer;transition:var(--tr);box-shadow:var(--shadow-1)}
-.crm-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-2);border-color:color-mix(in srgb,var(--sc) 42%,var(--line))}
-.crm-card-top{display:flex;align-items:center;gap:9px}
+.crm-car-slide.is-active .crm-lead{background:var(--panel-2)}
+.crm-lead:hover{transform:translateY(-2px);box-shadow:var(--shadow-2);
+  border-color:color-mix(in srgb,var(--sc) 42%,var(--line))}
+.crm-lead-top{display:flex;align-items:center;gap:10px}
+/* round, ringed initial — the reference's signature mark */
+.crm-lead-ava{flex:0 0 auto;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+  font-weight:800;font-size:14px;background:color-mix(in srgb,var(--sc) 14%,var(--panel));
+  color:var(--sc);box-shadow:0 0 0 2px color-mix(in srgb,var(--sc) 45%,transparent)}
+.crm-lead-id{flex:1;min-width:0}
+.crm-lead-co{font-weight:750;font-size:13.5px;line-height:1.25;overflow-wrap:anywhere}
+.crm-lead-val{font-size:12.5px;font-weight:800;font-family:var(--mono);margin-top:2px}
+.crm-lead-prod{margin-top:9px;font-size:11px;font-weight:600;color:var(--text-dim);
+  background:var(--panel-3);border-radius:8px;padding:6px 9px;line-height:1.35;overflow-wrap:anywhere}
+.crm-lead-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  font-size:11px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line)}
+.crm-lead-who{color:var(--text-mut);font-weight:600;min-width:0;overflow-wrap:anywhere}
+.crm-lead-due{font-weight:800;font-family:var(--mono);white-space:nowrap;color:var(--text-mut)}
+.crm-lead-due.late{color:var(--danger)}
+
+/* the drill-down popups still use these two */
 .crm-ava{flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-weight:800;font-size:13px;
   background:color-mix(in srgb,var(--sc) 16%,var(--panel));color:var(--sc)}
-/* five stage columns share the card, so card text WRAPS rather than truncating */
-.crm-card-co{font-weight:750;font-size:13px;line-height:1.2;flex:1;min-width:0;overflow-wrap:anywhere}
 .crm-card-val{font-size:12px;font-weight:800;font-family:var(--mono);white-space:nowrap}
-.crm-card-sub{margin-top:9px}
-.crm-card-sub .crm-pill{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:11px;
-  background:var(--panel-3);color:var(--text-dim);display:inline-block;max-width:100%;
-  white-space:normal;overflow-wrap:anywhere;line-height:1.35}
-.crm-card-foot{display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line)}
-.crm-card-due{font-weight:700;font-family:var(--mono);white-space:nowrap}
 
 /* ============================================================
    LOGIN GATE

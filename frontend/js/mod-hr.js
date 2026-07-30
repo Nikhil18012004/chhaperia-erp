@@ -74,7 +74,7 @@
     if (curTab === "attendance") return [MW.excelMenu("hrattendance")];
     if (curTab === "leave") return [h("button", { class: "btn primary", onclick: () => leaveForm(), html: "＋ Apply Leave" })];
     if (curTab === "payroll") return [
-      h("button", { class: "btn", title: "Print every payslip of this run — two to an A4 sheet",
+      h("button", { class: "btn", title: "Print every payslip of this run — one per A4 sheet",
         onclick: () => printPayslips(payrollCtx.slips || [], payrollCtx.run),
         html: "🖨 Print All Payslips" }),
       h("button", { class: "btn primary", onclick: () => runPayrollFlow(), html: "▶ Run Payroll" })];
@@ -484,78 +484,161 @@
      PAYSLIP — printed sheet
      Same masthead as the tax invoice (logo, company block, GSTIN strip), the
      worker's name in bold, and the money in proper tables instead of a boxed
-     list. Each payslip is exactly HALF an A4, so two print per sheet and a
-     whole finalised run comes out in one go.
+     list. The sheet follows the standard Indian salary-slip layout and takes
+     a full A4 each; a whole finalised run still prints in one go.
      ============================================================ */
   function payCompany() {
     const cos = ((ENG.data.org || {}).companies) || [];
     return cos[0] || { name: (ENG.data.org || {}).name || "Chhaperia", address: "", gstin: "" };
   }
   const IN2 = (n) => (+n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const RS = (n) => "₹" + IN2(n);
+  /* days read as "26" or "25.5" — a whole number never carries a ".0" */
+  const days = (n) => (Math.abs((+n || 0) % 1) < 0.05 ? String(Math.round(+n || 0)) : num(n, 1));
+  const MONTHS = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  /* "2026-05" -> "May 2026" */
+  function periodLabel(p) {
+    const m = /^(\d{4})-(\d{2})$/.exec(String(p || ""));
+    return m ? MONTHS[+m[2] - 1] + " " + m[1] : String(p || "—");
+  }
+  /* "2026-05-29" -> "29/05/2026" */
+  function dmy(d) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ""));
+    return m ? m[3] + "/" + m[2] + "/" + m[1] : "—";
+  }
+  /* The Indian financial year a period belongs to: April → March. */
+  function fyStart(period) {
+    const m = /^(\d{4})-(\d{2})$/.exec(String(period || ""));
+    if (!m) return "0000-00";
+    return (+m[2] >= 4 ? +m[1] : +m[1] - 1) + "-04";
+  }
+  /* Year-to-date: the same component summed across this worker's payslips
+     from the start of the financial year up to and including this period.
+     One pay run per period, so nothing is counted twice. */
+  function ytdFor(s, run) {
+    const from = fyStart(run.period), to = run.period;
+    const periodOf = {};
+    payruns().forEach((r) => { periodOf[r.id] = r.period; });
+    const mine = payslips().filter((p) => {
+      if (p.workerId !== s.workerId) return false;
+      const per = periodOf[p.payrunId];
+      return per && per >= from && per <= to;
+    });
+    // the slip being printed may be fresher than the copy in state
+    const rows = mine.some((p) => p.id === s.id) ? mine.map((p) => (p.id === s.id ? s : p)) : mine.concat([s]);
+    const sum = (f) => rows.reduce((n, p) => n + (+f(p) || 0), 0);
+    return {
+      basic: sum((p) => p.basicEarned), ot: sum((p) => p.otPay), allow: sum((p) => p.allowances),
+      gross: sum((p) => p.gross), net: sum((p) => p.net),
+      pf: sum((p) => (p.deductions || {}).pf), esi: sum((p) => (p.deductions || {}).esi),
+      pt: sum((p) => (p.deductions || {}).pt), adv: sum((p) => p.advances),
+    };
+  }
 
   function payslipSheet(s, run) {
     const d = s.deductions || {}, emp = s.employer || {};
     const co = payCompany();
+    const w = wById(s.workerId) || {};
+    const y = ytdFor(s, run);
     const dedTotal = (d.pf || 0) + (d.esi || 0) + (d.pt || 0) + (s.advances || 0);
+    // LOP = days not paid for: absences and any unpaid leave
+    const lop = (s.absent || 0) + (s.unpaidLeave || 0);
+
+    /* [label, this month, year to date, optional note] */
     const earn = [
-      ["Basic earned", s.basicEarned, num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
-      s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
-      s.allowances ? ["Allowances", s.allowances, ""] : null,
+      ["Basic", s.basicEarned, y.basic, days(s.payableDays) + " days × " + money(s.dailyRate)],
+      s.otPay ? ["Overtime", s.otPay, y.ot, days(s.otHours) + " h × " + money(s.hourly || 0)] : null,
+      s.allowances ? ["Allowances", s.allowances, y.allow, ""] : null,
     ].filter(Boolean);
     const ded = [
-      d.pf ? ["Provident Fund (PF)", d.pf, ""] : null,
-      d.esi ? ["ESI", d.esi, ""] : null,
-      d.pt ? ["Professional Tax", d.pt, ""] : null,
+      d.pf ? ["EPF Contribution", d.pf, y.pf, ""] : null,
+      d.esi ? ["ESI Contribution", d.esi, y.esi, ""] : null,
+      d.pt ? ["Professional Tax", d.pt, y.pt, ""] : null,
       // an advance shows what it is recovering against, so the worker can see
       // the balance come down month by month
-      s.advances ? ["Advance recovery", s.advances, advNote(s)] : null,
+      s.advances ? ["Advance Recovery", s.advances, y.adv, advNote(s)] : null,
     ].filter(Boolean);
-    const rowsOf = (list) => (list.length ? list : [["—", 0, ""]])
-      .map(([l, v, note]) => `<tr><td>${esc(l)}${note ? `<div class="n">${esc(note)}</div>` : ""}</td>` +
-        `<td class="r">${IN2(v)}</td></tr>`).join("");
-    // keep both columns the same height so the two tables line up
+    const rowsOf = (list) => (list.length ? list : [["—", 0, 0, ""]])
+      .map(([l, v, ytd, note]) => `<tr><td class="lbl">${esc(l)}${note ? `<div class="n">${esc(note)}</div>` : ""}</td>` +
+        `<td class="amt">${RS(v)}</td><td class="ytd">${RS(ytd)}</td></tr>`).join("");
+    // both halves share a row grid so their Gross / Total lines sit level
     const padTo = Math.max(earn.length, ded.length);
-    const pad = (list) => "<tr><td>&nbsp;</td><td></td></tr>".repeat(Math.max(0, padTo - (list.length || 1)));
+    const pad = (list) => `<tr class="pad"><td colspan="3">&nbsp;</td></tr>`.repeat(Math.max(0, padTo - (list.length || 1)));
 
     return `<section class="slip">
-      <div class="band">
-        <div class="logo"><img src="${location.origin}/assets/logo-invoice.png" alt="${esc(co.name)}"></div>
-        <div class="co">
-          <div class="conm">${esc(co.name)}</div>
-          <div>${esc(co.address || "")}</div>
-          <div class="ids"><span>GSTIN</span> ${esc(co.gstin || "—")}${co.pan ? `&nbsp; <span>PAN</span> ${esc(co.pan)}` : ""}</div>
+      <header class="ps-top">
+        <div class="ps-org">
+          <img class="ps-logo" src="${location.origin}/assets/logo-invoice.png" alt="${esc(co.name)}">
+          <div>
+            <div class="ps-conm">${esc(co.name)}</div>
+            <div class="ps-coad">${esc(co.address || "")}</div>
+          </div>
         </div>
+        <div class="ps-for">
+          <div class="ps-for-l">Payslip For the Month</div>
+          <div class="ps-for-m">${esc(periodLabel(run.period))}</div>
+        </div>
+      </header>
+
+      <div class="ps-sum">
+        <div class="ps-sum-l">
+          <div class="ps-sec">EMPLOYEE SUMMARY</div>
+          <table class="ps-kv"><tbody>
+            <tr><td>Employee Name</td><td class="c">:</td><td class="v nm">${esc(s.name)}</td></tr>
+            <tr><td>Designation</td><td class="c">:</td><td class="v">${esc(w.designation || cap(s.dept || "—"))}</td></tr>
+            <tr><td>Employee ID</td><td class="c">:</td><td class="v">${esc(s.workerId)}</td></tr>
+            <tr><td>Date of Joining</td><td class="c">:</td><td class="v">${esc(dmy(w.joined))}</td></tr>
+            <tr><td>Pay Period</td><td class="c">:</td><td class="v">${esc(periodLabel(run.period))}</td></tr>
+            <tr><td>Pay Date</td><td class="c">:</td><td class="v">${esc(dmy((run.generatedAt || "").slice(0, 10)))}</td></tr>
+          </tbody></table>
+        </div>
+        <aside class="ps-netcard">
+          <div class="ps-netcard-top">
+            <div class="ps-netbar"></div>
+            <div>
+              <div class="ps-netamt">${RS(s.net)}</div>
+              <div class="ps-netlbl">Employee Net Pay</div>
+            </div>
+          </div>
+          <div class="ps-netcard-foot">
+            <div><span>Paid Days</span><i>:</i><b>${days(s.payableDays)}</b></div>
+            <div><span>LOP Days</span><i>:</i><b>${days(lop)}</b></div>
+          </div>
+        </aside>
       </div>
-      <div class="rule"></div>
-      <div class="hd">
-        <span class="ttl">PAYSLIP</span>
-        <span class="per">Pay period <b>${esc(run.period)}</b>${run.status === "Finalized" ? ' · <span class="fin">FINALISED</span>' : ""}</span>
+
+      <div class="ps-ids">
+        <div><span>PF A/C Number</span><i>:</i><b>${esc(w.pfNo || "—")}</b></div>
+        <div><span>UAN</span><i>:</i><b>${esc(w.uan || "—")}</b></div>
       </div>
-      <div class="who">
-        <div><span>Employee</span><b class="nm">${esc(s.name)}</b></div>
-        <div><span>Code</span><b>${esc(s.workerId)}</b></div>
-        <div><span>Department</span><b>${esc(cap(s.dept || "—"))}</b></div>
-        <div><span>Pay type</span><b>${esc(cap(s.payType || "daily"))}</b></div>
-        <div><span>Days paid</span><b>${num(s.payableDays, 1)} of ${num((s.payableDays || 0) + (s.absent || 0), 1)}</b></div>
-        <div><span>Overtime</span><b>${s.otHours ? num(s.otHours, 1) + " h" : "—"}</b></div>
-      </div>
-      <div class="cols">
-        <table class="mn"><thead><tr><th>Earnings</th><th class="r">Amount (₹)</th></tr></thead>
+
+      <div class="ps-money">
+        <table class="ps-half">
+          <thead><tr><th class="lbl">EARNINGS</th><th class="amt">AMOUNT</th><th class="ytd">YTD</th></tr></thead>
           <tbody>${rowsOf(earn)}${pad(earn)}</tbody>
-          <tfoot><tr><td>Gross earnings</td><td class="r">${IN2(s.gross)}</td></tr></tfoot></table>
-        <table class="mn"><thead><tr><th>Deductions</th><th class="r">Amount (₹)</th></tr></thead>
+          <tfoot><tr><td class="lbl">Gross Earnings</td><td class="amt">${RS(s.gross)}</td><td class="ytd"></td></tr></tfoot>
+        </table>
+        <table class="ps-half">
+          <thead><tr><th class="lbl">DEDUCTIONS</th><th class="amt">AMOUNT</th><th class="ytd">YTD</th></tr></thead>
           <tbody>${rowsOf(ded)}${pad(ded)}</tbody>
-          <tfoot><tr><td>Total deductions</td><td class="r">${IN2(dedTotal)}</td></tr></tfoot></table>
+          <tfoot><tr><td class="lbl">Total Deductions</td><td class="amt">${RS(dedTotal)}</td><td class="ytd"></td></tr></tfoot>
+        </table>
       </div>
-      <div class="net"><span>NET PAY</span><b>₹ ${IN2(s.net)}</b></div>
-      <div class="words">${esc(GST.amountInWords(Math.round(s.net || 0)))}</div>
-      <div class="sign">
-        <div class="sg"><div class="ln">Employee signature</div></div>
-        <div class="sg"><div class="ln">For <b>${esc(co.name)}</b></div></div>
+
+      <div class="ps-payable">
+        <div>
+          <div class="ps-payable-t">TOTAL NET PAYABLE</div>
+          <div class="ps-payable-s">Gross Earnings - Total Deductions</div>
+        </div>
+        <div class="ps-payable-v">${RS(s.net)}</div>
       </div>
+
+      <div class="ps-words"><span>Amount In Words :</span> ${esc(GST.amountInWords(Math.round(s.net || 0)))}</div>
+
       <div class="foot">
         <span>Employer contribution — PF ${money(emp.pf || 0)} · ESI ${money(emp.esi || 0)}</span>
-        <span>Computer generated payslip</span>
+        <span>-- This document is computer generated, so a signature is not required. --</span>
       </div>
     </section>`;
   }
@@ -565,52 +648,90 @@
     const sheets = list.map((s) => payslipSheet(s, run)).join("");
     return `<!doctype html><html><head><meta charset="utf-8"><title>Payslip ${esc(run.period)}${list.length > 1 ? " — " + list.length + " workers" : " — " + esc(list[0].name)}</title>
 <style>
+  /* ---- The payslip follows the standard Indian salary-slip layout: company
+     masthead, EMPLOYEE SUMMARY beside a net-pay card, the PF/UAN line, then
+     EARNINGS and DEDUCTIONS side by side with an AMOUNT and a YTD column,
+     the TOTAL NET PAYABLE bar, the amount in words and a system-generated
+     footer. One slip per A4 page. ---- */
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body{font:11px/1.4 "Segoe UI",Arial,sans-serif;color:#1a1c1e;background:#eceff1}
-  /* one payslip = half an A4 */
-  .slip{width:210mm;height:148.5mm;background:#fff;padding:7mm 9mm;margin:0 auto;overflow:hidden;
-    display:flex;flex-direction:column;border-bottom:1px dashed #b9c0c7}
-  .band{display:flex;align-items:stretch;margin:-7mm -9mm 0;min-height:78px}
-  .logo{flex:1.05;display:flex;align-items:center;padding:6px 0 6px 14px}
-  .logo img{width:100%;max-height:66px;object-fit:contain;object-position:left center}
-  .co{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
-    padding:9px 16px 8px 52px;text-align:right;font-size:9.5px;line-height:1.5;
-    display:flex;flex-direction:column;justify-content:center}
-  .conm{font-size:12.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.3px}
-  .ids{margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600}
-  .ids span{color:#F58024;font-weight:800}
-  .rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -9mm 8px}
-  .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}
-  .ttl{font-size:15px;font-weight:800;letter-spacing:3px;color:#26282b;border-left:5px solid #F06820;padding-left:9px}
-  .per{font-size:10.5px;color:#555}.fin{color:#0f8a58;font-weight:800}
-  .who{display:grid;grid-template-columns:repeat(3,1fr);gap:3px 18px;border:1px solid #d8dbde;border-radius:8px;
-    background:#fafbfc;padding:7px 12px;margin-bottom:8px}
-  .who div{display:flex;justify-content:space-between;gap:8px;font-size:10.5px}
-  .who span{color:#767c82;text-transform:uppercase;font-size:8.5px;font-weight:700;letter-spacing:.3px;align-self:center}
-  .who b.nm{font-size:13px;font-weight:800}
-  .cols{display:flex;gap:9px;margin-bottom:8px}
-  table.mn{flex:1;border-collapse:collapse}
-  table.mn th{background:#26282b;color:#fff;font-size:9px;text-transform:uppercase;letter-spacing:.5px;
-    padding:5px 8px;border:1px solid #26282b;text-align:left}
-  table.mn td{border:1px solid #d8dbde;padding:4px 8px;font-size:10.5px}
-  table.mn tbody tr:nth-child(even) td{background:#f6f7f8}
-  table.mn tfoot td{background:#eef0f2;font-weight:800;border-top:2px solid #26282b}
-  table.mn td.r,table.mn th.r{text-align:right}
-  td .n{font-size:8.5px;color:#7a7f85}
-  .net{display:flex;justify-content:space-between;align-items:center;background:#F06820;color:#fff;
-    border-radius:7px;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:.5px}
-  .net b{font-size:16px}
-  .words{font-size:10px;color:#555;margin-top:5px;font-style:italic}
-  .sign{display:flex;justify-content:space-between;gap:40px;margin-top:auto;padding-bottom:6px}
-  .sg{flex:0 0 44%;text-align:center;font-size:9.5px;color:#555}
-  .sg .ln{border-top:1px solid #9aa1a8;padding-top:4px;margin-top:34px}
-  .sg b{color:#1a1c1e}
-  .foot{display:flex;justify-content:space-between;font-size:8.5px;color:#8b9096;
-    border-top:1px solid #e2e5e8;padding-top:5px}
+  body{font:11px/1.45 "Segoe UI",Arial,sans-serif;color:#2b2f33;background:#eceff1}
+  .slip{width:210mm;min-height:297mm;background:#fff;padding:14mm 13mm 10mm;margin:0 auto 10px;
+    display:flex;flex-direction:column}
+
+  /* masthead */
+  .ps-top{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;
+    padding-bottom:13px;border-bottom:1px solid #e3e6e9}
+  .ps-org{display:flex;align-items:center;gap:13px;min-width:0}
+  .ps-logo{height:44px;width:auto;max-width:150px;object-fit:contain;object-position:left center}
+  .ps-conm{font-size:17px;font-weight:800;color:#1a1c1e;line-height:1.2}
+  .ps-coad{font-size:11.5px;color:#6b7177;margin-top:2px;line-height:1.35}
+  .ps-for{text-align:right;flex:0 0 auto}
+  .ps-for-l{font-size:11.5px;color:#6b7177}
+  .ps-for-m{font-size:16px;font-weight:800;color:#1a1c1e;margin-top:2px}
+
+  /* employee summary + net pay card */
+  .ps-sum{display:flex;gap:24px;align-items:flex-start;padding:15px 0 13px}
+  .ps-sum-l{flex:1.25;min-width:0}
+  .ps-sec{font-size:11px;font-weight:800;letter-spacing:.7px;color:#1a1c1e;margin-bottom:10px}
+  table.ps-kv{border-collapse:collapse;width:100%}
+  table.ps-kv td{padding:4.5px 0;font-size:12px;vertical-align:top}
+  table.ps-kv td:first-child{color:#6b7177;width:44%}
+  table.ps-kv td.c{width:14px;color:#9aa1a8;text-align:center}
+  table.ps-kv td.v{color:#1a1c1e;font-weight:600}
+  table.ps-kv td.v.nm{font-weight:800}
+  .ps-netcard{flex:1;border:1px solid #dfe3e6;border-radius:10px;overflow:hidden;align-self:stretch}
+  .ps-netcard-top{display:flex;align-items:center;gap:12px;background:#f2faf5;padding:16px 18px}
+  .ps-netbar{flex:0 0 4px;align-self:stretch;min-height:40px;background:#38a169;border-radius:3px}
+  .ps-netamt{font-size:24px;font-weight:800;color:#1a1c1e;line-height:1.15}
+  .ps-netlbl{font-size:12.5px;color:#38a169;font-weight:600;margin-top:3px}
+  .ps-netcard-foot{padding:11px 18px 13px;border-top:1px dashed #dfe3e6}
+  .ps-netcard-foot div{display:flex;font-size:12px;padding:3px 0}
+  .ps-netcard-foot span{color:#6b7177;flex:0 0 42%}
+  .ps-netcard-foot i{font-style:normal;color:#9aa1a8;flex:0 0 14px;text-align:center}
+  .ps-netcard-foot b{color:#1a1c1e;font-weight:700}
+
+  /* PF / UAN strip */
+  .ps-ids{display:flex;gap:40px;padding:11px 0 15px;border-top:1px dashed #dfe3e6;font-size:12px}
+  .ps-ids div{display:flex;align-items:baseline;min-width:0}
+  .ps-ids span{color:#6b7177}
+  .ps-ids i{font-style:normal;color:#9aa1a8;padding:0 8px}
+  .ps-ids b{color:#1a1c1e;font-weight:700;overflow-wrap:anywhere}
+
+  /* earnings + deductions */
+  .ps-money{display:flex;border:1px solid #dfe3e6;border-radius:10px;overflow:hidden}
+  table.ps-half{flex:1;width:50%;border-collapse:collapse}
+  table.ps-half+table.ps-half{border-left:1px solid #eceff1}
+  table.ps-half th{font-size:10.5px;font-weight:800;letter-spacing:.5px;color:#1a1c1e;
+    padding:14px 16px 9px;text-align:left;border-bottom:1px dashed #dfe3e6}
+  table.ps-half td{padding:9px 16px;font-size:11.5px;vertical-align:top}
+  table.ps-half th.amt,table.ps-half td.amt{text-align:right;white-space:nowrap}
+  table.ps-half th.ytd,table.ps-half td.ytd{text-align:right;white-space:nowrap;width:26%}
+  table.ps-half td.amt{font-weight:700;color:#1a1c1e}
+  table.ps-half td.ytd{color:#4b5158}
+  table.ps-half td.lbl{color:#2b2f33}
+  table.ps-half tr.pad td{padding:9px 16px}
+  td .n{font-size:9.5px;color:#8b9096;margin-top:2px}
+  table.ps-half tfoot td{background:#f7f8f9;font-weight:800;color:#1a1c1e;font-size:12px;padding:11px 16px}
+
+  /* total net payable */
+  .ps-payable{display:flex;justify-content:space-between;align-items:stretch;
+    border:1px solid #dfe3e6;border-radius:10px;margin-top:16px;overflow:hidden}
+  .ps-payable>div:first-child{padding:13px 18px}
+  .ps-payable-t{font-size:12.5px;font-weight:800;color:#1a1c1e;letter-spacing:.3px}
+  .ps-payable-s{font-size:11.5px;color:#6b7177;margin-top:2px}
+  .ps-payable-v{background:#f2faf5;display:flex;align-items:center;padding:13px 22px;
+    font-size:16px;font-weight:800;color:#1a1c1e;white-space:nowrap}
+
+  .ps-words{text-align:right;font-size:12px;color:#1a1c1e;margin-top:14px}
+  .ps-words span{color:#6b7177}
+
+  .foot{margin-top:auto;padding-top:11px;border-top:1px solid #e3e6e9;
+    display:flex;justify-content:space-between;gap:16px;font-size:10px;color:#8b9096}
   @media print{
     body{background:#fff}
-    .slip{margin:0;border-bottom:none}
-    .slip:nth-child(even){page-break-after:always}   /* two payslips per sheet */
+    .slip{margin:0;min-height:auto;height:auto;padding:10mm 12mm}
+    /* one payslip per sheet — the layout needs the whole page */
+    .slip{page-break-after:always}
     .slip:last-child{page-break-after:auto}
   }
   @page{size:A4 portrait;margin:0}
