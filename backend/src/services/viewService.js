@@ -117,6 +117,7 @@ function stateForSupervisor(area, username) {
         product: { id: wo.itemId, name: it.name, typeCode: it.typeCode || null,
           uom: it.uom, widthMM: it.widthMM || null },
         qty: wo.qty,
+        widthMM: wo.widthMM != null ? wo.widthMM : null,   // the width this run is slit to
         customer: showCustomer ? customerForWO(wo) : undefined, // label info for slitting only
         updatedBy: wo.updatedBy || null, updatedAt: wo.updatedAt || null,
         // routing / stage hand-off

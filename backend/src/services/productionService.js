@@ -148,9 +148,19 @@ function assertMaterialsAvailable(data, item, qty, materialChoices) {
   }
 }
 
-/* updateWorkOrder — edit a planned run. Due date and priority can change
-   any time before dispatch; quantity and line only while NOTHING has been
-   posted or completed (stage movements are derived from them). */
+/* Tape width (mm) as entered on a work order. Blank clears it; anything that
+   is not a sane positive measurement is rejected rather than silently stored. */
+function widthOf(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const w = +v;
+  if (!isFinite(w) || w <= 0) throw err("Enter a valid tape width in mm", 400);
+  if (w > 5000) throw err("Tape width looks wrong — enter it in millimetres", 400);
+  return w;
+}
+
+/* updateWorkOrder — edit a planned run. Due date, priority and tape width can
+   change any time before dispatch; quantity and line only while NOTHING has
+   been posted or completed (stage movements are derived from them). */
 function updateWorkOrder(user, id, body) {
   if (!user) throw err("Not authenticated", 401);
   if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
@@ -188,6 +198,10 @@ function updateWorkOrder(user, id, body) {
   }
   if (body.due !== undefined) wo.due = body.due || null;
   if (body.priority !== undefined) wo.priority = body.priority || "Normal";
+  if (body.widthMM !== undefined) {
+    const width = widthOf(body.widthMM);
+    if (width == null) delete wo.widthMM; else wo.widthMM = width;
+  }
   if (body.qty !== undefined) {
     const q = +body.qty;
     if (!q || q <= 0) throw err("Enter a valid quantity", 400);
@@ -243,6 +257,10 @@ function createWorkOrder(user, body) {
     stageIdx: 0, legacy: false,
     createdBy: user.username, createdAt: new Date().toISOString(),
   };
+  // The width the run is slit to is decided per ORDER, not per product — it is
+  // recorded on the work order and printed as the size on the invoice.
+  const width = widthOf(body.widthMM);
+  if (width != null) wo.widthMM = width;
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId, data);
   if (spec && body[spec.key] != null && body[spec.key] !== "") wo[spec.key] = body[spec.key];
@@ -432,6 +450,7 @@ function summarize(wo, data) {
   return {
     id: wo.id, status: wo.status, progress: wo.progress,
     stageIdx: wo.stageIdx, dispatched: !!wo.dispatched,
+    widthMM: wo.widthMM != null ? wo.widthMM : null,
     route: (wo.route || []).map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq,
       owner: r.owner || null, line: r.line || null,
       status: r.status, doneBy: r.doneBy, doneAt: r.doneAt })),

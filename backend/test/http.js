@@ -269,6 +269,30 @@ async function run() {
     woBuy.status === 400 && /bought in ready-made/.test(String(woBuy.d && woBuy.d.error || woBuy.d)),
     woBuy.status + " " + JSON.stringify(woBuy.d).slice(0, 90));
 
+  section("Tape width is captured per work order");
+  // width is an ORDER parameter (the run is slit to the ordered width), not a
+  // product one — it must survive the round trip and reach the slitting board
+  const woW = await call("POST", "/production/wo", A, { itemId: fg, qty: 10, widthMM: 25 });
+  ok("a work order accepts a tape width", woW.d && woW.d.widthMM === 25, JSON.stringify(woW.d && woW.d.widthMM));
+  const woWFull = (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woW.d.id);
+  ok("the width is stored on the work order", woWFull && woWFull.widthMM === 25,
+    woWFull ? String(woWFull.widthMM) : "not found");
+  ok("width can be corrected later",
+    (await call("PATCH", "/production/wo/" + woW.d.id, A, { widthMM: 30 })).d.widthMM === 30);
+  ok("a blank width clears it",
+    (await call("PATCH", "/production/wo/" + woW.d.id, A, { widthMM: "" })).d.widthMM === null);
+  ok("a negative width is rejected",
+    (await call("PATCH", "/production/wo/" + woW.d.id, A, { widthMM: -5 })).status === 400);
+  ok("a width in metres is rejected as a wrong unit",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, widthMM: 25000 })).status === 400);
+  ok("a work order with no width is still valid",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d.widthMM === null);
+  await call("PATCH", "/production/wo/" + woW.d.id, A, { widthMM: 25 });
+  const slitW = await login("slitting1", "slitting1@123");
+  const slitWRow = ((await call("GET", "/state", slitW.token)).d.workorders || []).find((w) => w.id === woW.d.id);
+  ok("the slitting board is told the width to slit to", !!slitWRow && slitWRow.widthMM === 25,
+    slitWRow ? String(slitWRow.widthMM) : "not on the board");
+
   section("A production stage shows only on its owner's board");
   const supSees = async (tok) => {
     const d = (await call("GET", "/state", tok)).d;

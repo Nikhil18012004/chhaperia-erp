@@ -393,6 +393,9 @@
           started
             ? U.field("Product",`<input type="hidden" id="we_item" value="${esc(wo.itemId)}"><input class="input is-locked" readonly value="${esc(lockedLabel)}">`,"full")
             : fgPicker("we_item", fgs, wo.itemId),
+          // width is a slitting parameter, not a material one — it can still be
+          // corrected after the run has started, right up to dispatch
+          U.field("Tape Width (mm)",`<input class="input" id="we_width" type="number" min="0" step="0.5" placeholder="e.g. 25" value="${wo.widthMM!=null?wo.widthMM:""}">`),
           U.field("Production Line",U.selectHTML("we_line",LINES.map(l=>({v:l,l})),wo.line)),
           U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
           U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
@@ -405,7 +408,8 @@
           h("button",{class:"btn danger",onclick:del,html:"🗑 Delete WO"}),
           saveBtn]});
       async function save(){
-        const patch={ id:UI.$("#we_id").value.trim(), due:UI.$("#we_due").value, priority:UI.$("#we_prio").value };
+        const patch={ id:UI.$("#we_id").value.trim(), due:UI.$("#we_due").value, priority:UI.$("#we_prio").value,
+          widthMM:UI.$("#we_width").value===""?null:+UI.$("#we_width").value };
         if(!patch.id){ toast("Enter a work order number",{type:"warn"}); return; }
         if(!started){
           patch.qty=+UI.$("#we_qty").value;
@@ -464,6 +468,8 @@
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
+          ...(wo.widthMM?[["Width",wo.widthMM+" mm"]]:[]),
+          ...(it.thicknessMM!=null&&wo.widthMM?[["Size",it.thicknessMM+" × "+wo.widthMM+" mm"]]:[]),
           ["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
@@ -540,6 +546,10 @@
       const body=h("div",{class:"form-grid"},[
         fgPicker("w_item", fgs, fgs[0]&&fgs[0].id),
         U.field("Quantity",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
+        /* Width is a per-ORDER parameter, not a product one: the same tape is
+           slit to whatever width the customer ordered, so it is captured on the
+           run and travels with the batch onto the invoice. */
+        U.field("Tape Width (mm)",`<input class="input" id="w_width" type="number" min="0" step="0.5" placeholder="e.g. 25"><div class="muted" id="w_wnote" style="font-size:11px;margin-top:3px"></div>`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Slitting A")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
         U.field("Priority",U.selectHTML("w_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
@@ -569,7 +579,14 @@
         el.style.color="";
         el.textContent = unit==="SQM" ? ("= "+ENG.num(q*gsm/1000,1)+" kg · FG "+gsm+" g/m²")
                                       : ("= "+ENG.num(q*1000/gsm,0)+" sqm · FG "+gsm+" g/m²"); };
-      const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
+      /* thickness comes from the product, width from this order — shown
+         together so the size on the invoice is obvious while planning */
+      const widthHint=()=>{ const el=UI.$("#w_wnote"); if(!el) return;
+        const thk=(ENG.item(UI.$("#w_item").value)||{}).thicknessMM;
+        const w=+UI.$("#w_width").value||0;
+        el.textContent = thk==null ? (w?"Size "+w+" mm wide":"")
+          : (w? "Size "+thk+" × "+w+" mm" : "Thickness "+thk+" mm — enter the width this run is slit to"); };
+      const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         // show the stages this product will actually run, and keep the line in
         // the area that starts it (a one-material product never enters coating)
         const rt=routeFor(id,qty), lineSel=UI.$("#w_line"), pool=LINES_BY_AREA[rt.area]||[];
@@ -680,13 +697,14 @@
       const createBtn=h("button",{class:"btn primary",onclick:save,text:"Create Work Order"});
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), createBtn]});
-      setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); recalc(); },50);
+      setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); UI.$("#w_width").addEventListener("input",widthHint); recalc(); },50);
       async function save(){
         const itemId=UI.$("#w_item").value, qty=qtyKg();
         if(qty==null){ toast("This product has no GSM — enter the quantity in kg",{type:"warn"}); return; }
         if(!qty||qty<=0){ toast("Enter a valid quantity",{type:"warn"}); return; }
         if(shortages.length){ toast("Materials are short — cannot create this work order: "+shortages.join(", "),{type:"danger",title:"Insufficient stock"}); return; }
         const payload={itemId, qty, line:UI.$("#w_line").value, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
+        const wmm=+UI.$("#w_width").value; if(wmm>0) payload.widthMM=wmm;
         // which material was picked for each ranged BOM line — travels with the
         // work order so the issue posts the material actually chosen
         if(Object.keys(matChoices).length) payload.materialChoices=matChoices;

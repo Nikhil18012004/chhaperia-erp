@@ -391,6 +391,9 @@
       const used=claimed[w.id]||0;
       return { id:w.id, itemId:w.itemId, made:+w.qty||0, claimed:used,
                free:Math.max(0,(+w.qty||0)-used),
+               // the width this run was slit to — travels with the batch so a
+               // sales order shows the dimensions of the stock it is claiming
+               widthMM:(w.widthMM!=null&&w.widthMM!=="")?+w.widthMM:null,
                doneAt:w.packedAt||((w.route||[]).slice(-1)[0]||{}).doneAt||w.date||"" };
     }).sort((a,b)=>(a.doneAt<b.doneAt?1:-1));
   }

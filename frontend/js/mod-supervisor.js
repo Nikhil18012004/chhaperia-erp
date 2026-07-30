@@ -332,7 +332,9 @@
         fact("Make", H("b", { text: fmtQty(w.qty) + " " + (p.uom || "") })),
         w.spec ? fact(w.spec.label, H("b", { style: w.spec.value == null ? "color:var(--danger)" : "", text: w.spec.value == null ? "— not set" : String(w.spec.value) })) : null,
         w.customer ? fact("Customer", w.customer) : null,
-        p.widthMM ? fact("Width", (Array.isArray(p.widthMM) ? p.widthMM.join("/") : p.widthMM) + " mm") : null,
+        // the order's own slitting width wins over any width held on the product
+        w.widthMM ? fact("Width", w.widthMM + " mm")
+          : (p.widthMM ? fact("Width", (Array.isArray(p.widthMM) ? p.widthMM.join("/") : p.widthMM) + " mm") : null),
         w.due ? fact("Due", H("span", { style: overdue ? "color:var(--danger);font-weight:700" : "", text: w.due + (overdue ? " ⏰" : "") })) : null,
         w.priority && w.priority !== "Normal" ? fact("Priority", H("span", { style: "font-weight:700;color:var(--danger)", text: w.priority })) : null,
       ].filter(Boolean));

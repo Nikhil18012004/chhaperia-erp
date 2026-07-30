@@ -301,7 +301,9 @@
         id: window._erpUtil.nextSeqId(ENG.data.salesorders, "SO-"),
         date: DB.helpers.iso(DB.helpers.today()),
         customerId: cust.id,
-        lines: [{ itemId: l.product, qty, rate, width: (fg && fg.widthMM ? fg.widthMM[0] : 25) }],
+        // no invented width: it is set from the work order the line is filled
+        // from, and until then the invoice simply prints the thickness
+        lines: [{ itemId: l.product, qty, rate, width: (fg && fg.widthMM ? fg.widthMM[0] : null) }],
         status: "Confirmed",
         promised: DB.helpers.daysAhead(14),
         priority: "Normal",

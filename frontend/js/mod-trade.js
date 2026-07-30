@@ -31,6 +31,34 @@
     if(it&&it.gstRate!=null&&it.gstRate!=="") return +it.gstRate; return 18; }
   const TRANSPORT_MODES=[{v:"",l:"—"},{v:"Road",l:"Road"},{v:"Rail",l:"Rail"},{v:"Air",l:"Air"},{v:"Courier",l:"Courier"},{v:"Ship",l:"Ship"}];
 
+  /* ---- Batch = the work order a sales line is served from -------------------
+     The line STORES the work-order id (WO-0011) so the claim against that run
+     still matches, but everyone reads a batch as the plain run number — 0011.
+     Only the label changes; never the stored value. */
+  function batchNo(woId){ return String(woId||"").replace(/^WO[\s-]*/i,"")||String(woId||""); }
+  function woById(id){ return (ENG.data.workorders||[]).find(w=>w.id===id)||null; }
+  /* Width is decided per work order (the run is slit to the ordered width), so
+     the printed size comes from the batch first, then whatever the line itself
+     was saved with, and only then the product's own width. */
+  function lineWidth(l){
+    if(!l) return null;
+    const wo=l.batch?woById(l.batch):null;
+    if(wo&&wo.widthMM) return +wo.widthMM;
+    if(l.width) return +l.width;
+    const iw=(ENG.item(l.itemId)||{}).widthMM;
+    if(Array.isArray(iw)) return iw.length?+iw[0]:null;
+    return iw?+iw:null;
+  }
+  /* "0.05 × 25 mm" — thickness × width, the size a customer orders by. */
+  function lineSize(l,it){
+    it=it||ENG.item(l.itemId)||{};
+    const t=it.thicknessMM, w=lineWidth(l);
+    if(t!=null&&w) return t+" × "+w+" mm";
+    if(t!=null) return t+" mm";
+    if(w) return w+" mm wide";
+    return "";
+  }
+
   /* Build GST.calcDoc() input from document lines. */
   function gstLinesOf(o){
     return (o.lines||[]).map(l=>{ const it=ENG.item(l.itemId)||{};
@@ -455,8 +483,9 @@
         : [["CGST",ENG.money(calc.cgst)],["SGST",ENG.money(calc.sgst)]];
       const anyBatch=so.lines.some(l=>l.batch);
       const cols=[
-        {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(U.trim(it.name||r.itemId,30))}</div><div class="cell-sub">${r.itemId} · ${r.width||"-"}mm</div>`;},noSort:true}];
-      if(anyBatch) cols.push({key:"batch",label:"Batch No.",render:r=>r.batch?`<span class="mono">${esc(r.batch)}</span>`:'<span class="muted">—</span>',noSort:true});
+        {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};const sz=lineSize(r,it);
+          return `<div class="cell-main">${esc(U.trim(it.name||r.itemId,30))}</div><div class="cell-sub">${esc(sz||r.itemId)}</div>`;},noSort:true}];
+      if(anyBatch) cols.push({key:"batch",label:"Batch No.",render:r=>r.batch?`<span class="mono">${esc(batchNo(r.batch))}</span>`:'<span class="muted">—</span>',noSort:true});
       cols.push(
         {key:"qty",label:"Qty",num:true,render:r=>ENG.num(r.qty)+" kg",noSort:true},
         {key:"stock",label:"In Stock",num:true,render:r=>{const h2=ENG.stock(r.itemId).onHand;return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(h2,1)}</span>`;},noSort:true},
@@ -603,11 +632,17 @@
          from what the floor has actually produced. */
       function batchOpts(itemId){
         const ready=ENG.readyBatches(itemId);
-        const opts=ready.map(b=>({v:b.id,
-          l:b.id+" · "+ENG.num(b.free,1)+" ready"+(b.claimed?" (of "+ENG.num(b.made,1)+")":"")}));
+        const uom=(ENG.item(itemId)||{}).uom||"kg";
+        // the batch reads as its plain number, carrying the run's size and the
+        // quantity still free, so the operator picks the right ready stock
+        const opts=ready.map(b=>{
+          const size=lineSize({itemId:b.itemId,width:b.widthMM});
+          return {v:b.id, l:batchNo(b.id)+(size?" · "+size:"")+" · "+ENG.num(b.free,1)+" "+uom+" ready"
+            +(b.claimed?" (of "+ENG.num(b.made,1)+")":"")};
+        });
         // keep a batch that is already on this order even once fully claimed
         (editSo&&editSo.lines||[]).forEach(l=>{
-          if(l.batch && l.itemId===itemId && !opts.some(o=>o.v===l.batch)) opts.push({v:l.batch,l:l.batch});
+          if(l.batch && l.itemId===itemId && !opts.some(o=>o.v===l.batch)) opts.push({v:l.batch,l:batchNo(l.batch)});
         });
         return [{v:"",l:ready.length?"— pick a finished job —":"— nothing finished yet —"}].concat(opts);
       }
@@ -618,14 +653,17 @@
         if(!ready.length) return "No finished job for this product yet — it can still be ordered and made to order.";
         return "Ready to sell: "+ENG.num(free,1)+" "+((ENG.item(itemId)||{}).uom||"")+
           " reserved from "+ready.length+" finished job"+(ready.length>1?"s":"")+
-          " · "+ready.slice(0,3).map(b=>b.id+" ("+ENG.num(b.free,1)+")").join(", ")+
+          " · "+ready.slice(0,3).map(b=>batchNo(b.id)+" ("+ENG.num(b.free,1)+")").join(", ")+
           (ready.length>3?" …":"");
       }
       function collect(){ const out=[];
         lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#sl_item_"+i); if(!iEl) return;
           const id=iEl.value, qty=+UI.$("#sl_qty_"+i).value, rate=+UI.$("#sl_rate_"+i).value;
-          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).price, width:(ENG.item(id).widthMM||[25])[0],
-            hsn:(UI.$("#sl_hsn_"+i).value||"").trim(), batch:UI.$("#sl_batch_"+i).value||"",
+          const batch=UI.$("#sl_batch_"+i).value||"";
+          // the width is the one the batch was slit to — never an assumed default
+          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).price,
+            width:lineWidth({itemId:id, batch})||null,
+            hsn:(UI.$("#sl_hsn_"+i).value||"").trim(), batch,
             discPct:+UI.$("#sl_disc_"+i).value||0, gstPct:+UI.$("#sl_gst_"+i).value||0}); });
         return out; }
       function draft(){
@@ -985,10 +1023,13 @@
 
     const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
       const lc=GST.calcLine({qty:l.qty,rate:l.rate,discPct:l.discPct||0,gstPct:lineGstPct(l,it)},interState);
+      // the size a customer orders by — thickness × width, the width taken from
+      // the work order this line is served from
+      const size=lineSize(l,it);
       return `<tr><td class="c">${i+1}</td>`+
-        `<td>${esc(it.name||l.itemId)}<div class="sub">${esc(l.itemId)}${it.thicknessMM!=null?" · "+it.thicknessMM+" mm":""}</div></td>`+
+        `<td>${esc(it.name||l.itemId)}<div class="sub">${esc(size||l.itemId)}</div></td>`+
         `<td class="c">${esc(l.hsn||it.hsn||"—")}</td>`+
-        (anyBatch?`<td class="c">${esc(l.batch||"—")}</td>`:"")+
+        (anyBatch?`<td class="c">${esc(l.batch?batchNo(l.batch):"—")}</td>`:"")+
         `<td class="r">${ENG.num(l.qty,2)}</td><td class="c">${esc(isPO?(it.uom||"KG"):"KG")}</td>`+
         `<td class="r">${IN(l.rate)}</td>`+
         (anyDisc?`<td class="r">${l.discPct?l.discPct+"%":"—"}</td>`:"")+
@@ -1085,8 +1126,27 @@
   .strip b{color:#F58024}
   .greet{font-size:11.5px;margin:-4px 0 9px;color:#444}
   .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
-  @media print{ body{padding:0 6mm 6mm} .band{margin:0 -6mm} .rule{margin:0 -6mm 12px} .note{display:none} }
+  /* ---- running footer: the company tab and the thank-you line must sit at the
+     foot of EVERY printed page, not only the last one. The whole document is
+     laid out in one table so its <tfoot> spacer reserves the same strip of room
+     on every page; the footer itself is then painted there by a fixed block,
+     which the browser repeats page after page. On screen nothing is fixed —
+     the spacer collapses and the footer simply follows the content. ---- */
+  .sheet{width:100%;border-collapse:collapse}
+  .sheet>tbody>tr>td,.sheet>tfoot>tr>td{padding:0;border:0}
+  .foot-space{height:0}
+  @media print{
+    body{padding:0 6mm 6mm} .band{margin:0 -6mm} .rule{margin:0 -6mm 12px} .note{display:none}
+    /* the two strips measure ~13mm; 18mm leaves the footer room to grow a line
+       (a longer tagline) without the table ever running underneath it */
+    .foot-space{height:18mm}
+    .pgfoot{position:fixed;left:0;right:0;bottom:2mm;margin:0;padding:0 6mm;background:#fff}
+    .pgfoot .strip{margin-top:0}
+    .pgfoot .strip+.strip{margin-top:2px}
+  }
 </style></head><body>
+  <table class="sheet"><tfoot><tr><td><div class="foot-space"></div></td></tr></tfoot>
+  <tbody><tr><td>
   <div class="band">
     <div class="logo-side"><img src="${logo}" alt="${esc(co.name)}"></div>
     <div class="co-block">
@@ -1139,8 +1199,11 @@
     <div class="muted" style="color:#777">${interState?"Inter-state supply — IGST charged.":"Intra-state supply — CGST + SGST charged."}${isPO?"":" Whether tax is payable on reverse charge : No."}</div>
     <div class="sig">For <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></div>
   </div>
-  <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>${isPO?"Thank you for your partnership!":"Thank you for your business!"}</b></div>
-  <div class="strip" style="background:none;color:#888;border:none;padding:2px 12px"><span></span><span>This is a computer generated ${isPO?"purchase order":"invoice"}.</span></div>
+  </td></tr></tbody></table>
+  <div class="pgfoot">
+    <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>${isPO?"Thank you for your partnership!":"Thank you for your business!"}</b></div>
+    <div class="strip" style="background:none;color:#888;border:none;padding:2px 12px"><span></span><span>This is a computer generated ${isPO?"purchase order":"invoice"}.</span></div>
+  </div>
   <div class="note">Use your browser's "Save as PDF" to download</div>
   <script>window.onload=function(){window.print();}<\/script>
 </body></html>`;
@@ -1160,8 +1223,9 @@
     const hsns=[...new Set((o.lines||[]).map(l=>l.hsn||(ENG.item(l.itemId)||{}).hsn).filter(Boolean))];
     const bank=co.bank||{};
     const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
+      const size=lineSize(l,it);
       return `<tr>${i===0?`<td rowspan="${(o.lines||[]).length}" class="marks">${esc(o.marksPkgs||"")}</td>`:""}`+
-        `<td><b>${esc(it.name||l.itemId)}</b><div class="sub">${it.thicknessMM!=null?"SIZE: "+it.thicknessMM+" mm"+(l.width?" x "+l.width+" mm":""):esc(l.itemId)}${l.batch?" · Batch No. "+esc(l.batch):""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
+        `<td><b>${esc(it.name||l.itemId)}</b><div class="sub">${size?"SIZE: "+esc(size):esc(l.itemId)}${l.batch?" · Batch No. "+esc(batchNo(l.batch)):""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
         `<td class="r">${ENG.num(l.qty,2)}</td><td class="r">${F2(l.rate)}</td><td class="r">${F2(l.qty*l.rate*(1-(l.discPct||0)/100))}</td></tr>`; }).join("");
     const exNote=(o.exportNote||"").split("\n").map(s=>s.trim()).filter(Boolean);
     const words=GST.amountInWordsCcy(total, ccy).toUpperCase();
