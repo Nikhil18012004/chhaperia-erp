@@ -25,6 +25,9 @@
   const STATUS_META = { P: ["ok", "Present"], HD: ["warn", "Half day"], A: ["danger", "Absent"], L: ["info", "Leave"], WO: ["mut", "Week-off"] };
 
   let curTab = "dashboard";
+  // what the payroll tab is currently showing, so the header's print-all
+  // button knows which run to print
+  let payrollCtx = { run: null, slips: [] };
   function workers() { return ENG.data.hrWorkers || []; }
   function wById(id) { return workers().find((w) => w.id === id) || { name: id }; }
   function attendance() { return ENG.data.hrAttendance || []; }
@@ -70,7 +73,11 @@
       h("button", { class: "btn primary", onclick: () => workerForm(), html: "＋ New Worker" })];
     if (curTab === "attendance") return [MW.excelMenu("hrattendance")];
     if (curTab === "leave") return [h("button", { class: "btn primary", onclick: () => leaveForm(), html: "＋ Apply Leave" })];
-    if (curTab === "payroll") return [h("button", { class: "btn primary", onclick: () => runPayrollFlow(), html: "▶ Run Payroll" })];
+    if (curTab === "payroll") return [
+      h("button", { class: "btn", title: "Print every payslip of this run — two to an A4 sheet",
+        onclick: () => printPayslips(payrollCtx.slips || [], payrollCtx.run),
+        html: "🖨 Print All Payslips" }),
+      h("button", { class: "btn primary", onclick: () => runPayrollFlow(), html: "▶ Run Payroll" })];
     if (curTab === "settings") return [h("button", { class: "btn", onclick: () => leaveTypeForm(), html: "＋ Leave Type" })];
     return [];
   }
@@ -432,6 +439,7 @@
       h("span", { html: `<b>${r.period}</b> · ${badge(r.status === "Finalized" ? "ok" : "warn", r.status)} · net ${money((r.totals || {}).net || 0)}` })]))));
     const run = runs.find((r) => r.period === defPeriod) || runs[0];
     const slips = payslips().filter((s) => s.payrunId === run.id);
+    payrollCtx = { run, slips };
     const tot = (run.totals || {});
     host.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:14px" }, [
       kpi({ icon: "👷", label: "Workers Paid", value: num(slips.length) }),
@@ -467,23 +475,199 @@
   }
   async function finalizeRun(run) { if (!await confirm(`Finalize payroll ${run.period}? Payslips will be locked (no further edits).`, { title: "Finalize Payroll" })) return; save(() => DB.hr.payroll.finalize(run.id), "payroll"); }
   async function delRun(run) { if (!await confirm(`Delete payroll run ${run.period} and all its payslips?`, { title: "Delete Pay Run", danger: true })) return; save(() => DB.hr.payroll.remove(run.id), "payroll"); }
+
+  /* ============================================================
+     PAYSLIP — printed sheet
+     Same masthead as the tax invoice (logo, company block, GSTIN strip), the
+     worker's name in bold, and the money in proper tables instead of a boxed
+     list. Each payslip is exactly HALF an A4, so two print per sheet and a
+     whole finalised run comes out in one go.
+     ============================================================ */
+  function payCompany() {
+    const cos = ((ENG.data.org || {}).companies) || [];
+    return cos[0] || { name: (ENG.data.org || {}).name || "Chhaperia", address: "", gstin: "" };
+  }
+  const IN2 = (n) => (+n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function payslipSheet(s, run) {
+    const d = s.deductions || {}, emp = s.employer || {};
+    const co = payCompany();
+    const dedTotal = (d.pf || 0) + (d.esi || 0) + (d.pt || 0) + (s.advances || 0);
+    const earn = [
+      ["Basic earned", s.basicEarned, num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
+      s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
+      s.allowances ? ["Allowances", s.allowances, ""] : null,
+    ].filter(Boolean);
+    const ded = [
+      d.pf ? ["Provident Fund (PF)", d.pf, ""] : null,
+      d.esi ? ["ESI", d.esi, ""] : null,
+      d.pt ? ["Professional Tax", d.pt, ""] : null,
+      s.advances ? ["Advance / recovery", s.advances, ""] : null,
+    ].filter(Boolean);
+    const rowsOf = (list) => (list.length ? list : [["—", 0, ""]])
+      .map(([l, v, note]) => `<tr><td>${esc(l)}${note ? `<div class="n">${esc(note)}</div>` : ""}</td>` +
+        `<td class="r">${IN2(v)}</td></tr>`).join("");
+    // keep both columns the same height so the two tables line up
+    const padTo = Math.max(earn.length, ded.length);
+    const pad = (list) => "<tr><td>&nbsp;</td><td></td></tr>".repeat(Math.max(0, padTo - (list.length || 1)));
+
+    return `<section class="slip">
+      <div class="band">
+        <div class="logo"><img src="${location.origin}/assets/logo-invoice.png" alt="${esc(co.name)}"></div>
+        <div class="co">
+          <div class="conm">${esc(co.name)}</div>
+          <div>${esc(co.address || "")}</div>
+          <div class="ids"><span>GSTIN</span> ${esc(co.gstin || "—")}${co.pan ? `&nbsp; <span>PAN</span> ${esc(co.pan)}` : ""}</div>
+        </div>
+      </div>
+      <div class="rule"></div>
+      <div class="hd">
+        <span class="ttl">PAYSLIP</span>
+        <span class="per">Pay period <b>${esc(run.period)}</b>${run.status === "Finalized" ? ' · <span class="fin">FINALISED</span>' : ""}</span>
+      </div>
+      <div class="who">
+        <div><span>Employee</span><b class="nm">${esc(s.name)}</b></div>
+        <div><span>Code</span><b>${esc(s.workerId)}</b></div>
+        <div><span>Department</span><b>${esc(cap(s.dept || "—"))}</b></div>
+        <div><span>Pay type</span><b>${esc(cap(s.payType || "daily"))}</b></div>
+        <div><span>Days paid</span><b>${num(s.payableDays, 1)} of ${num((s.payableDays || 0) + (s.absent || 0), 1)}</b></div>
+        <div><span>Overtime</span><b>${s.otHours ? num(s.otHours, 1) + " h" : "—"}</b></div>
+      </div>
+      <div class="cols">
+        <table class="mn"><thead><tr><th>Earnings</th><th class="r">Amount (₹)</th></tr></thead>
+          <tbody>${rowsOf(earn)}${pad(earn)}</tbody>
+          <tfoot><tr><td>Gross earnings</td><td class="r">${IN2(s.gross)}</td></tr></tfoot></table>
+        <table class="mn"><thead><tr><th>Deductions</th><th class="r">Amount (₹)</th></tr></thead>
+          <tbody>${rowsOf(ded)}${pad(ded)}</tbody>
+          <tfoot><tr><td>Total deductions</td><td class="r">${IN2(dedTotal)}</td></tr></tfoot></table>
+      </div>
+      <div class="net"><span>NET PAY</span><b>₹ ${IN2(s.net)}</b></div>
+      <div class="words">${esc(GST.amountInWords(Math.round(s.net || 0)))}</div>
+      <div class="sign">
+        <div class="sg"><div class="ln">Employee signature</div></div>
+        <div class="sg"><div class="ln">For <b>${esc(co.name)}</b></div></div>
+      </div>
+      <div class="foot">
+        <span>Employer contribution — PF ${money(emp.pf || 0)} · ESI ${money(emp.esi || 0)}</span>
+        <span>Computer generated payslip</span>
+      </div>
+    </section>`;
+  }
+
+  function payslipDocHtml(list, run) {
+    const co = payCompany();
+    const sheets = list.map((s) => payslipSheet(s, run)).join("");
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Payslip ${esc(run.period)}${list.length > 1 ? " — " + list.length + " workers" : " — " + esc(list[0].name)}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:11px/1.4 "Segoe UI",Arial,sans-serif;color:#1a1c1e;background:#eceff1}
+  /* one payslip = half an A4 */
+  .slip{width:210mm;height:148.5mm;background:#fff;padding:7mm 9mm;margin:0 auto;overflow:hidden;
+    display:flex;flex-direction:column;border-bottom:1px dashed #b9c0c7}
+  .band{display:flex;align-items:stretch;margin:-7mm -9mm 0;min-height:78px}
+  .logo{flex:1.05;display:flex;align-items:center;padding:6px 0 6px 14px}
+  .logo img{width:100%;max-height:66px;object-fit:contain;object-position:left center}
+  .co{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
+    padding:9px 16px 8px 52px;text-align:right;font-size:9.5px;line-height:1.5;
+    display:flex;flex-direction:column;justify-content:center}
+  .conm{font-size:12.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.3px}
+  .ids{margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600}
+  .ids span{color:#F58024;font-weight:800}
+  .rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -9mm 8px}
+  .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}
+  .ttl{font-size:15px;font-weight:800;letter-spacing:3px;color:#26282b;border-left:5px solid #F06820;padding-left:9px}
+  .per{font-size:10.5px;color:#555}.fin{color:#0f8a58;font-weight:800}
+  .who{display:grid;grid-template-columns:repeat(3,1fr);gap:3px 18px;border:1px solid #d8dbde;border-radius:8px;
+    background:#fafbfc;padding:7px 12px;margin-bottom:8px}
+  .who div{display:flex;justify-content:space-between;gap:8px;font-size:10.5px}
+  .who span{color:#767c82;text-transform:uppercase;font-size:8.5px;font-weight:700;letter-spacing:.3px;align-self:center}
+  .who b.nm{font-size:13px;font-weight:800}
+  .cols{display:flex;gap:9px;margin-bottom:8px}
+  table.mn{flex:1;border-collapse:collapse}
+  table.mn th{background:#26282b;color:#fff;font-size:9px;text-transform:uppercase;letter-spacing:.5px;
+    padding:5px 8px;border:1px solid #26282b;text-align:left}
+  table.mn td{border:1px solid #d8dbde;padding:4px 8px;font-size:10.5px}
+  table.mn tbody tr:nth-child(even) td{background:#f6f7f8}
+  table.mn tfoot td{background:#eef0f2;font-weight:800;border-top:2px solid #26282b}
+  table.mn td.r,table.mn th.r{text-align:right}
+  td .n{font-size:8.5px;color:#7a7f85}
+  .net{display:flex;justify-content:space-between;align-items:center;background:#F06820;color:#fff;
+    border-radius:7px;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:.5px}
+  .net b{font-size:16px}
+  .words{font-size:10px;color:#555;margin-top:5px;font-style:italic}
+  .sign{display:flex;justify-content:space-between;gap:40px;margin-top:auto;padding-bottom:6px}
+  .sg{flex:0 0 44%;text-align:center;font-size:9.5px;color:#555}
+  .sg .ln{border-top:1px solid #9aa1a8;padding-top:4px;margin-top:34px}
+  .sg b{color:#1a1c1e}
+  .foot{display:flex;justify-content:space-between;font-size:8.5px;color:#8b9096;
+    border-top:1px solid #e2e5e8;padding-top:5px}
+  @media print{
+    body{background:#fff}
+    .slip{margin:0;border-bottom:none}
+    .slip:nth-child(even){page-break-after:always}   /* two payslips per sheet */
+    .slip:last-child{page-break-after:auto}
+  }
+  @page{size:A4 portrait;margin:0}
+</style></head><body>${sheets}
+<script>window.onload=function(){window.print();}<\/script>
+</body></html>`;
+  }
+
+  function printPayslips(list, run) {
+    if (!list.length) { toast("Nothing to print", { type: "warn" }); return; }
+    const w = window.open("", "_blank");
+    if (!w) { toast("Popup blocked — allow popups for this site to print", { type: "warn" }); return; }
+    w.document.write(payslipDocHtml(list, run)); w.document.close();
+  }
+
   function payslipDetail(s, run) {
-    const d = s.deductions || {};
+    const d = s.deductions || {}, emp = s.employer || {};
+    /* same two tables the printed slip carries, so the screen and the paper
+       agree — no boxed key/value list */
+    const money2 = (v) => "₹ " + (+v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const moneyTable = (title, rows, totalLabel, total) => {
+      const tb = h("table", { class: "tbl pay-tbl" });
+      tb.appendChild(h("thead", {}, h("tr", {}, [h("th", { text: title }), h("th", { class: "num", text: "Amount" })])));
+      tb.appendChild(h("tbody", {}, (rows.length ? rows : [["—", 0, ""]]).map(([l, v, n2]) =>
+        h("tr", {}, [
+          h("td", { class: "nm" }, [h("div", { text: l }), n2 ? h("div", { class: "cell-sub", text: n2 }) : null]),
+          h("td", { class: "num", text: money2(v) }),
+        ]))));
+      tb.appendChild(h("tfoot", {}, h("tr", {}, [
+        h("td", { class: "nm", html: "<b>" + esc(totalLabel) + "</b>" }),
+        h("td", { class: "num", html: "<b>" + esc(money2(total)) + "</b>" })])));
+      return tb;
+    };
+    const dedTotal = (d.pf || 0) + (d.esi || 0) + (d.pt || 0) + (s.advances || 0);
     const body = h("div", {}, [
-      MW.dl([
-        ["Worker", s.name + " (" + s.workerId + ")"], ["Department", cap(s.dept || "—")], ["Pay Period", run.period],
-        ["Payable Days", num(s.payableDays, 1) + " (present " + num(s.present, 1) + (s.paidLeave ? " + leave " + s.paidLeave : "") + ")"],
-        ["OT Hours", num(s.otHours, 1) + " h" + (s.otPay ? " → " + money(s.otPay) : "")],
-        ["Daily Rate", money(s.dailyRate)], ["Basic Earned", money(s.basicEarned)],
-        ["Gross", money(s.gross)],
-        ["— PF", money(d.pf || 0)], ["— ESI", money(d.esi || 0)], ["— Professional Tax", money(d.pt || 0)],
-        ["— Advance", money(s.advances || 0)], ["Net Pay", money(s.net)],
-        ["Employer PF", money((s.employer || {}).pf || 0)], ["Employer ESI", money((s.employer || {}).esi || 0)],
+      h("div", { class: "pay-who" }, [
+        h("div", {}, [h("span", { text: "Employee" }), h("b", { class: "nm", text: s.name })]),
+        h("div", {}, [h("span", { text: "Code" }), h("b", { text: s.workerId })]),
+        h("div", {}, [h("span", { text: "Department" }), h("b", { text: cap(s.dept || "—") })]),
+        h("div", {}, [h("span", { text: "Pay period" }), h("b", { text: run.period })]),
+        h("div", {}, [h("span", { text: "Days paid" }), h("b", { text: num(s.payableDays, 1) })]),
+        h("div", {}, [h("span", { text: "Overtime" }), h("b", { text: s.otHours ? num(s.otHours, 1) + " h" : "—" })]),
       ]),
+      h("div", { class: "pay-cols" }, [
+        moneyTable("Earnings", [
+          ["Basic earned", s.basicEarned, num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
+          s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
+          s.allowances ? ["Allowances", s.allowances, ""] : null,
+        ].filter(Boolean), "Gross earnings", s.gross),
+        moneyTable("Deductions", [
+          d.pf ? ["Provident Fund (PF)", d.pf, ""] : null,
+          d.esi ? ["ESI", d.esi, ""] : null,
+          d.pt ? ["Professional Tax", d.pt, ""] : null,
+          s.advances ? ["Advance / recovery", s.advances, ""] : null,
+        ].filter(Boolean), "Total deductions", dedTotal),
+      ]),
+      h("div", { class: "pay-net" }, [h("span", { text: "NET PAY" }), h("b", { text: money2(s.net) })]),
+      h("div", { class: "muted", style: "font-size:11.5px;margin-top:8px" },
+        "Employer contribution — PF " + money(emp.pf || 0) + " · ESI " + money(emp.esi || 0)),
     ]);
     const foot = [];
     if (run.status !== "Finalized") foot.push(h("button", { class: "btn ghost", onclick: () => editAdvance(s), text: "✎ Set Advance" }));
-    foot.push(h("button", { class: "btn primary", onclick: () => window.print(), text: "🖨 Print" }));
+    foot.push(h("button", { class: "btn primary", onclick: () => printPayslips([s], run), text: "🖨 Print Payslip" }));
     modal({ title: "Payslip — " + s.name, sub: run.period + " · " + run.id, wide: true, body, foot });
   }
   function editAdvance(s) {
