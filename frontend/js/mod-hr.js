@@ -74,7 +74,7 @@
     if (curTab === "attendance") return [MW.excelMenu("hrattendance")];
     if (curTab === "leave") return [h("button", { class: "btn primary", onclick: () => leaveForm(), html: "＋ Apply Leave" })];
     if (curTab === "payroll") return [
-      h("button", { class: "btn", title: "Print every payslip of this run — one per A4 sheet",
+      h("button", { class: "btn", title: "Print every payslip of this run — two to an A4 sheet",
         onclick: () => printPayslips(payrollCtx.slips || [], payrollCtx.run),
         html: "🖨 Print All Payslips" }),
       h("button", { class: "btn primary", onclick: () => runPayrollFlow(), html: "▶ Run Payroll" })];
@@ -485,7 +485,8 @@
      Same masthead as the tax invoice (logo, company block, GSTIN strip), the
      worker's name in bold, and the money in proper tables instead of a boxed
      list. The sheet follows the standard Indian salary-slip layout and takes
-     a full A4 each; a whole finalised run still prints in one go.
+     exactly HALF an A4 each, so two print per sheet and a whole finalised run
+     comes out in one go.
      ============================================================ */
   function payCompany() {
     const cos = ((ENG.data.org || {}).companies) || [];
@@ -654,84 +655,84 @@
      the TOTAL NET PAYABLE bar, the amount in words and a system-generated
      footer. One slip per A4 page. ---- */
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body{font:11px/1.45 "Segoe UI",Arial,sans-serif;color:#2b2f33;background:#eceff1}
-  .slip{width:210mm;min-height:297mm;background:#fff;padding:14mm 13mm 10mm;margin:0 auto 10px;
-    display:flex;flex-direction:column}
+  body{font:10px/1.32 "Segoe UI",Arial,sans-serif;color:#2b2f33;background:#eceff1}
+  /* one payslip = HALF an A4, so two print per sheet */
+  .slip{width:210mm;height:148.5mm;background:#fff;padding:6mm 9mm 5mm;margin:0 auto;overflow:hidden;
+    display:flex;flex-direction:column;border-bottom:1px dashed #b9c0c7}
 
   /* masthead */
-  .ps-top{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;
-    padding-bottom:13px;border-bottom:1px solid #e3e6e9}
-  .ps-org{display:flex;align-items:center;gap:13px;min-width:0}
-  .ps-logo{height:44px;width:auto;max-width:150px;object-fit:contain;object-position:left center}
-  .ps-conm{font-size:17px;font-weight:800;color:#1a1c1e;line-height:1.2}
-  .ps-coad{font-size:11.5px;color:#6b7177;margin-top:2px;line-height:1.35}
+  .ps-top{display:flex;justify-content:space-between;align-items:center;gap:16px;
+    padding-bottom:6px;border-bottom:1px solid #e3e6e9}
+  .ps-org{display:flex;align-items:center;gap:10px;min-width:0}
+  .ps-logo{height:30px;width:auto;max-width:112px;object-fit:contain;object-position:left center}
+  .ps-conm{font-size:13px;font-weight:800;color:#1a1c1e;line-height:1.2}
+  .ps-coad{font-size:9px;color:#6b7177;margin-top:1px;line-height:1.3}
   .ps-for{text-align:right;flex:0 0 auto}
-  .ps-for-l{font-size:11.5px;color:#6b7177}
-  .ps-for-m{font-size:16px;font-weight:800;color:#1a1c1e;margin-top:2px}
+  .ps-for-l{font-size:9px;color:#6b7177}
+  .ps-for-m{font-size:12.5px;font-weight:800;color:#1a1c1e;margin-top:1px}
 
   /* employee summary + net pay card */
-  .ps-sum{display:flex;gap:24px;align-items:flex-start;padding:15px 0 13px}
+  .ps-sum{display:flex;gap:16px;align-items:flex-start;padding:7px 0 6px}
   .ps-sum-l{flex:1.25;min-width:0}
-  .ps-sec{font-size:11px;font-weight:800;letter-spacing:.7px;color:#1a1c1e;margin-bottom:10px}
+  .ps-sec{font-size:9px;font-weight:800;letter-spacing:.6px;color:#1a1c1e;margin-bottom:4px}
   table.ps-kv{border-collapse:collapse;width:100%}
-  table.ps-kv td{padding:4.5px 0;font-size:12px;vertical-align:top}
+  table.ps-kv td{padding:1.4px 0;font-size:9.5px;vertical-align:top;line-height:1.3}
   table.ps-kv td:first-child{color:#6b7177;width:44%}
-  table.ps-kv td.c{width:14px;color:#9aa1a8;text-align:center}
+  table.ps-kv td.c{width:11px;color:#9aa1a8;text-align:center}
   table.ps-kv td.v{color:#1a1c1e;font-weight:600}
-  table.ps-kv td.v.nm{font-weight:800}
-  .ps-netcard{flex:1;border:1px solid #dfe3e6;border-radius:10px;overflow:hidden;align-self:stretch}
-  .ps-netcard-top{display:flex;align-items:center;gap:12px;background:#f2faf5;padding:16px 18px}
-  .ps-netbar{flex:0 0 4px;align-self:stretch;min-height:40px;background:#38a169;border-radius:3px}
-  .ps-netamt{font-size:24px;font-weight:800;color:#1a1c1e;line-height:1.15}
-  .ps-netlbl{font-size:12.5px;color:#38a169;font-weight:600;margin-top:3px}
-  .ps-netcard-foot{padding:11px 18px 13px;border-top:1px dashed #dfe3e6}
-  .ps-netcard-foot div{display:flex;font-size:12px;padding:3px 0}
+  table.ps-kv td.v.nm{font-weight:800;font-size:10.5px}
+  .ps-netcard{flex:1;border:1px solid #dfe3e6;border-radius:8px;overflow:hidden;align-self:stretch}
+  .ps-netcard-top{display:flex;align-items:center;gap:9px;background:#f2faf5;padding:8px 12px}
+  .ps-netbar{flex:0 0 3px;align-self:stretch;min-height:26px;background:#38a169;border-radius:3px}
+  .ps-netamt{font-size:16px;font-weight:800;color:#1a1c1e;line-height:1.15}
+  .ps-netlbl{font-size:9.5px;color:#38a169;font-weight:600;margin-top:1px}
+  .ps-netcard-foot{padding:5px 12px 6px;border-top:1px dashed #dfe3e6}
+  .ps-netcard-foot div{display:flex;font-size:9.5px;padding:1px 0}
   .ps-netcard-foot span{color:#6b7177;flex:0 0 42%}
-  .ps-netcard-foot i{font-style:normal;color:#9aa1a8;flex:0 0 14px;text-align:center}
+  .ps-netcard-foot i{font-style:normal;color:#9aa1a8;flex:0 0 11px;text-align:center}
   .ps-netcard-foot b{color:#1a1c1e;font-weight:700}
 
   /* PF / UAN strip */
-  .ps-ids{display:flex;gap:40px;padding:11px 0 15px;border-top:1px dashed #dfe3e6;font-size:12px}
+  .ps-ids{display:flex;gap:26px;padding:5px 0 7px;border-top:1px dashed #dfe3e6;font-size:9.5px}
   .ps-ids div{display:flex;align-items:baseline;min-width:0}
   .ps-ids span{color:#6b7177}
-  .ps-ids i{font-style:normal;color:#9aa1a8;padding:0 8px}
+  .ps-ids i{font-style:normal;color:#9aa1a8;padding:0 6px}
   .ps-ids b{color:#1a1c1e;font-weight:700;overflow-wrap:anywhere}
 
   /* earnings + deductions */
-  .ps-money{display:flex;border:1px solid #dfe3e6;border-radius:10px;overflow:hidden}
+  .ps-money{display:flex;border:1px solid #dfe3e6;border-radius:8px;overflow:hidden}
   table.ps-half{flex:1;width:50%;border-collapse:collapse}
   table.ps-half+table.ps-half{border-left:1px solid #eceff1}
-  table.ps-half th{font-size:10.5px;font-weight:800;letter-spacing:.5px;color:#1a1c1e;
-    padding:14px 16px 9px;text-align:left;border-bottom:1px dashed #dfe3e6}
-  table.ps-half td{padding:9px 16px;font-size:11.5px;vertical-align:top}
+  table.ps-half th{font-size:8.5px;font-weight:800;letter-spacing:.4px;color:#1a1c1e;
+    padding:6px 10px 4px;text-align:left;border-bottom:1px dashed #dfe3e6}
+  table.ps-half td{padding:3.4px 10px;font-size:9.5px;vertical-align:top}
   table.ps-half th.amt,table.ps-half td.amt{text-align:right;white-space:nowrap}
   table.ps-half th.ytd,table.ps-half td.ytd{text-align:right;white-space:nowrap;width:26%}
   table.ps-half td.amt{font-weight:700;color:#1a1c1e}
   table.ps-half td.ytd{color:#4b5158}
   table.ps-half td.lbl{color:#2b2f33}
-  table.ps-half tr.pad td{padding:9px 16px}
-  td .n{font-size:9.5px;color:#8b9096;margin-top:2px}
-  table.ps-half tfoot td{background:#f7f8f9;font-weight:800;color:#1a1c1e;font-size:12px;padding:11px 16px}
+  table.ps-half tr.pad td{padding:3.4px 10px}
+  td .n{font-size:8px;color:#8b9096;margin-top:1px;line-height:1.25}
+  table.ps-half tfoot td{background:#f7f8f9;font-weight:800;color:#1a1c1e;font-size:9.5px;padding:4.5px 10px}
 
   /* total net payable */
   .ps-payable{display:flex;justify-content:space-between;align-items:stretch;
-    border:1px solid #dfe3e6;border-radius:10px;margin-top:16px;overflow:hidden}
-  .ps-payable>div:first-child{padding:13px 18px}
-  .ps-payable-t{font-size:12.5px;font-weight:800;color:#1a1c1e;letter-spacing:.3px}
-  .ps-payable-s{font-size:11.5px;color:#6b7177;margin-top:2px}
-  .ps-payable-v{background:#f2faf5;display:flex;align-items:center;padding:13px 22px;
-    font-size:16px;font-weight:800;color:#1a1c1e;white-space:nowrap}
+    border:1px solid #dfe3e6;border-radius:8px;margin-top:7px;overflow:hidden}
+  .ps-payable>div:first-child{padding:5px 12px}
+  .ps-payable-t{font-size:10px;font-weight:800;color:#1a1c1e;letter-spacing:.3px}
+  .ps-payable-s{font-size:9px;color:#6b7177;margin-top:1px}
+  .ps-payable-v{background:#f2faf5;display:flex;align-items:center;padding:5px 16px;
+    font-size:12.5px;font-weight:800;color:#1a1c1e;white-space:nowrap}
 
-  .ps-words{text-align:right;font-size:12px;color:#1a1c1e;margin-top:14px}
+  .ps-words{text-align:right;font-size:9.5px;color:#1a1c1e;margin-top:6px}
   .ps-words span{color:#6b7177}
 
-  .foot{margin-top:auto;padding-top:11px;border-top:1px solid #e3e6e9;
-    display:flex;justify-content:space-between;gap:16px;font-size:10px;color:#8b9096}
+  .foot{margin-top:auto;padding-top:5px;border-top:1px solid #e3e6e9;
+    display:flex;justify-content:space-between;gap:12px;font-size:8px;color:#8b9096}
   @media print{
     body{background:#fff}
-    .slip{margin:0;min-height:auto;height:auto;padding:10mm 12mm}
-    /* one payslip per sheet — the layout needs the whole page */
-    .slip{page-break-after:always}
+    .slip{margin:0;border-bottom:none}
+    .slip:nth-child(even){page-break-after:always}   /* two payslips per sheet */
     .slip:last-child{page-break-after:auto}
   }
   @page{size:A4 portrait;margin:0}
