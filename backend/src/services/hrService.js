@@ -245,8 +245,84 @@ function ptForGross(gross, slabs) {
   return s ? num(s.amt) : 0;
 }
 
+/* ============================================================
+   ADVANCES — money paid to a worker up front and recovered from
+   later payslips in fixed monthly instalments.
+
+   It lives on the worker as
+     advance: { amount, monthly, note, startPeriod, startedOn }
+   and what has already been recovered is DERIVED from finalised
+   payslips rather than stored. That matters: a Draft pay run can
+   be re-run any number of times, and deriving the balance means a
+   re-run can never double-count a recovery the way a running
+   counter would.
+   ============================================================ */
+function advanceOf(worker) {
+  const a = worker && worker.advance;
+  if (!a) return null;
+  const amount = round(num(a.amount));
+  if (amount <= 0) return null;
+  return { amount, monthly: round(num(a.monthly)), note: a.note || "",
+    startPeriod: a.startPeriod || null, startedOn: a.startedOn || null };
+}
+
+/** Recovered so far — counted ONLY from FINALISED runs, and never from the
+    period being computed (that instalment is what we are working out). */
+function advanceRecovered(workerId, exceptPeriod, st) {
+  st = st || repo.getState();
+  const finalised = {};
+  (st.hrPayruns || []).forEach((pr) => {
+    if (pr.status === "Finalized" && pr.period !== exceptPeriod) finalised[pr.id] = true;
+  });
+  return round((st.hrPayslips || []).reduce((sum, s) =>
+    (finalised[s.payrunId] && s.workerId === workerId ? sum + num(s.advances) : sum), 0));
+}
+
+/** What this period should recover from a worker, and the balance either side.
+    The last instalment is trimmed to whatever is still outstanding, so an
+    advance is never over-recovered. */
+function advanceForPeriod(worker, period, st) {
+  const adv = advanceOf(worker);
+  if (!adv) return null;
+  if (adv.startPeriod && period < adv.startPeriod) return null;   // not started yet
+  const recovered = advanceRecovered(worker.id, period, st);
+  const opening = round(Math.max(0, adv.amount - recovered));
+  if (opening <= 0) return { amount: adv.amount, opening: 0, instalment: 0, closing: 0, cleared: true };
+  const instalment = round(Math.min(adv.monthly > 0 ? adv.monthly : opening, opening));
+  return { amount: adv.amount, opening, instalment, closing: round(opening - instalment), cleared: false };
+}
+
+/** Set / clear a worker's advance. `null` (or a zero amount) clears it. */
+function setAdvance(workerId, body) {
+  const w = repo.getWorker(workerId);
+  if (!w) throw err("Worker not found", 404);
+  body = body || {};
+  const amount = round(num(body.amount));
+  if (!amount) { delete w.advance; return repo.putWorker(w); }
+  if (amount < 0) throw err("Advance amount cannot be negative", 400);
+  const monthly = round(num(body.monthly));
+  if (monthly < 0) throw err("Monthly deduction cannot be negative", 400);
+  if (monthly > amount) throw err("Monthly deduction cannot exceed the advance itself", 400);
+  if (body.startPeriod && !/^\d{4}-\d{2}$/.test(body.startPeriod)) throw err("Recovery start must be YYYY-MM", 400);
+  w.advance = { amount, monthly, note: String(body.note || "").slice(0, 200),
+    startPeriod: body.startPeriod || null,
+    startedOn: (w.advance && w.advance.startedOn) || todayISO() };
+  return repo.putWorker(w);
+}
+
+/** A worker's advance with its live balance — what the UI shows. */
+function advanceStatus(workerId) {
+  const w = repo.getWorker(workerId);
+  if (!w) throw err("Worker not found", 404);
+  const adv = advanceOf(w);
+  if (!adv) return { workerId, name: w.name, advance: null };
+  const recovered = advanceRecovered(workerId, null);
+  return { workerId, name: w.name,
+    advance: Object.assign({}, adv, { recovered, outstanding: round(Math.max(0, adv.amount - recovered)) }) };
+}
+
 /** Compute one worker's payslip for a period (YYYY-MM) from attendance. */
-function computeSlip(worker, period, cfg, isPaidLeaveDay) {
+function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   const att = repo.attendanceForPeriod(period).filter((a) => a.workerId === worker.id);
   let present = 0, otHours = 0, paidLeave = 0, unpaidLeave = 0, absent = 0;
   att.forEach((a) => {
@@ -287,7 +363,8 @@ function computeSlip(worker, period, cfg, isPaidLeaveDay) {
   const employerPf = d.pf && d.pf.on ? round((num(d.pf.employerRate || d.pf.rate) / 100) * Math.min(basicEarned, num(d.pf.wageCapMonthly) || basicEarned)) : 0;
   const employerEsi = d.esi && d.esi.on && gross <= num(d.esi.grossThreshold) ? round((num(d.esi.employerRate) / 100) * gross) : 0;
 
-  const advances = 0;
+  // this month's advance instalment, if the worker is carrying one
+  const advances = advance ? advance.instalment : 0;
   const net = round(gross - pf - esi - pt - advances);
   return {
     workerId: worker.id, name: worker.name, dept: worker.dept, payType: worker.payType,
@@ -295,6 +372,8 @@ function computeSlip(worker, period, cfg, isPaidLeaveDay) {
     otHours: round(otHours), otPay: otPayOut || 0, allowances: allowOut || 0, hourly: hourlyOut || 0,
     basicEarned, gross,
     deductions: { pf, esi, pt }, employer: { pf: employerPf, esi: employerEsi }, advances, net,
+    // the balance either side of this recovery, so the payslip can show it
+    advance: advance ? { total: advance.amount, opening: advance.opening, closing: advance.closing } : null,
   };
 }
 
@@ -326,14 +405,16 @@ function runPayroll(period, opts) {
     return t ? t.paid !== false : true;
   };
 
-  const slips = workers.map((w) => computeSlip(w, period, cfg, isPaidLeaveDay));
+  const slips = workers.map((w) => computeSlip(w, period, cfg, isPaidLeaveDay, advanceForPeriod(w, period, st)));
   const totals = slips.reduce((t, s) => ({ gross: t.gross + s.gross, net: t.net + s.net,
-    pf: t.pf + s.deductions.pf, esi: t.esi + s.deductions.esi, pt: t.pt + s.deductions.pt }),
-    { gross: 0, net: 0, pf: 0, esi: 0, pt: 0 });
+    pf: t.pf + s.deductions.pf, esi: t.esi + s.deductions.esi, pt: t.pt + s.deductions.pt,
+    advances: t.advances + num(s.advances) }),
+    { gross: 0, net: 0, pf: 0, esi: 0, pt: 0, advances: 0 });
   const payrunId = "PR-" + period;
   const payrun = repo.putPayrun({ id: payrunId, period, status: "Draft", generatedAt: new Date().toISOString(),
     workers: slips.length, totals: { gross: round(totals.gross), net: round(totals.net),
-      pf: round(totals.pf), esi: round(totals.esi), pt: round(totals.pt) }, config: cfg });
+      pf: round(totals.pf), esi: round(totals.esi), pt: round(totals.pt),
+      advances: round(totals.advances) }, config: cfg });
   slips.forEach((s) => repo.putPayslip(Object.assign({ id: payrunId + ":" + s.workerId, payrunId }, s)));
   return { payrun, payslips: repo.payslipsForRun(payrunId) };
 }
@@ -348,7 +429,9 @@ function deletePayrun(id) {
   if (!repo.getPayrun(id)) throw err("Pay run not found", 404);
   return repo.deletePayrun(id);
 }
-/** Adjust one payslip's advances/manual lines and recompute net. */
+/** Adjust one payslip's advances/manual lines and recompute net.
+    A one-month override of the standing instalment: it may not recover more
+    than the worker still owes, and the closing balance follows it. */
 function updatePayslip(id, patch) {
   const [payrunId] = id.split(":");
   const pr = repo.getPayrun(payrunId);
@@ -356,7 +439,15 @@ function updatePayslip(id, patch) {
   if (pr.status === "Finalized") throw err("Pay run is finalized", 400);
   const slip = repo.payslipsForRun(payrunId).find((s) => s.id === id);
   if (!slip) throw err("Payslip not found", 404);
-  const advances = num((patch || {}).advances);
+  let advances = round(num((patch || {}).advances));
+  if (advances < 0) throw err("A deduction cannot be negative", 400);
+  const st = repo.getState();
+  const worker = (st.hrWorkers || []).find((w) => w.id === slip.workerId);
+  const plan = worker ? advanceForPeriod(worker, pr.period, st) : null;
+  if (plan) {
+    if (advances > plan.opening) throw err("Only " + plan.opening + " is still outstanding on this advance", 400);
+    slip.advance = { total: plan.amount, opening: plan.opening, closing: round(plan.opening - advances) };
+  }
   slip.advances = advances;
   slip.net = round(slip.gross - slip.deductions.pf - slip.deductions.esi - slip.deductions.pt - advances);
   return repo.putPayslip(slip);
@@ -413,4 +504,5 @@ module.exports = {
   ingestPunch, setAttendance, recomputeAttendance, recentPunches,
   saveLeaveType, deleteLeaveType, leaveBalances, applyLeave, decideLeave, deleteLeave,
   runPayroll, finalizePayrun, deletePayrun, updatePayslip, payslips, computeSlip,
+  setAdvance, advanceStatus, advanceForPeriod,
 };

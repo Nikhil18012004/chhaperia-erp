@@ -198,6 +198,11 @@
       remove(id) { return http("DELETE", "/hr/payroll/" + enc(id)); },
     },
     payslip: { update(id, patch) { return http("PATCH", "/hr/payslips/" + enc(id), patch); } },
+    // an advance paid up front, recovered from later payslips month by month
+    advance: {
+      get(workerId) { return http("GET", "/hr/workers/" + enc(workerId) + "/advance"); },
+      set(workerId, body) { return http("PUT", "/hr/workers/" + enc(workerId) + "/advance", body); },
+    },
     config: {
       get() { return http("GET", "/hr/config"); },
       set(patch) { return http("PATCH", "/hr/config", patch); },

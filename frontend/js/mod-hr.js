@@ -459,7 +459,11 @@
       { key: "pf", label: "PF", num: true, render: (r) => r.deductions.pf ? money(r.deductions.pf) : "—", sort: (r) => r.deductions.pf },
       { key: "esi", label: "ESI", num: true, render: (r) => r.deductions.esi ? money(r.deductions.esi) : "—", sort: (r) => r.deductions.esi },
       { key: "pt", label: "PT", num: true, render: (r) => r.deductions.pt ? money(r.deductions.pt) : "—", sort: (r) => r.deductions.pt },
-      { key: "adv", label: "Advance", num: true, render: (r) => r.advances ? money(r.advances) : "—", sort: (r) => r.advances },
+      // the instalment, with what is still owed after it
+      { key: "adv", label: "Advance", num: true, sort: (r) => r.advances,
+        render: (r) => r.advances
+          ? money(r.advances) + (r.advance && r.advance.closing ? `<div class="cell-sub">${esc(money(r.advance.closing))} left</div>` : "")
+          : "—" },
       { key: "net", label: "Net Pay", num: true, render: (r) => `<span class="strong">${money(r.net)}</span>`, sort: (r) => r.net },
     ], { onRow: (r) => payslipDetail(r, run), empty: "No payslips" }));
   }
@@ -502,7 +506,9 @@
       d.pf ? ["Provident Fund (PF)", d.pf, ""] : null,
       d.esi ? ["ESI", d.esi, ""] : null,
       d.pt ? ["Professional Tax", d.pt, ""] : null,
-      s.advances ? ["Advance / recovery", s.advances, ""] : null,
+      // an advance shows what it is recovering against, so the worker can see
+      // the balance come down month by month
+      s.advances ? ["Advance recovery", s.advances, advNote(s)] : null,
     ].filter(Boolean);
     const rowsOf = (list) => (list.length ? list : [["—", 0, ""]])
       .map(([l, v, note]) => `<tr><td>${esc(l)}${note ? `<div class="n">${esc(note)}</div>` : ""}</td>` +
@@ -658,7 +664,7 @@
           d.pf ? ["Provident Fund (PF)", d.pf, ""] : null,
           d.esi ? ["ESI", d.esi, ""] : null,
           d.pt ? ["Professional Tax", d.pt, ""] : null,
-          s.advances ? ["Advance / recovery", s.advances, ""] : null,
+          s.advances ? ["Advance recovery", s.advances, advNote(s)] : null,
         ].filter(Boolean), "Total deductions", dedTotal),
       ]),
       h("div", { class: "pay-net" }, [h("span", { text: "NET PAY" }), h("b", { text: money2(s.net) })]),
@@ -666,15 +672,81 @@
         "Employer contribution — PF " + money(emp.pf || 0) + " · ESI " + money(emp.esi || 0)),
     ]);
     const foot = [];
-    if (run.status !== "Finalized") foot.push(h("button", { class: "btn ghost", onclick: () => editAdvance(s), text: "✎ Set Advance" }));
+    if (run.status !== "Finalized") foot.push(h("button", { class: "btn ghost", onclick: () => advanceForm(s, run), text: "₹ Advance" }));
     foot.push(h("button", { class: "btn primary", onclick: () => printPayslips([s], run), text: "🖨 Print Payslip" }));
     modal({ title: "Payslip — " + s.name, sub: run.period + " · " + run.id, wide: true, body, foot });
   }
-  function editAdvance(s) {
-    const body = h("div", { class: "form-grid" }, [U.field("Advance / Manual Deduction (₹)", `<input class="input" id="ps_adv" type="number" value="${s.advances || 0}">`)]);
-    const mo = modal({ title: "Adjust Advance", sub: s.name, body,
-      foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
-        h("button", { class: "btn primary", onclick: () => { const adv = +UI.$("#ps_adv").value || 0; mo.close(); UI.$("#modalHost").hidden = true; save(() => DB.hr.payslip.update(s.id, { advances: adv }), "payroll"); }, text: "Save" })] });
+
+  /* the "3,000 of 20,000 · 17,000 left" line under an advance recovery */
+  function advNote(s) {
+    const a = s.advance;
+    if (!a || !a.total) return "";
+    return "of " + money(a.total) + " advance · " + money(a.closing) + " left after this month";
+  }
+
+  /* ============================================================
+     ADVANCE — money paid to a worker up front and recovered from
+     their payslips in fixed monthly instalments. Optional: a worker
+     without one simply has no advance line. The form takes the two
+     numbers that define it — the amount and the monthly deduction —
+     and shows what that means before it is saved.
+     ============================================================ */
+  async function advanceForm(s, run) {
+    let a = null;
+    try { a = ((await DB.hr.advance.get(s.workerId)) || {}).advance || null; }
+    catch (e) { toast(e.message || "Could not load the advance", { type: "danger" }); return; }
+
+    const body = h("div", {}, [
+      h("div", { class: "form-grid" }, [
+        U.field("Advance amount (₹)",
+          `<input class="input" id="adv_amt" type="number" min="0" step="1" value="${a ? a.amount : ""}" placeholder="e.g. 20000">
+           <div class="muted" style="font-size:11px;margin-top:3px">The total paid to the worker.</div>`),
+        U.field("Monthly deduction (₹)",
+          `<input class="input" id="adv_mon" type="number" min="0" step="1" value="${a ? a.monthly : ""}" placeholder="e.g. 2000">
+           <div class="muted" style="font-size:11px;margin-top:3px">Taken off each payslip until it is cleared.</div>`),
+        U.field("Start recovering from",
+          `<input class="input" id="adv_from" type="month" value="${a && a.startPeriod ? a.startPeriod : (run ? run.period : "")}">`),
+        U.field("Note (optional)", `<input class="input" id="adv_note" value="${esc((a && a.note) || "")}" placeholder="reason / reference">`),
+      ]),
+    ]);
+    // what those two numbers actually mean, restated as they are typed
+    const plan = h("div", { class: "muted", style: "font-size:12px;margin-top:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px" });
+    body.appendChild(plan);
+    if (a) body.appendChild(h("div", { class: "muted", style: "font-size:11.5px;margin-top:8px" },
+      "Recovered so far " + money(a.recovered) + " of " + money(a.amount) + " · outstanding " + money(a.outstanding)
+      + (a.startedOn ? " · taken " + a.startedOn : "")));
+
+    const foot = [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" })];
+    if (a) foot.push(h("button", { class: "btn danger", onclick: () => saveAdv(0, 0), text: "🗑 Clear advance" }));
+    foot.push(h("button", { class: "btn primary", onclick: () => saveAdv(), text: "Save Advance" }));
+    const mo = modal({ title: "Advance — " + s.name, sub: "Paid up front, recovered from monthly pay", body, foot });
+
+    const restate = () => {
+      const amt = +UI.$("#adv_amt").value || 0, mon = +UI.$("#adv_mon").value || 0;
+      if (!amt) { plan.textContent = "No advance — nothing will be deducted."; return; }
+      if (!mon) { plan.textContent = "With no monthly deduction the whole " + money(amt) + " comes off the next payslip."; return; }
+      if (mon > amt) { plan.textContent = "The monthly deduction cannot be more than the advance itself."; return; }
+      const months = Math.ceil(amt / mon), last = amt - mon * (months - 1);
+      plan.textContent = money(mon) + " a month for " + months + " month" + (months > 1 ? "s" : "")
+        + (last !== mon ? " (last month " + money(last) + ")" : "") + " — clears " + money(amt) + ".";
+    };
+    ["adv_amt", "adv_mon"].forEach((id) => { const el = UI.$("#" + id); if (el) el.addEventListener("input", restate); });
+    restate();
+
+    async function saveAdv(amtOverride, monOverride) {
+      const amount = amtOverride != null ? amtOverride : (+UI.$("#adv_amt").value || 0);
+      const monthly = monOverride != null ? monOverride : (+UI.$("#adv_mon").value || 0);
+      if (amount && monthly > amount) { toast("The monthly deduction cannot exceed the advance", { type: "warn" }); return; }
+      const startPeriod = (UI.$("#adv_from") || {}).value || null;
+      const note = (UI.$("#adv_note") || {}).value || "";
+      mo.close(); UI.$("#modalHost").hidden = true;
+      await save(async () => {
+        await DB.hr.advance.set(s.workerId, { amount, monthly, startPeriod, note });
+        // the instalment only reaches the payslips when the run is regenerated
+        if (run && run.status !== "Finalized") await DB.hr.payroll.run(run.period, { force: true });
+        toast(amount ? "Advance set for " + s.name : "Advance cleared for " + s.name, { type: "ok" });
+      }, "payroll");
+    }
   }
 
   /* ============================================================

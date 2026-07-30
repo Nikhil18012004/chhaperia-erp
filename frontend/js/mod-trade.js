@@ -1083,11 +1083,15 @@
     for(let i=0;i<2;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(totalCols)}</tr>`;
     const html=`<!doctype html><html><head><meta charset="utf-8"><title>${title} ${esc(o.invoiceNo||o.id)}</title>
 <style>
+  /* A4 is what these documents are printed on — say so, or the browser falls
+     back to its own default (US Letter is 18mm shorter and cost a whole extra
+     page). The 8mm page margin plus the body's 6mm gives a 14mm side margin. */
+  @page{size:A4;margin:8mm}
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
-  .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:112px}
-  .logo-side{flex:1.05;display:flex;align-items:center;padding:8px 0 8px 16px}
-  .logo-side img{width:100%;max-height:108px;object-fit:contain;object-position:left center}
+  body{font:12px/1.38 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
+  .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:96px}
+  .logo-side{flex:1.05;display:flex;align-items:center;padding:5px 0 5px 16px}
+  .logo-side img{width:100%;max-height:92px;object-fit:contain;object-position:left center}
   .co-block{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
     padding:12px 20px 10px 58px;text-align:right;font-size:10.5px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
   .conm{font-size:14.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
@@ -1097,31 +1101,35 @@
   .title-row{display:flex;justify-content:space-between;align-items:center;margin:0 0 10px}
   .title{font-size:20px;font-weight:800;letter-spacing:4px;color:#26282b;border-left:6px solid #F06820;padding-left:12px}
   .copy{font-size:9px;font-weight:700;letter-spacing:1px;color:#888;border:1px solid #ccc;border-radius:4px;padding:3px 9px;text-transform:uppercase}
-  .info{display:grid;grid-template-columns:repeat(3,1fr);gap:5px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:10px 14px;margin-bottom:10px}
+  .info{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:8px}
   .ip{display:flex;justify-content:space-between;gap:8px;font-size:11px}.ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}
-  .parties{display:flex;gap:12px;margin-bottom:10px}
-  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:9px 12px;font-size:11.5px;line-height:1.55}
-  .plbl{display:inline-block;background:#F06820;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:2.5px 10px;border-radius:3px;margin:-19px 0 6px;box-shadow:0 1px 0 rgba(0,0,0,.15)}
+  .parties{display:flex;gap:12px;margin-bottom:8px}
+  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:7px 12px;font-size:11.5px;line-height:1.45}
+  .plbl{display:inline-block;background:#F06820;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:2.5px 10px;border-radius:3px;margin:-18px 0 5px;box-shadow:0 1px 0 rgba(0,0,0,.15)}
   .pnm{font-weight:800;font-size:13px}.paddr{color:#333;white-space:pre-line}
-  table.items{width:100%;border-collapse:collapse;margin-bottom:10px}
-  table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:6.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}
-  table.items td{border:1px solid #d8dbde;padding:5.5px 7px;font-size:11.5px;vertical-align:top}
+  table.items{width:100%;border-collapse:collapse;margin-bottom:8px}
+  table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:5.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}
+  table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:11.5px;vertical-align:top}
   table.items tbody tr:nth-child(even) td{background:#f6f7f8}
-  tr.fill td{height:19px;background:#fff !important}
+  tr.fill td{height:15px;background:#fff !important}
   td.r,th.r{text-align:right} td.c,th.c{text-align:center}
   td .sub{font-size:9.5px;color:#777}
-  .bottom{display:flex;gap:12px;align-items:stretch;margin-bottom:10px}
-  .bl{flex:1.4;display:flex;flex-direction:column;gap:8px}
-  .words,.bank,.notes{border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:7px 12px;font-size:11px;line-height:1.55}
+  /* The totals column used to leave a tall blank beside the stacked notes.
+     The amount in words now sits directly under the grand total it restates,
+     which reads better AND balances the two columns onto one page. */
+  .bottom{display:flex;gap:12px;align-items:flex-start;margin-bottom:8px}
+  .bl{flex:1.4;display:flex;flex-direction:column;gap:6px}
+  .br{flex:1;display:flex;flex-direction:column;gap:6px}
+  .words,.bank,.notes{border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:5px 12px;font-size:11px;line-height:1.45}
   .words b{display:block;margin-top:2px;font-size:11.5px}
   .lbl{font-size:9px;font-weight:800;letter-spacing:1px;color:#F06820;text-transform:uppercase}
-  table.tot{flex:1;border-collapse:collapse;height:fit-content}
-  table.tot td{border:1px solid #d8dbde;padding:6px 12px;font-size:12px}
+  table.tot{width:100%;border-collapse:collapse;height:fit-content}
+  table.tot td{border:1px solid #d8dbde;padding:5px 12px;font-size:12px}
   table.tot td:first-child{color:#555}
   table.tot tr:nth-child(even) td{background:#f6f7f8}
   table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}
-  .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:14px;font-size:10.5px;color:#777}
-  .sig{text-align:center;color:#1a1c1e}.sig .ln{border-top:1.5px solid #555;margin-top:50px;padding-top:5px;min-width:210px;font-weight:700}
+  .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:10.5px;color:#777}
+  .sig{text-align:center;color:#1a1c1e}.sig .ln{border-top:1.5px solid #555;margin-top:24px;padding-top:5px;min-width:210px;font-weight:700}
   .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
   .greet{font-size:11.5px;margin:-4px 0 9px;color:#444}
@@ -1136,11 +1144,13 @@
   .sheet>tbody>tr>td,.sheet>tfoot>tr>td{padding:0;border:0}
   .foot-space{height:0}
   @media print{
-    body{padding:0 6mm 6mm} .band{margin:0 -6mm} .rule{margin:0 -6mm 12px} .note{display:none}
-    /* the two strips measure ~13mm; 18mm leaves the footer room to grow a line
+    /* no padding at the foot: the running footer is fixed, so the page's own
+       bottom margin is all the room the flow needs */
+    body{padding:0 6mm 0} .band{margin:0 -6mm} .rule{margin:0 -6mm 12px} .note{display:none}
+    /* the two strips measure ~13mm; 16mm leaves the footer room to grow a line
        (a longer tagline) without the table ever running underneath it */
-    .foot-space{height:18mm}
-    .pgfoot{position:fixed;left:0;right:0;bottom:2mm;margin:0;padding:0 6mm;background:#fff}
+    .foot-space{height:16mm}
+    .pgfoot{position:fixed;left:0;right:0;bottom:0;margin:0;padding:0 6mm;background:#fff}
     .pgfoot .strip{margin-top:0}
     .pgfoot .strip+.strip{margin-top:2px}
   }
@@ -1172,7 +1182,6 @@
   </tr></thead><tbody>${rows}${filler}</tbody></table>
   <div class="bottom">
     <div class="bl">
-      <div class="words"><span class="lbl">AMOUNT IN WORDS</span><b>${esc(GST.amountInWords(calc.grandTotal))}</b></div>
       ${hasBank?`<div class="bank"><span class="lbl">BANK DETAILS</span>
         ${bank.name?`<div>Bank : <b>${esc(bank.name)}</b>${bank.branch?" · "+esc(bank.branch):""}</div>`:""}
         ${bank.acName?`<div>A/c Name : ${esc(bank.acName)}</div>`:""}
@@ -1190,10 +1199,13 @@
              :terms.map((t,i)=>`<div>${i+1}. ${esc(t)}</div>`).join("")}
       </div>
     </div>
-    <table class="tot"><tbody>
-      ${totalsRows}
-      <tr class="g"><td>GRAND TOTAL (₹)</td><td class="r">${IN(calc.grandTotal)}</td></tr>
-    </tbody></table>
+    <div class="br">
+      <table class="tot"><tbody>
+        ${totalsRows}
+        <tr class="g"><td>GRAND TOTAL (₹)</td><td class="r">${IN(calc.grandTotal)}</td></tr>
+      </tbody></table>
+      <div class="words"><span class="lbl">AMOUNT IN WORDS</span><b>${esc(GST.amountInWords(calc.grandTotal))}</b></div>
+    </div>
   </div>
   <div class="sign">
     <div class="muted" style="color:#777">${interState?"Inter-state supply — IGST charged.":"Intra-state supply — CGST + SGST charged."}${isPO?"":" Whether tax is payable on reverse charge : No."}</div>

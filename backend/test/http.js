@@ -143,6 +143,98 @@ async function run() {
      to the full dataset while the UI merely hid its menus; these
      assertions exist so that cannot happen again unnoticed.
      ============================================================ */
+  section("Payroll advances — recovered monthly, never double-counted");
+  {
+    const W = { id: "EMP-ADV", name: "Advance Test Worker", dept: "packing", payType: "daily",
+      dailyRate: 700, joined: "2020-01-01" };
+    await call("POST", "/hr/workers", A, W);
+    // give the worker a full month of attendance so there is pay to deduct from
+    const per = "2026-05";
+    for (let d = 1; d <= 26; d++) {
+      await call("POST", "/hr/attendance", A, { workerId: W.id, date: per + "-" + String(d).padStart(2, "0"), status: "P" });
+    }
+    const slipOf = async (period) => {
+      const r = await call("POST", "/hr/payroll/run", A, { period, force: true });
+      return (r.d.payslips || []).find((s) => s.workerId === W.id);
+    };
+
+    const plain = await slipOf(per);
+    ok("with no advance nothing is deducted", plain && plain.advances === 0, plain && String(plain.advances));
+    const grossWas = plain.gross;
+
+    ok("an advance needs an amount and a monthly deduction",
+      (await call("PUT", "/hr/workers/" + W.id + "/advance", A, { amount: 20000, monthly: 2000 })).status === 200);
+    const st1 = (await call("GET", "/hr/workers/" + W.id + "/advance", A)).d;
+    ok("it is held against the worker", st1.advance && st1.advance.amount === 20000 && st1.advance.monthly === 2000);
+    ok("nothing is recovered until a run is finalised", st1.advance.recovered === 0 && st1.advance.outstanding === 20000);
+
+    const s1 = await slipOf(per);
+    ok("the payslip now recovers one monthly instalment", s1.advances === 2000, String(s1.advances));
+    ok("and the net pay drops by exactly that", s1.net === plain.net - 2000, s1.net + " vs " + plain.net);
+    ok("gross is untouched — an advance is a deduction, not a pay cut", s1.gross === grossWas);
+    ok("the slip carries the balance either side",
+      s1.advance && s1.advance.opening === 20000 && s1.advance.closing === 18000,
+      JSON.stringify(s1.advance));
+
+    // THE trap: a Draft run can be regenerated any number of times
+    const s1again = await slipOf(per);
+    ok("re-running a DRAFT does not recover twice", s1again.advances === 2000 && s1again.advance.closing === 18000,
+      s1again.advances + " / " + JSON.stringify(s1again.advance));
+
+    await call("POST", "/hr/payroll/PR-" + per + "/finalize", A, {});
+    const st2 = (await call("GET", "/hr/workers/" + W.id + "/advance", A)).d;
+    ok("finalising the run books the recovery", st2.advance.recovered === 2000 && st2.advance.outstanding === 18000,
+      JSON.stringify(st2.advance));
+
+    // next month picks up where it left off
+    for (let d = 1; d <= 26; d++) {
+      await call("POST", "/hr/attendance", A, { workerId: W.id, date: "2026-06-" + String(d).padStart(2, "0"), status: "P" });
+    }
+    const s2 = await slipOf("2026-06");
+    ok("the next month recovers the next instalment", s2.advances === 2000, String(s2.advances));
+    ok("counting down from the new balance",
+      s2.advance.opening === 18000 && s2.advance.closing === 16000, JSON.stringify(s2.advance));
+
+    // a nearly-cleared advance must not over-recover
+    await call("PUT", "/hr/workers/" + W.id + "/advance", A, { amount: 2500, monthly: 2000 });
+    const s3 = await slipOf("2026-06");
+    ok("the last instalment is trimmed to what is left, never more",
+      s3.advances === 500 && s3.advance.closing === 0,
+      s3.advances + " / " + JSON.stringify(s3.advance));
+
+    // manual one-month override
+    ok("a one-month override is allowed",
+      (await call("PATCH", "/hr/payslips/PR-2026-06:" + W.id, A, { advances: 300 })).d.advances === 300);
+    ok("but it cannot recover more than is outstanding",
+      (await call("PATCH", "/hr/payslips/PR-2026-06:" + W.id, A, { advances: 99999 })).status === 400);
+    ok("and it cannot be negative",
+      (await call("PATCH", "/hr/payslips/PR-2026-06:" + W.id, A, { advances: -5 })).status === 400);
+
+    ok("a monthly deduction larger than the advance is refused",
+      (await call("PUT", "/hr/workers/" + W.id + "/advance", A, { amount: 1000, monthly: 5000 })).status === 400);
+    ok("a negative advance is refused",
+      (await call("PUT", "/hr/workers/" + W.id + "/advance", A, { amount: -100, monthly: 10 })).status === 400);
+
+    ok("recovery can be told to start from a later month",
+      (await call("PUT", "/hr/workers/" + W.id + "/advance", A, { amount: 9000, monthly: 1000, startPeriod: "2026-09" })).status === 200);
+    const s4 = await slipOf("2026-06");
+    ok("so an earlier month deducts nothing", s4.advances === 0, String(s4.advances));
+
+    ok("clearing the advance removes it",
+      !((await call("PUT", "/hr/workers/" + W.id + "/advance", A, { amount: 0 })).d || {}).advance);
+    const s5 = await slipOf("2026-06");
+    ok("and the payslip goes back to no deduction", s5.advances === 0);
+
+    ok("a supervisor cannot set an advance (403)",
+      (await call("PUT", "/hr/workers/" + W.id + "/advance", C, { amount: 500, monthly: 100 })).status === 403);
+    ok("an unknown worker 404s",
+      (await call("PUT", "/hr/workers/EMP-NOPE/advance", A, { amount: 500, monthly: 100 })).status === 404);
+
+    await call("DELETE", "/hr/payroll/PR-" + per, A);
+    await call("DELETE", "/hr/payroll/PR-2026-06", A);
+    await call("DELETE", "/hr/workers/" + W.id, A);
+  }
+
   section("Lab role: scoped payload + write limits");
   const lab = await login("lab", "lab@123");
   const LB = lab.token;

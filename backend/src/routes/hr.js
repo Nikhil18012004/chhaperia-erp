@@ -94,6 +94,14 @@ router.patch("/payslips/:id", requireAuth, office, (req, res, next) => {
   try { res.json(hr.updatePayslip(req.params.id, req.body || {})); } catch (e) { next(e); }
 });
 
+/* ---- advances: an amount paid up front, recovered monthly from payslips ---- */
+router.get("/workers/:id/advance", requireAuth, office, (req, res, next) => {
+  try { res.json(hr.advanceStatus(req.params.id)); } catch (e) { next(e); }
+});
+router.put("/workers/:id/advance", requireAuth, office, (req, res, next) => {
+  try { res.json(hr.setAdvance(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+
 /* ---- config (deduction toggles/rates, OT multiplier, device key) ---- */
 router.get("/config", requireAuth, office, (req, res, next) => {
   try { res.json(hr.getConfig()); } catch (e) { next(e); }
