@@ -53,7 +53,7 @@ function stateForOfficer(user) {
      • raw-material & finished-goods QUANTITIES (no costs/values)
    Strips: prices, costs, customers, suppliers, sales, money.
    ============================================================ */
-function stateForSupervisor(area) {
+function stateForSupervisor(area, username) {
   const d = fullState();
   const itemById = Object.fromEntries(d.items.map((i) => [i.id, i]));
   const custById = Object.fromEntries((d.customers || []).map((c) => [c.id, c]));
@@ -74,8 +74,15 @@ function stateForSupervisor(area) {
     if (wo.route && wo.route.length) return wo.route;
     return S.seedRouteFromLegacy(wo).route;
   }
+  /* Does this job belong on my board at all? A stage counts as mine when my
+     area covers it AND (for an RM-production stage) I am the person who owns
+     it — the two RM lines never see each other's jobs, while slitting and
+     packing stay shared. */
+  function isMyStage(r) {
+    return S.areaCovers(area, r.area) && (!r.owner || r.owner === username);
+  }
   function involved(route) {
-    return area === "all" || route.some((r) => S.areaCovers(area, r.area));
+    return area === "all" || route.some(isMyStage);
   }
 
   // materials THIS area needs for the WO's current stage (quantities only, no cost)
@@ -96,10 +103,14 @@ function stateForSupervisor(area) {
       const idx = Math.min(Math.max(wo.stageIdx || 0, 0), route.length - 1);
       const cur = route[idx];
       const myStage = S.stageForArea(route, area) || cur;
+      /* An RM-production stage belongs to one person: it appears on their board
+         only. Slitting and packing carry no owner, so every slitting and
+         fibre-glass login keeps seeing them. */
+      const ownedByMe = (st) => !st || !st.owner || st.owner === username;
       const mine = area === "all"
         ? (cur.status !== "Completed" || !wo.dispatched)
-        : (S.areaCovers(area, cur.area) && cur.status !== "Completed");
-      const myDone = area !== "all" && route.filter((r) => S.areaCovers(area, r.area)).every((r) => r.status === "Completed");
+        : (S.areaCovers(area, cur.area) && cur.status !== "Completed" && ownedByMe(cur));
+      const myDone = area !== "all" && route.filter(isMyStage).every((r) => r.status === "Completed");
       return {
         id: wo.id, date: wo.date, due: wo.due, status: wo.status,
         progress: wo.progress, priority: wo.priority, line: wo.line,
@@ -110,11 +121,12 @@ function stateForSupervisor(area) {
         updatedBy: wo.updatedBy || null, updatedAt: wo.updatedAt || null,
         // routing / stage hand-off
         route: route.map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq, status: r.status,
+          owner: r.owner || null, line: r.line || null,
           doneBy: r.doneBy || null, doneAt: r.doneAt || null })),
         stageIdx: idx,
         stage: { key: cur.key, name: cur.name, area: cur.area, seq: cur.seq, status: cur.status },
         myStageKey: myStage.key,
-        spec: S.specForWO(wo),   // order spec (e.g. copper-wire count), or null
+        spec: S.specForWO(wo, d),   // order spec (e.g. copper-wire count), or null
         mine, myDone, dispatched: !!wo.dispatched,
         // recipe for THIS area's stage (quantities only)
         materials: stageMaterials(wo, myStage),
@@ -122,8 +134,10 @@ function stateForSupervisor(area) {
     });
 
   // stock QUANTITIES only (raw + finished), no valuation
+  // WIP is not stocked any more (a stage hands its output straight to the next
+  // stage), so the old WIP plumbing items are never shown
   const stock = d.items
-    .filter((i) => ["RM", "WIP", "FG", "PKG", "CON"].includes(i.cat))
+    .filter((i) => ["RM", "FG", "PKG", "CON"].includes(i.cat))
     .map((i) => ({ id: i.id, name: i.name, cat: i.cat, uom: i.uom }));
 
   // finished-goods products that can be produced on the floor (have a BOM), each
@@ -239,7 +253,7 @@ function stateForLab() {
 /** Top-level dispatcher by user. */
 function stateForUser(user) {
   if (!user) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
-  if (user.role === "supervisor") return stateForSupervisor(user.area || "all");
+  if (user.role === "supervisor") return stateForSupervisor(user.area || "all", user.username);
   if (user.role === "lab") return stateForLab();
   return stateForOfficer(user); // admin + office (office gets no lab spec values)
 }

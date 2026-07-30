@@ -36,7 +36,8 @@
 
     root.appendChild(pageHead("CRM — Sales Pipeline",
       "Track enquiries from first contact to won order. Never miss a follow-up.",
-      [ h("button", { class: "btn ghost", onclick: () => activityDrill(allLeads), html: "🕘 Activity" }),
+      [ MW.excelMenu("leads"),
+        h("button", { class: "btn ghost", onclick: () => activityDrill(allLeads), html: "🕘 Activity" }),
         h("button", { class: "btn primary", onclick: () => leadForm(), html: "＋ New Lead" }) ]));
 
     /* ============ PRIORITY 1 — today's follow-ups ============

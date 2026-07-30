@@ -153,9 +153,14 @@
   /* ============================================================
      Aggregations for dashboards
      ============================================================ */
+  /* WIP is not stocked: a production stage hands its output straight to the
+     next stage, so nothing is ever booked as work-in-process. The leftover
+     WIP items from the old stage engine are excluded everywhere. */
+  const stocked = it => it && it.cat!=="WIP";
+
   function inventoryValue(filterFn){
     let total=0, items=0, fg=0, rm=0;
-    D.items.forEach(it=>{ if(filterFn && !filterFn(it)) return;
+    D.items.forEach(it=>{ if(!stocked(it)) return; if(filterFn && !filterFn(it)) return;
       const v = STOCK[it.id].value; total+=v; items++;
       if(it.cat==="FG") fg+=v; else rm+=v;
     });
@@ -165,6 +170,7 @@
   function alerts(){
     const out=[];
     D.items.forEach(it=>{
+      if(!stocked(it)) return;
       const st = status(it.id);
       if(st.state==="danger") out.push({sev:"danger", ic: st.onHand<=0?"⛔":"🔻",
         title:`${it.name}`, desc:`${st.label} — ${num(st.onHand)} ${it.uom} on hand (safety ${num(it.safety)})`,
@@ -216,9 +222,18 @@
     for(let i=days-1;i>=0;i--){ const d=H.iso(t-i*H.DAY); buckets[d]={prod:0,sold:0,recv:0}; labels.push(d); }
     D.movements.forEach(m=>{
       if(!(m.date in buckets)) return;
-      if(m.type==="PROD") buckets[m.date].prod += m.qty;
       if(m.type==="SALE") buckets[m.date].sold += -m.qty;
       if(m.type==="GRN")  buckets[m.date].recv += m.qty;
+    });
+    /* Production output comes from FINISHED WORK ORDERS, not from stock
+       receipts: a completed job is never booked into a store (see the stage
+       service), so the ledger has nothing to count. A job counts on the day
+       its last stage was completed. */
+    (D.workorders||[]).forEach(w=>{
+      const last=(w.route||[]).slice(-1)[0]||{};
+      const done=w.packedAt || last.doneAt || null;
+      const d=done? String(done).slice(0,10) : null;
+      if(d && (d in buckets)) buckets[d].prod += (+w.qty||0);
     });
     labels.forEach(d=>{ prod.push(+buckets[d].prod.toFixed(1)); sold.push(+buckets[d].sold.toFixed(1)); recv.push(+buckets[d].recv.toFixed(1)); });
     return {labels, prod, sold, recv};
@@ -249,7 +264,7 @@
 
   function stockByCategory(){
     const map={};
-    D.items.forEach(it=>{ map[it.cat]=(map[it.cat]||0)+STOCK[it.id].value; });
+    D.items.forEach(it=>{ if(!stocked(it)) return; map[it.cat]=(map[it.cat]||0)+STOCK[it.id].value; });
     const catName = id => (D.categories.find(c=>c.id===id)||{}).name||id;
     return Object.entries(map).filter(([,v])=>v>0).map(([id,v])=>({id, name:catName(id), value:v})).sort((a,b)=>b.value-a.value);
   }
@@ -259,7 +274,7 @@
      a new entry is saved (every save path calls rebuild()) the volumes
      change and items re-rank across A/B/C automatically. */
   function abcAnalysis(){
-    const rows = D.items.map(it=>{
+    const rows = D.items.filter(stocked).map(it=>{
       const u=USAGE[it.id];
       const vol90 = u.recv90 + u.sold90 + u.used90;   // purchase + sales + consumption volume
       const annual = vol90*(365/90);
@@ -354,12 +369,42 @@
       hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 
+  /* ============================================================
+     READY TO SELL — finished work orders held for a sales order.
+     A production stage never books stock in, so a job that has run all the way
+     through (slitting, packing) is not inventory: it is a quantity standing
+     ready. It stays reserved against its work order until a sales order line
+     claims it (the line's Batch = the W.O. number), and what a line claims is
+     deducted here, so the same run can never be sold twice.
+     ============================================================ */
+  function readyBatches(itemId){
+    const wos=(D.workorders||[]).filter(w=>
+      (!itemId || w.itemId===itemId) && !w.dispatched &&
+      (w.route||[]).length && (w.route||[]).every(r=>r.status==="Completed"));
+    // what each work order has already been claimed for, across all open orders
+    const claimed={};
+    (D.salesorders||[]).forEach(so=>{
+      if(so.status==="Cancelled") return;
+      (so.lines||[]).forEach(l=>{ if(l.batch) claimed[l.batch]=(claimed[l.batch]||0)+(+l.qty||0); });
+    });
+    return wos.map(w=>{
+      const used=claimed[w.id]||0;
+      return { id:w.id, itemId:w.itemId, made:+w.qty||0, claimed:used,
+               free:Math.max(0,(+w.qty||0)-used),
+               doneAt:w.packedAt||((w.route||[]).slice(-1)[0]||{}).doneAt||w.date||"" };
+    }).sort((a,b)=>(a.doneAt<b.doneAt?1:-1));
+  }
+  /* free-to-sell quantity for a product (0 when nothing has finished) */
+  function readyQty(itemId){
+    return readyBatches(itemId).reduce((n,b)=>n+b.free,0);
+  }
+
   const E = {
     init, rebuild,
     money, moneyFull, num, item,
     get data(){return D;},
     stock:(id)=>STOCK[id], usage:(id)=>USAGE[id], ledger:(id)=>LEDGER[id],
-    status, pendingIn, pendingOut, wipRawDemand,
+    status, pendingIn, pendingOut, wipRawDemand, readyBatches, readyQty,
     inventoryValue, alerts, dailySeries, salesByProduct, purchaseBySupplier,
     stockByCategory, abcAnalysis, forecast, kpis, sup, custName,
     leads, crmStats, pipelineByStage, dueFollowUps, STAGES, STAGE_PROB

@@ -235,7 +235,7 @@
     return cell;
   }
 
-  /* ----- data preview: every "Data" action shows the table FIRST; the
+  /* ----- data preview: every "Export" action shows the table FIRST; the
      actual .xlsx download happens from the preview's Download button ----- */
   function dataPreview(opts){
     const head=opts.head||[], rows=opts.rows||[];
@@ -250,18 +250,20 @@
       },html:"⬇ Download"})]});
   }
 
-  /* ----- Excel split-button: hover (or tap) → Import / Data ----- */
+  /* ----- Excel split-button: hover (or tap) → Import / Export ----- */
   // onExport: opens the data preview (download lives inside it). opts.onImport
-  // overrides the generic auto-detecting import dialog (CSVImportUI).
+  // overrides the generic auto-detecting import dialog (CSVImportUI); opts.entity
+  // pre-selects which section an import lands in (e.g. "suppliers").
   function csvMenu(onExport, opts){
     opts = opts || {};
     const menu = h("div",{class:"ni-menu csv-drop",hidden:true},[
       h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();
-        (opts.onImport || (window.CSVImportUI && CSVImportUI.open) || (()=>UI.toast("Import unavailable",{type:"warn"})))();},html:"⬆ Import…"}),
-      h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();onExport&&onExport();},html:"🗂 Data"}),
+        (opts.onImport || (window.CSVImportUI ? ()=>CSVImportUI.open(opts.entity)
+          : ()=>UI.toast("Import unavailable",{type:"warn"})))();},html:"⬆ Import…"}),
+      h("button",{class:"ni-opt",onclick:e=>{e.stopPropagation();close();onExport&&onExport();},html:"⬇ Export"}),
     ]);
     const trigger = h("button",{class:"btn"+(opts.small?" sm":"")+(opts.primary?" primary":""),
-      html:"🗎 "+(opts.label||"Excel")+' <span class="caret">▾</span>'});
+      html:"🗎 "+(opts.label||"DATA")+' <span class="caret">▾</span>'});
     const wrap = h("div",{class:"ni-drop csv-menu"},[trigger,menu]);
     function onDoc(e){ if(!wrap.contains(e.target)) close(); }
     function close(){ menu.hidden=true; trigger.classList.remove("open"); document.removeEventListener("click",onDoc); }
@@ -270,6 +272,18 @@
     return wrap;
   }
 
+  /* ----- one-liner Excel ▾ for a section -----
+     Export → previews that section's table (the .xlsx download sits inside the
+     preview); Import → the shared dialog with this section pre-selected. */
+  function excelMenu(entity, opts){
+    return csvMenu(()=>{
+      const t = CSVIO.entityTable(entity);
+      if(!t){ UI.toast("Nothing to export",{type:"warn"}); return; }
+      dataPreview({title:t.label, head:t.header, rows:t.rows,
+        name:"chhaperia_"+entity+".xlsx", sheet:t.label});
+    }, Object.assign({entity:entity}, opts||{}));
+  }
+
   global.M = M;
-  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview };
+  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview, excelMenu };
 })(window);

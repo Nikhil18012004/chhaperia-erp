@@ -83,7 +83,7 @@
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"PO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
-        {key:"supplier",label:"Supplier",render:r=>esc(U.trim(ENG.sup(r.supplierId),28)),sort:r=>ENG.sup(r.supplierId)},
+        {key:"supplier",label:"Supplier",cls:"nm",render:r=>esc(U.trim(ENG.sup(r.supplierId),28)),sort:r=>ENG.sup(r.supplierId)},
         {key:"lines",label:"Items",num:true,render:r=>r.lines.length,sort:r=>r.lines.length},
         {key:"value",label:"Value",num:true,render:r=>ENG.money(r.value),sort:r=>r.value},
         {key:"recd",label:"Received",render:r=>{const tot=r.lines.reduce((a,l)=>a+l.qty,0),rec=r.lines.reduce((a,l)=>a+(l.recd||0),0);const p=tot?Math.round(rec/tot*100):0;return `<div style="min-width:110px">${meter(p,p===100?"ok":p>0?"warn":"danger")}<div class="muted" style="font-size:11px;margin-top:3px">${p}%</div></div>`;},sort:r=>{const tot=r.lines.reduce((a,l)=>a+l.qty,0);return tot?r.lines.reduce((a,l)=>a+(l.recd||0),0)/tot:0;}},
@@ -206,29 +206,35 @@
       const totBox=h("div");
       const ev=k=>esc(editPo?(editPo[k]||""):"");
       const body=h("div",{},[
-        h("div",{class:"form-grid"},[
+        docSec("Who & when"),
+        h("div",{class:"form-grid g3"},[
           U.field("Billing Company (invoice under) *",U.selectHTML("po_co",companyOpts(),editPo?editPo.company:companies()[0].key)),
           U.field("Supplier",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
           U.field("PO Date",`<input class="input" id="po_date" type="date" value="${editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
           U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
           U.field("Valid Upto",`<input class="input" id="po_valid" type="date" value="${ev("validUpto")}">`),
           U.field("Quotation Ref.",`<input class="input" id="po_ref" value="${ev("refNo")}" placeholder="e.g. Verbal / QTN-77">`),
+        ]),
+        docSec("Contacts"),
+        h("div",{class:"form-grid g3"},[
           U.field("Vendor Code",`<input class="input" id="po_vcode" value="${ev("vendorCode")}" placeholder="optional">`),
           U.field("Attn (vendor contact)",`<input class="input" id="po_attn" value="${ev("attn")}" placeholder="e.g. Mr. S. Saravanan">`),
           U.field("Our Contact (CTC Person)",`<input class="input" id="po_ctc" value="${ev("ctcPerson")}" placeholder="e.g. Mr. Neelmani">`),
+        ]),
+        docSec("Terms printed on the PO"),
+        h("div",{class:"form-grid g3"},[
           U.field("GST",U.selectHTML("po_gstmode",[{v:"As Applicable",l:"As Applicable"},{v:"Included",l:"Included"},{v:"Extra",l:"Extra"}],editPo?(editPo.gstMode||"As Applicable"):"As Applicable")),
           U.field("Packing",`<input class="input" id="po_pack" value="${ev("packing")}" placeholder="e.g. Non-returnable barrels">`),
           U.field("Delivery",`<input class="input" id="po_deliv" value="${esc(editPo?(editPo.deliveryNote||""):"immediate")}" placeholder="e.g. immediate / ASAP">`),
           U.field("Destination",`<input class="input" id="po_dest" value="${esc(editPo?(editPo.destination||""):"to our works")}">`),
-          U.field("Notes / Instructions (printed on the PO)",`<textarea class="input" id="po_notes" rows="2" placeholder="e.g. Kindly attach Test Report along with material">${ev("notes")}</textarea>`,"full"),
+          U.field("Notes / Instructions",`<textarea class="input" id="po_notes" rows="2" placeholder="e.g. Kindly attach Test Report along with material">${ev("notes")}</textarea>`,"full"),
         ]),
-        h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines"}),
-        lineHead(false),
-        h("div",{id:"po_lines"}),
-        h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add line"}),
-        h("div",{class:"flex",style:"justify-content:flex-end;margin-top:14px"},totBox),
+        docSec("Materials ordered"),
+        h("div",{id:"po_lines",class:"doc-lines"}),
+        h("button",{class:"btn sm doc-add",onclick:()=>addLine(),html:"＋ Add line"}),
+        h("div",{class:"doc-tot"},totBox),
       ]);
-      const mo=modal({title:editPo?("Edit "+editPo.id):"New Purchase Order", sub:editPo?"Update this purchase order":"Raise a PO to a supplier", wide:true, body,
+      const mo=modal({title:editPo?("Edit "+editPo.id):"New Purchase Order", sub:editPo?"Update this purchase order":"Raise a PO to a supplier", xwide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn",onclick:printDraft,html:PRINT_IC+" Print"}),
           h("button",{class:"btn primary",onclick:save,text:editPo?"Save Changes":"Create PO"})]});
@@ -273,15 +279,16 @@
         const it=ENG.item(itemId)||{};
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:(typeof seed==="string"?ENG.status(seed).suggest:"");
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(typeof seed==="string"?ENG.item(seed).cost:"");
-        const row=h("div",{class:"inv-line",style:LINE_GRID(false)},[
-          h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:i.id+" — "+i.name})),itemId,"Search material…")}),
-          h("input",{class:"input",id:"pl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""}),
-          h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"Qty",value:qtyVal}),
-          h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"Rate",value:rateVal}),
-          h("input",{class:"input",id:"pl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""}),
-          h("input",{class:"input",id:"pl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)}),
-          h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".inv-line").remove();lines[idx]=null;recalc();},text:"✕"})
-        ]);
+        const row=docLine(idx + 1,
+          h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:i.name+" — "+i.id})),itemId,"Search material…")}),
+          [
+            ["HSN",      h("input",{class:"input",id:"pl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
+            ["Qty",      h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal})],
+            ["Rate (₹)", h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"0.00",value:rateVal})],
+            ["Disc %",   h("input",{class:"input",id:"pl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""})],
+            ["GST %",    h("input",{class:"input",id:"pl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)})],
+          ],
+          el=>{ el.remove(); lines[idx]=null; recalc(); });
         UI.$("#po_lines").appendChild(row);
         // picking a material refreshes its HSN + GST defaults
         const hid=UI.$("#pl_item_"+idx);
@@ -313,16 +320,26 @@
   }};
 
   /* ---- shared line-grid pieces (PO + SO forms) ---- */
-  function LINE_GRID(withBatch){
-    return "display:grid;gap:6px;margin-bottom:8px;align-items:center;grid-template-columns:"+
-      (withBatch?"2fr .9fr .9fr .7fr .8fr .6fr .6fr 30px":"2fr .9fr .7fr .8fr .6fr .6fr 30px");
+  /* ---- document form building blocks (PO / SO) ----
+     A section rule, and a LINE as a small card: the item picker gets a whole
+     row (so a long product name stays readable) and its numbers sit beneath in
+     a grid that reflows — nothing is ever clipped or side-scrolled, at any
+     width. `fields` is [[label, node], …]; every input keeps its original id so
+     the collect/save logic is untouched. */
+  function docSec(title){
+    return h("div",{class:"doc-sec"},[h("span",{class:"doc-sec-t",text:title}), h("span",{class:"doc-sec-l"})]);
   }
-  function lineHead(withBatch){
-    const lab=t=>h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:t});
-    const cols=withBatch
-      ? ["Item","HSN","Batch (WO)","Qty","Rate (₹)","Disc %","GST %",""]
-      : ["Item","HSN","Qty","Rate (₹)","Disc %","GST %",""];
-    return h("div",{style:LINE_GRID(withBatch)+";margin-bottom:4px"},cols.map(lab));
+  function docLine(no, itemNode, fields, onRemove){
+    return h("div",{class:"doc-line"},[
+      h("div",{class:"doc-line-top"},[
+        h("div",{class:"doc-line-no",text:String(no)}),
+        h("div",{class:"doc-line-item"},[itemNode]),
+        h("button",{class:"btn sm ghost doc-line-x",title:"Remove this line",
+          onclick:e=>{ e.preventDefault(); onRemove(e.target.closest(".doc-line")); },text:"✕"}),
+      ]),
+      h("div",{class:"doc-line-fields"}, fields.map(([lab,node])=>
+        h("div",{class:"doc-line-f"},[h("label",{text:lab}), node]))),
+    ]);
   }
   /* Live totals panel: taxable → CGST/SGST or IGST → freight/insurance →
      round off → grand total. Freight/insurance are editable inputs INSIDE
@@ -396,7 +413,7 @@
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"SO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
-        {key:"cust",label:"Customer",render:r=>esc(U.trim(ENG.custName(r.customerId),26)),sort:r=>ENG.custName(r.customerId)},
+        {key:"cust",label:"Customer",cls:"nm",render:r=>esc(U.trim(ENG.custName(r.customerId),26)),sort:r=>ENG.custName(r.customerId)},
         {key:"lines",label:"Items",num:true,render:r=>r.lines.length,sort:r=>r.lines.length},
         {key:"value",label:"Value",num:true,render:r=>ENG.money(r.value),sort:r=>r.value},
         {key:"date",label:"Order Date",render:r=>r.date||"—",sort:r=>r.date||""},
@@ -493,10 +510,10 @@
       let lines=[];
       const totBox=h("div");
       const cust0=editSo?custs.find(c=>c.id===editSo.customerId):custs[0];
-      const sec=t=>h("h3",{style:"margin:16px 0 8px;font-size:13px;color:var(--accent)",text:t});
+      const sec=docSec;
       const body=h("div",{},[
         sec("Parties"),
-        h("div",{class:"form-grid"},[
+        h("div",{class:"form-grid g3"},[
           U.field("Billing Company (invoice under) *",U.selectHTML("so_co",companyOpts(),editSo?editSo.company:companies()[0].key)),
           U.field("Customer (Bill To)",U.searchSelect("so_cust",custs.map(c=>({v:c.id,l:c.name})),editSo?editSo.customerId:(cust0&&cust0.id),"Search customer…")),
           U.field("Place of Supply",U.selectHTML("so_pos",stateOpts(),
@@ -504,7 +521,7 @@
           U.field("Ship To (delivery address)",`<textarea class="input" id="so_ship" rows="2" placeholder="same as billing">${esc(editSo?(editSo.shipTo||""):(cust0&&(cust0.shipTo||cust0.address)||""))}</textarea>`,"full"),
         ]),
         sec("Invoice Details"),
-        h("div",{class:"form-grid"},[
+        h("div",{class:"form-grid g3"},[
           U.field("Invoice Type",U.selectHTML("so_itype",[{v:"domestic",l:"Domestic — GST Tax Invoice"},{v:"export",l:"Export — Commercial Invoice"}],editSo?(editSo.invoiceType||"domestic"):"domestic")),
           U.field("Currency",U.selectHTML("so_ccy",[{v:"INR",l:"INR ₹"},{v:"USD",l:"USD $"},{v:"EUR",l:"EUR €"},{v:"GBP",l:"GBP £"},{v:"AED",l:"AED"},{v:"SAR",l:"SAR"}],editSo?(editSo.currency||"INR"):"INR")),
           U.field("Invoice No.",`<input class="input" id="so_inv" value="${esc(editSo?(editSo.invoiceNo||editSo.id):soId)}">`),
@@ -515,7 +532,7 @@
           U.field("Customer PO Date",`<input class="input" id="so_cpod" type="date" value="${editSo?(editSo.custPoDate||""):""}">`),
         ]),
         sec("Transport & Dispatch"),
-        h("div",{class:"form-grid"},[
+        h("div",{class:"form-grid g3"},[
           U.field("Transport Mode",U.selectHTML("so_tmode",TRANSPORT_MODES,editSo?(editSo.transportMode||""):"")),
           U.field("Transporter",U.selectHTML("so_transp",[{v:"",l:"—"}].concat((ENG.data.transporters||[]).filter(t=>t.active!==false).map(t=>({v:t.id,l:t.name}))),editSo?(editSo.transporterId||""):"")),
           U.field("Vehicle No.",`<input class="input" id="so_veh" value="${esc(editSo?(editSo.vehicleNo||""):"")}" placeholder="e.g. KA 52 AB 1234">`),
@@ -525,7 +542,7 @@
         ]),
         h("div",{id:"so_export",hidden:!(editSo&&editSo.invoiceType==="export")},[
           sec("Export / Shipment (Commercial Invoice)"),
-          h("div",{class:"form-grid"},[
+          h("div",{class:"form-grid g3"},[
             U.field("Other Reference",`<input class="input" id="so_oref" value="${esc(editSo?(editSo.otherRef||""):"")}">`),
             U.field("Consignee",`<input class="input" id="so_consignee" value="${esc(editSo?(editSo.consignee||"TO THE ORDER"):"TO THE ORDER")}">`),
             U.field("Notify Party",`<textarea class="input" id="so_notify" rows="2" placeholder="buyer name, address, phone, e-mail">${esc(editSo?(editSo.notifyParty||""):"")}</textarea>`,"full"),
@@ -543,17 +560,17 @@
             U.field("Export Note (printed bold on the invoice)",`<textarea class="input" id="so_exnote" rows="2">${esc(editSo?(editSo.exportNote!=null?editSo.exportNote:"SUPPLY MEANT FOR EXPORT UNDER PAYMENT OF IGST @ 18%\nEXPORT UNDER DRAWBACK"):"SUPPLY MEANT FOR EXPORT UNDER PAYMENT OF IGST @ 18%\nEXPORT UNDER DRAWBACK")}</textarea>`,"full"),
           ]),
         ]),
-        sec("Lines"),
-        lineHead(true),
-        h("div",{id:"so_lines"}),
-        h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>addLine(),html:"＋ Add line"}),
-        h("div",{class:"form-grid",style:"margin-top:14px"},[
+        sec("Goods sold"),
+        h("div",{id:"so_lines",class:"doc-lines"}),
+        h("button",{class:"btn sm doc-add",onclick:()=>addLine(),html:"＋ Add line"}),
+        sec("Payment & notes"),
+        h("div",{class:"form-grid g3"},[
           U.field("Payment Terms",`<input class="input" id="so_terms" value="${esc(editSo?(editSo.payTerms||""):(cust0&&cust0.terms||"30 days"))}">`),
-          U.field("Notes",`<input class="input" id="so_notes" value="${esc(editSo?(editSo.notes||""):"")}" placeholder="shown on the invoice">`),
+          U.field("Notes",`<input class="input" id="so_notes" value="${esc(editSo?(editSo.notes||""):"")}" placeholder="shown on the invoice">`,"full"),
         ]),
-        h("div",{class:"flex",style:"justify-content:flex-end;margin-top:10px"},totBox),
+        h("div",{class:"doc-tot"},totBox),
       ]);
-      const mo=modal({title:editSo?("Edit "+editSo.id):"New Sales Order", sub:editSo?"Update this sales order":"Everything here flows straight onto the tax invoice", wide:true, body,
+      const mo=modal({title:editSo?("Edit "+editSo.id):"New Sales Order", sub:editSo?"Update this sales order":"Everything here flows straight onto the tax invoice", xwide:true, wide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn",onclick:printDraft,html:PRINT_IC+" Print"}),
           h("button",{class:"btn primary",onclick:save,text:editSo?"Save Changes":"Create Order"})]});
@@ -581,10 +598,28 @@
         const tEl=UI.$("#so_terms"); if(tEl&&c.terms) tEl.value=c.terms;
         recalc();
       });
+      /* Batch = the work order this line is served from. Only FINISHED jobs
+         appear, each with the quantity still unclaimed, so an order is filled
+         from what the floor has actually produced. */
       function batchOpts(itemId){
-        const wos=(ENG.data.workorders||[]).filter(w=>w.itemId===itemId)
-          .slice().sort((a,b)=>a.id<b.id?1:-1);
-        return [{v:"",l:"—"}].concat(wos.map(w=>({v:w.id,l:w.id})));
+        const ready=ENG.readyBatches(itemId);
+        const opts=ready.map(b=>({v:b.id,
+          l:b.id+" · "+ENG.num(b.free,1)+" ready"+(b.claimed?" (of "+ENG.num(b.made,1)+")":"")}));
+        // keep a batch that is already on this order even once fully claimed
+        (editSo&&editSo.lines||[]).forEach(l=>{
+          if(l.batch && l.itemId===itemId && !opts.some(o=>o.v===l.batch)) opts.push({v:l.batch,l:l.batch});
+        });
+        return [{v:"",l:ready.length?"— pick a finished job —":"— nothing finished yet —"}].concat(opts);
+      }
+      /* a line-level note: what is standing ready for the product picked */
+      function readyHint(itemId){
+        const ready=ENG.readyBatches(itemId);
+        const free=ready.reduce((n,b)=>n+b.free,0);
+        if(!ready.length) return "No finished job for this product yet — it can still be ordered and made to order.";
+        return "Ready to sell: "+ENG.num(free,1)+" "+((ENG.item(itemId)||{}).uom||"")+
+          " reserved from "+ready.length+" finished job"+(ready.length>1?"s":"")+
+          " · "+ready.slice(0,3).map(b=>b.id+" ("+ENG.num(b.free,1)+")").join(", ")+
+          (ready.length>3?" …":"");
       }
       function collect(){ const out=[];
         lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#sl_item_"+i); if(!iEl) return;
@@ -643,16 +678,19 @@
         const it=ENG.item(itemId)||{};
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(it.price||"");
-        const row=h("div",{class:"inv-line",style:LINE_GRID(true)},[
+        const row=docLine(idx + 1,
           h("div",{html:U.searchSelect("sl_item_"+idx,fgs.map(i=>({v:i.id,l:i.name+(i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"")+" — "+(i.typeCode||i.id)})),itemId,"Search product…")}),
-          h("input",{class:"input",id:"sl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""}),
-          h("div",{html:U.selectHTML("sl_batch_"+idx,batchOpts(itemId),(seed&&seed.batch)||"")}),
-          h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"Qty (kg)",value:qtyVal}),
-          h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"Rate",value:rateVal}),
-          h("input",{class:"input",id:"sl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""}),
-          h("input",{class:"input",id:"sl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)}),
-          h("button",{class:"btn sm ghost",title:"Remove line",onclick:e=>{e.preventDefault();e.target.closest(".inv-line").remove();lines[idx]=null;recalc();},text:"✕"})
-        ]);
+          [
+            ["HSN",         h("input",{class:"input",id:"sl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
+            ["Batch (W.O.)",h("div",{html:U.selectHTML("sl_batch_"+idx,batchOpts(itemId),(seed&&seed.batch)||"")})],
+            ["Qty (kg)",    h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal})],
+            ["Rate",        h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"0.00",value:rateVal})],
+            ["Disc %",      h("input",{class:"input",id:"sl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""})],
+            ["GST %",       h("input",{class:"input",id:"sl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)})],
+          ],
+          el=>{ el.remove(); lines[idx]=null; recalc(); });
+        // what the floor already has finished and reserved for this product
+        row.appendChild(h("div",{class:"so-ready",id:"sl_ready_"+idx,text:readyHint(itemId)}));
         UI.$("#so_lines").appendChild(row);
         // picking a product refreshes HSN, GST, rate default + its batch (WO) list
         const hid=UI.$("#sl_item_"+idx);
@@ -661,6 +699,8 @@
           if(!UI.$("#sl_rate_"+idx).value) UI.$("#sl_rate_"+idx).value=ni.price||"";
           const bSel=UI.$("#sl_batch_"+idx);
           if(bSel){ bSel.innerHTML=batchOpts(hid.value).map(o=>`<option value="${esc(o.v)}">${esc(o.l)}</option>`).join(""); }
+          const rEl=UI.$("#sl_ready_"+idx);
+          if(rEl) rEl.textContent=readyHint(hid.value);
           recalc(); });
       }
       if(editSo) editSo.lines.forEach(l=>addLine(l)); else addLine();
@@ -697,6 +737,7 @@
   /* ============== SUPPLIERS ============== */
   M.suppliers = { title:"Suppliers", sub:"Vendor master & performance", render(root){
     root.appendChild(pageHead("Suppliers","Vendor performance, spend and supplied items",[
+      MW.excelMenu("suppliers"),
       h("button",{class:"btn primary",onclick:()=>supplierForm(),html:"＋ New Supplier"})
     ]));
     const spend=ENG.purchaseBySupplier(365);
@@ -723,27 +764,18 @@
           ...(s.email ? [" · ", MW.emailLink(s.email,{mode:"compose"})] : []),
         ]),
         h("div",{class:"flex gap",style:"margin-top:12px;padding-top:10px;border-top:1px solid var(--line);justify-content:flex-end"},[
+          // delete lives inside the Edit dialog, not on the card
           h("button",{class:"btn sm ghost",onclick:()=>supplierForm(s),text:"✎ Edit"}),
-          h("button",{class:"btn sm danger",onclick:()=>deleteSupplier(s),text:"🗑 Delete"}),
         ])
       ]));
     });
     root.appendChild(grid);
-
-    async function deleteSupplier(s){
-      if(!await confirm(`Delete supplier ${s.name}? This cannot be undone.`,{title:"Delete Supplier",danger:true})) return;
-      try{
-        await DB.suppliers.remove(s.id);   // server refuses while POs/items still reference it
-        ENG.data.suppliers=ENG.data.suppliers.filter(x=>x.id!==s.id);
-        toast(s.name+" deleted",{type:"ok",title:"Removed"});
-        App.saveDelta(()=>Promise.resolve());
-      }catch(e){ toast(e.message,{type:"danger",title:"Cannot delete"}); }
-    }
   }};
 
   /* ============== CUSTOMERS ============== */
   M.customers = { title:"Customers", sub:"Client master & orders", render(root){
     root.appendChild(pageHead("Customers","HT cable manufacturers and order history",[
+      MW.excelMenu("customers"),
       h("button",{class:"btn primary",onclick:()=>customerForm(),html:"＋ New Customer"})
     ]));
     const grid=h("div",{class:"grid cols-2"});
@@ -769,29 +801,45 @@
           " · "+c.terms,
         ]),
         h("div",{class:"flex gap",style:"margin-top:12px;padding-top:10px;border-top:1px solid var(--line);justify-content:flex-end"},[
+          // delete lives inside the Edit dialog, not on the card
           h("button",{class:"btn sm ghost",onclick:()=>customerForm(c),text:"✎ Edit"}),
-          h("button",{class:"btn sm danger",onclick:()=>deleteCustomer(c),text:"🗑 Delete"}),
         ])
       ]));
     });
     root.appendChild(grid);
-
-    async function deleteCustomer(c){
-      if(!await confirm(`Delete customer ${c.name}? This cannot be undone.`,{title:"Delete Customer",danger:true})) return;
-      try{
-        await DB.customers.remove(c.id);   // server refuses while SOs/leads still reference it
-        ENG.data.customers=ENG.data.customers.filter(x=>x.id!==c.id);
-        toast(c.name+" deleted",{type:"ok",title:"Removed"});
-        App.saveDelta(()=>Promise.resolve());
-      }catch(e){ toast(e.message,{type:"danger",title:"Cannot delete"}); }
-    }
   }};
 
   function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
 
+  /* ----- Supplier / Customer delete -----
+     Reached from the Edit dialog (there is no delete on the card), so the user
+     sees the full record before removing it. The server refuses while other
+     documents still reference the party. */
+  async function deleteSupplier(s, done){
+    if(!await confirm(`Delete supplier ${s.name}? This cannot be undone.`,{title:"Delete Supplier",danger:true})) return;
+    try{
+      await DB.suppliers.remove(s.id);
+      ENG.data.suppliers=ENG.data.suppliers.filter(x=>x.id!==s.id);
+      if(done) done();
+      toast(s.name+" deleted",{type:"ok",title:"Removed"});
+      App.saveDelta(()=>Promise.resolve());
+    }catch(e){ toast(e.message,{type:"danger",title:"Cannot delete"}); }
+  }
+  async function deleteCustomer(c, done){
+    if(!await confirm(`Delete customer ${c.name}? This cannot be undone.`,{title:"Delete Customer",danger:true})) return;
+    try{
+      await DB.customers.remove(c.id);
+      ENG.data.customers=ENG.data.customers.filter(x=>x.id!==c.id);
+      if(done) done();
+      toast(c.name+" deleted",{type:"ok",title:"Removed"});
+      App.saveDelta(()=>Promise.resolve());
+    }catch(e){ toast(e.message,{type:"danger",title:"Cannot delete"}); }
+  }
+
   /* ----- Supplier / Customer forms (create + edit) -----
      Carry every field the tax invoice needs: GSTIN, state (auto-
-     derived from the GSTIN prefix), full address, ship-to. */
+     derived from the GSTIN prefix), full address, ship-to.
+     When editing, the footer also holds 🗑 Delete. */
   function supplierForm(edit){
     const v=k=>esc(edit?(edit[k]||""):"");
     const body=h("div",{class:"form-grid"},[
@@ -809,7 +857,10 @@
     ]);
     const mo=modal({title:edit?("✎ "+edit.name):"＋ New Supplier",
       sub:edit?"Update this vendor's master record":"Add a vendor to the supplier master", body,
-      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+      foot:[
+        edit? h("button",{class:"btn danger",style:"margin-right:auto",
+          onclick:()=>deleteSupplier(edit,()=>mo.close()),text:"🗑 Delete"}) : null,
+        h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:edit?"Save Changes":"Add Supplier"})]});
     const gstEl=UI.$("#sp_gst");
     if(gstEl) gstEl.addEventListener("input",()=>{ const sc=GST.stateFromGSTIN(gstEl.value); if(sc) UI.$("#sp_state").value=sc; });
@@ -856,7 +907,10 @@
     ]);
     const mo=modal({title:edit?("✎ "+edit.name):"＋ New Customer",
       sub:edit?"Update this client's master record":"Add a client to the customer master", body,
-      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+      foot:[
+        edit? h("button",{class:"btn danger",style:"margin-right:auto",
+          onclick:()=>deleteCustomer(edit,()=>mo.close()),text:"🗑 Delete"}) : null,
+        h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:edit?"Save Changes":"Add Customer"})]});
     const gstEl=UI.$("#cu_gst");
     if(gstEl) gstEl.addEventListener("input",()=>{ const sc=GST.stateFromGSTIN(gstEl.value); if(sc) UI.$("#cu_state").value=sc; });

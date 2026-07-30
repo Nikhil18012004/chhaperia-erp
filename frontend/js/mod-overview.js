@@ -269,25 +269,38 @@
     {code:"CNY", name:"Chinese Yuan",   flag:"🇨🇳"},
     {code:"JPY", name:"Japanese Yen",   flag:"🇯🇵"},
   ];
-  // Real-currency names for the converter dropdowns ("USD — US Dollar").
+  // Real currencies for the converter dropdowns: code → [full name, symbol].
   // Only codes listed here appear in the pickers, which also keeps the crypto
   // and obscure feeds out of the /api/fx payload from cluttering the list.
-  const CCY_NAMES={
-    INR:"Indian Rupee", USD:"US Dollar", EUR:"Euro", GBP:"British Pound",
-    AED:"UAE Dirham", SAR:"Saudi Riyal", JPY:"Japanese Yen", CNY:"Chinese Yuan",
-    SGD:"Singapore Dollar", AUD:"Australian Dollar", CAD:"Canadian Dollar",
-    CHF:"Swiss Franc", HKD:"Hong Kong Dollar", NZD:"New Zealand Dollar",
-    SEK:"Swedish Krona", NOK:"Norwegian Krone", DKK:"Danish Krone",
-    ZAR:"South African Rand", THB:"Thai Baht", MYR:"Malaysian Ringgit",
-    IDR:"Indonesian Rupiah", PHP:"Philippine Peso", KRW:"South Korean Won",
-    TRY:"Turkish Lira", RUB:"Russian Ruble", BRL:"Brazilian Real",
-    MXN:"Mexican Peso", PLN:"Polish Zloty", CZK:"Czech Koruna",
-    HUF:"Hungarian Forint", ILS:"Israeli Shekel", KWD:"Kuwaiti Dinar",
-    BHD:"Bahraini Dinar", OMR:"Omani Rial", QAR:"Qatari Riyal",
-    LKR:"Sri Lankan Rupee", BDT:"Bangladeshi Taka", NPR:"Nepalese Rupee",
-    PKR:"Pakistani Rupee", EGP:"Egyptian Pound", VND:"Vietnamese Dong",
-    TWD:"Taiwan Dollar",
+  // Gulf/Arabic currencies use their common Latin symbols (Dh, SR, KD …) — the
+  // native RTL glyphs (د.إ) reorder unpredictably inside a Latin option label.
+  const CCY_META={
+    INR:["Indian Rupee","₹"],        USD:["US Dollar","$"],
+    EUR:["Euro","€"],                GBP:["British Pound","£"],
+    AED:["UAE Dirham","Dh"],         SAR:["Saudi Riyal","SR"],
+    JPY:["Japanese Yen","¥"],        CNY:["Chinese Yuan","CN¥"],
+    SGD:["Singapore Dollar","S$"],   AUD:["Australian Dollar","A$"],
+    CAD:["Canadian Dollar","C$"],    CHF:["Swiss Franc","Fr"],
+    HKD:["Hong Kong Dollar","HK$"],  NZD:["New Zealand Dollar","NZ$"],
+    SEK:["Swedish Krona","kr"],      NOK:["Norwegian Krone","kr"],
+    DKK:["Danish Krone","kr"],       ZAR:["South African Rand","R"],
+    THB:["Thai Baht","฿"],           MYR:["Malaysian Ringgit","RM"],
+    IDR:["Indonesian Rupiah","Rp"],  PHP:["Philippine Peso","₱"],
+    KRW:["South Korean Won","₩"],    TRY:["Turkish Lira","₺"],
+    RUB:["Russian Ruble","₽"],       BRL:["Brazilian Real","R$"],
+    MXN:["Mexican Peso","Mex$"],     PLN:["Polish Zloty","zł"],
+    CZK:["Czech Koruna","Kč"],       HUF:["Hungarian Forint","Ft"],
+    ILS:["Israeli Shekel","₪"],      KWD:["Kuwaiti Dinar","KD"],
+    BHD:["Bahraini Dinar","BD"],     OMR:["Omani Rial","RO"],
+    QAR:["Qatari Riyal","QR"],       LKR:["Sri Lankan Rupee","Rs"],
+    BDT:["Bangladeshi Taka","৳"],    NPR:["Nepalese Rupee","रू"],
+    PKR:["Pakistani Rupee","₨"],     EGP:["Egyptian Pound","E£"],
+    VND:["Vietnamese Dong","₫"],     TWD:["Taiwan Dollar","NT$"],
   };
+  const ccySym  =c=>(CCY_META[c]||[])[1]||"";
+  // collapsed picker = code + symbol ("USD $"); open list = the full name too
+  const ccyShort =c=>c+" "+ccySym(c);
+  const ccyFull  =c=>c+" "+ccySym(c)+" — "+(CCY_META[c]||[])[0];
   const FX_POLL_MS=60000;
   // fxRates = ₹ per 1 unit of each currency, served by our backend which
   // cross-verifies a LIVE market feed against 3 independent daily sources
@@ -297,38 +310,61 @@
     const stamp=h("div",{class:"sub",text:"Fetching live rates…"});
     const list=h("div",{class:"fx-list"});
 
-    /* converter — box 1: amount + from-currency; box 2: result, INR by default */
+    /* converter — labelled From row (amount + currency), ⇅, To row (result +
+       currency), then the unit rate the result was computed from */
     const amt=h("input",{class:"input fx-amt",type:"number",value:"1",min:"0",step:"any","aria-label":"Amount"});
     const selFrom=h("select",{class:"select fx-sel","aria-label":"From currency"});
     const selTo=h("select",{class:"select fx-sel","aria-label":"To currency"});
-    const out=h("div",{class:"input fx-out",text:"—"});
+    const out=h("div",{class:"fx-out",text:"—"});
+    const rate=h("div",{class:"fx-rate",text:""});
+    const field=(lbl,ctl)=>h("div",{class:"fx-field"},[h("span",{class:"fx-lbl",text:lbl}),ctl]);
     const conv=h("div",{class:"fx-conv"},[
-      h("div",{class:"fx-conv-row"},[amt, selFrom]),
-      h("button",{class:"btn sm ghost fx-swap",title:"Swap currencies",onclick:()=>{
-        const a=selFrom.value; selFrom.value=selTo.value; selTo.value=a; convert();
-      },text:"⇅"}),
-      h("div",{class:"fx-conv-row"},[out, selTo]),
+      h("div",{class:"fx-conv-row"},[field("Amount",amt), field("From",selFrom)]),
+      h("div",{class:"fx-swap-wrap"},[
+        h("button",{class:"icon-btn fx-swap",title:"Swap currencies","aria-label":"Swap currencies",onclick:()=>{
+          const a=selFrom.value; selFrom.value=selTo.value; selTo.value=a;
+          shrink(selFrom); shrink(selTo); convert();
+        },text:"⇅"})
+      ]),
+      h("div",{class:"fx-conv-row"},[field("Converted",out), field("To",selTo)]),
+      rate,
     ]);
     amt.oninput=convert; selFrom.onchange=convert; selTo.onchange=convert;
 
+    // A <select> can only display its selected option's text, so we rewrite the
+    // labels around the popup: full names while the list is open, code+symbol
+    // once it closes.
+    function expand(sel){ for(const o of sel.options) o.textContent=ccyFull(o.value); }
+    function shrink(sel){
+      expand(sel);                                     // every other row stays full
+      const o=sel.selectedOptions[0];
+      if(o) o.textContent=ccyShort(o.value);
+    }
+    [selFrom,selTo].forEach(sel=>{
+      ["mousedown","focus","keydown"].forEach(e=>sel.addEventListener(e,()=>expand(sel)));
+      ["change","blur"].forEach(e=>sel.addEventListener(e,()=>shrink(sel)));
+    });
+
     function fillSelects(){
       if(selFrom.options.length) return;               // populate once
-      // only real currencies we can name, sorted, labelled "CODE — Full Name"
-      Object.keys(fxRates).filter(c=>CCY_NAMES[c]).sort().forEach(c=>{
-        const label=c+" — "+CCY_NAMES[c];
-        selFrom.appendChild(h("option",{value:c,text:label}));
-        selTo.appendChild(h("option",{value:c,text:label}));
+      // only real currencies we can name, listed "CODE SYM — Full Name"
+      Object.keys(fxRates).filter(c=>CCY_META[c]).sort().forEach(c=>{
+        selFrom.appendChild(h("option",{value:c,text:ccyFull(c)}));
+        selTo.appendChild(h("option",{value:c,text:ccyFull(c)}));
       });
       selFrom.value="USD"; selTo.value="INR";
+      shrink(selFrom); shrink(selTo);
     }
     function convert(){
-      if(!fxRates){ out.textContent="—"; return; }
+      if(!fxRates){ out.textContent="—"; rate.textContent=""; return; }
       const v=parseFloat(amt.value);
       const rf=fxRates[selFrom.value], rt=fxRates[selTo.value];   // ₹ per unit
-      if(!isFinite(v)||!rf||!rt){ out.textContent="—"; return; }
-      const res=v*rf/rt;
-      out.textContent=res.toLocaleString("en-IN",{maximumFractionDigits:res<1?6:2})+" "+selTo.value;
-      out.title=`1 ${selFrom.value} = ${(rf/rt).toLocaleString("en-IN",{maximumFractionDigits:6})} ${selTo.value}`;
+      if(!isFinite(v)||!rf||!rt){ out.textContent="—"; rate.textContent=""; return; }
+      const res=v*rf/rt, unit=rf/rt;
+      const fmt=n=>n.toLocaleString("en-IN",{maximumFractionDigits:n<1?6:2});
+      out.textContent=(ccySym(selTo.value)||"")+" "+fmt(res);
+      rate.textContent=`1 ${selFrom.value} = ${fmt(unit)} ${selTo.value}`;
+      out.title=rate.textContent;
     }
 
     const card=h("div",{class:"card"},[

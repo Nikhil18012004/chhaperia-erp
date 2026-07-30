@@ -43,10 +43,13 @@
   }
 
   /* ---------- modal ---------- */
-  function modal({title, sub, body, foot, wide}){
+  /* wide  = 960px  (tables, detail views)
+     xwide = 1240px (document forms: PO / SO carry a header block AND line items) */
+  function modal({title, sub, body, foot, wide, xwide}){
     const host=$("#modalHost"); host.hidden=false; host.innerHTML="";
     const prevFocus=document.activeElement;   // restore focus on close (a11y)
-    const m=h("div",{class:"modal",role:"dialog","aria-modal":"true","aria-label":title||"Dialog",style:wide?"width:min(960px,96vw)":""},[
+    const width=xwide?"width:min(1240px,96vw)":(wide?"width:min(960px,96vw)":"");
+    const m=h("div",{class:"modal",role:"dialog","aria-modal":"true","aria-label":title||"Dialog",style:width},[
       h("div",{class:"modal-head"},[
         h("div",{},[ h("h3",{text:title||""}), sub?h("div",{class:"sub",text:sub}):null ]),
         h("button",{class:"icon-btn","aria-label":"Close dialog",style:"margin-left:auto",onclick:close,text:"✕"})

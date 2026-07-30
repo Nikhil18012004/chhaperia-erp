@@ -285,8 +285,14 @@
       if(this.isDrawerWidth&&this.isDrawerWidth()) this.closeNavDrawer();
     },
 
+    /* the settings document — both save paths build it here so neither can
+       drop a key the other writes */
+    settingsDoc(){
+      return {theme:this.theme,accent:this.accent,autoAccent:this.autoAccent,lowStockOnly:false};
+    },
+
     persistAndRefresh(){
-      ENG.data.settings={theme:this.theme,accent:this.accent,autoAccent:this.autoAccent,lowStockOnly:false};
+      ENG.data.settings=this.settingsDoc();
       DB.save(ENG.data);
       ENG.rebuild();
       this.buildNav();
@@ -299,7 +305,7 @@
        flip a colour. Re-renders locally so the change shows instantly. */
     persistSettings(){
       if(!this.isAdmin()) return; // theme/accent are system settings — admin only
-      const s={theme:this.theme,accent:this.accent,autoAccent:this.autoAccent,lowStockOnly:false};
+      const s=this.settingsDoc();
       ENG.data.settings=s;
       DB.saveSettings(s);
       this.buildNav();

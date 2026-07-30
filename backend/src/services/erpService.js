@@ -18,7 +18,7 @@ function getState() {
   return repo.getState();
 }
 
-/** One-time (idempotent) migration: derive WIP items + attach stage
+/** One-time (idempotent) migration: attach stage
     routes to work orders. Runs at boot and after any bulk save so
     imported/restored data is always stage-ready. Never wipes data. */
 function ensureStageModel() {

@@ -62,7 +62,8 @@
       : h("button", { class: "btn primary", onclick: () => productForm(), html: "＋ New Product" });
     root.appendChild(pageHead("Lab Reports — Quality Control",
       "Test certificates for finished goods. The parameters on a report follow the product's material type; measured values are graded against the lab spec on submit.",
-      [newBtn]));
+      // the Excel menu follows the visible tab: certificates vs the product master
+      [MW.excelMenu(VIEW === "reports" ? "labreports" : "labproducts"), newBtn]));
 
     // segmented view switch
     const seg = h("div", { class: "flex gap", style: "margin-bottom:16px" }, [
@@ -118,7 +119,7 @@
       if (!products().length) { host.appendChild(emptyBox("No lab products yet", "Add products under the Products tab, then create reports.")); return; }
       host.appendChild(table(data, [
         { key: "reportDate", label: "Date", width: "104px" },
-        { key: "product", label: "Product", render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:11.5px">${esc(U.trim(r.productName, 40))}</div>`, sort: (r) => r.productCode || "" },
+        { key: "product", label: "Product", cls: "nm", render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:11.5px">${esc(U.trim(r.productName, 40))}</div>`, sort: (r) => r.productCode || "" },
         { key: "ref", label: "Batch / Lot", render: (r) => `<div>${esc(r.refNo || "—")}</div><div class="muted" style="font-size:10.5px">${refLabel(r.refMode)}</div>`, sort: (r) => r.refNo || "" },
         { key: "type", label: "Type", noSort: true, render: (r) => `<div class="flex gap wrap">${typeChips(r.flags)}</div>` },
         { key: "result", label: "Result", width: "92px", render: (r) => resultBadge(r.result), sort: (r) => r.result },
@@ -174,10 +175,10 @@
       if (!merged) {
         const vals = App.isLab() ? (hasLab ? lab : r.values) : r.values;
         const res = App.isLab() ? (hasLab ? r.labResults : r.results) : r.results;
-        return `<tr><td style="padding:6px 10px">${esc(p.label)}</td>`
+        return `<tr><td class="nm" style="padding:6px 10px">${esc(p.label)}</td>`
           + `<td class="num" style="padding:6px 10px">${measCell(vals, res, p.key, p.unit)}</td></tr>`;
       }
-      return `<tr><td style="padding:6px 10px">${esc(p.label)}</td>`
+      return `<tr><td class="nm" style="padding:6px 10px">${esc(p.label)}</td>`
         + `<td class="num" style="padding:6px 10px">${specText(spec[p.key], p.unit)}</td>`
         + `<td class="num" style="padding:6px 10px">${measCell(prod, r.prodResults, p.key, p.unit)}</td>`
         + `<td class="num" style="padding:6px 10px">${measCell(lab, r.labResults, p.key, p.unit)}</td></tr>`;
@@ -340,7 +341,7 @@
       host.innerHTML = "";
       host.appendChild(table(data, [
         { key: "code", label: "Code / Type", width: "170px", render: (p) => `<span style="font-weight:600">${esc(p.code || "—")}</span>` },
-        { key: "name", label: "Product", render: (p) => esc(U.trim(p.name, 46)) },
+        { key: "name", label: "Product", cls: "nm", render: (p) => esc(U.trim(p.name, 46)) },
         { key: "thickness", label: "Thk (mm)", width: "90px", render: (p) => esc(p.thickness || "—") },
         { key: "series", label: "Series", width: "130px", render: (p) => esc(p.series || "—") },
         { key: "type", label: "Type", noSort: true, render: (p) => `<div class="flex gap wrap">${typeChips(p.flags)}</div>` },

@@ -20,7 +20,8 @@
     let filter = { q: "", rating: "all", vehicle: "all", status: "active" };
     root.appendChild(pageHead("Dispatch — Transport Providers",
       "Your transport agencies / carriers for outbound goods: contacts, vehicles, routes, rates and on-time performance.",
-      [h("button", { class: "btn primary", onclick: () => transporterForm(), html: "＋ New Transporter" })]));
+      [MW.excelMenu("transporters"),
+       h("button", { class: "btn primary", onclick: () => transporterForm(), html: "＋ New Transporter" })]));
 
     // KPI strip
     const active = trs().filter((t) => t.active !== false);

@@ -5,9 +5,10 @@
        stage belongs to their area
      • only safe stage transitions are allowed
      • no money/customer fields are ever returned
-   The job flows Coating → Slitting → Packing; completing a stage
-   hands the job to the next area's panel and (for non-legacy work
-   orders) posts that stage's WIP stock movements. Writes are
+   Completing a stage hands the job to the next area's panel and (for
+   non-legacy work orders) issues that stage's materials from the store.
+   No stage ever receives stock — not coating, slitting or packing.
+   Writes are
    TARGETED (one WO row + appended movements) — no full-state
    rewrite, so panels no longer clobber each other.
    ============================================================ */
@@ -42,9 +43,9 @@ function todayISO() {
 const calcProgress = S.calcProgress; // single source of truth (stageService)
 
 /** Ensure a WO has a route (bridges any WO that predates the stage model). */
-function withRoute(wo) {
+function withRoute(wo, data) {
   if (!wo.route || !wo.route.length) {
-    const seeded = S.seedRouteFromLegacy(wo);
+    const seeded = S.seedRouteFromLegacy(wo, data);
     wo.route = seeded.route; wo.stageIdx = seeded.stageIdx; wo.legacy = seeded.legacy;
   }
   return wo;
@@ -65,7 +66,7 @@ function advance(user, woId, action) {
 
   const found = repo.getWorkOrder(woId);
   if (!found || !found.id) throw err("Work order not found", 404);
-  const wo = withRoute(found);
+  const wo = withRoute(found, data);
 
   const route = wo.route;
   const idx = Math.min(Math.max(wo.stageIdx || 0, 0), route.length - 1);
@@ -113,7 +114,7 @@ function advance(user, woId, action) {
   wo.updatedBy = by; wo.updatedAt = now;
   repo.putWorkOrder(wo);
 
-  return summarize(wo);
+  return summarize(wo, data);
 }
 
 /* ============================================================
@@ -121,10 +122,14 @@ function advance(user, woId, action) {
    Builds a fresh 3-stage route (non-legacy → full per-stage
    posting as it progresses).
    ============================================================ */
-/* Reject when any BOM component's aggregate need exceeds store on-hand. */
+/* A short material is only a hard stop for goods we BUY ready-made. Anything we
+   produce ourselves simply starts a stage earlier: the work order is routed
+   through its owner's RM production so the missing material gets made first
+   (see stageService.routeStagesFor). */
 function assertMaterialsAvailable(data, item, qty, materialChoices) {
   const bom = (data.boms || {})[item.id];
   if (!bom) return;
+  if (S.productOwner(item.id, data)) return;        // made in-house → route, don't block
   const onHand = {};
   (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
   const need = {};
@@ -137,7 +142,10 @@ function assertMaterialsAvailable(data, item, qty, materialChoices) {
       const it = (data.items || []).find((x) => x.id === rid) || {};
       return (it.name || rid) + " (need " + n.toFixed(2) + " " + (it.uom || "") + ", in store " + (onHand[rid] || 0).toFixed(2) + ")";
     });
-  if (short.length) throw err("Materials short — cannot create this work order: " + short.join("; "), 400);
+  if (short.length) {
+    throw err("This product is bought in ready-made, and the store is short: " + short.join("; ")
+      + ". Raise a purchase order first.", 400);
+  }
 }
 
 /* updateWorkOrder — edit a planned run. Due date and priority can change
@@ -173,7 +181,9 @@ function updateWorkOrder(user, id, body) {
     assertMaterialsAvailable(data, newItem, body.qty !== undefined ? +body.qty : wo.qty, null);
     wo.itemId = body.itemId;
     delete wo.materialChoices;                 // the picks belonged to the old recipe
-    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId });
+    const q2 = body.qty !== undefined ? +body.qty : wo.qty;
+    wo.line = lineForItem(newItem, data, null, { qty: q2 });
+    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId, qty: q2 }, data);
     wo.stageIdx = 0;
   }
   if (body.due !== undefined) wo.due = body.due || null;
@@ -190,15 +200,17 @@ function updateWorkOrder(user, id, body) {
   }
   if (body.line !== undefined && body.line && body.line !== wo.line) {
     if (started) throw err("Line cannot change after production has started", 400);
-    wo.line = body.line;
-    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId });
+    const item2 = (data.items || []).find((i) => i.id === wo.itemId);
+    wo.line = item2 ? lineForItem(item2, data, body.line, { qty: wo.qty }) : body.line;
+    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId, qty: wo.qty,
+      materialChoices: wo.materialChoices }, data);
     wo.stageIdx = 0;
   }
   wo.progress = calcProgress(wo.route || []);
   wo.status = S.rollupStatus(wo);
   wo.updatedBy = user.username; wo.updatedAt = new Date().toISOString();
   repo.putWorkOrder(wo);
-  return summarize(wo);
+  return summarize(wo, data);
 }
 
 function createWorkOrder(user, body) {
@@ -220,18 +232,19 @@ function createWorkOrder(user, body) {
   (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
   const id = "WO-" + String(max + 1).padStart(4, "0");
 
-  // default the production line from routing (same logic the seed uses) so a
-  // WO created without an explicit line still lands on the right area's board
-  const line = body.line || getLineForItem(item) || "Coating Line 1";
+  // the line follows the route: a job that must be produced starts on its
+  // owner's RM line, otherwise it lands on a slitting line
+  const line = lineForItem(item, data, body.line, { qty, materialChoices: body.materialChoices });
   const wo = {
     id, date: todayISO(), itemId: body.itemId, qty,
     status: "Released", due: body.due || null, line,
     progress: 0, priority: body.priority || "Normal",
-    route: S.freshRoute({ line, itemId: body.itemId }), stageIdx: 0, legacy: false,
+    route: S.freshRoute({ line, itemId: body.itemId, qty, materialChoices: body.materialChoices }, data),
+    stageIdx: 0, legacy: false,
     createdBy: user.username, createdAt: new Date().toISOString(),
   };
   // capture any per-order production spec (e.g. copper-wire count) for this product
-  const spec = S.specForProduct(body.itemId);
+  const spec = S.specForProduct(body.itemId, data);
   if (spec && body[spec.key] != null && body[spec.key] !== "") wo[spec.key] = body[spec.key];
   // A ranged BOM line names a choice or a span, not one material. Whichever was
   // picked against live store stock at issue is recorded here, so every later
@@ -246,7 +259,7 @@ function createWorkOrder(user, body) {
   }
   wo.status = S.rollupStatus(wo);
   repo.putWorkOrder(wo);
-  return summarize(wo);
+  return summarize(wo, data);
 }
 
 /* ============================================================
@@ -329,7 +342,7 @@ function recordExcessMaterial(user, body) {
   //    their own work area — same authorization rule as advance().
   const found = repo.getWorkOrder(body.woId);
   if (!found || !found.id) throw err("Work order not found", 404);
-  const wo = withRoute(found);
+  const wo = withRoute(found, data);
   const route = wo.route || [];
   const curStage = route[Math.min(Math.max(wo.stageIdx || 0, 0), Math.max(route.length - 1, 0))] || {};
   if (!isOffice && user.area !== "all" && !S.areaCovers(user.area, curStage.area)) {
@@ -402,14 +415,27 @@ function updateWorkOrderStatus(user, woId, status) {
   return advance(user, woId, action);
 }
 
+/* The production line must belong to the area that actually STARTS the job:
+   a single-material product skips coating, so it must not land on a coating
+   line whatever the caller asked for. Pools live in stageService. */
+function lineForItem(item, data, wanted, opts) {
+  const pool = S.LINES_BY_AREA[S.startArea(item.id, data, opts)] || S.LINES_BY_AREA.slitting;
+  if (!wanted) {
+    const fromRouting = getLineForItem(item);          // legacy group-based hint
+    if (pool.indexOf(fromRouting) >= 0) return fromRouting;
+  }
+  return S.lineForProduct(item.id, data, wanted, opts);
+}
+
 /* trim a WO to what the UI needs (no money) */
-function summarize(wo) {
+function summarize(wo, data) {
   return {
     id: wo.id, status: wo.status, progress: wo.progress,
     stageIdx: wo.stageIdx, dispatched: !!wo.dispatched,
     route: (wo.route || []).map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq,
+      owner: r.owner || null, line: r.line || null,
       status: r.status, doneBy: r.doneBy, doneAt: r.doneAt })),
-    spec: S.specForWO(wo),
+    spec: S.specForWO(wo, data),
     updatedAt: wo.updatedAt,
   };
 }
@@ -485,12 +511,12 @@ function createAdhocProduction(user, body) {
   let max = 0;
   (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
   const now = new Date().toISOString();
-  const line = body.line || getLineForItem(item) || "Coating Line 1";
+  const line = lineForItem(item, data, body.line, { qty: kg });
   const wo = {
     id: "WO-" + String(max + 1).padStart(4, "0"),
     date: todayISO(), itemId: item.id, qty: kg, status: "Released",
     due: null, line, progress: 0, priority: "Normal",
-    route: S.freshRoute({ line, itemId: item.id }), stageIdx: 0, legacy: false,
+    route: S.freshRoute({ line, itemId: item.id, qty: kg }, data), stageIdx: 0, legacy: false,
     adhoc: true, rolls, lengthM, widthMM, gsm, sqm,
     createdBy: user.username, createdAt: now,
   };
@@ -498,8 +524,9 @@ function createAdhocProduction(user, body) {
   repo.putWorkOrder(wo);
 
   const ref = "AP-" + Date.now().toString(36).toUpperCase();
-  const moves = [{ id: mvId(), date: todayISO(), itemId: item.id, wh, type: "PROD",
-    qty: Math.abs(kg), rate: item.cost || 0, ref, note: "Ad-hoc production " + wo.id, by: user.username }];
+  // the run's output is NOT stocked (same rule as every stage) — only the
+  // materials it burned are posted below
+  const moves = [];
 
   const bom = (data.boms || {})[item.id];
   const consumed = [];

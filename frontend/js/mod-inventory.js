@@ -28,7 +28,7 @@
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
-      MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
+      MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
       MW.select([{value:"all",label:"All Status"},{value:"instock",label:"In Stock"},{value:"low",label:"Low Stock"},{value:"out",label:"Out of Stock"}], v=>{filter.state=v;draw();}),
       MW.dateRange(filter, draw, {label:"Last Movement"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
@@ -50,7 +50,9 @@
         // WIP items are auto-generated stage plumbing (the server re-creates
         // them per product at boot) — keep them out of the list until they
         // actually carry stock, unless the WIP category is explicitly chosen
-        if(r.it.cat==="WIP" && filter.cat!=="WIP" && !r.stock.lastMove && !r.st.onHand) return false;
+        // WIP is never stocked now — a stage hands its output to the next stage,
+        // so the leftover WIP plumbing items stay out of the list entirely
+        if(r.it.cat==="WIP") return false;
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
         if(filter.state!=="all" && stockClass(r.st)!==filter.state) return false;
         if(!MW.inDateRange(r.stock.lastMove, filter)) return false;
@@ -159,7 +161,7 @@
     const body=h("div",{class:"form-grid"},[
       field("Item Code",`<input class="input" id="f_id" value="${esc(f('id',''))}" ${edit?'disabled':''} placeholder="e.g. RM-XYZ">`),
       field("Item Name",`<input class="input" id="f_name" value="${esc(f('name',''))}" placeholder="Descriptive name">`),
-      field("Category",selectHTML("f_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),it.cat)),
+      field("Category",selectHTML("f_cat",ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({v:c.id,l:c.name})),it.cat)),
       field("Unit of Measure",`<input class="input" id="f_uom" value="${esc(f('uom','KG'))}">`),
       field("Reorder Point",`<input class="input" id="f_reorder" type="number" value="${f('reorder',0)}">`),
       field("Safety Stock",`<input class="input" id="f_safety" type="number" value="${f('safety',0)}">`),
@@ -483,7 +485,7 @@
         {key:"date",label:"Date",render:r=>r.date,sort:r=>r.date},
         {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(trim(it.name||r.itemId,32))}</div><div class="cell-sub">${r.itemId}</div>`;},sort:r=>r.itemId},
         {key:"type",label:"Type",render:r=>moveBadge(r.type),sort:r=>r.type},
-        {key:"wh",label:"Warehouse",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
+        {key:"wh",label:"Warehouse",cls:"nm",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
         {key:"ref",label:"Reference",render:r=>`<span class="mono">${esc(r.ref||"—")}</span>`,sort:r=>r.ref},
         {key:"qty",label:"Qty",num:true,render:r=>{const it=ENG.item(r.itemId)||{};return `<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(r.qty,2)}</span> <span class="muted">${it.uom||""}</span>`;},sort:r=>r.qty},
         {key:"rate",label:"Rate",num:true,render:r=>r.rate?"₹"+ENG.num(r.rate,2):"—",sort:r=>r.rate||0},

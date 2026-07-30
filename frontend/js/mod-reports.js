@@ -28,7 +28,7 @@
         h("h3",{style:"font-size:14.5px;margin-top:12px",text:r.name}),
         h("div",{class:"muted",style:"font-size:12px;margin-top:4px;line-height:1.5",text:r.desc}),
         h("div",{class:"flex gap",style:"margin-top:14px",onclick:e=>e.stopPropagation()},[
-          h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn();},html:"🗂 Data"})
+          h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn();},html:"⬇ Export"})
         ])
       ]));
     });
@@ -200,16 +200,7 @@
       ])
     ]));
 
-    /* Excel import / export */
-    root.appendChild(h("div",{class:"card",style:"margin-top:16px"},[
-      h("div",{class:"card-head"},h("h3",{text:"📑 Excel Import / Export"})),
-      h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",text:"Export any table to an Excel (.xlsx) file, edit it, and import it back. Imports show a preview (new / updated) before anything is saved — nothing is deleted. Imported work orders are automatically routed through Coating → Slitting → Packing."}),
-      h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Tables — click a button for Import / Data"}),
-      h("div",{class:"flex gap wrap"}, Object.keys(CSVIO.ENTITIES).map(k=>
-        MW.csvMenu(()=>{ const t=CSVIO.entityTable(k);
-          MW.dataPreview({title:t.label, head:t.header, rows:t.rows, name:"chhaperia_"+k+".xlsx", sheet:t.label}); },
-          {small:true, label:CSVIO.ENTITIES[k].label})))
-    ]));
+    /* Excel import / export lives on each section's own DATA button, not here. */
 
     function refreshSeg(e){ [...e.target.parentElement.children].forEach(c=>c.classList.remove("on")); e.target.classList.add("on"); }
     function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#2f7fe0",teal:"#0fb5ae",violet:"#7c5cff",green:"#16a34a",pink:"#ec4899",amber:"#e0a000"}; return map[a]; }
@@ -229,18 +220,29 @@
       catch(e){ toast("Reset failed: "+e.message,{type:"danger"}); } } }
   }};
 
-  /* ============== SHARED EXCEL IMPORT (any page's Excel ▾ menu) ============== */
-  function csvImport(){
+  /* ============== SHARED EXCEL IMPORT (any page's Excel ▾ menu) ==============
+     Reads EVERY sheet of the workbook, so the multi-section import template
+     (one sheet per section) can be dropped in as-is. `want` is the section the
+     user started from — its sheet is opened first when the file has several. */
+  function csvImport(want){
       const inp=h("input",{type:"file",accept:".xlsx,.xls",style:"display:none"});
       inp.onchange=e=>{ const f=e.target.files[0]; if(!f) return;
-        if(!/\.xlsx?$/i.test(f.name)){ toast("Only Excel files (.xlsx) are supported — export a table first to get the right columns.",{type:"warn"}); return; }
+        if(!/\.xlsx?$/i.test(f.name)){ toast("Only Excel files (.xlsx) are supported — export a table first, or use the import template.",{type:"warn"}); return; }
         const r=new FileReader();
         r.onload=()=>{ try{
-            const parsed=CSVIO.parseXLSX(r.result);
-            if(parsed.length<1){ toast("Empty Excel file",{type:"warn"}); return; }
-            const detected=CSVIO.detect(parsed[0].map(x=>x.trim()));
-            if(!detected){ toast("Could not recognise this Excel file. Export a table first to get the right columns.",{type:"danger"}); return; }
-            showImportPreview(detected, parsed);
+            const sheets=CSVIO.parseWorkbook(r.result);
+            // sheets with a recognised header AND at least one data row
+            const usable=sheets.filter(s=>s.key && s.rows.length>1);
+            if(!usable.length){
+              const named=sheets.filter(s=>s.key).map(s=>s.name);
+              toast(named.length
+                ? "Recognised "+named.join(", ")+" but every sheet is empty — fill in at least one row."
+                : "Could not recognise any sheet in this file. Export a section first, or use the import template, to get the right column names.",
+                {type:"danger",title:"Nothing to import"});
+              return;
+            }
+            const first=usable.find(s=>s.key===want)||usable[0];
+            showImportPreview(first.key, first.rows, usable, first);
           }catch(err){ toast("Import failed: "+err.message,{type:"danger"}); } };
         r.readAsArrayBuffer(f); };
       document.body.appendChild(inp); inp.click(); inp.remove();
@@ -249,8 +251,8 @@
   function statPill(txt,col){ return h("span",{style:`padding:6px 12px;border-radius:999px;border:1.5px solid ${col};color:${col};font-weight:700;font-size:13px`,text:txt}); }
   function previewVal(o,col){ const v=o[col.k]; if(Array.isArray(v)) return v.join("|"); if(v&&typeof v==="object") return JSON.stringify(v); return v==null?"":v; }
 
-  function showImportPreview(key, parsed){
-      let curKey=key;
+  function showImportPreview(key, parsed, sheets, curSheet){
+      let curKey=key, rows=parsed;
       const host=h("div");
       const mo=modal({title:"Import Excel", sub:"Review changes before saving", wide:true, body:host,
         foot:[ h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
@@ -258,13 +260,26 @@
       const sel=h("select",{class:"select",style:"max-width:240px"}, Object.keys(CSVIO.ENTITIES).map(k=>{
         const o=h("option",{value:k,text:CSVIO.ENTITIES[k].label}); if(k===curKey)o.selected=true; return o; }));
       sel.onchange=()=>{ curKey=sel.value; render(); };
+      /* a workbook can hold one sheet per section — pick which one to import */
+      const multi=(sheets||[]).length>1;
+      const shSel=multi? h("select",{class:"select",style:"max-width:230px"},(sheets||[]).map(s=>{
+        const o=h("option",{value:s.name,text:s.name+"  ("+(s.rows.length-1)+" rows)"});
+        if(curSheet&&s.name===curSheet.name)o.selected=true; return o; })) : null;
+      if(shSel) shSel.onchange=()=>{
+        const s=sheets.find(x=>x.name===shSel.value);
+        if(!s) return;
+        rows=s.rows; curKey=s.key||curKey; sel.value=curKey; render();
+      };
 
       function render(){
         host.innerHTML="";
+        if(shSel) host.appendChild(h("div",{class:"flex gap aic wrap",style:"margin-bottom:10px"},[
+          h("span",{class:"muted",style:"font-size:12px",text:"Sheet:"}), shSel,
+          h("span",{class:"muted",style:"font-size:11.5px",text:sheets.length+" importable sheets in this file — one section at a time"}) ]));
         host.appendChild(h("div",{class:"flex gap aic",style:"margin-bottom:12px"},[
-          h("span",{class:"muted",style:"font-size:12px",text:"Import this file as:"}), sel ]));
+          h("span",{class:"muted",style:"font-size:12px",text:"Import this sheet as:"}), sel ]));
         let diff;
-        try{ diff=CSVIO.buildDiff(curKey, parsed); }
+        try{ diff=CSVIO.buildDiff(curKey, rows); }
         catch(err){ host.appendChild(h("div",{class:"muted",text:"Cannot map this file to "+CSVIO.ENTITIES[curKey].label+"."})); return; }
         host.appendChild(h("div",{class:"flex gap wrap",style:"margin-bottom:14px"},[
           statPill("＋ "+diff.add.length+" new","var(--ok)"),
@@ -277,7 +292,7 @@
         const cols0=CSVIO.ENTITIES[curKey].cols.slice(0,6);
         const rows=changed.slice(0,120).map(c=>{ const o={_k:c.kind}; cols0.forEach(col=>o[col.k]=previewVal(c.o,col)); return o; });
         const tcols=[{key:"_k",label:"Change",noSort:true,render:r=>badge(r._k==="New"?"ok":"info",r._k)}].concat(
-          cols0.map(col=>({key:col.k,label:col.k,noSort:true,render:r=>esc(String(r[col.k]==null?"":r[col.k])).slice(0,44)})));
+          cols0.map(col=>({key:col.k,label:col.label||col.k,noSort:true,render:r=>esc(String(r[col.k]==null?"":r[col.k])).slice(0,44)})));
         host.appendChild(table(rows,tcols,{empty:"No new or changed rows in this file"}));
         if(changed.length>120) host.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-top:8px",text:"Showing first 120 of "+changed.length+" changed rows — all will be applied."}));
 

@@ -517,7 +517,7 @@
        Posts a single RET movement — never a silent adjustment. */
     openReturn() {
       const self = this;
-      const items = (this.data.stockItems || []).filter((i) => ["RM", "PKG", "CON", "FG", "WIP"].includes(i.cat));
+      const items = (this.data.stockItems || []).filter((i) => ["RM", "PKG", "CON", "FG"].includes(i.cat));
       const warehouses = this.data.warehouses || [];
       if (!items.length) { toast("No materials available to return.", { type: "warn" }); return; }
 

@@ -9,6 +9,10 @@
    Process templates
    -----------------
    • standard  (most tapes):   Coating → Slitting → Packing
+   • slitfirst (any product whose BOM has a SINGLE raw material):
+                Slitting → Packing — there is nothing to laminate, so the
+                job skips coating and the one material is issued at slitting.
+                Picked automatically from the BOM, see templateKeyFor().
    • fgtape    (fibre-glass tape): Fibre-Glass Production → Packing
                 (made to order spec, no slitting)
    • copperwb  (copper-woven semi-cond WB tape, FG-CU-WBT):
@@ -24,15 +28,19 @@
                   copper weaving/coating) AND also covers everything
                   the slitting pool does (see areaCovers()).
 
-   Stock is posted PER STAGE as work-in-process (WIP): each stage
-   consumes the previous stage's WIP + its own raw materials and
-   produces the next WIP; the final (packing) stage produces the
-   finished good. Per-stage recipes are DERIVED from the single BOM
-   by classifying each material's role (base / paste / pack), so it
-   works on the current data with no manual recipe authoring.
+   Stock effects are deliberately one-way. Each stage ISSUES the raw
+   materials it consumes from the store that holds them, and NOTHING is
+   ever received back — not after coating, not after slitting, not after
+   packing. The goods travel from stage to stage and out of the door
+   without being booked into any store, so no work-in-process or
+   finished-goods receipt appears in stock, in the item master or in a
+   report. (Finished stock is created only by the explicit "Add to
+   Finished Stock" action.) Per-stage recipes are DERIVED from the single
+   BOM by classifying each material's role (base / paste / pack), so it
+   works on the current data with no manual authoring.
 
-   `ensureStageModel` is an idempotent migration: it adds the WIP
-   items + attaches a route to every work order WITHOUT wiping data.
+   `ensureStageModel` is an idempotent migration: it attaches a route
+   to every work order WITHOUT wiping data.
    Legacy work orders are flagged so advancing them hands off between
    panels but does NOT re-post stock the old flow already booked;
    brand-new work orders get the full per-stage posting.
@@ -55,58 +63,166 @@ const PACK_DEFAULTS = [
 const r2 = (n) => Math.round((+n || 0) * 100) / 100;
 const indexBy = (arr, k) => Object.fromEntries((arr || []).map((x) => [x[k], x]));
 
-/* WIP item ids derived deterministically from the FG id + a suffix */
-function wipId(fgId, suffix) { return "WIP-" + String(fgId).replace(/^FG-/, "") + "-" + suffix; }
-
 /* ============================================================
    PROCESS TEMPLATES
    Each stage lists the material ROLES it consumes (base = the
    physical carrier/weave; paste = coating/impregnation chemistry;
-   pack = cores/packaging). Stages produce a WIP (`wip` suffix)
-   except the final packing stage, which produces the finished good.
+   pack = cores/packaging). No stage produces stock — every stage
+   hands its output to the next one (and the last one to dispatch)
+   without booking anything in.
    ============================================================ */
-const TEMPLATES = {
-  standard: {
-    wips: [["J", "Coated Jumbo (WIP)"], ["S", "Slit Rolls (WIP)"]],
-    stages: [
-      { key: "coating",  name: "Coating / Lamination", area: "coating",  roles: ["base", "paste"], wip: "J" },
-      { key: "slitting", name: "Slitting",             area: "slitting", roles: ["pack"],           wip: "S" },
-      { key: "packing",  name: "Packing & Dispatch",   area: "slitting", roles: [], packDefaults: true },
-    ],
-  },
-  fgtape: {
-    wips: [["P", "Produced Roll (WIP)"]],
-    stages: [
-      { key: "production", name: "Fibre-Glass Production", area: "fiberglass", roles: ["base", "paste", "pack"], wip: "P" },
-      { key: "packing",    name: "Packing & Dispatch",     area: "slitting",   roles: [], packDefaults: true },
-    ],
-  },
-  copperwb: {
-    // number of copper wires woven in is an order spec captured per work order
-    spec: { key: "copperWires", label: "Copper wires (per tape)", hint: "as per order" },
-    wips: [["W", "Copper-Woven Base (WIP)"], ["C", "Semi-Cond WB Coated (WIP)"]],
-    stages: [
-      { key: "weaving", name: "Copper-Wire Weaving",   area: "fiberglass", roles: ["base"],         wip: "W" },
-      { key: "wbcoat",  name: "Semi-Cond WB Coating",  area: "fiberglass", roles: ["paste", "pack"], wip: "C" },
-      { key: "packing", name: "Packing & Dispatch",    area: "slitting",   roles: [], packDefaults: true },
-    ],
-  },
+/* ============================================================
+   WHO PRODUCES WHAT
+   The two RM-production people own different product families; anything not
+   listed is bought in ready-made and only slit, packed and dispatched here.
+   Matched on the product's type code (family), longest pattern first.
+   ============================================================ */
+const OWNERS = {
+  gautam: { user: "coating1", area: "coating", line: "RM Production 1",
+            label: "RM Production — Gautam Saw", person: "Gautam Saw" },
+  ganesh: { user: "coating2", area: "coating", line: "RM Production 2",
+            label: "RM Production 2 — Ganesh", person: "Ganesh" },
+  fibre:  { user: "fiberglass", area: "fiberglass", line: "Fibre-Glass Line 1",
+            label: "Fibre-Glass Production", person: "Fibre-glass team" },
+};
+/* Ganesh: the woven semi-conductive family, the copper-woven tape, and the
+   listed coated tapes. Gautam: every other water-blocking tape. */
+const GANESH_FAMILIES = [
+  "CHN-", "CHSCWWBT", "CHCWSCWBT",                       // woven semi-conductive + copper woven
+  "CP25GE", "CCM25GE",                                   // inorganic mica tapes
+  "CH-LSZH", "CH-FSZH", "CH-FGT", "CH-ALPET", "CH-ALPFT", // LSZH / FSZH / FGT / alu laminates
+  "CH-CUPET", "CH-PFGT", "CH-NW-B", "CH-PT", "CH-CT",
+  "CH-RCT", "CH-RPST", "CH-BCT",
+];
+/* products whose base is woven by the fibre-glass team before Ganesh coats it */
+const FIBRE_FIRST = ["CHCWSCWBT"];
+
+function famOf(fgId, data) {
+  const it = ((data || {}).items || []).find((i) => i && i.id === fgId) || {};
+  return String(it.typeCode || fgId || "").toUpperCase().trim();
+}
+/* A family pattern matches the whole family or a family followed by a
+   separator — so "CH-PT" catches CH-PT-12 but never CH-PTFE. */
+function famMatches(fam, pattern) {
+  const p = pattern.toUpperCase();
+  if (fam === p) return true;
+  if (fam.indexOf(p) !== 0) return false;
+  if (/[^A-Z0-9]$/.test(p)) return true;        // pattern already ends at a boundary ("CHN-")
+  const next = fam.charAt(p.length);
+  return next === "" || /[^A-Z0-9]/.test(next); // "CH-PT" matches CH-PT-12, not CH-PTFE
+}
+/** Who makes this product in-house — or null when it is bought in ready-made. */
+function productOwner(fgId, data) {
+  const fam = famOf(fgId, data);
+  const it = ((data || {}).items || []).find((i) => i && i.id === fgId) || {};
+  const hit = (list) => list.some((p) => famMatches(fam, p));
+  if (hit(GANESH_FAMILIES)) return OWNERS.ganesh;
+  // everything else in the water-blocking series is Gautam's
+  if (String(it.group || "").toUpperCase().indexOf("WATER BLOCKING") === 0) return OWNERS.gautam;
+  return null;                                    // bought in — slit & pack only
+}
+const needsFibreFirst = (fgId, data) => FIBRE_FIRST.some((p) => famMatches(famOf(fgId, data), p));
+
+/* ---- the stages a route can be built from ---- */
+const STAGE = {
+  rm: (owner) => ({ key: "rmprod", name: owner.label, area: owner.area,
+                    owner: owner.user, line: owner.line, roles: ["base", "paste"] }),
+  weave: () => ({ key: "weaving", name: "Copper-Wire Weaving", area: "fiberglass",
+                  owner: OWNERS.fibre.user, line: OWNERS.fibre.line, roles: ["base"] }),
+  slit:  (all) => ({ key: "slitting", name: "Slitting", area: "slitting",
+                     roles: all ? ["base", "paste", "pack"] : ["pack"] }),
+  pack:  () => ({ key: "packing", name: "Packing & Dispatch", area: "slitting",
+                  roles: [], packDefaults: true }),
 };
 
-/* which template each product uses (default 'standard') */
-const PRODUCT_TEMPLATE = {
-  "FG-FG-TAPE": "fgtape",   // fibre-glass tape — produced & packed to order spec
-  "FG-CU-WBT":  "copperwb", // copper-woven semi-conductive water-blocking tape
+/* per-order production spec, by family */
+const SPEC_BY_FAMILY = {
+  CHCWSCWBT: { key: "copperWires", label: "Copper wires (per tape)", hint: "as per order" },
 };
 
-function templateKeyFor(fgId) { return PRODUCT_TEMPLATE[fgId] || "standard"; }
-function templateFor(fgId) { return TEMPLATES[templateKeyFor(fgId)]; }
-function specForProduct(fgId) { return templateFor(fgId).spec || null; }
+/* how many raw materials the product's recipe actually consumes */
+function bomMaterialCount(fgId, data) {
+  const bom = ((data || {}).boms || {})[fgId];
+  if (!bom) return 0;
+  const fg = ((data || {}).items || []).find((i) => i && i.id === fgId) || {};
+  try { return BC.toLegacy(bom, BC.metaFromItem(fg)).length; }
+  catch { return (bom.lines || []).length; }
+}
 
-/* products made on the fibre-glass floor (any template whose first stage is fiberglass) */
-const FIBERGLASS_PRODUCTS = new Set(
-  Object.keys(PRODUCT_TEMPLATE).filter((id) => TEMPLATES[PRODUCT_TEMPLATE[id]].stages[0].area === "fiberglass")
-);
+/** What the recipe needs for `qty`, and how much of it the store holds. */
+function materialCheck(fgId, qty, data, choices) {
+  const bom = ((data || {}).boms || {})[fgId];
+  const out = { need: [], short: [], ok: true };
+  if (!bom) return out;
+  const fg = ((data || {}).items || []).find((i) => i && i.id === fgId) || {};
+  const onHand = {};
+  ((data || {}).movements || []).forEach((m) => { onHand[m.itemId] = (onHand[m.itemId] || 0) + (+m.qty || 0); });
+  const Y = bom.yield || 1;
+  const need = {};
+  BC.toLegacy(bom, BC.metaFromItem(fg), choices || {}).forEach(([rid, per]) => {
+    need[rid] = (need[rid] || 0) + (per * (+qty || 0)) / Y;
+  });
+  Object.keys(need).forEach((rid) => {
+    const have = +(onHand[rid] || 0);
+    const row = { id: rid, need: r2(need[rid]), have: r2(have) };
+    out.need.push(row);
+    if (have + 1e-6 < need[rid]) { out.short.push(row); out.ok = false; }
+  });
+  return out;
+}
+
+/* ============================================================
+   ROUTE SELECTION
+   A work order looks at the store FIRST: if the material this product is made
+   from is already there in the quantity needed, the job starts at SLITTING.
+   If it is not, the job starts at the RM PRODUCTION stage of whoever makes
+   that product (and, for the copper-woven tape, at fibre-glass weaving before
+   it) so the material gets produced first. A bought-in product has no
+   production stage — it can only be slit once the goods are in.
+   ============================================================ */
+function routeStagesFor(fgId, data, opts) {
+  opts = opts || {};
+  const owner = productOwner(fgId, data);
+  const chk = materialCheck(fgId, opts.qty, data, opts.materialChoices);
+  const haveMaterial = chk.ok;                       // no BOM => nothing to miss
+  if (haveMaterial || !owner) return [STAGE.slit(true), STAGE.pack()];
+  const stages = [];
+  if (needsFibreFirst(fgId, data)) stages.push(STAGE.weave());
+  stages.push(STAGE.rm(owner));
+  stages.push(STAGE.slit(false), STAGE.pack());
+  return stages;
+}
+function templateFor(fgId, data, opts) { return { stages: routeStagesFor(fgId, data, opts) }; }
+function templateKeyFor(fgId, data, opts) {
+  return routeStagesFor(fgId, data, opts).map((s) => s.key).join(">");
+}
+function specForProduct(fgId, data) {
+  const fam = famOf(fgId, data);
+  const key = Object.keys(SPEC_BY_FAMILY).find((p) => famMatches(fam, p));
+  return key ? SPEC_BY_FAMILY[key] : null;
+}
+
+/* The lines each area runs. A work order's line must belong to the area that
+   STARTS its route, so a job that skips coating never sits on a coating line. */
+const LINES_BY_AREA = {
+  coating:    ["RM Production 1", "RM Production 2"],
+  slitting:   ["Slitting A", "Slitting B"],
+  fiberglass: ["Fibre-Glass Line 1", "Fibre-Glass Line 2"],
+};
+function startArea(fgId, data, opts) {
+  const first = (routeStagesFor(fgId, data, opts) || [])[0] || {};
+  return first.area || "slitting";
+}
+/* keep `wanted` when it is a line of the right area, else pick deterministically */
+function lineForProduct(fgId, data, wanted, opts) {
+  const stages = routeStagesFor(fgId, data, opts);
+  const first = stages[0] || {};
+  if (first.line) return first.line;                 // the owner's own line
+  const pool = LINES_BY_AREA[first.area || "slitting"] || LINES_BY_AREA.slitting;
+  if (wanted && pool.indexOf(wanted) >= 0) return wanted;
+  const hash = Array.from(String(fgId || "")).reduce((n, c) => n + c.charCodeAt(0), 0);
+  return pool[hash % pool.length];
+}
 
 /* classify a raw material's ROLE in the process */
 function materialRole(id) {
@@ -131,8 +247,9 @@ function areaCovers(userArea, stageArea) {
    computeStagePlan — derived per-stage recipe to produce `qty` kg
    of finished good `fgId`. Returns an object keyed by stage key:
      { <stageKey>: { consume:[[id,qty>0]…], produce:[id,qty>0], wh } }
-   Each stage consumes the previous stage's WIP + its role materials;
-   the final stage produces the finished good. Returns null (no BOM).
+   Each stage consumes only its own role materials; nothing is carried
+   between stages as stock and no stage produces stock. Returns null (no
+   BOM).
    ============================================================ */
 /* `choices` maps a ranged BOM line index -> the stock item actually chosen
    for this work order (see BOMCALC.candidatesFor / resolve). */
@@ -140,7 +257,7 @@ function computeStagePlan(fgId, qty, data, choices) {
   const bom = (data.boms || {})[fgId];
   if (!bom) return null;
   const itemsById = indexBy(data.items || [], "id");
-  const tpl = templateFor(fgId);
+  const tpl = { stages: routeStagesFor(fgId, data, { qty, materialChoices: choices }) };
   const stages = tpl.stages;
   const Y = bom.yield || 1;
 
@@ -157,11 +274,9 @@ function computeStagePlan(fgId, qty, data, choices) {
   });
 
   const plan = {};
-  let prevWip = null;
   stages.forEach((s, i) => {
     const isLast = i === stages.length - 1;
     const consume = [];
-    if (prevWip) consume.push([prevWip, r2(qty)]);   // previous WIP (nominal mass = qty)
     perStage[i].forEach((l) => consume.push(l));
     if (s.packDefaults) {
       PACK_DEFAULTS.forEach((p) => {
@@ -172,9 +287,11 @@ function computeStagePlan(fgId, qty, data, choices) {
         if (q > 0) consume.push([p.id, q]);
       });
     }
-    const produceId = isLast ? fgId : wipId(fgId, s.wip);
-    plan[s.key] = { consume, produce: [produceId, r2(qty)], wh: isLast ? "WH-FG" : "WH-WIP" };
-    prevWip = isLast ? null : produceId;
+    /* NO stage output is stocked — not coating, not slitting, not packing. Each
+       stage only ISSUES what it consumes; the goods move from stage to stage and
+       out of the door without ever being booked into a store. (Finished stock is
+       only ever created by the explicit "Add to Finished Stock" action.) */
+    plan[s.key] = { consume, produce: null, wh: null, last: isLast };
   });
   return plan;
 }
@@ -187,9 +304,8 @@ function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements
   const st = plan[stageKey];
   if (!st) return [];
   /* Raw materials are issued FROM THE WAREHOUSE THAT HOLDS THEM (whichever
-     store they were received into) — issuing everything against WH-WIP hid
-     the deduction from the store's warehouse view. WIP intermediates live
-     (and are consumed) in WH-WIP. */
+     store they were received into) — issuing everything against one warehouse
+     hid the deduction from the store's warehouse view. */
   const whFor = (rid) => {
     const it = itemsById[rid] || {};
     if (it.cat === "WIP" || /^WIP-/.test(rid)) return "WH-WIP";
@@ -206,25 +322,23 @@ function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements
       qty: -Math.abs(q), rate: (itemsById[rid] || {}).cost || 0, ref: wo.id,
       note: "Stage " + stageKey + " → " + wo.itemId, by: byWho });
   });
-  const [pid, pq] = st.produce;
-  if (pq) {
-    moves.push({ id: mvId(), date: dateISO, itemId: pid, wh: st.wh, type: "PROD",
-      qty: Math.abs(pq), rate: (itemsById[pid] || {}).cost || 0, ref: wo.id,
-      note: stageKey === "packing" ? "Finished goods (packed)" : "WIP output (" + stageKey + ")",
-      by: byWho });
-  }
+  /* No receipt is posted for any stage — see computeStagePlan(). A stage's
+     output is not stock, so completing coating, slitting or packing books
+     nothing in. */
   return moves;
 }
 
 /* ============================================================
    Route construction
    ============================================================ */
-function freshRoute(wo) {
-  const stages = templateFor(wo.itemId).stages;
+function freshRoute(wo, data) {
+  const stages = routeStagesFor(wo.itemId, data, { qty: wo.qty, materialChoices: wo.materialChoices });
   return stages.map((s, i) => ({
     key: s.key,
     name: s.name,
     area: s.area,
+    owner: s.owner || null,       // only this person's board shows the stage
+    line: s.line || null,
     seq: i + 1,
     status: "Pending",            // Pending | In Production | Completed
     posted: false,                // have this stage's stock movements been posted?
@@ -234,13 +348,15 @@ function freshRoute(wo) {
 }
 
 /* seed a route for a work order that predates the stage model */
-function seedRouteFromLegacy(wo) {
-  const route = freshRoute(wo);
+function seedRouteFromLegacy(wo, data) {
+  const route = freshRoute(wo, data);
   const s = String(wo.status || "").toLowerCase();
   const done = s === "completed" || s === "packed" || s === "dispatched";
 
   // a legacy WO on a slitting line is already past its first production stage
-  let curIdx = String(wo.line || "").toLowerCase().includes("slit") ? Math.min(1, route.length - 1) : 0;
+  const startsAtCoating = route.length > 0 && route[0].area === "coating";
+  let curIdx = (startsAtCoating && String(wo.line || "").toLowerCase().includes("slit"))
+    ? Math.min(1, route.length - 1) : 0;
 
   route.forEach((r, i) => {
     if (done) {
@@ -296,66 +412,51 @@ function currentStage(wo) {
 }
 
 /* order-spec (e.g. copper-wire count) for a work order, or null */
-function specForWO(wo) {
-  const sp = specForProduct(wo.itemId);
+function specForWO(wo, data) {
+  const sp = specForProduct(wo.itemId, data);
   if (!sp) return null;
   return { key: sp.key, label: sp.label, hint: sp.hint || null, value: wo[sp.key] == null ? null : wo[sp.key] };
 }
 
 /* ============================================================
    ensureStageModel(data) — idempotent migration (mutates `data`).
-   1) create the WIP items each product's template needs (if missing)
-   2) attach a route + stageIdx to every work order (if missing)
+   Attaches a route + stageIdx to every work order (if missing) and keeps the
+   flat status/progress fields honest. No WIP items are created: an unfinished
+   stage's output is never stocked, it is handed straight to the next stage.
    Returns { changed:boolean }. Does NOT touch historical movements.
    ============================================================ */
 function ensureStageModel(data) {
   let changed = false;
   data.items = data.items || [];
   data.workorders = data.workorders || [];
-  const itemsById = indexBy(data.items, "id");
-  const boms = data.boms || {};
 
-  // 1) WIP items per product template
-  Object.keys(boms).forEach((fgId) => {
-    const fg = itemsById[fgId];
-    if (!fg) return;
-    const tpl = templateFor(fgId);
-    const Y = boms[fgId].yield || 1;
-
-    // material cost per role (per kg FG), then accumulate per stage for WIP valuation
-    const roleCost = { base: 0, paste: 0, pack: 0 };
-    BC.toLegacy(boms[fgId], BC.metaFromItem(fg)).forEach(([rid, per]) => { roleCost[materialRole(rid)] += per * ((itemsById[rid] || {}).cost || 0); });
-    const cumCost = {}; let cum = 0;
-    tpl.stages.forEach((s) => { (s.roles || []).forEach((role) => { cum += roleCost[role] || 0; }); if (s.wip) cumCost[s.wip] = Math.round(cum / Y); });
-
-    tpl.wips.forEach(([suf, label], k) => {
-      const id = wipId(fgId, suf);
-      if (itemsById[id]) return;
-      const wipItem = {
-        id, name: fg.name + " — " + label, cat: "WIP", uom: fg.uom || "KG",
-        cost: cumCost[suf] || Math.round((fg.cost || 0) * (k + 1) / (tpl.wips.length + 1)),
-        price: 0, reorder: 0, safety: 0, lead: 0, abc: "C",
-        hsn: fg.hsn || "", supplierId: null, group: fg.group || null,
-        stageOf: fgId, barcode: "",
-      };
-      data.items.push(wipItem);
-      itemsById[id] = wipItem;
-      changed = true;
-    });
-  });
-
-  // 2) attach routes to work orders that don't have one, and reconcile the
+  // attach routes to work orders that don't have one, and reconcile the
   //    flat status + progress fields against the route for EVERY work order.
   //    (Seed data set progress to a random value independent of the route, so
   //    without this the Production board's progress bar disagreed with its
   //    stage dots. Runs idempotently on every boot → self-heals old data.)
   data.workorders.forEach((wo) => {
     if (!wo.route || !wo.route.length) {
-      const seeded = seedRouteFromLegacy(wo);
+      const seeded = seedRouteFromLegacy(wo, data);
       wo.route = seeded.route;
       wo.stageIdx = seeded.stageIdx;
       wo.legacy = seeded.legacy;
       changed = true;
+    } else if (!wo.legacy) {
+      // the product's route may have changed (e.g. its BOM is down to a single
+      // material, so it now skips coating). Re-route only while NOTHING has
+      // started — a job in flight keeps the route it was planned with.
+      const untouched = wo.route.every((r) => r.status === "Pending" && !r.posted);
+      const want = routeStagesFor(wo.itemId, data,
+        { qty: wo.qty, materialChoices: wo.materialChoices }).map((s) => s.key).join(">");
+      if (untouched && wo.route.map((r) => r.key).join(">") !== want) {
+        wo.route = freshRoute(wo, data);
+        wo.stageIdx = 0;
+        // the line has to follow the route to the area that now starts the job
+        const line = lineForProduct(wo.itemId, data, wo.line);
+        if (line !== wo.line) wo.line = line;
+        changed = true;
+      }
     }
     const status = rollupStatus(wo);
     const progress = calcProgress(wo.route);
@@ -367,8 +468,9 @@ function ensureStageModel(data) {
 }
 
 module.exports = {
-  TEMPLATES, PRODUCT_TEMPLATE, FIBERGLASS_PRODUCTS, Y_SLIT, Y_PACK,
-  wipId, templateKeyFor, templateFor, specForProduct, specForWO,
+  OWNERS_BY_KEY: OWNERS, Y_SLIT, Y_PACK,
+  templateKeyFor, templateFor, specForProduct, specForWO, bomMaterialCount,
+  LINES_BY_AREA, startArea, lineForProduct, OWNERS, productOwner, materialCheck, routeStagesFor,
   materialRole, areaCovers,
   computeStagePlan, stageMovements,
   freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,

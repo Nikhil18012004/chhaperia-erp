@@ -219,7 +219,10 @@
 .table-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--line);background:var(--panel);
   box-shadow:var(--shadow-1),var(--inset-top)}
 table.tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl thead th{text-align:left;padding:10px 10px;font-size:10.5px;font-weight:800;color:var(--text-mut);
+/* Headings are centred over their column — numeric ones too, which the .num
+   rule below would otherwise pull right, away from the rest of the row. */
+.tbl thead th,.tbl thead th.num{text-align:center;padding:10px 8px;
+  font-size:10.5px;font-weight:800;color:var(--text-mut);
   text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--line-strong);
   background:linear-gradient(180deg,var(--panel-2),var(--panel));
   position:sticky;top:0;z-index:1;cursor:pointer;user-select:none;white-space:normal;vertical-align:bottom;transition:color var(--tr)}
@@ -228,12 +231,23 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl thead th .arr{opacity:.4;font-size:9px}
 .tbl thead th.sorted{color:var(--accent)}
 .tbl thead th.sorted .arr{opacity:1;color:var(--accent)}
-.tbl tbody td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle;overflow-wrap:break-word}
+/* body cells are centred too, so each column reads as one centred stack under
+   its heading (numbers keep their mono/tabular figures, just not right-aligned) */
+.tbl tbody td{text-align:center;padding:9px 8px;
+  border-bottom:1px solid var(--line);vertical-align:middle;overflow-wrap:break-word}
 .tbl tbody tr{transition:background .12s,box-shadow .12s}
 .tbl tbody tr:nth-child(even){background:var(--table-stripe)}
 .tbl tbody tr:hover{background:var(--table-hover);box-shadow:inset 3px 0 0 var(--accent)}
 .tbl tbody tr:last-child td{border-bottom:none}
-.tbl .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em;white-space:nowrap}
+.tbl .num{text-align:center;font-family:var(--mono);
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em;white-space:nowrap}
+/* NAMES read left — everything else (codes, numbers, dates, status) stays
+   centred. `.cell-main` is the identity line most tables render; columns whose
+   name is plain text declare themselves with cls:"nm". Headings stay centred. */
+.tbl tbody td:has(.cell-main),.tbl tbody td.nm{text-align:left}
+/* escape hatch: a cell that uses .cell-main for emphasis but is NOT a name
+   (e.g. the Stage column, which belongs with Status/Progress) */
+.tbl tbody td.ctr{text-align:center}
 .tbl .mono{font-family:var(--mono);font-size:12px;white-space:nowrap}
 .tbl .strong{font-weight:700}
 .row-click{cursor:pointer}
@@ -320,14 +334,24 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 /* chart legend under the card title */
 .chart-legend-row{display:flex;gap:8px;flex-wrap:wrap;margin:-6px 0 12px}
 
-/* currency exchange (dashboard) */
-.fx-conv{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
-.fx-conv-row{display:grid;grid-template-columns:1fr 96px;gap:8px}
-.fx-amt{font-family:var(--mono);font-weight:700}
-.fx-out{display:flex;align-items:center;font-family:var(--mono);font-weight:800;color:var(--text);
-  background:var(--panel-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.fx-sel{font-family:var(--mono);font-weight:700;padding:0 8px}
-.fx-swap{align-self:center;padding:2px 14px}
+/* currency exchange (dashboard) — labelled From row, ⇅, To row, unit rate */
+.fx-conv{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.fx-conv-row{display:grid;grid-template-columns:minmax(0,1fr) 124px;gap:8px;align-items:end}
+.fx-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fx-lbl{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--text-mut);padding-left:2px}
+.fx-amt{font-family:var(--mono);font-weight:700;min-width:0}
+.fx-out{display:flex;align-items:center;height:38px;padding:0 12px;border-radius:10px;
+  border:1px solid var(--line);background:var(--panel-3);color:var(--text);
+  font-family:var(--mono);font-weight:800;font-size:15px;
+  min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fx-sel{font-family:var(--mono);font-weight:700;padding:0 6px;min-width:0}
+/* the ⇅ sits on a hairline that visually joins the two rows */
+.fx-swap-wrap{display:flex;align-items:center;gap:10px;margin:2px 0}
+.fx-swap-wrap::before,.fx-swap-wrap::after{content:"";flex:1;border-top:1px solid var(--line)}
+.fx-swap{width:30px;height:30px;flex:0 0 30px;border-radius:50%;font-size:13px;line-height:1}
+.fx-rate{font-size:11px;font-family:var(--mono);color:var(--text-mut);text-align:center;
+  margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fx-divider{border-top:1px solid var(--line);margin-bottom:4px}
 .fx-list{display:flex;flex-direction:column}
 .fx-row{display:grid;grid-template-columns:auto 44px 1fr auto;align-items:center;gap:10px;
@@ -676,10 +700,11 @@ canvas{display:block;width:100%}
   .tbl-card-row:last-child{border-bottom:none}
   .tbl-card-row:active{background:var(--panel-2)}
   .tbl-card-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
-  .tbl-card-head{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tbl-card-head .cell-main{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tbl-card-head .cell-sub{font-size:11px;color:var(--text-mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tbl-card-sub{font-size:11.5px;color:var(--text-mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* phone cards show the FULL name — wrap it instead of cutting it off */
+  .tbl-card-head{font-weight:700;font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.3}
+  .tbl-card-head .cell-main{font-weight:700;font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.3}
+  .tbl-card-head .cell-sub{font-size:11px;color:var(--text-mut);white-space:normal;overflow-wrap:anywhere;margin-top:2px}
+  .tbl-card-sub{font-size:11.5px;color:var(--text-mut);white-space:normal;overflow-wrap:anywhere}
   .tbl-card-params{display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;margin-top:1px}
   .tcp{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;min-width:0}
   .tcp-k{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-mut)}
@@ -848,8 +873,19 @@ canvas{display:block;width:100%}
 .crm-none{color:var(--text-mut);font-size:12px;text-align:center;padding:26px 0;opacity:.75}
 
 /* ---- kanban board ---- */
-.crm-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(250px,1fr);gap:14px;
+/* all five stages share the card width — no horizontal scroll on desktop
+   (≤820px switches to the swipeable 260px carousel further up) */
+.crm-board{display:grid;grid-auto-flow:column;gap:12px;
   overflow-x:auto;padding-bottom:10px;align-items:start}
+/* Desktop: the five stages share the card width, no horizontal scroll.
+   Phones/tablets keep the swipeable 260px carousel set further up — hence the
+   min-width guard, without which this rule (being later in the file) would win
+   there too and squeeze the columns to a few pixels. */
+/* Five stages only fit side by side once the page is wide enough (~1000px);
+   below that the board becomes a swipeable carousel instead of squeezing the
+   lead cards until their text clips. */
+@media(min-width:1001px){ .crm-board{grid-auto-columns:minmax(0,1fr)} }
+@media(max-width:1000px){ .crm-board{grid-auto-columns:minmax(260px,86vw)} }
 .crm-col{--sc:var(--accent);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);
   display:flex;flex-direction:column;min-height:130px;box-shadow:var(--inset-top)}
 .crm-col-head{padding:13px 14px 12px;border-bottom:1px solid var(--line);border-radius:var(--radius) var(--radius) 0 0;position:relative;overflow:hidden}
@@ -870,11 +906,13 @@ canvas{display:block;width:100%}
 .crm-card-top{display:flex;align-items:center;gap:9px}
 .crm-ava{flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-weight:800;font-size:13px;
   background:color-mix(in srgb,var(--sc) 16%,var(--panel));color:var(--sc)}
-.crm-card-co{font-weight:750;font-size:13px;line-height:1.2;flex:1;min-width:0}
+/* five stage columns share the card, so card text WRAPS rather than truncating */
+.crm-card-co{font-weight:750;font-size:13px;line-height:1.2;flex:1;min-width:0;overflow-wrap:anywhere}
 .crm-card-val{font-size:12px;font-weight:800;font-family:var(--mono);white-space:nowrap}
 .crm-card-sub{margin-top:9px}
-.crm-card-sub .crm-pill{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:20px;
-  background:var(--panel-3);color:var(--text-dim);display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crm-card-sub .crm-pill{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:11px;
+  background:var(--panel-3);color:var(--text-dim);display:inline-block;max-width:100%;
+  white-space:normal;overflow-wrap:anywhere;line-height:1.35}
 .crm-card-foot{display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line)}
 .crm-card-due{font-weight:700;font-family:var(--mono);white-space:nowrap}
 
@@ -978,3 +1016,92 @@ canvas{display:block;width:100%}
 .xm-summ{font-size:12.5px;color:var(--text-dim);font-weight:600;margin-right:auto}
 .xm-foot-btns{display:flex;gap:10px}
 @media(max-width:560px){ .xm-grid,.xm-grid.r2{grid-template-columns:1fr} }
+
+
+/* New W.O. — the stages this product will run (single-material products skip coating) */
+.wo-route{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border-radius:10px;
+  background:var(--panel-2);border:1px solid var(--line)}
+.wo-route-lbl{font-size:9.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--text-mut)}
+.wo-route-path{font-size:12.5px;font-weight:700;color:var(--text)}
+
+/* ============================================================
+   DOCUMENT FORMS (New / Edit purchase order · sales order)
+   A header block of fields + a list of line items. The header
+   packs into 3 columns on a wide modal; each line item is its own
+   card — the product on its own row so a long name stays readable,
+   its numbers beneath — so nothing is ever clipped or side-scrolled.
+   ============================================================ */
+.doc-sec{display:flex;align-items:center;gap:12px;margin:22px 0 12px}
+.doc-sec:first-child{margin-top:2px}
+.doc-sec-t{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);white-space:nowrap}
+.doc-sec-l{flex:1;height:1px;background:var(--line)}
+.form-grid.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:1100px){ .form-grid.g3{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media(max-width:680px){ .form-grid.g3{grid-template-columns:1fr} }
+
+.doc-lines{display:flex;flex-direction:column;gap:10px}
+.doc-line{border:1px solid var(--line);border-radius:12px;background:var(--panel-2);padding:11px 12px 12px}
+.doc-line-top{display:flex;align-items:center;gap:10px}
+.doc-line-no{flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+  background:var(--panel-3);color:var(--text-mut);font-family:var(--mono);font-size:12px;font-weight:800}
+.doc-line-item{flex:1;min-width:0}
+.doc-line-item .ss-wrap,.doc-line-item .select,.doc-line-item .input{width:100%}
+.doc-line-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:9px;margin-top:10px}
+.doc-line-f{display:flex;flex-direction:column;gap:4px;min-width:0}
+.doc-line-f label{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--text-mut)}
+.doc-line-f .input,.doc-line-f .select{width:100%;min-width:0}
+.doc-line-x{flex:0 0 auto}
+.doc-add{margin-top:12px}
+.doc-tot{display:flex;justify-content:flex-end;margin-top:18px}
+
+/* A long <option> (e.g. a company name + GSTIN) must not stretch its grid
+   column: the control shrinks with the column instead of widening it. */
+.form-grid .field{min-width:0}
+.form-grid .field > *{min-width:0}
+.form-grid .field .select,.form-grid .field .input,
+.form-grid .field select,.form-grid .field input,.form-grid .field textarea{width:100%;min-width:0}
+
+/* BOM editor components table: roomy on desktop, but it must FIT the modal on a
+   tablet or phone instead of forcing a sideways scroll. The fixed cell widths
+   live here (not inline) so they can relax on a narrow screen. */
+.bom-edit-tbl{width:100%;table-layout:auto}
+.bom-edit-tbl .bom-nm{min-width:250px}
+.bom-edit-tbl .bom-num{width:100px}
+.bom-edit-tbl .bom-unit{width:74px}
+@media(max-width:1120px){
+  .bom-edit-tbl th,.bom-edit-tbl td{padding:7px 4px;font-size:12px}
+  .bom-edit-tbl th{white-space:normal}
+  .bom-edit-tbl .bom-nm{min-width:0}
+  .bom-edit-tbl .bom-num,.bom-edit-tbl .bom-unit{width:auto;min-width:0}
+  .bom-edit-tbl .input,.bom-edit-tbl .select{min-width:0;width:100%;padding:0 6px}
+}
+/* small tablets: squeeze once more so eight columns still fit the dialog */
+@media(max-width:900px){
+  .bom-edit-tbl th,.bom-edit-tbl td{padding:6px 2px;font-size:11.5px}
+  .bom-edit-tbl .input,.bom-edit-tbl .select{padding:0 4px;font-size:11.5px}
+}
+
+/* BOM editor: the components table stays a REAL table at every width.
+   The generic phone card layout stacks cells and reads their column name from
+   data-label — this table is hand-built and has none, so stacking left a row of
+   unlabelled inputs. A labelled table you swipe sideways is far more usable. */
+.bom-edit-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;
+  border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+@media(max-width:640px){
+  .bom-edit-wrap table.bom-edit-tbl{display:table;min-width:720px;font-size:12px}
+  .bom-edit-wrap .bom-edit-tbl thead{position:static;width:auto;height:auto;clip:auto;overflow:visible}
+  .bom-edit-wrap .bom-edit-tbl tbody{display:table-row-group}
+  .bom-edit-wrap .bom-edit-tbl tbody tr{display:table-row;background:none;border:none;
+    border-radius:0;margin:0;box-shadow:none}
+  .bom-edit-wrap .bom-edit-tbl tbody tr:nth-child(even){background:var(--table-stripe)}
+  .bom-edit-wrap .bom-edit-tbl tbody td{display:table-cell;text-align:center;
+    border-bottom:1px solid var(--line);padding:6px 4px;min-height:0;justify-content:initial}
+  .bom-edit-wrap .bom-edit-tbl tbody td::before{content:none}
+  .bom-edit-wrap .bom-edit-tbl tbody td:first-child{background:none;border-radius:0;margin:0;
+    padding:6px 4px;display:table-cell;text-align:left}
+  .bom-edit-wrap .bom-edit-tbl tbody td[colspan]{display:table-cell}
+}
+
+/* sales-order line: what the floor already has finished for this product */
+.so-ready{margin-top:8px;font-size:11.5px;line-height:1.45;color:var(--text-mut);
+  border-top:1px dashed var(--line);padding-top:7px}

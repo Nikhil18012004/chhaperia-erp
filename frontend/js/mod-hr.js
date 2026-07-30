@@ -65,7 +65,10 @@
   });
 
   function headerActions() {
-    if (curTab === "workers") return [h("button", { class: "btn primary", onclick: () => workerForm(), html: "＋ New Worker" })];
+    // Workers + Attendance carry an Excel ▾ (bulk load from a spreadsheet)
+    if (curTab === "workers") return [MW.excelMenu("hrworkers"),
+      h("button", { class: "btn primary", onclick: () => workerForm(), html: "＋ New Worker" })];
+    if (curTab === "attendance") return [MW.excelMenu("hrattendance")];
     if (curTab === "leave") return [h("button", { class: "btn primary", onclick: () => leaveForm(), html: "＋ Apply Leave" })];
     if (curTab === "payroll") return [h("button", { class: "btn primary", onclick: () => runPayrollFlow(), html: "▶ Run Payroll" })];
     if (curTab === "settings") return [h("button", { class: "btn", onclick: () => leaveTypeForm(), html: "＋ Leave Type" })];
@@ -268,11 +271,12 @@
       // ---- desktop/tablet: scrolling matrix (hidden ≤640px) ----
       const wrap = h("div", { class: "muster-full", style: "overflow-x:auto;border:1px solid var(--line);border-radius:12px" });
       const tbl = h("table", { class: "tbl muster" });
-      const head = h("tr", {}, [h("th", { style: "position:sticky;left:0;background:var(--panel);text-align:left;min-width:150px", text: "Worker" })]);
+      // widths kept tight so a full 31-day month fits a laptop card without scrolling
+      const head = h("tr", {}, [h("th", { style: "position:sticky;left:0;background:var(--panel);min-width:136px", text: "Worker" })]);
       for (let d = 1; d <= days; d++) { const wd = new Date(y, m - 1, d).getDay();
-        head.appendChild(h("th", { style: "padding:4px 2px;font-size:10px;" + (wd === 0 ? "color:var(--danger)" : ""), text: d })); }
-      head.appendChild(h("th", { style: "min-width:56px", text: "P" }));
-      head.appendChild(h("th", { style: "min-width:56px", text: "OT" }));
+        head.appendChild(h("th", { style: "padding:4px 1px;font-size:10px;" + (wd === 0 ? "color:var(--danger)" : ""), text: d })); }
+      head.appendChild(h("th", { style: "min-width:46px;padding:10px 4px", text: "P" }));
+      head.appendChild(h("th", { style: "min-width:46px;padding:10px 4px", text: "OT" }));
       tbl.appendChild(h("thead", {}, head));
       const tbody = h("tbody");
       // ---- phone: one card per worker, name header + scrollable day strip ----
@@ -283,7 +287,7 @@
       }
       list.forEach((w) => {
         const tr = h("tr");
-        tr.appendChild(h("td", { style: "position:sticky;left:0;background:var(--panel);font-weight:600;font-size:12px;min-width:150px", text: U.trim(w.name, 20) }));
+        tr.appendChild(h("td", { class: "nm", style: "position:sticky;left:0;background:var(--panel);font-weight:600;font-size:12px;min-width:136px", text: U.trim(w.name, 20) }));
         const strip = h("div", { class: "mstrip" });
         let p = 0, ot = 0;
         for (let d = 1; d <= days; d++) {
@@ -295,7 +299,7 @@
             if (a.status === "P") p++; else if (a.status === "HD") p += 0.5; ot += a.otHours || 0; }
           else if (wd === 0) { letter = "·"; cls = "s-mut"; }
           const title = a ? (STATUS_META[a.status] ? STATUS_META[a.status][1] : a.status) + (a.otHours ? " · OT " + a.otHours + "h" : "") : "Mark " + ds;
-          tr.appendChild(h("td", { style: "text-align:center;padding:2px;cursor:pointer", title, onclick: () => dayEntry(w, ds, a) },
+          tr.appendChild(h("td", { style: "text-align:center;padding:2px 1px;cursor:pointer", title, onclick: () => dayEntry(w, ds, a) },
             letter ? h("span", { class: "badge-s " + cls, style: "min-width:20px;display:inline-block", text: letter }) : h("span", { class: "muted", text: "" })));
           // phone strip cell: weekday + day number + status pip, tap to edit
           strip.appendChild(h("button", { class: "mcell" + (wd === 0 ? " sun" : ""), title, onclick: () => dayEntry(w, ds, a) }, [
@@ -548,7 +552,7 @@
       h("div", { class: "card-head" }, [h("h3", { text: "🗂 Leave Types" }), h("div", { class: "sub", text: "Define entitlements & accrual — used by the Leave tab" })]),
       table(lts, [
         { key: "id", label: "Code", render: (r) => `<span class="mono strong">${r.id}</span>`, noSort: true },
-        { key: "name", label: "Name", render: (r) => esc(r.name), noSort: true },
+        { key: "name", label: "Name", cls: "nm", render: (r) => esc(r.name), noSort: true },
         { key: "quota", label: "Annual Quota", num: true, render: (r) => r.accrual === "earned" ? "earned 1/20" : num(r.quota, 1) + " days", noSort: true },
         { key: "accrual", label: "Accrual", render: (r) => badge("mut", r.accrual), noSort: true },
         { key: "paid", label: "Paid", render: (r) => r.paid ? badge("ok", "Paid") : badge("mut", "Unpaid"), noSort: true },
