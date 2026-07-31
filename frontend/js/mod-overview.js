@@ -261,13 +261,72 @@
   }};
 
   /* ----- live currency exchange (INR base) ----- */
+  /* ---- national flags ----------------------------------------------------
+     Drawn as inline SVG, not emoji: Windows ships no flag glyph, so 🇺🇸 comes
+     out as bare "US" letters in Chrome and Edge. Each is deliberately
+     simplified — at 21×14 px the fine detail is invisible anyway — but reads
+     correctly at a glance. All share a 30×20 viewBox so the column lines up.
+     The Union Jack skips the saltire counterchange for the same reason. */
+  const STAR="M 0,-1 L .225,-.309 L .951,-.309 L .363,.118 L .588,.809 "+
+             "L 0,.382 L -.588,.809 L -.363,.118 L -.951,-.309 L -.225,-.309 Z";
+  const star=(x,y,r)=>`<path d="${STAR}" transform="translate(${x} ${y}) scale(${r})"/>`;
+  const FLAG_SVG={
+    US:(()=>{                                   // 13 stripes + starred canton
+      let s='<rect width="30" height="20" fill="#fff"/>';
+      for(let i=0;i<13;i+=2)
+        s+=`<rect y="${(i*20/13).toFixed(2)}" width="30" height="${(20/13).toFixed(2)}" fill="#b22234"/>`;
+      s+='<rect width="12" height="10.77" fill="#3c3b6e"/>';
+      let st="";
+      for(let r=0;r<5;r++) for(let c=0;c<(r%2?5:6);c++)
+        st+=star(1.1+c*2+(r%2?1:0), 1.15+r*2.15, .6);
+      return s+`<g fill="#fff">${st}</g>`;
+    })(),
+    EU:(()=>{                                   // 12 gold stars on a circle
+      let st="";
+      for(let i=0;i<12;i++){
+        const a=i*Math.PI/6;
+        st+=star(15+Math.sin(a)*6, 10-Math.cos(a)*6, 1.05);
+      }
+      return `<rect width="30" height="20" fill="#039"/><g fill="#fc0">${st}</g>`;
+    })(),
+    GB:'<rect width="30" height="20" fill="#012169"/>'+
+       '<path d="M0,0 30,20 M30,0 0,20" stroke="#fff" stroke-width="4.2"/>'+
+       '<path d="M0,0 30,20 M30,0 0,20" stroke="#c8102e" stroke-width="2"/>'+
+       '<path d="M15,0 V20 M0,10 H30" stroke="#fff" stroke-width="6.6"/>'+
+       '<path d="M15,0 V20 M0,10 H30" stroke="#c8102e" stroke-width="3.9"/>',
+    AE:'<rect width="30" height="20" fill="#00732f"/>'+
+       '<rect y="6.67" width="30" height="6.67" fill="#fff"/>'+
+       '<rect y="13.34" width="30" height="6.66" fill="#000"/>'+
+       '<rect width="7.5" height="20" fill="#f00"/>',
+    CN:'<rect width="30" height="20" fill="#de2910"/><g fill="#fd0">'+
+       star(5.4,5.2,2.7)+star(10.4,2,.85)+star(12.3,4.1,.85)+
+       star(12.3,6.7,.85)+star(10.4,8.7,.85)+'</g>',
+    JP:'<rect width="30" height="20" fill="#fff"/>'+
+       '<circle cx="15" cy="10" r="6" fill="#bc002d"/>',
+    IN:'<rect width="30" height="20" fill="#f93"/>'+
+       '<rect y="6.67" width="30" height="6.67" fill="#fff"/>'+
+       '<rect y="13.34" width="30" height="6.66" fill="#128807"/>'+
+       '<g fill="none" stroke="#008" stroke-width=".45">'+
+       '<circle cx="15" cy="10" r="2.6"/>'+
+       '<path d="M15,7.4 V12.6 M12.4,10 H17.6 M13.16,8.16 16.84,11.84 M16.84,8.16 13.16,11.84"/></g>'+
+       '<circle cx="15" cy="10" r=".55" fill="#008"/>',
+  };
+  /* the flag cell — falls back to the country code if we have no artwork */
+  function flagEl(cc,name){
+    const svg=FLAG_SVG[cc];
+    return h("span",{class:"fx-flag"+(svg?"":" txt"),role:"img",
+      "aria-label":(name||cc)+" flag",title:name||cc},
+      svg?[h("span",{class:"fx-flag-svg",html:`<svg viewBox="0 0 30 20">${svg}</svg>`})]:cc);
+  }
+
+  // `name` is the currency (shown in the row); `country` only labels the flag
   const FX_LIST=[
-    {code:"USD", name:"US Dollar",      flag:"🇺🇸"},
-    {code:"EUR", name:"Euro",           flag:"🇪🇺"},
-    {code:"GBP", name:"British Pound",  flag:"🇬🇧"},
-    {code:"AED", name:"UAE Dirham",     flag:"🇦🇪"},
-    {code:"CNY", name:"Chinese Yuan",   flag:"🇨🇳"},
-    {code:"JPY", name:"Japanese Yen",   flag:"🇯🇵"},
+    {code:"USD", name:"US Dollar",      cc:"US", country:"United States"},
+    {code:"EUR", name:"Euro",           cc:"EU", country:"European Union"},
+    {code:"GBP", name:"British Pound",  cc:"GB", country:"United Kingdom"},
+    {code:"AED", name:"UAE Dirham",     cc:"AE", country:"United Arab Emirates"},
+    {code:"CNY", name:"Chinese Yuan",   cc:"CN", country:"China"},
+    {code:"JPY", name:"Japanese Yen",   cc:"JP", country:"Japan"},
   ];
   // Real currencies for the converter dropdowns: code → [full name, symbol].
   // Only codes listed here appear in the pickers, which also keeps the crypto
@@ -298,9 +357,130 @@
     VND:["Vietnamese Dong","₫"],     TWD:["Taiwan Dollar","NT$"],
   };
   const ccySym  =c=>(CCY_META[c]||[])[1]||"";
-  // collapsed picker = code + symbol ("USD $"); open list = the full name too
-  const ccyShort =c=>c+" "+ccySym(c);
-  const ccyFull  =c=>c+" "+ccySym(c)+" — "+(CCY_META[c]||[])[0];
+  // collapsed picker = "USD $"; each row of the open list adds the full name
+  const ccyShort =c=>(c+" "+ccySym(c)).trim();
+  const ccyFull  =c=>ccyShort(c)+" — "+(CCY_META[c]||[])[0];
+  /* ---- currency picker ---------------------------------------------------
+     A native <select> hands its popup to the OS to draw, and on Windows that
+     renderer has no colour-emoji support — the flags simply never appeared in
+     the From/To lists even though they show fine in the rate list below. So
+     the pickers are plain HTML listboxes instead. They expose the slice of the
+     <select> API the converter uses (.value, .codes, .setCodes, and a "change"
+     event, so `picker.onchange = fn` keeps working). */
+  let fxOpenPick=null;                        // at most one popup open at a time
+  let fxPickWired=false;
+  function fxWirePick(){
+    if(fxPickWired||typeof document==="undefined") return; fxPickWired=true;
+    document.addEventListener("mousedown",e=>{
+      if(!fxOpenPick) return;
+      const inside=e.target.closest&&e.target.closest(".fx-pick");
+      if(inside!==fxOpenPick) fxOpenPick.closePick();
+    });
+    const reflow=()=>{ if(fxOpenPick) fxOpenPick.reposition(); };
+    window.addEventListener("scroll",reflow,true);   // capture → catches inner scrollers
+    window.addEventListener("resize",reflow);
+  }
+  function ccyPicker(label){
+    fxWirePick();
+    const cur=h("span",{class:"fx-pick-cur",text:"—"});
+    const btn=h("button",{class:"select fx-sel fx-pick-btn",type:"button",role:"combobox",
+      "aria-haspopup":"listbox","aria-expanded":"false","aria-label":label},
+      [cur, h("span",{class:"fx-pick-caret",text:"▾"})]);
+    const pop=h("div",{class:"fx-pick-pop",role:"listbox","aria-label":label,hidden:true});
+    const wrap=h("div",{class:"fx-pick"},[btn,pop]);
+    let codes=[], value="";
+
+    function paintOpts(){
+      pop.innerHTML="";
+      codes.forEach(c=>{
+        pop.appendChild(h("div",{class:"fx-opt",role:"option","aria-selected":"false","data-code":c,
+          onclick:()=>{ setValue(c,true); closePick(true); }},[
+          h("span",{class:"fx-code",text:c}),
+          h("span",{class:"fx-opt-sym",text:ccySym(c)}),
+          h("span",{class:"fx-name",text:(CCY_META[c]||[])[0]||c}),
+        ]));
+      });
+      mark();
+    }
+    function mark(){
+      pop.querySelectorAll(".fx-opt").forEach(o=>{
+        const on=o.getAttribute("data-code")===value;
+        o.classList.toggle("sel",on); o.setAttribute("aria-selected",on?"true":"false");
+      });
+    }
+    function setValue(c,fire){
+      if(!c||!CCY_META[c]) return;
+      value=c; cur.textContent=ccyShort(c); mark();
+      if(fire) wrap.dispatchEvent(new Event("change"));
+    }
+    function setActive(el){
+      pop.querySelectorAll(".fx-opt.act").forEach(o=>o.classList.remove("act"));
+      if(el){ el.classList.add("act"); el.scrollIntoView({block:"nearest"}); }
+    }
+    function reposition(){
+      if(pop.hidden) return;
+      const r=btn.getBoundingClientRect();
+      const popH=Math.min(272, pop.scrollHeight||272);
+      const below=window.innerHeight-r.bottom;
+      // the picker is the row's right-hand column, so the wider popup grows leftwards
+      pop.style.left="auto"; pop.style.right=(window.innerWidth-r.right)+"px";
+      if(below<popH+8 && r.top>below){ pop.style.top="auto"; pop.style.bottom=(window.innerHeight-r.top+4)+"px"; }
+      else { pop.style.bottom="auto"; pop.style.top=(r.bottom+4)+"px"; }
+    }
+    function openPick(){
+      if(fxOpenPick&&fxOpenPick!==wrap) fxOpenPick.closePick();
+      pop.hidden=false; btn.setAttribute("aria-expanded","true"); fxOpenPick=wrap;
+      reposition();
+      setActive(pop.querySelector(".fx-opt.sel")||pop.firstElementChild);
+    }
+    function closePick(refocus){
+      pop.hidden=true; btn.setAttribute("aria-expanded","false");
+      if(fxOpenPick===wrap) fxOpenPick=null;
+      if(refocus) btn.focus();
+    }
+
+    // type-ahead: the one <select> habit worth keeping — "e","u" jumps to EUR
+    let taBuf="", taAt=0;
+    function typeAhead(e){
+      if(e.key.length!==1||e.ctrlKey||e.metaKey||e.altKey) return;
+      const now=Date.now();
+      taBuf=(now-taAt>900?"":taBuf)+e.key; taAt=now;
+      const q=taBuf.toUpperCase();
+      const hit=codes.find(c=>c.startsWith(q))
+             || codes.find(c=>String((CCY_META[c]||[])[0]||"").toUpperCase().startsWith(q));
+      if(!hit) return;
+      e.preventDefault();
+      if(pop.hidden) setValue(hit,true);
+      else setActive(pop.querySelector('.fx-opt[data-code="'+hit+'"]'));
+    }
+    btn.addEventListener("click",()=>{ pop.hidden?openPick():closePick(); });
+    btn.addEventListener("keydown",e=>{
+      if(e.key==="Escape"){ if(!pop.hidden){ e.preventDefault(); closePick(true); } return; }
+      if(pop.hidden){
+        if(e.key==="ArrowDown"||e.key==="ArrowUp"||e.key==="Enter"||e.key===" "){ e.preventDefault(); openPick(); }
+        else typeAhead(e);
+        return;
+      }
+      const items=[...pop.querySelectorAll(".fx-opt")]; if(!items.length) return;
+      const i=items.findIndex(o=>o.classList.contains("act"));
+      if(e.key==="ArrowDown"){ e.preventDefault(); setActive(items[Math.min(items.length-1,i+1)]); }
+      else if(e.key==="ArrowUp"){ e.preventDefault(); setActive(items[Math.max(0,(i<0?0:i-1))]); }
+      else if(e.key==="Home"){ e.preventDefault(); setActive(items[0]); }
+      else if(e.key==="End"){ e.preventDefault(); setActive(items[items.length-1]); }
+      else if(e.key==="Enter"||e.key===" "){
+        e.preventDefault();
+        if(i>=0){ setValue(items[i].getAttribute("data-code"),true); closePick(true); }
+      }
+      else typeAhead(e);
+    });
+
+    wrap.setCodes=cs=>{ codes=cs.slice(); paintOpts(); };
+    wrap.closePick=closePick; wrap.reposition=reposition;
+    Object.defineProperty(wrap,"codes",{get:()=>codes});
+    Object.defineProperty(wrap,"value",{get:()=>value, set:v=>setValue(v,false)});
+    return wrap;
+  }
+
   const FX_POLL_MS=60000;
   // fxRates = ₹ per 1 unit of each currency, served by our backend which
   // cross-verifies a LIVE market feed against 3 independent daily sources
@@ -313,8 +493,10 @@
     /* converter — labelled From row (amount + currency), ⇅, To row (result +
        currency), then the unit rate the result was computed from */
     const amt=h("input",{class:"input fx-amt",type:"number",value:"1",min:"0",step:"any","aria-label":"Amount"});
-    const selFrom=h("select",{class:"select fx-sel","aria-label":"From currency"});
-    const selTo=h("select",{class:"select fx-sel","aria-label":"To currency"});
+    // Native <select> popups are drawn by the OS on Windows, which silently
+    // drops colour emoji — the flags vanished there. These are HTML listboxes
+    // so the flag renders in the picker exactly as it does in the rate list.
+    const selFrom=ccyPicker("From currency"), selTo=ccyPicker("To currency");
     const out=h("div",{class:"fx-out",text:"—"});
     const rate=h("div",{class:"fx-rate",text:""});
     const field=(lbl,ctl)=>h("div",{class:"fx-field"},[h("span",{class:"fx-lbl",text:lbl}),ctl]);
@@ -323,7 +505,7 @@
       h("div",{class:"fx-swap-wrap"},[
         h("button",{class:"icon-btn fx-swap",title:"Swap currencies","aria-label":"Swap currencies",onclick:()=>{
           const a=selFrom.value; selFrom.value=selTo.value; selTo.value=a;
-          shrink(selFrom); shrink(selTo); convert();
+          convert();
         },text:"⇅"})
       ]),
       h("div",{class:"fx-conv-row"},[field("Converted",out), field("To",selTo)]),
@@ -331,29 +513,16 @@
     ]);
     amt.oninput=convert; selFrom.onchange=convert; selTo.onchange=convert;
 
-    // A <select> can only display its selected option's text, so we rewrite the
-    // labels around the popup: full names while the list is open, code+symbol
-    // once it closes.
-    function expand(sel){ for(const o of sel.options) o.textContent=ccyFull(o.value); }
-    function shrink(sel){
-      expand(sel);                                     // every other row stays full
-      const o=sel.selectedOptions[0];
-      if(o) o.textContent=ccyShort(o.value);
-    }
-    [selFrom,selTo].forEach(sel=>{
-      ["mousedown","focus","keydown"].forEach(e=>sel.addEventListener(e,()=>expand(sel)));
-      ["change","blur"].forEach(e=>sel.addEventListener(e,()=>shrink(sel)));
-    });
-
     function fillSelects(){
-      if(selFrom.options.length) return;               // populate once
-      // only real currencies we can name, listed "CODE SYM — Full Name"
-      Object.keys(fxRates).filter(c=>CCY_META[c]).sort().forEach(c=>{
-        selFrom.appendChild(h("option",{value:c,text:ccyFull(c)}));
-        selTo.appendChild(h("option",{value:c,text:ccyFull(c)}));
-      });
+      if(selFrom.codes.length) return;                 // populate once
+      // only real currencies we can name, listed "CODE SYM — Full Name".
+      // Sorted by the NAME, not the code: the name is what you read down the
+      // list, and code order scatters it (AED "UAE Dirham" would lead, CHF
+      // "Swiss Franc" would sit between Canadian and Chinese).
+      const codes=Object.keys(fxRates).filter(c=>CCY_META[c])
+        .sort((a,b)=>CCY_META[a][0].localeCompare(CCY_META[b][0]));
+      selFrom.setCodes(codes); selTo.setCodes(codes);
       selFrom.value="USD"; selTo.value="INR";
-      shrink(selFrom); shrink(selTo);
     }
     function convert(){
       if(!fxRates){ out.textContent="—"; rate.textContent=""; return; }
@@ -362,7 +531,7 @@
       if(!isFinite(v)||!rf||!rt){ out.textContent="—"; rate.textContent=""; return; }
       const res=v*rf/rt, unit=rf/rt;
       const fmt=n=>n.toLocaleString("en-IN",{maximumFractionDigits:n<1?6:2});
-      out.textContent=(ccySym(selTo.value)||"")+" "+fmt(res);
+      out.textContent=fmt(res);                  // bare number — the To picker names the currency
       rate.textContent=`1 ${selFrom.value} = ${fmt(unit)} ${selTo.value}`;
       out.title=rate.textContent;
     }
@@ -382,7 +551,7 @@
         const prev=fxPrev? fxPrev[c.code] : null;
         const dir=prev==null||Math.abs(perUnit-prev)<1e-6 ? 0 : (perUnit>prev?1:-1);
         list.appendChild(h("div",{class:"fx-row"},[
-          h("span",{class:"fx-flag",text:c.flag}),
+          flagEl(c.cc,c.country),
           h("span",{class:"fx-code",text:c.code}),
           h("span",{class:"fx-name",text:c.name}),
           h("span",{class:"fx-val"},[

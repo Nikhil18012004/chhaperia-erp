@@ -346,6 +346,23 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
   font-family:var(--mono);font-weight:800;font-size:15px;
   min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .fx-sel{font-family:var(--mono);font-weight:700;padding:0 6px;min-width:0}
+/* From/To are custom listboxes, not <select>: Windows draws native select
+   popups through the OS, which has no colour-emoji support, so the flags
+   never rendered there. Our own markup draws them like the rate list does. */
+.fx-pick{position:relative;min-width:0}
+.fx-pick-btn{display:flex;align-items:center;gap:6px;width:100%;cursor:pointer;
+  text-align:left;font-size:12.5px}
+.fx-pick-btn[aria-expanded="true"]{border-color:var(--accent);box-shadow:var(--ring)}
+.fx-pick-cur{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fx-pick-caret{flex:0 0 auto;font-size:9px;color:var(--text-mut)}
+.fx-pick-pop{position:fixed;z-index:200;max-height:272px;overflow-y:auto;background:var(--panel);
+  border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);padding:5px;
+  min-width:min(250px,92vw);max-width:92vw}
+.fx-opt{display:grid;grid-template-columns:40px 34px 1fr;align-items:center;gap:9px;
+  padding:7px 9px;border-radius:7px;cursor:pointer;font-size:12.5px;color:var(--text)}
+.fx-opt:hover,.fx-opt.act{background:var(--panel-2);color:var(--accent)}
+.fx-opt.sel{font-weight:700}
+.fx-opt-sym{font-family:var(--mono);font-weight:700;font-size:11.5px;color:var(--text-dim);text-align:center}
 /* the ⇅ sits on a hairline that visually joins the two rows */
 .fx-swap-wrap{display:flex;align-items:center;gap:10px;margin:2px 0}
 .fx-swap-wrap::before,.fx-swap-wrap::after{content:"";flex:1;border-top:1px solid var(--line)}
@@ -357,7 +374,14 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 .fx-row{display:grid;grid-template-columns:auto 44px 1fr auto;align-items:center;gap:10px;
   padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px}
 .fx-row:last-child{border-bottom:none}
-.fx-flag{font-size:16px;line-height:1}
+/* national flag, drawn as inline SVG — Windows ships no flag emoji glyph */
+.fx-flag{display:block;width:21px;height:14px;border-radius:2px;overflow:hidden;
+  line-height:0;box-shadow:0 0 0 1px var(--line) inset,var(--shadow-1)}
+.fx-flag-svg,.fx-flag svg{display:block;width:100%;height:100%}
+/* fallback when we have no artwork for a country: its 2-letter code */
+.fx-flag.txt{width:auto;height:auto;line-height:1;box-shadow:none;padding:3px 5px;
+  border:1px solid var(--line);border-radius:4px;background:var(--panel-2);
+  font-family:var(--mono);font-weight:800;font-size:10px;letter-spacing:.06em;color:var(--text-dim)}
 .fx-code{font-family:var(--mono);font-weight:800;font-size:11.5px;color:var(--text-mut)}
 .fx-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fx-val{text-align:right;font-family:var(--mono);font-weight:700;white-space:nowrap;color:var(--text)}
