@@ -86,9 +86,9 @@ const server = app.listen(PORT, () => {
   let seedInfo = { seeded: false };
   try { seedInfo = authService.seedDefaultUsers(); } catch (e) { console.error("[user seed]", e.message); }
 
-  // flag any account still on its seeded "<username>@123" password so the
-  // UI forces a change at next login
-  try { const fp = authService.flagDefaultPasswords(); if (fp.flagged) console.log("  ├─ Security : " + fp.flagged + " account(s) still on default passwords — change forced at next login"); }
+  // Accounts are no longer flagged for a forced password change. Clear any
+  // flag left behind by an earlier build so nobody is prompted again.
+  try { const fp = authService.clearPasswordChangeFlags(); if (fp.cleared) console.log("  ├─ Security : cleared " + fp.cleared + " leftover forced-password-change flag(s)"); }
   catch (e) { console.error("[pw flag]", e.message); }
 
   // ensure the multi-stage routing model is applied to existing data (idempotent)

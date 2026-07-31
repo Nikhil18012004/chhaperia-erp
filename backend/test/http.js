@@ -300,7 +300,11 @@ async function run() {
   await call("POST", "/movements", A, { itemId: rm2, type: "GRN", qty: 100000, wh: "WH-PNY", rate: 10 });
   await call("PUT", "/boms/" + fg, A, { yield: 100, lines: [[rm, 0.6], [rm2, 0.3]] });
 
-  const woStk = await call("POST", "/production/wo", A, { itemId: fg, qty: 10 });
+  // A width is named so the run is not netted against the finished stock the
+  // adhoc run booked earlier: stock whose tape width was never recorded is
+  // never used for a width-specific order. This section is about ROUTING, so
+  // the netting is deliberately kept out of it (netting has its own section).
+  const woStk = await call("POST", "/production/wo", A, { itemId: fg, qty: 10, widthMM: 25 });
   const rStk = (woStk.d && woStk.d.route) || [];
   ok("material in store -> straight to Slitting → Packing",
     rStk.length === 2 && rStk[0].key === "slitting" && rStk[1].key === "packing",
@@ -409,7 +413,9 @@ async function run() {
 
   section("Production never books stock in — coating, slitting or packing");
   await call("PUT", "/boms/" + fg, A, { yield: 100, lines: [[rm, 0.6], [rm2, 0.3]] });
-  const woP = (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d;
+  // width-specific again, so this stays a test of a genuinely MANUFACTURED job
+  // rather than one quietly satisfied from finished stock (see netting section)
+  const woP = (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, widthMM: 25 })).d;
   ok("a job was planned with a route", (woP.route || []).length >= 2,
     (woP.route || []).map((r) => r.key).join(" > "));
   for (let i = 0; i < woP.route.length; i++) {            // admin may drive every stage
@@ -440,6 +446,244 @@ async function run() {
   const woPdone = (afterState.workorders || []).find((w) => w.id === woP.id);
   ok("the job still completed normally", (woPdone.route || []).every((r) => r.status === "Completed"));
   await call("PUT", "/boms/" + fg, A, { yield: 90, lines: [[rm, 0.7]] });   // restore
+
+  section("A requirement is netted against stock before anything is made");
+  {
+    // A dedicated product so nothing else in this file can disturb the sums.
+    const nfg = "FG-NET-TEST";
+    await call("POST", "/items", A, { id: nfg, name: "NETTING TEST TAPE", cat: "FG", uom: "KG",
+      thicknessMM: 0.05, gsm: 100, tapeWidthMM: 25, typeCode: "NETTEST-05" });
+    await call("PUT", "/boms/" + nfg, A, { yield: 100, lines: [[rm, 1]] });
+
+    // 30 kg of it already sits in the finished store, at 25 mm
+    await call("POST", "/movements", A, { itemId: nfg, type: "GRN", qty: 30, wh: "WH-FG", rate: 0, manual: true });
+
+    const wo1 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 100, widthMM: 25 })).d;
+    const p1 = wo1.plan || {};
+    ok("finished stock is taken off the requirement", p1.fgQty === 30, JSON.stringify(p1));
+    ok("only the remainder is manufactured", p1.makeQty === 70, "makeQty=" + p1.makeQty);
+    const pack1 = (wo1.route || []).find((r) => r.key === "packing");
+    ok("the whole order still passes through packing", pack1 && pack1.qty === 100,
+      pack1 ? "qty=" + pack1.qty : "no packing stage");
+    const made1 = (wo1.route || []).filter((r) => r.key !== "packing");
+    ok("every earlier stage carries only the manufactured quantity",
+      made1.length > 0 && made1.every((r) => r.qty === 70),
+      made1.map((r) => r.key + "=" + r.qty).join(","));
+
+    // a width the stock does not match is made in full
+    const wo2 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 100, widthMM: 12 })).d;
+    ok("finished stock of another width is left alone", (wo2.plan || {}).fgQty === 0,
+      JSON.stringify(wo2.plan));
+
+    /* Releasing wo1 DREW its 30 kg off the shelf there and then, so the shelf
+       is empty again — restock before testing an order covered by stock. */
+    const midState = (await call("GET", "/state", A)).d;
+    const leftAfterWo1 = (midState.movements || [])
+      .filter((m) => m.itemId === nfg).reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("releasing a work order draws its finished stock immediately", leftAfterWo1 === 0,
+      "on hand " + leftAfterWo1);
+    await call("POST", "/movements", A, { itemId: nfg, type: "GRN", qty: 30, wh: "WH-FG", rate: 0, manual: true });
+
+    // an order fully covered by stock skips production entirely
+    const wo3 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 20, widthMM: 25 })).d;
+    ok("an order covered by stock goes straight to packing",
+      (wo3.route || []).length === 1 && wo3.route[0].key === "packing",
+      (wo3.route || []).map((r) => r.key).join(" > "));
+    ok("nothing is manufactured for it", (wo3.plan || {}).makeQty === 0, JSON.stringify(wo3.plan));
+
+    // the stock was drawn at RELEASE — driving the job must not draw it twice
+    await call("POST", "/production/wo/" + wo3.id + "/advance", A, { action: "start" });
+    await call("POST", "/production/wo/" + wo3.id + "/advance", A, { action: "complete" });
+    const netState = (await call("GET", "/state", A)).d;
+    const wo3Moves = (netState.movements || []).filter((m) => m.ref === wo3.id);
+    const fgIssue = wo3Moves.filter((m) => m.itemId === nfg);
+    ok("the finished stock it used is issued from the store",
+      fgIssue.length === 1 && fgIssue[0].type === "ISSUE" && fgIssue[0].qty === -20,
+      JSON.stringify(fgIssue));
+    ok("no raw material is drawn for a job that makes nothing",
+      wo3Moves.every((m) => m.itemId !== rm), wo3Moves.map((m) => m.itemId).join(","));
+    ok("still nothing is received into stock",
+      wo3Moves.every((m) => m.qty < 0), wo3Moves.map((m) => m.type + ":" + m.qty).join(","));
+  }
+
+  section("The office chooses how much comes from stock");
+  {
+    const sfg = "FG-SPLIT-TEST";
+    await call("POST", "/items", A, { id: sfg, name: "SPLIT TEST TAPE", cat: "FG", uom: "KG",
+      thicknessMM: 0.05, gsm: 100, tapeWidthMM: 25, typeCode: "SPLITTEST-05" });
+    await call("PUT", "/boms/" + sfg, A, { yield: 1, lines: [[rm, 1]] });
+    await call("POST", "/movements", A, { itemId: sfg, type: "GRN", qty: 50, wh: "WH-FG", rate: 0, manual: true });
+
+    // take only 10 of the 50 available
+    const woA = (await call("POST", "/production/wo", A,
+      { itemId: sfg, qty: 100, widthMM: 25, fgQty: 10 })).d;
+    ok("only the named quantity is taken from finished stock", (woA.plan || {}).fgQty === 10,
+      JSON.stringify(woA.plan));
+    ok("the rest is manufactured", (woA.plan || {}).makeQty === 90, "makeQty=" + (woA.plan || {}).makeQty);
+
+    const afterA = (await call("GET", "/state", A)).d;
+    const leftA = (afterA.movements || []).filter((m) => m.itemId === sfg)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("the other 40 stay on the shelf", Math.abs(leftA - 40) < 0.01, "on hand " + leftA);
+    ok("the 10 were issued against the work order",
+      (afterA.movements || []).some((m) => m.ref === woA.id && m.itemId === sfg && m.qty === -10));
+
+    // asking for zero uses none, even though stock is there
+    const woB = (await call("POST", "/production/wo", A,
+      { itemId: sfg, qty: 10, widthMM: 25, fgQty: 0 })).d;
+    ok("zero means take none from stock", (woB.plan || {}).fgQty === 0, JSON.stringify(woB.plan));
+    ok("so the whole order is manufactured", (woB.plan || {}).makeQty === 10, JSON.stringify(woB.plan));
+
+    // asking for more than exists is capped, never over-drawn
+    const woC = (await call("POST", "/production/wo", A,
+      { itemId: sfg, qty: 100, widthMM: 25, fgQty: 9999 })).d;
+    ok("asking for more than the shelf holds is capped", (woC.plan || {}).fgQty === 40,
+      JSON.stringify(woC.plan));
+    const afterC = (await call("GET", "/state", A)).d;
+    const leftC = (afterC.movements || []).filter((m) => m.itemId === sfg)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("stock never goes negative from over-asking", leftC >= -0.001, "on hand " + leftC);
+
+    // the plan reports what WAS available, so the form can show a ceiling
+    ok("the plan reports what was on the shelf", (woA.plan || {}).fgAvailable === 50,
+      "fgAvailable=" + (woA.plan || {}).fgAvailable);
+  }
+
+  section("Half-made stock skips the coating stage");
+  {
+    // A product Ganesh coats (the CHN- family), so the route really has a
+    // coating stage to skip, and a raw material nobody has any of.
+    const cfg = "FG-NET-COAT";
+    const crm = "RM-NET-COAT";
+    await call("POST", "/items", A, { id: crm, name: "NETTING COAT BASE", cat: "RM", uom: "KG" });
+    await call("POST", "/items", A, { id: cfg, name: "NETTING COAT TAPE", cat: "FG", uom: "KG",
+      thicknessMM: 0.05, gsm: 100, typeCode: "CHN-NET-05" });
+    // yield 1 so the recipe is a plain 1 kg of base per 1 kg of tape and the
+    // quantity drawn from the store can be read directly
+    await call("PUT", "/boms/" + cfg, A, { yield: 1, lines: [[crm, 1]] });
+
+    // CONTROL: the same order with nothing on the shelf, driven to completion,
+    // so the netted run below can be compared against a real full draw rather
+    // than against a hand-computed figure that depends on how the BOM scales.
+    const plain = (await call("POST", "/production/wo", A, { itemId: cfg, qty: 100, widthMM: 25 })).d;
+    ok("with no stock at all the job is coated in full",
+      (plain.route || []).some((r) => r.key === "rmprod" && r.qty === 100),
+      (plain.route || []).map((r) => r.key + "=" + r.qty).join(" > "));
+    for (let i = 0; i < (plain.route || []).length; i++) {
+      await call("POST", "/production/wo/" + plain.id + "/advance", A, { action: "start" });
+      await call("POST", "/production/wo/" + plain.id + "/advance", A, { action: "complete" });
+    }
+    const ctlState = (await call("GET", "/state", A)).d;
+    const fullDraw = (ctlState.movements || [])
+      .filter((m) => m.ref === plain.id && m.itemId === crm)
+      .reduce((n, m) => n + Math.abs(+m.qty || 0), 0);
+    ok("the control run drew raw material for all 100", fullDraw > 0, "drew " + fullDraw);
+
+    // 25 kg of coated jumbo is on the shelf, linked to that product
+    const cwip = "WIP-NET-COAT";
+    await call("POST", "/items", A, { id: cwip, name: "NETTING COAT TAPE — Jumbo (WIP)", cat: "WIP",
+      uom: "KG", stageOf: cfg, thicknessMM: 0.05 });
+    await call("POST", "/movements", A, { itemId: cwip, type: "GRN", qty: 25, wh: "WH-WIP", rate: 0, manual: true });
+
+    const woW = (await call("POST", "/production/wo", A, { itemId: cfg, qty: 100, widthMM: 25 })).d;
+    const pw = woW.plan || {};
+    ok("the job is recognised as one that involves coating", pw.hasCoating === true, JSON.stringify(pw));
+    ok("half-made stock is taken off the requirement", pw.wipQty === 25, "wipQty=" + pw.wipQty);
+    ok("only the rest is coated", pw.makeQty === 75, "makeQty=" + pw.makeQty);
+    const coat = (woW.route || []).find((r) => r.key === "rmprod");
+    const slit = (woW.route || []).find((r) => r.key === "slitting");
+    const packW = (woW.route || []).find((r) => r.key === "packing");
+    ok("coating carries only the quantity being made", coat && coat.qty === 75,
+      coat ? "qty=" + coat.qty : "no coating stage");
+    ok("slitting carries the coated and the half-made together", slit && slit.qty === 100,
+      slit ? "qty=" + slit.qty : "no slitting stage");
+    ok("packing carries the whole order", packW && packW.qty === 100,
+      packW ? "qty=" + packW.qty : "no packing stage");
+
+    // drive it and check what the store actually gave up
+    for (let i = 0; i < (woW.route || []).length; i++) {
+      await call("POST", "/production/wo/" + woW.id + "/advance", A, { action: "start" });
+      await call("POST", "/production/wo/" + woW.id + "/advance", A, { action: "complete" });
+    }
+    const wState = (await call("GET", "/state", A)).d;
+    const wMoves = (wState.movements || []).filter((m) => m.ref === woW.id);
+    const rawUsed = wMoves.filter((m) => m.itemId === crm).reduce((n, m) => n + Math.abs(+m.qty || 0), 0);
+    ok("raw material is drawn for 75, not for the whole 100",
+      fullDraw > 0 && Math.abs(rawUsed - fullDraw * 0.75) < 0.01,
+      "drew " + rawUsed + " against a full draw of " + fullDraw);
+    const wipUsed = wMoves.filter((m) => m.itemId === cwip);
+    ok("the half-made stock is issued once, at slitting",
+      wipUsed.length === 1 && wipUsed[0].qty === -25, JSON.stringify(wipUsed));
+    ok("nothing is received into stock by this job either",
+      wMoves.every((m) => m.qty < 0), wMoves.map((m) => m.type + ":" + m.qty).join(","));
+  }
+
+  section("Booking finished stock can draw on half-made stock (admin only)");
+  {
+    const bfg = "FG-BOOK-TEST";
+    const brm = "RM-BOOK-TEST";
+    const bwip = "WIP-BOOK-TEST";
+    await call("POST", "/items", A, { id: brm, name: "BOOK TEST BASE", cat: "RM", uom: "KG" });
+    await call("POST", "/items", A, { id: bfg, name: "BOOK TEST TAPE", cat: "FG", uom: "KG",
+      thicknessMM: 0.05, gsm: 100, typeCode: "CHN-BOOK-05" });
+    await call("POST", "/items", A, { id: bwip, name: "BOOK TEST TAPE — Coated Jumbo (WIP)", cat: "WIP",
+      uom: "KG", stageOf: bfg, thicknessMM: 0.05 });
+    await call("PUT", "/boms/" + bfg, A, { yield: 1, lines: [[brm, 1]] });
+    await call("POST", "/movements", A, { itemId: brm, type: "GRN", qty: 100000, wh: "WH-PNY", rate: 0, manual: true });
+    await call("POST", "/movements", A, { itemId: bwip, type: "GRN", qty: 40, wh: "WH-WIP", rate: 0, manual: true });
+
+    /* CONTROL: book 100 the ordinary way and measure the raw draw, so the
+       sourced run below is compared against a real figure rather than a
+       hand-computed one (the recipe scales per batch, not per unit). */
+    const rawOf = (st) => (st.movements || []).filter((m) => m.itemId === brm)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    const ctlBefore = rawOf((await call("GET", "/state", A)).d);
+    await call("POST", "/production/finished", A, { itemId: bfg, qty: 100, wh: "WH-FG", tapeWidthMM: 25 });
+    const ctlDraw = ctlBefore - rawOf((await call("GET", "/state", A)).d);
+    ok("the control booking drew raw material for all 100", ctlDraw > 0, "drew " + ctlDraw);
+
+    const before = (await call("GET", "/state", A)).d;
+    const rawBefore = rawOf(before);
+
+    // book 100, of which 30 comes off the half-made shelf
+    const r = await call("POST", "/production/finished", A,
+      { itemId: bfg, qty: 100, wh: "WH-FG", tapeWidthMM: 25, wipQty: 30 });
+    ok("an admin can book part of a run from half-made stock", r.status < 300,
+      "status " + r.status + " " + JSON.stringify(r.d).slice(0, 160));
+    ok("it reports what came off the shelf", r.d && r.d.fromStock && r.d.fromStock.wipQty === 30,
+      JSON.stringify(r.d && r.d.fromStock));
+    ok("and what was actually made", r.d && r.d.fromStock && r.d.fromStock.makeQty === 70,
+      JSON.stringify(r.d && r.d.fromStock));
+
+    const after = (await call("GET", "/state", A)).d;
+    const wipLeft = (after.movements || []).filter((m) => m.itemId === bwip)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("the half-made stock was drawn down", Math.abs(wipLeft - 10) < 0.01, "on hand " + wipLeft);
+    const drew = rawBefore - rawOf(after);
+    ok("raw material was drawn for 70, not 100", Math.abs(drew - ctlDraw * 0.7) < 0.001,
+      "drew " + drew + " against a full draw of " + ctlDraw);
+    const fgMade = (after.movements || []).filter((m) => m.itemId === bfg)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("the full 100 still lands in finished stock (200 with the control)",
+      Math.abs(fgMade - 200) < 0.01, "on hand " + fgMade);
+
+    // a supervisor gets no such control — the request is simply ignored
+    const S1 = C;                       // coating1's token, from the auth section
+    const before2 = (await call("GET", "/state", A)).d;
+    const wipBefore2 = (before2.movements || []).filter((m) => m.itemId === bwip)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    const r2s = await call("POST", "/production/finished", S1,
+      { itemId: bfg, qty: 5, wh: "WH-FG", tapeWidthMM: 25, wipQty: 5 });
+    ok("a supervisor can still book stock normally", r2s.status < 300, "status " + r2s.status);
+    ok("but cannot source it from half-made stock",
+      r2s.status >= 300 || (r2s.d.fromStock && r2s.d.fromStock.wipQty === 0),
+      JSON.stringify(r2s.d && r2s.d.fromStock));
+    const after2 = (await call("GET", "/state", A)).d;
+    const wipAfter2 = (after2.movements || []).filter((m) => m.itemId === bwip)
+      .reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("so the half-made shelf is untouched by them", Math.abs(wipAfter2 - wipBefore2) < 0.01,
+      wipBefore2 + " -> " + wipAfter2);
+  }
 
   section("Validation rejects bad input");
   ok("SO with empty lines → 400", (await call("POST", "/sales-orders", A, { customerId: cust, lines: [] })).status === 400);

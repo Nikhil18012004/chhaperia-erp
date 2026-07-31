@@ -537,6 +537,31 @@
     };
   }
 
+  /* PAID LEAVE STILL PENDING — what the worker may still take this calendar
+     year. Mirrors hrService.leaveBalances: an "earned" type accrues one day
+     per 20 days actually worked, "none" grants nothing, everything else uses
+     its quota; approved leave of that type in the same year is taken off.
+     UNPAID types are ignored — the slip is about paid entitlement. */
+  function paidLeavePending(workerId, period) {
+    const year = String(period || "").slice(0, 4) || String(new Date().getFullYear());
+    const worked = (ENG.data.hrAttendance || []).filter((a) => a.workerId === workerId
+      && String(a.date || "").startsWith(year) && (a.status === "P" || a.status === "HD"))
+      .reduce((n, a) => n + (a.status === "HD" ? 0.5 : 1), 0);
+    const rows = [];
+    leaveTypes().forEach((t) => {
+      if (t.paid === false) return;
+      const entitled = t.accrual === "earned" ? Math.floor(worked / 20)
+        : (t.accrual === "none" ? 0 : (+t.quota || 0));
+      const taken = (ENG.data.hrLeaves || []).filter((l) => l.workerId === workerId
+        && l.type === t.id && l.status === "Approved" && String(l.fromDate || "").startsWith(year))
+        .reduce((n, l) => n + (+l.days || 0), 0);
+      if (entitled <= 0 && taken <= 0) return;
+      rows.push({ name: t.name, entitled, taken, balance: Math.round((entitled - taken) * 10) / 10 });
+    });
+    const total = rows.reduce((n, r) => n + r.balance, 0);
+    return { rows, total: Math.round(total * 10) / 10, year };
+  }
+
   function payslipSheet(s, run) {
     const d = s.deductions || {}, emp = s.employer || {};
     const co = payCompany();
@@ -545,6 +570,7 @@
     const dedTotal = (d.pf || 0) + (d.esi || 0) + (d.pt || 0) + (s.advances || 0);
     // LOP = days not paid for: absences and any unpaid leave
     const lop = (s.absent || 0) + (s.unpaidLeave || 0);
+    const pl = paidLeavePending(s.workerId, run.period);
 
     /* [label, this month, year to date, optional note] */
     const earn = [
@@ -581,6 +607,7 @@
           <div class="ps-for-m">${esc(periodLabel(run.period))}</div>
         </div>
       </header>
+      <div class="ps-rule"></div>
 
       <div class="ps-sum">
         <div class="ps-sum-l">
@@ -605,6 +632,7 @@
           <div class="ps-netcard-foot">
             <div><span>Paid Days</span><i>:</i><b>${days(s.payableDays)}</b></div>
             <div><span>LOP Days</span><i>:</i><b>${days(lop)}</b></div>
+            <div><span>Paid Leave Taken</span><i>:</i><b>${days(s.paidLeave || 0)}</b></div>
           </div>
         </aside>
       </div>
@@ -612,6 +640,8 @@
       <div class="ps-ids">
         <div><span>PF A/C Number</span><i>:</i><b>${esc(w.pfNo || "—")}</b></div>
         <div><span>UAN</span><i>:</i><b>${esc(w.uan || "—")}</b></div>
+        <div class="ps-leave"><span>Paid Leave Pending (${esc(pl.year)})</span><i>:</i><b>${days(pl.total)} ${pl.total === 1 ? "day" : "days"}</b>${
+          pl.rows.length ? `<em>${esc(pl.rows.map((r) => r.name + " " + days(r.balance)).join(" · "))}</em>` : ""}</div>
       </div>
 
       <div class="ps-money">
@@ -637,9 +667,19 @@
 
       <div class="ps-words"><span>Amount In Words :</span> ${esc(GST.amountInWords(Math.round(s.net || 0)))}</div>
 
-      <div class="foot">
-        <span>Employer contribution — PF ${money(emp.pf || 0)} · ESI ${money(emp.esi || 0)}</span>
-        <span>-- This document is computer generated, so a signature is not required. --</span>
+      <div class="ps-sign">
+        <div class="ps-sign-l">
+          <div class="ps-sign-emp">Employer contribution — PF ${money(emp.pf || 0)} · ESI ${money(emp.esi || 0)}</div>
+          <div class="ps-sign-note">Please report any discrepancy within 7 days of receiving this slip.</div>
+        </div>
+        <div class="ps-sign-r">
+          <div class="ps-seal">Seal</div>
+          <div class="ps-sign-box">
+            <div class="ps-sign-for">For <b>${esc(co.name)}</b></div>
+            <div class="ps-sign-space"></div>
+            <div class="ps-sign-lbl">Authorised Signatory</div>
+          </div>
+        </div>
       </div>
     </section>`;
   }
@@ -650,85 +690,113 @@
     return `<!doctype html><html><head><meta charset="utf-8"><title>Payslip ${esc(run.period)}${list.length > 1 ? " — " + list.length + " workers" : " — " + esc(list[0].name)}</title>
 <style>
   /* ---- The payslip follows the standard Indian salary-slip layout: company
-     masthead, EMPLOYEE SUMMARY beside a net-pay card, the PF/UAN line, then
-     EARNINGS and DEDUCTIONS side by side with an AMOUNT and a YTD column,
-     the TOTAL NET PAYABLE bar, the amount in words and a system-generated
-     footer. One slip per A4 page. ---- */
+     masthead under a brand rule, EMPLOYEE SUMMARY beside a net-pay card, a
+     strip carrying PF / UAN and the PAID LEAVE still pending, then EARNINGS
+     and DEDUCTIONS side by side with an AMOUNT and a YTD column, the TOTAL
+     NET PAYABLE bar, the amount in words, and a signature block that leaves
+     real space for a signature and the company seal.
+     Each slip is HALF an A4, so two print per sheet. ---- */
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{font:10px/1.32 "Segoe UI",Arial,sans-serif;color:#2b2f33;background:#eceff1}
   /* one payslip = HALF an A4, so two print per sheet */
-  .slip{width:210mm;height:148.5mm;background:#fff;padding:6mm 9mm 5mm;margin:0 auto;overflow:hidden;
+  .slip{width:210mm;height:148.5mm;background:#fff;padding:5mm 9mm 4mm;margin:0 auto;overflow:hidden;
     display:flex;flex-direction:column;border-bottom:1px dashed #b9c0c7}
 
-  /* masthead */
-  .ps-top{display:flex;justify-content:space-between;align-items:center;gap:16px;
-    padding-bottom:6px;border-bottom:1px solid #e3e6e9}
+  /* masthead — the company sits under its own brand rule */
+  .ps-top{display:flex;justify-content:space-between;align-items:center;gap:16px;padding-bottom:4px}
   .ps-org{display:flex;align-items:center;gap:10px;min-width:0}
-  .ps-logo{height:30px;width:auto;max-width:112px;object-fit:contain;object-position:left center}
-  .ps-conm{font-size:13px;font-weight:800;color:#1a1c1e;line-height:1.2}
+  .ps-logo{height:40px;width:auto;max-width:150px;object-fit:contain;object-position:left center}
+  .ps-conm{font-size:13.5px;font-weight:800;color:#12151a;line-height:1.2;letter-spacing:-.15px}
   .ps-coad{font-size:9px;color:#6b7177;margin-top:1px;line-height:1.3}
   .ps-for{text-align:right;flex:0 0 auto}
-  .ps-for-l{font-size:9px;color:#6b7177}
-  .ps-for-m{font-size:12.5px;font-weight:800;color:#1a1c1e;margin-top:1px}
+  .ps-for-l{font-size:8px;font-weight:700;letter-spacing:.75px;text-transform:uppercase;color:#9aa1a8}
+  .ps-for-m{font-size:13px;font-weight:800;color:#12151a;margin-top:2px;letter-spacing:-.1px}
+  /* a thin brand rule carries the eye across the whole sheet */
+  .ps-rule{height:2px;border-radius:2px;background:linear-gradient(90deg,#F06820 0 34%,#1f2937 34% 100%)}
 
   /* employee summary + net pay card */
-  .ps-sum{display:flex;gap:16px;align-items:flex-start;padding:7px 0 6px}
+  .ps-sum{display:flex;gap:16px;align-items:stretch;padding:8px 0 7px}
   .ps-sum-l{flex:1.25;min-width:0}
-  .ps-sec{font-size:9px;font-weight:800;letter-spacing:.6px;color:#1a1c1e;margin-bottom:4px}
+  .ps-sec{font-size:8px;font-weight:800;letter-spacing:.9px;color:#9aa1a8;margin-bottom:5px;
+    text-transform:uppercase}
   table.ps-kv{border-collapse:collapse;width:100%}
   table.ps-kv td{padding:1.4px 0;font-size:9.5px;vertical-align:top;line-height:1.3}
   table.ps-kv td:first-child{color:#6b7177;width:44%}
   table.ps-kv td.c{width:11px;color:#9aa1a8;text-align:center}
   table.ps-kv td.v{color:#1a1c1e;font-weight:600}
   table.ps-kv td.v.nm{font-weight:800;font-size:10.5px}
-  .ps-netcard{flex:1;border:1px solid #dfe3e6;border-radius:8px;overflow:hidden;align-self:stretch}
-  .ps-netcard-top{display:flex;align-items:center;gap:9px;background:#f2faf5;padding:8px 12px}
-  .ps-netbar{flex:0 0 3px;align-self:stretch;min-height:26px;background:#38a169;border-radius:3px}
-  .ps-netamt{font-size:16px;font-weight:800;color:#1a1c1e;line-height:1.15}
-  .ps-netlbl{font-size:9.5px;color:#38a169;font-weight:600;margin-top:1px}
-  .ps-netcard-foot{padding:5px 12px 6px;border-top:1px dashed #dfe3e6}
+  .ps-netcard{flex:1;border:1px solid #d7ede0;border-radius:9px;overflow:hidden;align-self:stretch;
+    display:flex;flex-direction:column}
+  .ps-netcard-top{display:flex;align-items:center;gap:10px;background:#f2faf5;padding:9px 12px}
+  .ps-netbar{flex:0 0 3px;align-self:stretch;min-height:28px;background:#38a169;border-radius:3px}
+  .ps-netamt{font-size:17px;font-weight:800;color:#12151a;line-height:1.1;letter-spacing:-.3px}
+  .ps-netlbl{font-size:8px;color:#38a169;font-weight:800;margin-top:2px;
+    letter-spacing:.7px;text-transform:uppercase}
+  .ps-netcard-foot{padding:5px 12px 6px;border-top:1px dashed #d7ede0;margin-top:auto}
   .ps-netcard-foot div{display:flex;font-size:9.5px;padding:1px 0}
-  .ps-netcard-foot span{color:#6b7177;flex:0 0 42%}
+  .ps-netcard-foot span{color:#6b7177;flex:0 0 52%}
   .ps-netcard-foot i{font-style:normal;color:#9aa1a8;flex:0 0 11px;text-align:center}
-  .ps-netcard-foot b{color:#1a1c1e;font-weight:700}
+  .ps-netcard-foot b{color:#12151a;font-weight:700}
 
-  /* PF / UAN strip */
-  .ps-ids{display:flex;gap:26px;padding:5px 0 7px;border-top:1px dashed #dfe3e6;font-size:9.5px}
-  .ps-ids div{display:flex;align-items:baseline;min-width:0}
+  /* PF / UAN / leave strip */
+  .ps-ids{display:flex;flex-wrap:wrap;gap:5px 24px;padding:6px 11px;font-size:9.5px;
+    background:#f7f8f9;border:1px solid #eceff1;border-radius:8px}
+  .ps-ids>div{display:flex;align-items:baseline;min-width:0}
   .ps-ids span{color:#6b7177}
   .ps-ids i{font-style:normal;color:#9aa1a8;padding:0 6px}
-  .ps-ids b{color:#1a1c1e;font-weight:700;overflow-wrap:anywhere}
+  .ps-ids b{color:#12151a;font-weight:700;overflow-wrap:anywhere}
+  /* the leave balance takes the rest of the row so its breakdown has room */
+  .ps-ids .ps-leave{margin-left:auto}
+  .ps-ids .ps-leave b{color:#0f766e}
+  .ps-ids .ps-leave em{font-style:normal;color:#8b9096;font-size:8.5px;padding-left:7px}
 
   /* earnings + deductions */
-  .ps-money{display:flex;border:1px solid #dfe3e6;border-radius:8px;overflow:hidden}
+  .ps-money{display:flex;border:1px solid #dfe3e6;border-radius:9px;overflow:hidden;margin-top:6px}
   table.ps-half{flex:1;width:50%;border-collapse:collapse}
-  table.ps-half+table.ps-half{border-left:1px solid #eceff1}
-  table.ps-half th{font-size:8.5px;font-weight:800;letter-spacing:.4px;color:#1a1c1e;
-    padding:6px 10px 4px;text-align:left;border-bottom:1px dashed #dfe3e6}
-  table.ps-half td{padding:3.4px 10px;font-size:9.5px;vertical-align:top}
+  table.ps-half+table.ps-half{border-left:1px solid #e3e6e9}
+  table.ps-half th{font-size:8px;font-weight:800;letter-spacing:.8px;color:#4b5158;
+    padding:6px 10px 5px;text-align:left;background:#f7f8f9;border-bottom:1px solid #e3e6e9}
+  table.ps-half td{padding:3.6px 10px;font-size:9.5px;vertical-align:top}
+  /* zebra rows make a long list readable across the fold */
+  table.ps-half tbody tr:nth-child(even) td{background:#fafbfc}
   table.ps-half th.amt,table.ps-half td.amt{text-align:right;white-space:nowrap}
   table.ps-half th.ytd,table.ps-half td.ytd{text-align:right;white-space:nowrap;width:26%}
-  table.ps-half td.amt{font-weight:700;color:#1a1c1e}
-  table.ps-half td.ytd{color:#4b5158}
+  table.ps-half td.amt{font-weight:700;color:#12151a}
+  table.ps-half td.ytd{color:#8b9096}
   table.ps-half td.lbl{color:#2b2f33}
-  table.ps-half tr.pad td{padding:3.4px 10px}
+  table.ps-half tr.pad td{padding:3.6px 10px}
   td .n{font-size:8px;color:#8b9096;margin-top:1px;line-height:1.25}
-  table.ps-half tfoot td{background:#f7f8f9;font-weight:800;color:#1a1c1e;font-size:9.5px;padding:4.5px 10px}
+  table.ps-half tfoot td{background:#f1f3f5;font-weight:800;color:#12151a;font-size:9.5px;
+    padding:5px 10px;border-top:1px solid #e3e6e9}
 
-  /* total net payable */
+  /* total net payable — the anchor of the sheet */
   .ps-payable{display:flex;justify-content:space-between;align-items:stretch;
-    border:1px solid #dfe3e6;border-radius:8px;margin-top:7px;overflow:hidden}
-  .ps-payable>div:first-child{padding:5px 12px}
-  .ps-payable-t{font-size:10px;font-weight:800;color:#1a1c1e;letter-spacing:.3px}
-  .ps-payable-s{font-size:9px;color:#6b7177;margin-top:1px}
-  .ps-payable-v{background:#f2faf5;display:flex;align-items:center;padding:5px 16px;
-    font-size:12.5px;font-weight:800;color:#1a1c1e;white-space:nowrap}
+    border-radius:9px;margin-top:6px;overflow:hidden;background:#1f2937}
+  .ps-payable>div:first-child{padding:6px 13px}
+  .ps-payable-t{font-size:9.5px;font-weight:800;color:#fff;letter-spacing:.6px}
+  .ps-payable-s{font-size:8.5px;color:#9aa5b1;margin-top:1px}
+  .ps-payable-v{background:#38a169;display:flex;align-items:center;padding:6px 18px;
+    font-size:14px;font-weight:800;color:#fff;white-space:nowrap;letter-spacing:-.2px}
 
-  .ps-words{text-align:right;font-size:9.5px;color:#1a1c1e;margin-top:6px}
+  .ps-words{text-align:right;font-size:9.5px;color:#12151a;margin-top:5px}
   .ps-words span{color:#6b7177}
 
-  .foot{margin-top:auto;padding-top:5px;border-top:1px solid #e3e6e9;
-    display:flex;justify-content:space-between;gap:12px;font-size:8px;color:#8b9096}
+  /* signature + seal — space is LEFT for a real signature and stamp */
+  .ps-sign{margin-top:auto;padding-top:6px;border-top:1px solid #e3e6e9;
+    display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+  .ps-sign-l{font-size:8.5px;color:#8b9096;min-width:0}
+  .ps-sign-emp{color:#4b5158}
+  .ps-sign-note{margin-top:2px}
+  .ps-sign-r{display:flex;align-items:flex-end;gap:12px;flex:0 0 auto}
+  .ps-seal{width:54px;height:54px;border:1px dashed #c7ced4;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:7.5px;letter-spacing:1px;text-transform:uppercase;color:#c0c7cd}
+  .ps-sign-box{text-align:center;min-width:150px}
+  .ps-sign-for{font-size:9px;color:#4b5158}
+  .ps-sign-for b{color:#12151a;font-weight:700}
+  .ps-sign-space{height:24px}                       /* room to actually sign */
+  .ps-sign-lbl{font-size:8.5px;font-weight:700;color:#12151a;
+    border-top:1px solid #9aa1a8;padding-top:3px}
   @media print{
     body{background:#fff}
     .slip{margin:0;border-bottom:none}

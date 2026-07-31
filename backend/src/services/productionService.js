@@ -96,7 +96,7 @@ function advance(user, woId, action) {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
     // post this stage's stock movements (skip for legacy WOs — old flow already did)
     if (!wo.legacy && !stage.posted) {
-      const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices);
+      const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices, wo.plan);
       if (plan && plan[stage.key]) {
         const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements);
         if (moves.length) repo.addMovements(moves);
@@ -237,9 +237,27 @@ function createWorkOrder(user, body) {
   const qty = +body.qty;
   if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
 
-  // A run cannot be released without the materials to make it: reject the
-  // work order outright when any BOM component is short of store stock.
-  assertMaterialsAvailable(data, item, qty, body.materialChoices);
+  // The width the run is slit to is decided per ORDER, not per product — it is
+  // recorded on the work order and printed as the size on the invoice. It is
+  // also what finished stock has to match before it can be used, so it is
+  // resolved BEFORE the requirement is netted.
+  const width = widthOf(body.widthMM);
+
+  /* Net the requirement against stock that already exists: finished goods go
+     straight to packing, half-made rolls skip coating and start at slitting,
+     and only the remainder is manufactured. */
+  const plan = S.planForRequirement(body.itemId, qty, data, {
+    widthMM: width, materialChoices: body.materialChoices,
+    // the planner takes as much from stock as it can unless the office named
+    // an amount — a blank means "use whatever is there", 0 means "use none"
+    fgQty: body.fgQty, wipQty: body.wipQty,
+  });
+
+  // A run cannot be released without the materials to make it — but only the
+  // part being MANUFACTURED needs any, so the check follows the netted figure.
+  if (plan.makeQty > 0) {
+    assertMaterialsAvailable(data, item, plan.makeQty, body.materialChoices);
+  }
 
   // next WO id
   let max = 0;
@@ -248,18 +266,17 @@ function createWorkOrder(user, body) {
 
   // the line follows the route: a job that must be produced starts on its
   // owner's RM line, otherwise it lands on a slitting line
-  const line = lineForItem(item, data, body.line, { qty, materialChoices: body.materialChoices });
+  const line = lineForItem(item, data, body.line, { qty: plan.makeQty || qty, materialChoices: body.materialChoices });
   const wo = {
     id, date: todayISO(), itemId: body.itemId, qty,
     status: "Released", due: body.due || null, line,
     progress: 0, priority: body.priority || "Normal",
-    route: S.freshRoute({ line, itemId: body.itemId, qty, materialChoices: body.materialChoices }, data),
+    plan,
+    route: S.freshRoute({ line, itemId: body.itemId, qty, widthMM: width, plan,
+      materialChoices: body.materialChoices }, data),
     stageIdx: 0, legacy: false,
     createdBy: user.username, createdAt: new Date().toISOString(),
   };
-  // The width the run is slit to is decided per ORDER, not per product — it is
-  // recorded on the work order and printed as the size on the invoice.
-  const width = widthOf(body.widthMM);
   if (width != null) wo.widthMM = width;
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId, data);
@@ -275,6 +292,28 @@ function createWorkOrder(user, body) {
     });
     if (Object.keys(picks).length) wo.materialChoices = picks;
   }
+  /* ---- the store is drawn down the moment the run is RELEASED ----------
+     Everything the job consumes — the finished rolls taken off the shelf,
+     the half-made rolls, and the raw materials for the part being made — is
+     issued now, in one go, against this work order. Each stage is therefore
+     marked as already posted so completing it later cannot draw the same
+     stock a second time. Deleting the work order rolls all of it back
+     (repo.deleteWorkOrder removes movements by ref). */
+  const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+  const stagePlan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices, plan);
+  const moves = [];
+  if (stagePlan) {
+    (wo.route || []).forEach((r) => {
+      if (!stagePlan[r.key]) return;
+      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements)
+        .forEach((m) => moves.push(m));
+    });
+  }
+  if (moves.length) repo.addMovements(moves);
+  (wo.route || []).forEach((r) => { r.posted = true; });
+  wo.stockPosted = true;
+  wo.stockPostedAt = new Date().toISOString();
+
   wo.status = S.rollupStatus(wo);
   repo.putWorkOrder(wo);
   return summarize(wo, data);
@@ -295,9 +334,23 @@ function produceFinished(user, body) {
 
   const item = (data.items || []).find((i) => i.id === body.itemId);
   if (!item) throw err("Unknown product", 400);
-  if (item.cat !== "FG") throw err("Only finished goods can be added to finished stock", 400);
+  if (item.cat !== "FG" && item.cat !== "WIP") {
+    throw err("Only finished goods or work in process can be booked here", 400);
+  }
+  // A WIP item is a half-made version of a finished good: it carries no recipe
+  // of its own, so it draws on its parent's — and only on the part of it the
+  // coating stage actually consumes (the base web and the paste chemistry).
+  const isWip = item.cat === "WIP";
+  const recipeOwnerId = isWip ? (item.stageOf || "") : item.id;
+  if (isWip && !recipeOwnerId) {
+    throw err("This work-in-process item is not linked to a finished product — cannot work out its materials", 400);
+  }
+  const recipeOwner = isWip
+    ? (data.items || []).find((i) => i.id === recipeOwnerId)
+    : item;
+  if (isWip && !recipeOwner) throw err("Unknown parent product " + recipeOwnerId, 400);
 
-  const bom = (data.boms || {})[body.itemId];
+  const bom = (data.boms || {})[recipeOwnerId];
   if (!bom || !(bom.lines || []).length) throw err("This product has no BOM recipe — cannot deduct raw materials", 400);
 
   const qty = +body.qty;
@@ -312,27 +365,92 @@ function produceFinished(user, body) {
   const date = todayISO();
   const ref = "FP-" + Date.now().toString(36).toUpperCase(); // finished-production batch ref
 
+  /* A ranged BOM line names a choice or a span, not one material. Whichever
+     the form picked against live store stock is honoured here, so the issue
+     posts the material actually chosen — the same contract a work order has. */
+  let picks = {};
+  if (body.materialChoices && typeof body.materialChoices === "object") {
+    Object.entries(body.materialChoices).forEach(([k, v]) => {
+      if (/^\d+$/.test(String(k)) && typeof v === "string" && itemsById[v]) picks[k] = v;
+    });
+  }
+
+  /* ---- part of the output can come from stock that already exists --------
+     ADMIN ONLY. A run of finished goods can be made partly from half-made
+     rolls already on the shelf (and, where a matching item exists, from
+     finished stock): that part draws no raw material at all, only the stock
+     itself. Everything left over is made from the recipe as usual. */
+  const isAdmin = user.role === "admin";
+  const wantFg = isAdmin ? body.fgQty : null;
+  const wantWip = isAdmin ? body.wipQty : null;
+  let fromStock = { fgQty: 0, wipQty: 0, fgSources: [], wipSources: [] };
+  if (isAdmin && ((+wantFg || 0) > 0 || (+wantWip || 0) > 0)) {
+    // never a source for itself — booking an item cannot consume that item
+    const stockData = Object.assign({}, data, {
+      items: (data.items || []).filter((i) => i.id !== item.id),
+    });
+    /* The stock is drawn directly rather than through planForRequirement:
+       that planner only offers half-made rolls to a job whose ROUTE would
+       coat, which is the right rule for a work order but the wrong one here.
+       Booking output from a jumbo already on the shelf is valid whatever the
+       route would have done. */
+    const fgDraw = S.drawFrom(S.finishedStockFor(recipeOwnerId, stockData, body.tapeWidthMM),
+      Math.min(+wantFg || 0, qty));
+    const wipDraw = S.drawFrom(S.wipStockFor(recipeOwnerId, stockData),
+      Math.min(+wantWip || 0, r2(qty - fgDraw.taken)));
+    fromStock = { fgQty: fgDraw.taken, wipQty: wipDraw.taken,
+      fgSources: fgDraw.used, wipSources: wipDraw.used };
+  }
+  const fromStockQty = r2(fromStock.fgQty + fromStock.wipQty);
+  if (fromStockQty > qty + 1e-6) throw err("More was taken from stock than is being produced", 400);
+  const makeQty = r2(qty - fromStockQty);
+
   const moves = [];
   const consumed = [];
+  // 0) whatever is being taken off the shelf is issued as itself
+  [].concat(fromStock.fgSources, fromStock.wipSources).forEach((s) => {
+    if (!(s.qty > 0)) return;
+    const src = itemsById[s.id] || {};
+    moves.push({ id: mvId(), date, itemId: s.id, wh: src.cat === "WIP" ? "WH-WIP" : FG_STORE,
+      type: "ISSUE", qty: -Math.abs(s.qty), rate: src.cost || 0, ref,
+      note: "Taken from stock → " + item.id, by });
+    consumed.push({ id: s.id, name: src.name || s.id, qty: s.qty, uom: src.uom || "" });
+  });
   // 1) deduct each raw material from the store, scaled by the BOM + overall yield
   //    (toLegacy handles both legacy tuples and rich imported lines)
-  BC.toLegacy(bom, BC.metaFromItem(item)).forEach(([rid, per]) => {
-    const need = r2(per * qty / Y);
+  BC.toLegacy(bom, BC.metaFromItem(recipeOwner), picks).forEach(([rid, per]) => {
+    // half-made stock has not been slit or packed, so it never draws the
+    // packaging materials — only what the coating stage puts into the web
+    if (isWip && !["base", "paste"].includes(S.materialRole(rid))) return;
+    const need = r2(per * makeQty / Y);
     if (!need || !itemsById[rid]) return;
     moves.push({ id: mvId(), date, itemId: rid, wh: RAW_STORE, type: "ISSUE",
       qty: -Math.abs(need), rate: (itemsById[rid] || {}).cost || 0, ref,
       note: "Production issue → " + item.id, by });
     consumed.push({ id: rid, name: (itemsById[rid] || {}).name || rid, qty: need, uom: (itemsById[rid] || {}).uom || "" });
   });
-  // 2) add the produced finished quantity to the chosen warehouse
+  // 2) add the produced quantity to the chosen warehouse
+  const tapeWidth = body.tapeWidthMM == null || body.tapeWidthMM === "" ? null : +body.tapeWidthMM || null;
   moves.push({ id: mvId(), date, itemId: item.id, wh: warehouse.id, type: "PROD",
     qty: Math.abs(qty), rate: item.cost || 0, ref,
-    note: "Finished stock added at " + warehouse.name, by });
+    note: (isWip ? "Work in process added at " : "Finished stock added at ") + warehouse.name
+      + (tapeWidth ? " · " + tapeWidth + " mm tape width" : ""), by });
 
   repo.addMovements(moves);
+
+  /* The parameters the form collected belong to the ITEM — the tape width a
+     finished good is slit to is what a later work order matches its stock on,
+     so it has to persist rather than live only in the movement note. */
+  const patch = {};
+  if (tapeWidth && !isWip) patch.tapeWidthMM = tapeWidth;
+  if (body.thicknessMM != null && body.thicknessMM !== "") patch.thicknessMM = +body.thicknessMM || null;
+  if (body.gsm != null && body.gsm !== "") patch.gsm = +body.gsm || null;
+  if (Object.keys(patch).length) repo.putItem(Object.assign({}, item, patch));
   return {
     ok: true, ref,
     produced: { itemId: item.id, name: item.name, qty, uom: item.uom || "", wh: warehouse.id, whName: warehouse.name },
+    // how the run was met: off the shelf vs actually made from the recipe
+    fromStock: { fgQty: fromStock.fgQty, wipQty: fromStock.wipQty, makeQty },
     consumed,
   };
 }
@@ -371,7 +489,7 @@ function recordExcessMaterial(user, body) {
   //    Legacy WOs with no derivable BOM plan → null (fall back to any raw material,
   //    still bounded by the category + on-hand checks below).
   const RAW = new Set(["RM", "PKG", "CON"]);
-  const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices);
+  const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices, wo.plan);
   const jobMaterials = plan
     ? new Set(Object.keys(plan).flatMap((k) => (plan[k].consume || []).map(([rid]) => rid)))
     : null;
@@ -451,8 +569,12 @@ function summarize(wo, data) {
     id: wo.id, status: wo.status, progress: wo.progress,
     stageIdx: wo.stageIdx, dispatched: !!wo.dispatched,
     widthMM: wo.widthMM != null ? wo.widthMM : null,
+    // how the requirement was met: from finished stock, from half-made stock,
+    // and how much is genuinely being manufactured
+    plan: wo.plan || null,
     route: (wo.route || []).map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq,
       owner: r.owner || null, line: r.line || null,
+      qty: r.qty != null ? r.qty : (wo.qty != null ? wo.qty : null),
       status: r.status, doneBy: r.doneBy, doneAt: r.doneAt })),
     spec: S.specForWO(wo, data),
     updatedAt: wo.updatedAt,

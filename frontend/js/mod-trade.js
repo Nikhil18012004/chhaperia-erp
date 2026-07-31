@@ -237,6 +237,11 @@
         docSec("Who & when"),
         h("div",{class:"form-grid g3"},[
           U.field("Billing Company (invoice under) *",U.selectHTML("po_co",companyOpts(),editPo?editPo.company:companies()[0].key)),
+          /* what the printed document calls itself — the order, or a proforma
+             raised against it. Stored on the PO so a reprint never changes. */
+          U.field("Document Type",U.selectHTML("po_dtype",[
+            {v:"po",l:"Purchase Order"},{v:"proforma",l:"Proforma Invoice"}],
+            editPo?(editPo.docType||"po"):"po")),
           U.field("Supplier",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
           U.field("PO Date",`<input class="input" id="po_date" type="date" value="${editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
           U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
@@ -281,6 +286,7 @@
           date:UI.$("#po_date").value||DB.helpers.iso(DB.helpers.today()),
           supplierId:UI.$("#po_sup").value, company:UI.$("#po_co").value,
           refNo:UI.$("#po_ref").value.trim(), lines:out,
+          docType:UI.$("#po_dtype").value,
           validUpto:UI.$("#po_valid").value, vendorCode:UI.$("#po_vcode").value.trim(),
           attn:UI.$("#po_attn").value.trim(), ctcPerson:UI.$("#po_ctc").value.trim(),
           gstMode:UI.$("#po_gstmode").value, packing:UI.$("#po_pack").value.trim(),
@@ -330,6 +336,7 @@
         const o=draft();
         if(!o.lines.length){ toast("Add at least one line with qty",{type:"warn"}); return; }
         const patch={supplierId:o.supplierId, company:o.company, refNo:o.refNo, date:o.date,
+          docType:o.docType,
           validUpto:o.validUpto, vendorCode:o.vendorCode, attn:o.attn, ctcPerson:o.ctcPerson,
           gstMode:o.gstMode, packing:o.packing, deliveryNote:o.deliveryNote, destination:o.destination,
           notes:o.notes, eta:o.eta, lines:o.lines, freight:o.freight, value:o.value, status:"Open"};
@@ -980,7 +987,7 @@
   /* ============================================================
      PRINTED DOCUMENT — GST tax invoice / purchase order
      Layout modelled on the approved sample templates: logo band
-     with tagline, GSTIN/CIN/PAN strip, Bill To / Ship To, HSN
+     with tagline, GSTIN/PAN strip, Bill To / Ship To, HSN
      item table with per-line GST, CGST/SGST/IGST summary, amount
      in words, bank details, terms and signatory. Work-order
      traceability appears ONLY as "Batch No." here.
@@ -1010,7 +1017,12 @@
     const uniformPct=[...new Set(gstLinesOf(o).map(l=>l.gstPct))];
     const pctSuffix=uniformPct.length===1?` @ ${uniformPct[0]/(interState?1:2)}%`:"";
     const igstSuffix=uniformPct.length===1?` @ ${uniformPct[0]}%`:"";
-    const title=isPO?"PURCHASE ORDER":(o.status==="Dispatched"?"TAX INVOICE":"PROFORMA / TAX INVOICE");
+    /* A purchase document prints either as the order itself or as a proforma
+       — chosen on the PO form and stored on the order, so re-printing gives
+       the same document every time. */
+    const poTitle=String(o.docType||"").toLowerCase()==="proforma"
+      ? "PROFORMA INVOICE" : "PURCHASE ORDER";
+    const title=isPO?poTitle:(o.status==="Dispatched"?"TAX INVOICE":"PROFORMA / TAX INVOICE");
     const logo=location.origin+"/assets/logo-invoice.png";
     const bank=co.bank||{};
     const hasBank=!isPO&&(bank.name||bank.acNo||bank.ifsc);
@@ -1163,7 +1175,7 @@
       <div class="conm">${esc(co.name)}</div>
       <div>${esc(co.address||"")}</div>
       <div>${esc([co.phone,co.email,co.website].filter(Boolean).join("  ·  "))}</div>
-      <div class="co-ids"><span>GSTIN</span> ${esc(co.gstin||"—")}${co.cin?`&nbsp; <span>CIN</span> ${esc(co.cin)}`:""}${co.pan?`&nbsp; <span>PAN</span> ${esc(co.pan)}`:""}</div>
+      <div class="co-ids"><span>GSTIN</span> ${esc(co.gstin||"—")}${co.pan?`&nbsp; <span>PAN</span> ${esc(co.pan)}`:""}</div>
     </div>
   </div>
   <div class="rule"></div>

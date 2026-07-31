@@ -26,7 +26,8 @@
       catch(err){ this.showLogin(); return; }
 
       this.user = me;
-      if(me.mustChangePassword) setTimeout(()=>this.forcePasswordChange(), 400);
+      /* No password change is forced on sign-in. The form is still there and
+         can be opened deliberately (⌘K → "Change Password"). */
 
       // 3) supervisors get the dedicated panel (rendered inside the shell)
       if(me.role === "supervisor"){
@@ -141,7 +142,6 @@
           const r = await DB.auth.login(user.value.trim(), pass.value);
           if(!r || !r.token) throw new Error("Login failed");
           this.user = r.user;
-          if(r.user.mustChangePassword) setTimeout(()=>this.forcePasswordChange(), 600);
           location.hash = "";
           // route by role
           if(r.user.role === "supervisor"){
@@ -167,21 +167,22 @@
       this.showLogin("You have been signed out.");
     },
 
-    /* Seeded / admin-reset passwords are temporary: this dialog re-appears
-       on every sign-in until the password is changed. */
+    /* Changing your password is entirely OPTIONAL and only ever opened on
+       purpose — nothing forces this dialog at sign-in. */
     forcePasswordChange(){
       const {h, modal, toast} = UI;
       const body=h("div",{},[
         h("p",{class:"dim",style:"font-size:13px;margin-bottom:14px;line-height:1.6",
-          text:"This account is still using a temporary password. Set your own to continue — at least 8 characters."}),
+          text:"Set a new password for this account — at least 8 characters."}),
         h("div",{class:"form-grid"},[
           h("div",{class:"field full"},[h("label",{text:"Current Password"}),h("input",{class:"input",id:"pw_cur",type:"password",autocomplete:"current-password"})]),
           h("div",{class:"field full"},[h("label",{text:"New Password"}),h("input",{class:"input",id:"pw_new",type:"password",autocomplete:"new-password"})]),
           h("div",{class:"field full"},[h("label",{text:"Confirm New Password"}),h("input",{class:"input",id:"pw_new2",type:"password",autocomplete:"new-password"})]),
         ])
       ]);
-      const mo=modal({title:"🔒 Change Your Password", sub:"Required before you keep working", body,
-        foot:[h("button",{class:"btn primary",id:"pwBtn",onclick:save,text:"Set New Password"})]});
+      const mo=modal({title:"🔒 Change Password", sub:"Optional — only if you want a new one", body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn primary",id:"pwBtn",onclick:save,text:"Set New Password"})]});
       const self=this;
       async function save(){
         const cur=UI.$("#pw_cur").value, nw=UI.$("#pw_new").value, nw2=UI.$("#pw_new2").value;
@@ -501,5 +502,12 @@
   };
 
   global.App = App;
+
+  /* Changing a password is never forced, so it needs a way in: searching the
+     command palette (⌘K) for "password" opens the same form. */
+  global.ERPActions = Object.assign(global.ERPActions||{}, {
+    changePassword: { ic:"🔒", label:"Change Password", run:()=>App.forcePasswordChange() },
+  });
+
   document.addEventListener("DOMContentLoaded",()=>App.boot());
 })(window);

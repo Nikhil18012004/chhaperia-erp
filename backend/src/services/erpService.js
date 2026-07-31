@@ -138,10 +138,13 @@ function addMovement(m) {
   if (!MOVE_TYPES.includes(m.type)) throw err("Invalid movement type '" + m.type + "'", 400);
   const mvItem = repo.getItem(m.itemId);
   if (!mvItem) throw err("Unknown item " + m.itemId, 400);
-  // WIP items are stage-engine plumbing — a manual receipt into one silently
-  // hides the stock from every work order (which consumes the RAW material).
-  // This actually happened: 2000 m of mica tape got booked to WIP-CP25G-08-S.
-  if (m.type === "GRN" && mvItem.cat === "WIP") {
+  // WIP items are stage-engine plumbing — a receipt into one silently hides
+  // the stock from every work order (which consumes the RAW material).
+  // This actually happened: 2000 m of mica tape got booked to WIP-CP25G-08-S,
+  // posted by a stale browser tab running an older Add Stock form.
+  // Add Stock now offers WIP deliberately, so a receipt carrying `manual` is
+  // allowed through; anything else reaching a WIP item is still refused.
+  if (m.type === "GRN" && mvItem.cat === "WIP" && !m.manual) {
     throw err("Cannot receive stock into a WIP item (" + m.itemId + "). Receive the raw material itself instead.", 400);
   }
   m.qty = +m.qty;

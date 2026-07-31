@@ -192,6 +192,174 @@ function routeStagesFor(fgId, data, opts) {
   stages.push(STAGE.slit(false), STAGE.pack());
   return stages;
 }
+
+/* ============================================================
+   NETTING A WORK ORDER AGAINST STOCK ALREADY ON THE SHELF
+   A requirement is not always made from scratch. Before anything is
+   produced the store is searched twice:
+
+     1. FINISHED GOODS of the same product, thickness and tape width.
+        Whatever is there is already made — it only has to be PACKED,
+        so it joins the route at packing and skips everything before it.
+
+     2. WORK IN PROCESS of the same product and thickness (a coated
+        jumbo that has not been slit). It has already been through
+        coating, so it joins at SLITTING and skips the coating stage.
+        This only applies to a job that would otherwise be coated —
+        a job with no coating stage has nothing to skip.
+
+   Only what is left after both is actually manufactured, and only that
+   remainder draws raw materials from the store.
+   ============================================================ */
+function onHandByItem(data) {
+  const onHand = {};
+  ((data || {}).movements || []).forEach((m) => {
+    onHand[m.itemId] = (onHand[m.itemId] || 0) + (+m.qty || 0);
+  });
+  return onHand;
+}
+const nameKey = (i) => String((i && (i.productName || i.name)) || "").trim().toUpperCase();
+const sameThickness = (a, b) => {
+  const x = a == null ? null : +a, y = b == null ? null : +b;
+  if (x == null || y == null) return x == null && y == null;
+  return Math.abs(x - y) < 1e-6;
+};
+
+/** Finished stock that can satisfy this requirement outright. */
+function finishedStockFor(fgId, data, widthMM) {
+  const items = (data || {}).items || [];
+  const fg = items.find((i) => i.id === fgId) || {};
+  const onHand = onHandByItem(data);
+  const want = widthMM == null || widthMM === "" ? null : +widthMM;
+  return items
+    .filter((i) => i.cat === "FG")
+    .filter((i) => nameKey(i) === nameKey(fg))
+    .filter((i) => sameThickness(i.thicknessMM, fg.thicknessMM))
+    // A tape width is only comparable when both sides state one. Stock whose
+    // width was never recorded is NOT silently used for a width-specific
+    // order — 12 mm rolls must never be shipped against a 25 mm line.
+    .filter((i) => (want == null ? true : sameThickness(i.tapeWidthMM, want)))
+    .map((i) => ({ id: i.id, name: i.name || i.id, have: r2(onHand[i.id] || 0) }))
+    .filter((r) => r.have > 0);
+}
+
+/* Half-made stock comes in two shapes: the COATED JUMBO (past coating, not yet
+   slit) and SLIT ROLLS (already through slitting). Only the jumbo can join a
+   job at slitting — feeding slit rolls back into slitting would cut them
+   twice, so they are excluded. */
+const isSlitRoll = (i) => /-S$/.test(String(i.id || "")) || /slit/i.test(String(i.name || ""));
+
+/** Half-made stock (coated, not yet slit) that can skip the coating stage. */
+function wipStockFor(fgId, data) {
+  const items = (data || {}).items || [];
+  const fg = items.find((i) => i.id === fgId) || {};
+  const onHand = onHandByItem(data);
+  return items
+    .filter((i) => i.cat === "WIP")
+    .filter((i) => !isSlitRoll(i))
+    // linked to this product, or carrying the same product name + thickness
+    .filter((i) => (i.stageOf ? i.stageOf === fgId
+      : nameKey(i) === nameKey(fg) && sameThickness(i.thicknessMM, fg.thicknessMM)))
+    .map((i) => ({ id: i.id, name: i.name || i.id, have: r2(onHand[i.id] || 0) }))
+    .filter((r) => r.have > 0);
+}
+
+/* draw `want` from a list of stock rows, in order, without over-drawing */
+function drawFrom(rows, want) {
+  const used = [];
+  let left = +want || 0;
+  rows.forEach((r) => {
+    if (left <= 1e-9) return;
+    const take = Math.min(left, r.have);
+    if (take > 1e-9) { used.push({ id: r.id, name: r.name, qty: r2(take) }); left -= take; }
+  });
+  return { used, taken: r2((+want || 0) - left) };
+}
+
+/**
+ * Work out how a requirement is met: from finished stock, from half-made
+ * stock, and how much is genuinely manufactured.
+ * Returns { qty, fgQty, wipQty, makeQty, fgSources, wipSources, hasCoating }.
+ */
+/* how much of `want` may actually be drawn: never more than is on the shelf,
+   and never more than is still outstanding */
+function capped(want, available, outstanding) {
+  const w = Math.max(0, +want || 0);
+  return r2(Math.min(w, r2(available), r2(outstanding)));
+}
+
+function planForRequirement(fgId, qty, data, opts) {
+  opts = opts || {};
+  const total = +qty || 0;
+  const plan = {
+    qty: total, fgQty: 0, wipQty: 0, makeQty: total,
+    fgSources: [], wipSources: [], hasCoating: false,
+    fgAvailable: 0, wipAvailable: 0,
+  };
+  if (total <= 0) return plan;
+
+  const fgRows = finishedStockFor(fgId, data, opts.widthMM);
+  plan.fgAvailable = r2(fgRows.reduce((n, r) => n + r.have, 0));
+
+  // 1) finished goods already on the shelf — straight to packing.
+  //    The planner takes as much as it can unless a quantity was named.
+  const wantFg = opts.fgQty == null || opts.fgQty === ""
+    ? plan.fgAvailable
+    : capped(opts.fgQty, plan.fgAvailable, total);
+  const fgDraw = drawFrom(fgRows, Math.min(wantFg, total));
+  plan.fgQty = fgDraw.taken;
+  plan.fgSources = fgDraw.used;
+  const afterFg = r2(total - plan.fgQty);
+
+  // 2) does what is left involve coating at all?
+  const baseStages = afterFg > 0
+    ? routeStagesFor(fgId, data, { qty: afterFg, materialChoices: opts.materialChoices })
+    : [];
+  plan.hasCoating = baseStages.some((s) => s.key === "rmprod");
+
+  // 3) half-made stock skips the coating stage
+  const wipRows = wipStockFor(fgId, data);
+  plan.wipAvailable = r2(wipRows.reduce((n, r) => n + r.have, 0));
+  if (plan.hasCoating && afterFg > 0) {
+    const wantWip = opts.wipQty == null || opts.wipQty === ""
+      ? plan.wipAvailable
+      : capped(opts.wipQty, plan.wipAvailable, afterFg);
+    const wipDraw = drawFrom(wipRows, Math.min(wantWip, afterFg));
+    plan.wipQty = wipDraw.taken;
+    plan.wipSources = wipDraw.used;
+  }
+  plan.makeQty = r2(afterFg - plan.wipQty);
+  return plan;
+}
+
+/**
+ * The stages a netted work order runs, each carrying the quantity that
+ * actually passes through it. Quantities join the line at different points,
+ * so one job can be part packed-only, part slit-only and part manufactured.
+ */
+function plannedStages(fgId, data, opts) {
+  opts = opts || {};
+  const plan = opts.plan || planForRequirement(fgId, opts.qty, data, opts);
+  // the manufacturing route is sized by what is actually manufactured
+  const base = routeStagesFor(fgId, data, {
+    qty: plan.makeQty > 0 ? plan.makeQty : plan.qty,
+    materialChoices: opts.materialChoices,
+  });
+  const slitQty = r2(plan.makeQty + plan.wipQty);
+  const out = [];
+  base.forEach((s) => {
+    if (s.key === "packing") { out.push(Object.assign({}, s, { qty: plan.qty })); return; }
+    if (s.key === "slitting") {
+      if (slitQty > 0) out.push(Object.assign({}, s, { qty: slitQty }));
+      return;
+    }
+    // everything before slitting only exists for the quantity being made
+    if (plan.makeQty > 0) out.push(Object.assign({}, s, { qty: plan.makeQty }));
+  });
+  // an all-from-stock order still has to be packed
+  if (!out.some((s) => s.key === "packing")) out.push(Object.assign({}, STAGE.pack(), { qty: plan.qty }));
+  return out;
+}
 function templateFor(fgId, data, opts) { return { stages: routeStagesFor(fgId, data, opts) }; }
 function templateKeyFor(fgId, data, opts) {
   return routeStagesFor(fgId, data, opts).map((s) => s.key).join(">");
@@ -207,7 +375,7 @@ function specForProduct(fgId, data) {
 const LINES_BY_AREA = {
   coating:    ["RM Production 1", "RM Production 2"],
   slitting:   ["Slitting A", "Slitting B"],
-  fiberglass: ["Fibre-Glass Line 1", "Fibre-Glass Line 2"],
+  fiberglass: ["Fibre-Glass Line 1"],
 };
 function startArea(fgId, data, opts) {
   const first = (routeStagesFor(fgId, data, opts) || [])[0] || {};
@@ -253,12 +421,21 @@ function areaCovers(userArea, stageArea) {
    ============================================================ */
 /* `choices` maps a ranged BOM line index -> the stock item actually chosen
    for this work order (see BOMCALC.candidatesFor / resolve). */
-function computeStagePlan(fgId, qty, data, choices) {
+function computeStagePlan(fgId, qty, data, choices, netting) {
   const bom = (data.boms || {})[fgId];
   if (!bom) return null;
   const itemsById = indexBy(data.items || [], "id");
-  const tpl = { stages: routeStagesFor(fgId, data, { qty, materialChoices: choices }) };
-  const stages = tpl.stages;
+  /* When the job has been netted against stock, only the MANUFACTURED part
+     draws raw materials — the finished and half-made quantities already
+     embody theirs. Packaging still scales to the whole order, because every
+     unit gets packed however it got here. */
+  /* No stored netting means a work order raised before netting existed (or a
+     plain what-if): treat the whole quantity as manufactured, which is exactly
+     how it behaved before. Netting is decided once, at release — never
+     re-derived later against stock that has since moved. */
+  const net = netting || { qty, fgQty: 0, wipQty: 0, makeQty: qty, fgSources: [], wipSources: [] };
+  const rawQty = net.makeQty != null ? net.makeQty : qty;
+  const stages = plannedStages(fgId, data, { qty, materialChoices: choices, plan: net });
   const Y = bom.yield || 1;
 
   // assign each BOM line to the first stage that consumes its role (else stage 0)
@@ -266,18 +443,28 @@ function computeStagePlan(fgId, qty, data, choices) {
   // toLegacy() accepts both the legacy [id, qty] tuple and the rich object
   // form the real BOM import produces, so neither shape can reach the
   // array-destructuring below unconverted.
-  BC.toLegacy(bom, BC.metaFromItem(itemsById[fgId]), choices).forEach(([rid, per]) => {
-    const role = materialRole(rid);
-    let si = stages.findIndex((s) => (s.roles || []).includes(role));
-    if (si < 0) si = 0;
-    perStage[si].push([rid, r2(per * qty / Y)]); // scale raws by overall yield
-  });
+  if (rawQty > 0) {
+    BC.toLegacy(bom, BC.metaFromItem(itemsById[fgId]), choices).forEach(([rid, per]) => {
+      const role = materialRole(rid);
+      let si = stages.findIndex((s) => (s.roles || []).includes(role));
+      if (si < 0) si = 0;
+      perStage[si].push([rid, r2(per * rawQty / Y)]); // scale raws by overall yield
+    });
+  }
 
   const plan = {};
   stages.forEach((s, i) => {
     const isLast = i === stages.length - 1;
     const consume = [];
     perStage[i].forEach((l) => consume.push(l));
+    /* stock joining the line is drawn AT the stage it joins: half-made rolls
+       at slitting, finished rolls at packing */
+    if (s.key === "slitting") {
+      (net.wipSources || []).forEach((w) => { if (w.qty > 0) consume.push([w.id, r2(w.qty)]); });
+    }
+    if (s.key === "packing") {
+      (net.fgSources || []).forEach((f) => { if (f.qty > 0) consume.push([f.id, r2(f.qty)]); });
+    }
     if (s.packDefaults) {
       PACK_DEFAULTS.forEach((p) => {
         if (!itemsById[p.id]) return;
@@ -332,13 +519,18 @@ function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements
    Route construction
    ============================================================ */
 function freshRoute(wo, data) {
-  const stages = routeStagesFor(wo.itemId, data, { qty: wo.qty, materialChoices: wo.materialChoices });
+  const stages = plannedStages(wo.itemId, data, {
+    qty: wo.qty, materialChoices: wo.materialChoices, widthMM: wo.widthMM, plan: wo.plan,
+  });
   return stages.map((s, i) => ({
     key: s.key,
     name: s.name,
     area: s.area,
     owner: s.owner || null,       // only this person's board shows the stage
     line: s.line || null,
+    // how much of the order passes through this stage — quantities join the
+    // line at different points once the order has been netted against stock
+    qty: s.qty != null ? s.qty : wo.qty,
     seq: i + 1,
     status: "Pending",            // Pending | In Production | Completed
     posted: false,                // have this stage's stock movements been posted?
@@ -472,6 +664,7 @@ module.exports = {
   templateKeyFor, templateFor, specForProduct, specForWO, bomMaterialCount,
   LINES_BY_AREA, startArea, lineForProduct, OWNERS, productOwner, materialCheck, routeStagesFor,
   materialRole, areaCovers,
+  planForRequirement, plannedStages, finishedStockFor, wipStockFor, drawFrom,
   computeStagePlan, stageMovements,
   freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,
   stageForArea, currentStage, ensureStageModel,

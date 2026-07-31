@@ -76,7 +76,7 @@
   }
   const LINES_BY_AREA={ coating:["RM Production 1","RM Production 2"],
     slitting:["Slitting A","Slitting B"],
-    fiberglass:["Fibre-Glass Line 1","Fibre-Glass Line 2"] };
+    fiberglass:["Fibre-Glass Line 1"] };
   function curStage(w){ const rt=w.route; if(!rt||!rt.length) return null; const i=Math.min(Math.max(w.stageIdx||0,0),rt.length-1); return rt[i]; }
   /* The source sheet's LAYERS column ("TOP LAYER", "DIP COAT", "DOUBLE BLADE
      DOUBLE SIDE"…) travels on the FG item as layersText, alongside the layer
@@ -138,6 +138,55 @@
     if(l.rmThk) bits.push(l.rmThk+" mm"); if(l.rmGsm) bits.push(l.rmGsm+" g/m²");
     return bits.join(" · "); }
 
+  /* what a material DOES in the process — mirrors the backend's
+     stageService.materialRole, so "what coating consumes" means the same
+     thing on screen as it does when the stock is actually issued */
+  function materialRole(id){
+    const s=String(id||"").toUpperCase();
+    if(s.startsWith("PKG-")||s.includes("CORE")) return "pack";
+    if(/MICA|SAP|CARBON|SILICONE|ACRYLIC|ADH|INORGANIC|SOLVENT|RESIN|BINDER|PASTE/.test(s)) return "paste";
+    return "base";
+  }
+
+  /* ---- THE materials list, used everywhere a recipe is previewed ----------
+     New Work Order and both Add-to-Finished-Stock forms render the same
+     thing: a layer heading where the product has layers, then one row per
+     material carrying its live need / in-store / short figures.
+     `groups` is [{ label, lines:[{ name, code, spec, need, have, uom, agg }] }]
+     — `agg` is the need across ALL layers when a material appears in more
+     than one, since the store is shared between them. */
+  function materialsList(host, groups, opts){
+    opts=opts||{};
+    groups=(groups||[]).filter(g=>g&&(g.lines||[]).length);
+    if(!groups.length) return;
+    const multi=groups.length>1;
+    host.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",
+      text: opts.title || (multi? "≡ Materials by layer · "+groups.length+" layers" : "Materials to be consumed")}));
+    groups.forEach((grp,gi)=>{
+      if(multi) host.appendChild(h("div",{style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:"+(gi?12:2)+"px 0 4px;color:var(--accent)",
+        text:grp.label||("LAYER "+(gi+1))}));
+      (grp.lines||[]).forEach(l=>{
+        const have=+l.have||0, agg=(l.agg!=null?l.agg:l.need)||0;
+        const ok=have>=agg-1e-9;
+        host.appendChild(h("div",{class:"flex between aic",
+          style:"gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
+          h("div",{style:"min-width:0"},[
+            h("div",{class:"flex aic",style:"gap:8px"},[
+              h("span",{style:"font-weight:600",text:l.name}),
+              l.code?h("span",{class:"muted mono",style:"font-size:11px",text:l.code}):null
+            ]),
+            l.spec?h("div",{class:"muted mono",style:"font-size:11px",text:l.spec}):null
+          ]),
+          h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
+            h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(l.need,2)+" "+(l.uom||"")})]),
+            h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(l.uom||"")})]),
+            h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(agg-have,2))})
+          ])
+        ]));
+      });
+    });
+  }
+
   function layerPanel(fg, rawLines){
     if(!fg || !rawLines) return null;
     const lines=BOMCALC.normalize(rawLines);
@@ -198,8 +247,10 @@
       const cur=list.find(f=>f.id===keepId)||list[0];
       const sel=h("select",{class:"select",onchange:e=>{ hid.value=e.target.value;
         hid.dispatchEvent(new Event("change",{bubbles:true})); }},
+        /* the item CODE rides along with the thickness, so the picker always
+           names the exact stock item being chosen and not just its size */
         list.map(f=>h("option",{value:f.id,selected:cur&&f.id===cur.id?"selected":null,
-          text:(f.thicknessMM!=null? f.thicknessMM+" mm":(f.typeCode||f.id))})));
+          text:(f.thicknessMM!=null? f.thicknessMM+" mm":(f.typeCode||f.id))+" · "+f.id})));
       thkHost.innerHTML=""; thkHost.appendChild(sel);
       hid.value=cur?cur.id:"";
       if(!silent) hid.dispatchEvent(new Event("change",{bubbles:true}));
@@ -381,7 +432,7 @@
       const it=ENG.item(wo.itemId)||{};
       const started=(wo.route||[]).some(s=>s.posted||s.status!=="Pending");
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
-      const LINES=["Coating Line 1","Coating Line 2","Fibre-Glass Line 1","Fibre-Glass Line 2","Slitting A","Slitting B"];
+      const LINES=["Coating Line 1","Coating Line 2","Fibre-Glass Line 1","Slitting A","Slitting B"];
       const lockedLabel=(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId)
         +" — "+(it.productName||it.name||wo.itemId)
         +(it.thicknessMM!=null?" · "+it.thicknessMM+" mm":"");
@@ -508,31 +559,344 @@
        one and only way finished stock is created, since a production stage
        never books anything in. */
     function finishedStockForm(){
+      /* Output can be booked as a FINISHED GOOD or as WORK IN PROCESS — a
+         coated jumbo that has not been slit yet is real stock, and a work
+         order can now start from it, so it has to be bookable. */
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
-      const whs=(ENG.data.warehouses||[]).filter(w=>w.id!=="WH-WIP");
+      const wips=ENG.data.items.filter(i=>i.cat==="WIP");
+      const whs=ENG.data.warehouses||[];
       if(!fgs.length||!whs.length){ toast("No finished products or stores set up yet",{type:"warn"}); return; }
-      const fgStore=(whs.find(w=>w.id==="WH-FG")||whs[0]).id;
+      const fgStore=(whs.find(w=>w.id==="WH-FG")||whs.find(w=>w.id!=="WH-WIP")||whs[0]).id;
+      const isMtr=u=>["M","MTR","METER"].includes(String(u||"").toUpperCase());
+
+      const pickHost=h("div",{style:"display:contents"});
+      /* U.field takes an HTML string, so the unit select gets a host div it can
+         be re-rendered into — finished goods are counted in kg or sqm only,
+         while a jumbo roll is also meaningfully measured in metres */
+      const uomField=U.field("Unit of Quantity",`<div id="fs_uomhost"></div>`);
+      const gsmField=U.field("GSM (g/m²)",`<input class="input" id="fs_gsm" type="number" step="0.1" placeholder="e.g. 110">`);
+      const tapeField=U.field("Tape Width (mm)",`<input class="input" id="fs_tapewid" type="number" step="0.5" placeholder="e.g. 25">`);
+      const convHint=h("div",{class:"muted",style:"grid-column:1/-1;font-size:11px;margin-top:-6px",id:"fs_conv"});
+      const matHost=h("div",{style:"grid-column:1/-1"});
+      const srcHost=h("div",{style:"grid-column:1/-1"});
+      /* Sourcing part of a run from stock already on the shelf is an ADMIN
+         control — the floor books what it made, it does not decide what the
+         run is built from. */
+      const canSource=((App.user||{}).role==="admin");
+      let fsFgWanted=0, fsWipWanted=0;
+      let fsChoices={};   // ranged BOM line index -> the stock item chosen
+      let fsShort=[];     // materials short of stock — blocks the booking
       const body=h("div",{class:"form-grid"},[
-        fgPicker("fs_item", fgs, fgs[0]&&fgs[0].id),
+        U.field("Category",U.selectHTML("fs_cat",[{v:"FG",l:"Finished Goods"},{v:"WIP",l:"Work in Process"}],"FG")),
+        pickHost,
+        gsmField,
         U.field("Quantity produced",`<input class="input" id="fs_qty" type="number" min="0" step="any" placeholder="0">`),
+        uomField,
+        tapeField,
         U.field("Store it in",U.selectHTML("fs_wh",whs.map(w=>({v:w.id,l:w.name+(w.type?" · "+w.type:"")})),fgStore)),
-        h("div",{class:"muted",style:"grid-column:1/-1;font-size:12px;line-height:1.5",
-          text:"Raw materials for this quantity are issued from the store per the product's BOM."}),
+        convHint,
+        srcHost,
+        matHost,
       ]);
-      const mo=UI.modal({title:"➕ Add to Finished Stock", sub:"Book finished goods into a store", body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-          h("button",{class:"btn primary",onclick:e=>save(e.currentTarget),text:"Add to Finished Stock"})]});
+      const saveBtn=h("button",{class:"btn primary",onclick:e=>save(e.currentTarget),text:"Add to Finished Stock"});
+      const mo=UI.modal({title:"➕ Add to Finished Stock", sub:"Book finished goods or work in process into a store", body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), saveBtn]});
+
+      /* ---- product → thickness, the same two-step as New Work Order --------
+         The PRODUCT is chosen first (its name led by the code), then the
+         THICKNESS of that product, because one product exists at several
+         thicknesses and each is its own stock item. Work in process behaves
+         identically: its size lives on the finished product it came from, so
+         a jumbo is picked by product and thickness just the same. */
+      const parentOf=i=>(i.stageOf && ENG.item(i.stageOf)) || {};
+      /* what a roll IS — the half-made stock a work order can start from is the
+         COATED JUMBO; rolls already slit say so rather than being mislabelled */
+      const wipStage=i=>(/-S$/.test(i.id) || /slit/i.test(i.name||"")) ? "Slit Rolls" : "Coated Jumbo Roll";
+      const prodOf=i=>{
+        if(i.cat!=="WIP") return i.productName||i.name||i.id;
+        const p=parentOf(i);
+        return p.productName||p.name
+          ||String(i.name||i.id).replace(/\s*—\s*(Coated Jumbo|Slit Rolls)\s*\(WIP\)\s*$/i,"");
+      };
+      const thkOf=i=>{ if(i.thicknessMM!=null) return i.thicknessMM;
+        const p=parentOf(i); return p.thicknessMM!=null?p.thicknessMM:null; };
+      /* the family code, thickness stripped out — "FG-CP25G" / "WIP-CP25G" */
+      const famOf=i=>{
+        const src=i.cat==="WIP"?parentOf(i):i;
+        const fam=U.familyCode(src.typeCode, src.thicknessMM)||U.baseCode(src.typeCode||"")||"";
+        return (i.cat==="WIP"?"WIP-":"FG-")+fam;
+      };
+      /* one picker entry per product: code first, then the name, and for a
+         half-made roll what it actually is */
+      const keyOf=i=>famOf(i)+"|"+prodOf(i)+"|"+(i.cat==="WIP"?wipStage(i):"");
+      const nameLabel=k=>{ const p=k.split("|"); return p[0]+" — "+p[1]+(p[2]?" — "+p[2]:""); };
+
+      let catNow="FG";
+      function buildPicker(){
+        catNow=UI.$("#fs_cat").value;
+        pickHost.innerHTML="";
+        const isFg=catNow==="FG";
+        const list=isFg?fgs:wips;
+        // group the items by product, each group ordered by thickness
+        const byName={};
+        list.forEach(i=>{ (byName[keyOf(i)]=byName[keyOf(i)]||[]).push(i); });
+        Object.values(byName).forEach(a=>a.sort((x,y)=>(thkOf(x)||0)-(thkOf(y)||0)));
+        const names=Object.keys(byName).sort();
+        const hid=h("input",{type:"hidden",id:"fs_item",value:""});
+        const thkHost=h("div");
+        pickHost.appendChild(hid);
+        pickHost.appendChild(h("div",{class:"field full"},[
+          h("label",{text:isFg?"Product":"Work in process item"}),
+          h("div",{html:names.length
+            ? U.searchSelect("fs_nm", names.map(n=>({v:n,l:nameLabel(n)})), names[0],
+                isFg?"Search product…":"Search work in process…")
+            : `<input class="input" value="" placeholder="no items in this category yet" disabled>`}),
+        ]));
+        pickHost.appendChild(h("div",{class:"field"},[h("label",{text:"Thickness (mm)"}), thkHost]));
+        let curName=names[0];
+        function buildThk(){
+          const group=byName[curName]||[];
+          const sel=h("select",{class:"select",onchange:e=>{ hid.value=e.target.value;
+            hid.dispatchEvent(new Event("change",{bubbles:true})); }},
+            group.map(i=>h("option",{value:i.id,
+              text:(thkOf(i)!=null? thkOf(i)+" mm" : (i.typeCode||i.id))+" · "+i.id})));
+          thkHost.innerHTML=""; thkHost.appendChild(sel);
+          hid.value=group.length?group[0].id:"";
+          fillParams();
+        }
+        const nmHid=pickHost.querySelector('input[id="fs_nm"]');
+        if(nmHid) nmHid.addEventListener("change",()=>{
+          if(nmHid.value && nmHid.value!==curName){ curName=nmHid.value; buildThk(); } });
+        if(names.length) buildThk();
+        // finished goods are never counted in running metres — a slit roll is
+        // sold by weight or area, so metres is offered on WIP jumbos only
+        const host=UI.$("#fs_uomhost");
+        if(host){
+          const units=[{v:"KG",l:"Kilogram (kg)"},{v:"SQM",l:"Square Meter (sqm)"}];
+          if(!isFg) units.push({v:"MTR",l:"Meter (m)"});
+          host.innerHTML=U.selectHTML("fs_uom",units,"KG");
+          const u=UI.$("#fs_uom"); if(u) u.addEventListener("change",calc);
+        }
+        const sel=UI.$("#fs_item");
+        if(sel) sel.addEventListener("change",fillParams);
+        tapeField.style.display=isFg?"":"none";
+        fillParams();
+      }
+      function fillParams(){
+        const el=UI.$("#fs_item"); const it=(el&&ENG.item(el.value))||{};
+        /* a half-made roll carries no size of its own — its thickness and GSM
+           are the finished product's, so they are read off the parent */
+        const parent=(it.stageOf && ENG.item(it.stageOf)) || {};
+        const pick=(k)=>(it[k]!=null?it[k]:(parent[k]!=null?parent[k]:""));
+        const set=(id,v)=>{const e=UI.$("#"+id); if(e) e.value=(v==null?"":v);};
+        set("fs_gsm",pick("gsm"));
+        if(catNow==="FG") set("fs_tapewid",it.tapeWidthMM!=null?it.tapeWidthMM:"");
+        calc();
+      }
+      /* kg ⇄ sqm ⇄ metres across the GSM and the width being produced */
+      function width(){
+        if(catNow==="FG"){ const t=+((UI.$("#fs_tapewid")||{}).value)||0; if(t>0) return t; }
+        const el=UI.$("#fs_item"); const it=(el&&ENG.item(el.value))||{};
+        return +it.width||1000;
+      }
+      function derive(){
+        const q=+((UI.$("#fs_qty")||{}).value)||0, unit=(UI.$("#fs_uom")||{}).value;
+        const gsm=+((UI.$("#fs_gsm")||{}).value)||0, w=width()/1000;
+        if(!q) return null;
+        let kg=null,sqm=null,len=null;
+        if(unit==="KG"){ kg=q; if(gsm){ sqm=kg*1000/gsm; len=sqm/w; } }
+        else if(unit==="SQM"){ sqm=q; len=sqm/w; if(gsm) kg=sqm*gsm/1000; }
+        else { len=q; sqm=len*w; if(gsm) kg=sqm*gsm/1000; }
+        return {kg,sqm,len,wid:width()};
+      }
+      function calc(){
+        const el=UI.$("#fs_conv");
+        const c=derive();
+        if(el){
+          if(!c) el.textContent="";
+          else {
+            const bits=[];
+            if(c.sqm!=null) bits.push(ENG.num(c.sqm,1)+" sqm");
+            if(c.len!=null) bits.push(ENG.num(c.len,1)+" m @ "+c.wid+" mm");
+            if(c.kg!=null) bits.push(ENG.num(c.kg,2)+" kg");
+            el.textContent=bits.length?"= "+bits.join(" · "):"Enter the GSM to convert between kg, sqm and metres";
+          }
+        }
+        drawMaterials();
+      }
+      /* the SAME list New Work Order shows — layer headings, and every row
+         carrying its live need / in-store / short figures. A half-made roll
+         draws only what its coating stage consumes, exactly as the server
+         issues it, so the packaging lines are left out. */
+      /* what is on the shelf that this run could be built from — the item
+         being booked is never a source for itself */
+      function sourceRows(ownerId, itemId){
+        const owner=ENG.item(ownerId)||{};
+        const key=i=>String((i.productName||i.name)||"").trim().toUpperCase();
+        const same=(a,b)=>{const x=a==null?null:+a,y=b==null?null:+b;
+          if(x==null||y==null) return x==null&&y==null; return Math.abs(x-y)<1e-6;};
+        const on=id=>((ENG.stock(id)||{}).onHand)||0;
+        const wantW=+((UI.$("#fs_tapewid")||{}).value)||null;
+        const isSlit=i=>/-S$/.test(String(i.id||""))||/slit/i.test(String(i.name||""));
+        const fg=ENG.data.items.filter(i=>i.cat==="FG"&&i.id!==itemId)
+          .filter(i=>key(i)===key(owner)&&same(i.thicknessMM,owner.thicknessMM))
+          .filter(i=>wantW==null?true:same(i.tapeWidthMM,wantW))
+          .map(i=>({id:i.id,name:i.name||i.id,have:on(i.id)})).filter(r=>r.have>0);
+        const wip=ENG.data.items.filter(i=>i.cat==="WIP"&&i.id!==itemId&&!isSlit(i))
+          .filter(i=>i.stageOf? i.stageOf===ownerId : (key(i)===key(owner)&&same(i.thicknessMM,owner.thicknessMM)))
+          .map(i=>({id:i.id,name:i.name||i.id,have:on(i.id)})).filter(r=>r.have>0);
+        return {fg, wip, fgAvail:fg.reduce((n,r)=>n+r.have,0), wipAvail:wip.reduce((n,r)=>n+r.have,0)};
+      }
+      function drawSources(ownerId, itemId, qty, uom){
+        srcHost.innerHTML="";
+        if(!canSource||!ownerId||!(qty>0)) return {fgQty:0,wipQty:0,makeQty:qty||0};
+        const s=sourceRows(ownerId,itemId);
+        const fgQty=Math.max(0,Math.min(fsFgWanted,s.fgAvail,qty));
+        const wipQty=Math.max(0,Math.min(fsWipWanted,s.wipAvail,qty-fgQty));
+        const makeQty=qty-fgQty-wipQty;
+        if(!(s.fgAvail>0||s.wipAvail>0)) return {fgQty:0,wipQty:0,makeQty:qty};
+        const row=(icon,label,val,max,onInput)=>h("div",{class:"flex between aic",
+            style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+          h("div",{style:"min-width:0"},[h("div",{text:icon+" "+label}),
+            h("div",{class:"muted",style:"font-size:11px",text:ENG.num(max,2)+" "+(uom||"")+" available"})]),
+          h("input",{class:"input",type:"number",min:"0",step:"any",value:ENG.num(val,2),
+            style:"width:110px;text-align:right;flex:0 0 auto",oninput:e=>onInput(e.target.value)}),
+        ]);
+        srcHost.appendChild(h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},[
+          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
+            text:"Build from stock — the rest is made from raw materials"}),
+          s.fgAvail>0? row("📦","Finished stock",fgQty,s.fgAvail,
+            v=>{ fsFgWanted=Math.max(0,+v||0); calc(); }):null,
+          s.wipAvail>0? row("🧵","Half-made stock",wipQty,s.wipAvail,
+            v=>{ fsWipWanted=Math.max(0,+v||0); calc(); }):null,
+          h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
+            h("span",{text:"To make from raw materials"}),
+            h("span",{text:ENG.num(makeQty,2)+" "+(uom||"")}),
+          ]),
+        ]));
+        return {fgQty, wipQty, makeQty};
+      }
+      function drawMaterials(){
+        matHost.innerHTML="";
+        const el=UI.$("#fs_item"); const it=(el&&ENG.item(el.value))||null;
+        if(!it){ srcHost.innerHTML=""; return; }
+        const isWip=catNow==="WIP";
+        const ownerId=isWip?(it.stageOf||""):it.id;
+        const owner=ENG.item(ownerId); const bom=ENG.data.boms[ownerId];
+        if(!owner||!bom||!(bom.lines||[]).length){
+          matHost.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:12px",
+            text:"No BOM recipe for this product — no materials will be deducted."}));
+          return;
+        }
+        // whatever is taken off the shelf draws no recipe at all
+        const src=drawSources(ownerId, it.id, postQty()||0, it.uom||"");
+        const qty=src.makeQty;
+
+        /* ---- ranged materials: pick the real one from what the store holds ----
+           Identical to New Work Order. The BOM records a choice ("CLOFT 912 /
+           CLOFT 913") or a span ("0.08-0.10") rather than one material; which
+           is actually issued is decided here, against live stock, and travels
+           to the server so the issue posts the material that was chosen. */
+        const norm=BOMCALC.normalize(bom.lines);
+        const ranged=norm.map((l,i)=>({l,i})).filter(x=>x.l.ranged);
+        if(ranged.length){
+          matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",text:"⟡ Choose material to issue"}));
+          ranged.forEach(({l,i})=>{
+            const cands=BOMCALC.candidatesFor(l,ENG.data.items)
+              .map(cid=>({id:cid,item:ENG.item(cid)||{},have:(ENG.stock(cid)||{}).onHand||0}))
+              .sort((a,b)=>b.have-a.have);
+            const inStock=cands.filter(c=>c.have>0);
+            const usable=inStock.length?inStock:cands;
+            if(fsChoices[i]==null && usable.length) fsChoices[i]=usable[0].id;
+            const sel=h("select",{class:"select",style:"max-width:340px",
+              onchange:e=>{ fsChoices[i]=e.target.value; drawMaterials(); }},
+              usable.map(c=>h("option",{value:c.id,selected:fsChoices[i]===c.id,
+                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
+            matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
+              h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
+                text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
+              usable.length? sel : h("div",{class:"muted",style:"font-size:12px;color:var(--danger)",text:"No matching material found in the store"})
+            ]));
+          });
+        }
+
+        const resolved=BOMCALC.resolve(bom,fsChoices);
+        const cc=BOMCALC.compute({lines:resolved},BOMCALC.metaFromItem(owner));
+        const perOf=l=> cc.fgKgPerBatch? l.qty/cc.fgKgPerBatch : l.qty;
+        const keep=l=>!isWip||["base","paste"].includes(materialRole(l.id));
+        const needBy={};   // a fabric can sit in two layers — the store is shared
+        resolved.forEach(l=>{ if(l.id&&keep(l)) needBy[l.id]=(needBy[l.id]||0)+perOf(l)*qty/bom.yield; });
+        materialsList(matHost, layerGroups(resolved).map(grp=>({
+          label: grp.label,
+          lines: grp.lines.filter(keep).map(l=>{
+            const rid=l.id, r=rid?(ENG.item(rid)||{}):{};
+            return { name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
+              need: perOf(l)*qty/bom.yield,
+              have: rid?(ENG.stock(rid).onHand||0):0,
+              agg: rid?needBy[rid]:undefined,
+              uom: r.uom||l.unit||"" };
+          }),
+        })), {title:"Raw materials to be deducted from store"});
+
+        /* ---- a short material blocks the booking, exactly as it blocks a
+           work order: stock cannot be issued that is not there ---- */
+        fsShort=Object.entries(needBy)
+          .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
+          .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
+        if(qty>0 && fsShort.length){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600",
+            text:"⛔ Cannot book this production — short of: "+fsShort.join(", ")+". Add the stock first."}));
+        }
+        if(saveBtn) saveBtn.disabled=(qty>0 && fsShort.length>0);
+      }
+      /* what actually posts: the item's OWN unit, whatever it was counted in */
+      function postQty(){
+        const el=UI.$("#fs_item"); const it=(el&&ENG.item(el.value))||null;
+        if(!it) return null;
+        const c=derive(); if(!c) return null;
+        const uom=String(it.uom||"KG").toUpperCase();
+        if(isMtr(uom)) return c.len;
+        if(uom==="SQM") return c.sqm;
+        return c.kg==null?null:c.kg*({KG:1,GRAM:1000,MG:1e6}[uom]||1);
+      }
+      UI.$("#fs_cat").addEventListener("change",buildPicker);
+      ["fs_qty","fs_gsm","fs_tapewid"].forEach(id=>{ const e=UI.$("#"+id); if(e) e.addEventListener("input",calc); });
+      buildPicker();   // also renders the unit select and binds its change
+
       async function save(btn){
-        const itemId=UI.$("#fs_item").value, qty=+UI.$("#fs_qty").value, wh=UI.$("#fs_wh").value;
+        const el=UI.$("#fs_item");
+        const itemId=el?el.value:"";
         if(!itemId){ toast("Pick a product",{type:"warn"}); return; }
-        if(!qty||qty<=0){ toast("Enter the quantity produced",{type:"warn"}); return; }
+        const it=ENG.item(itemId)||{};
+        const entered=+UI.$("#fs_qty").value, wh=UI.$("#fs_wh").value;
+        if(!entered||entered<=0){ toast("Enter the quantity produced",{type:"warn"}); return; }
+        if(fsShort.length){ toast("Materials are short — cannot book this production: "+fsShort.join(", "),
+          {type:"danger",title:"Insufficient stock"}); return; }
+        const tapeWidthMM=catNow==="FG"?(+UI.$("#fs_tapewid").value||null):null;
+        if(catNow==="FG" && !tapeWidthMM){ toast("Enter the tape width for a finished good",{type:"warn"}); return; }
+        /* book the output in the ITEM's own unit, whatever it was counted in —
+           the same conversion the materials preview above is sized by */
+        const postUom=String(it.uom||"KG").toUpperCase();
+        let qty=postQty();
+        if(qty==null||!(qty>0)){ toast("Enter the GSM so the quantity can be converted to "+postUom,{type:"warn"}); return; }
+        qty=+qty.toFixed(3);
         btn.disabled=true; btn.textContent="Saving…";
         try{
-          const r=await DB.production.addFinishedStock({itemId, qty, wh});
+          /* thickness is no longer sent: it is a property of the stock item
+             that was PICKED, not something typed here, so there is nothing to
+             write back. GSM stays editable and does get saved. */
+          const r=await DB.production.addFinishedStock(Object.assign(
+            {itemId, qty, wh, tapeWidthMM, gsm:+UI.$("#fs_gsm").value||null},
+            // which material was picked for each ranged BOM line — so the issue
+            // posts the material actually chosen, exactly as a work order does
+            Object.keys(fsChoices).length?{materialChoices:fsChoices}:{},
+            // admin-only: how much of this run comes off the shelf instead of
+            // being made from the recipe (the server enforces the role too)
+            canSource?{fgQty:fsFgWanted, wipQty:fsWipWanted}:{}));
           mo.close();
           const used=(r&&r.consumed||[]).length;
-          toast(ENG.num(qty)+" "+((ENG.item(itemId)||{}).uom||"")+" added"+(used?" · "+used+" material(s) issued":""),
-            {type:"ok",title:"Finished stock booked"});
+          toast(ENG.num(qty,2)+" "+postUom+" added"+(used?" · "+used+" material(s) issued":""),
+            {type:"ok",title:(catNow==="FG"?"Finished stock booked":"Work in process booked")});
           await App.reloadState();
         }catch(err){
           toast(err.message||"Could not add finished stock",{type:"danger"});
@@ -550,7 +914,7 @@
            slit to whatever width the customer ordered, so it is captured on the
            run and travels with the batch onto the invoice. */
         U.field("Tape Width (mm)",`<input class="input" id="w_width" type="number" min="0" step="0.5" placeholder="e.g. 25"><div class="muted" id="w_wnote" style="font-size:11px;margin-top:3px"></div>`),
-        U.field("Production Line",U.selectHTML("w_line",[{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Fibre-Glass Line 2",l:"Fibre-Glass Line 2"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Slitting A")),
+        U.field("Production Line",U.selectHTML("w_line",[{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Slitting A")),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
         U.field("Priority",U.selectHTML("w_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
       ]);
@@ -586,6 +950,90 @@
         const w=+UI.$("#w_width").value||0;
         el.textContent = thk==null ? (w?"Size "+w+" mm wide":"")
           : (w? "Size "+thk+" × "+w+" mm" : "Thickness "+thk+" mm — enter the width this run is slit to"); };
+      /* ---- netting the requirement against stock already on the shelf -------
+         Mirrors the server (stageService.planForRequirement) so the planner
+         sees the same answer before pressing Create: finished goods of the
+         same product, thickness and TAPE WIDTH go straight to packing;
+         half-made rolls of the same product and thickness skip coating and
+         join at slitting; only what is left is actually made. */
+      const nameKey=i=>String((i&&(i.productName||i.name))||"").trim().toUpperCase();
+      const sameThk=(a,b)=>{ const x=a==null?null:+a, y=b==null?null:+b;
+        if(x==null||y==null) return x==null&&y==null; return Math.abs(x-y)<1e-6; };
+      const onHandOf=id=>((ENG.stock(id)||{}).onHand)||0;
+      const drawFrom=(rows,want)=>{ const used=[]; let left=+want||0;
+        rows.forEach(r=>{ if(left<=1e-9) return; const take=Math.min(left,r.have);
+          if(take>1e-9){ used.push({id:r.id,name:r.name,qty:take}); left-=take; } });
+        return {used, taken:(+want||0)-left}; };
+      const cap=(want,avail,left)=>Math.max(0,Math.min(+want||0,avail,left));
+      function netPlan(id, qty, widthMM, hasCoating){
+        const fg=ENG.item(id)||{};
+        const want=(widthMM==null||widthMM==="")?null:+widthMM;
+        const plan={qty, fgQty:0, wipQty:0, makeQty:qty, fgSources:[], wipSources:[],
+          hasCoating:!!hasCoating, fgAvailable:0, wipAvailable:0};
+        if(!(qty>0)) { plan.makeQty=0; return plan; }
+        const fgRows=ENG.data.items.filter(i=>i.cat==="FG")
+          .filter(i=>nameKey(i)===nameKey(fg))
+          .filter(i=>sameThk(i.thicknessMM,fg.thicknessMM))
+          .filter(i=>want==null?true:sameThk(i.tapeWidthMM,want))
+          .map(i=>({id:i.id,name:i.name||i.id,have:onHandOf(i.id)}))
+          .filter(r=>r.have>0);
+        plan.fgAvailable=fgRows.reduce((n,r)=>n+r.have,0);
+        // a typed amount wins; otherwise take as much as the shelf allows
+        const fgDraw=drawFrom(fgRows, fgWanted==null? Math.min(plan.fgAvailable,qty)
+          : cap(fgWanted, plan.fgAvailable, qty));
+        plan.fgQty=fgDraw.taken; plan.fgSources=fgDraw.used;
+        const afterFg=qty-plan.fgQty;
+        // only the COATED JUMBO can join at slitting — rolls that have
+        // already been slit would be cut twice (mirrors the server)
+        const isSlit=i=>/-S$/.test(String(i.id||""))||/slit/i.test(String(i.name||""));
+        const wipRows=ENG.data.items.filter(i=>i.cat==="WIP").filter(i=>!isSlit(i))
+          .filter(i=>i.stageOf? i.stageOf===id : (nameKey(i)===nameKey(fg)&&sameThk(i.thicknessMM,fg.thicknessMM)))
+          .map(i=>({id:i.id,name:i.name||i.id,have:onHandOf(i.id)}))
+          .filter(r=>r.have>0);
+        plan.wipAvailable=wipRows.reduce((n,r)=>n+r.have,0);
+        if(hasCoating && afterFg>0){
+          const wipDraw=drawFrom(wipRows, wipWanted==null? Math.min(plan.wipAvailable,afterFg)
+            : cap(wipWanted, plan.wipAvailable, afterFg));
+          plan.wipQty=wipDraw.taken; plan.wipSources=wipDraw.used;
+        }
+        plan.makeQty=afterFg-plan.wipQty;
+        return plan;
+      }
+      /* How much comes off the shelf is the PLANNER'S choice, not a fixed
+         calculation: each source gets an editable quantity, capped at what is
+         actually there, and whatever is left over is manufactured. */
+      let fgWanted=null, wipWanted=null;   // null = "take whatever is available"
+      function netPanel(plan, uom){
+        const avFg=plan.fgAvailable||0, avWip=plan.wipAvailable||0;
+        if(!(avFg>0 || avWip>0)) return null;
+        const row=(icon,label,val,max,dest,src,onInput)=>h("div",{class:"flex between aic",
+            style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+          h("div",{style:"min-width:0"},[
+            h("div",{text:icon+" "+label}),
+            h("div",{class:"muted",style:"font-size:11px",
+              text:(src&&src.length? src.map(s=>s.name+" · "+ENG.num(s.qty,2)).join(" · ")+"  ·  " : "")
+                +ENG.num(max,2)+" "+(uom||"")+" available"}),
+          ]),
+          h("div",{class:"flex aic",style:"gap:8px;flex:0 0 auto"},[
+            h("input",{class:"input",type:"number",min:"0",step:"any",value:ENG.num(val,2),
+              style:"width:110px;text-align:right",oninput:e=>onInput(e.target.value)}),
+            h("div",{class:"muted",style:"font-size:11px;white-space:nowrap;min-width:96px",text:dest}),
+          ]),
+        ]);
+        return h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},[
+          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
+            text:"Take from stock — the rest is made from raw materials"}),
+          avFg>0? row("📦","Finished stock",plan.fgQty,avFg,"→ packing",plan.fgSources,
+            v=>{ fgWanted=v===""?null:Math.max(0,+v||0); recalc(); }):null,
+          (avWip>0&&plan.hasCoating)? row("🧵","Half-made stock",plan.wipQty,avWip,"→ slitting",plan.wipSources,
+            v=>{ wipWanted=v===""?null:Math.max(0,+v||0); recalc(); }):null,
+          h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
+            h("span",{text:"To manufacture from raw materials"}),
+            h("span",{text:ENG.num(plan.makeQty,2)+" "+(uom||"")}),
+          ]),
+        ]);
+      }
+
       const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         // show the stages this product will actually run, and keep the line in
         // the area that starts it (a one-material product never enters coating)
@@ -608,6 +1056,14 @@
         if(spec){ specHost.appendChild(U.field(spec.label,`<input class="input" id="w_spec" type="number" min="0" placeholder="as per order">`)); }
         matHost.innerHTML="";
         shortages=[]; if(createBtn) createBtn.disabled=false;
+        /* net the requirement before anything else is worked out — the
+           materials list below sizes itself to what is actually MADE */
+        const widthNow=(UI.$("#w_width")||{}).value;
+        const plan=netPlan(id, qty, widthNow, !rt.ready && !!own);
+        const uomNow=(ENG.item(id)||{}).uom||"";
+        const panel=netPanel(plan, uomNow);
+        if(panel) matHost.appendChild(panel);
+        const makeQty=plan.makeQty;
         if(!bom) return;
 
         // the layer layout below carries the materials AND their live
@@ -650,45 +1106,27 @@
         const cc=BOMCALC.compute({lines:resolved}, BOMCALC.metaFromItem(fgIt));
         const perOf=l=> cc.fgKgPerBatch? l.qty/cc.fgKgPerBatch : l.qty;
         const needBy={};             // a fabric can sit in two layers — stock is shared
-        resolved.forEach(l=>{ if(l.id) needBy[l.id]=(needBy[l.id]||0)+perOf(l)*qty/bom.yield; });
-        const groups=layerGroups(resolved);
-        const multi=groups.length>1;
-        matHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",
-          text: multi? "≡ Materials by layer · "+groups.length+" layers" : "Materials to be consumed"}));
-        groups.forEach((grp,gi)=>{
-          if(multi) matHost.appendChild(h("div",{style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:"+(gi?12:2)+"px 0 4px;color:var(--accent)",
-            text:grp.label||("LAYER "+(gi+1))}));
-          grp.lines.forEach(l=>{
-            const rid=l.id;
-            const need=perOf(l)*qty/bom.yield;
-            const r=rid?(ENG.item(rid)||{}):{};
-            const have=rid?(ENG.stock(rid).onHand||0):0;
-            const agg=rid?needBy[rid]:need;
-            const ok=have>=agg-1e-9;
-            const spec=matLineSpec(l);
-            matHost.appendChild(h("div",{class:"flex between aic",
-              style:"gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
-              h("div",{style:"min-width:0"},[
-                h("div",{class:"flex aic",style:"gap:8px"},[
-                  h("span",{style:"font-weight:600",text:matLineName(l)}),
-                  matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null
-                ]),
-                spec?h("div",{class:"muted mono",style:"font-size:11px",text:spec}):null
-              ]),
-              h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
-                h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(need,2)+" "+(r.uom||l.unit||"")})]),
-                h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(r.uom||l.unit||"")})]),
-                h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(agg-have,2))})
-              ])
-            ]));
-          });
-        });
+        // only the manufactured remainder draws raw material from the store
+        resolved.forEach(l=>{ if(l.id) needBy[l.id]=(needBy[l.id]||0)+perOf(l)*makeQty/bom.yield; });
+        // the shared renderer — the Add to Finished Stock forms show the very
+        // same list, built the same way, so the two can never drift apart
+        materialsList(matHost, layerGroups(resolved).map(grp=>({
+          label: grp.label,
+          lines: grp.lines.map(l=>{
+            const rid=l.id, r=rid?(ENG.item(rid)||{}):{};
+            return { name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
+              need: perOf(l)*makeQty/bom.yield,
+              have: rid?(ENG.stock(rid).onHand||0):0,
+              agg: rid?needBy[rid]:undefined,
+              uom: r.uom||l.unit||"" };
+          }),
+        })));
         /* a short material blocks creation outright — the run cannot start
            without the stock to make it */
         shortages=Object.entries(needBy)
           .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
           .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
-        if(qty>0 && shortages.length){
+        if(makeQty>0 && shortages.length){
           matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600",
             text:"⛔ Cannot create this work order — short of: "+shortages.join(", ")+". Add the stock first."}));
           if(createBtn) createBtn.disabled=true;
@@ -697,7 +1135,9 @@
       const createBtn=h("button",{class:"btn primary",onclick:save,text:"Create Work Order"});
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), createBtn]});
-      setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); UI.$("#w_width").addEventListener("input",widthHint); recalc(); },50);
+      setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); /* the width decides WHICH finished stock can be used, so it re-nets the
+   whole plan rather than just refreshing its own hint */
+UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
       async function save(){
         const itemId=UI.$("#w_item").value, qty=qtyKg();
         if(qty==null){ toast("This product has no GSM — enter the quantity in kg",{type:"warn"}); return; }
@@ -705,6 +1145,11 @@
         if(shortages.length){ toast("Materials are short — cannot create this work order: "+shortages.join(", "),{type:"danger",title:"Insufficient stock"}); return; }
         const payload={itemId, qty, line:UI.$("#w_line").value, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
         const wmm=+UI.$("#w_width").value; if(wmm>0) payload.widthMM=wmm;
+        /* how much to take off the shelf — sent explicitly (0 included, which
+           is why this is not a truthiness check) so the server draws exactly
+           what the planner chose rather than as much as it can */
+        if(fgWanted!=null) payload.fgQty=fgWanted;
+        if(wipWanted!=null) payload.wipQty=wipWanted;
         // which material was picked for each ranged BOM line — travels with the
         // work order so the issue posts the material actually chosen
         if(Object.keys(matChoices).length) payload.materialChoices=matChoices;
@@ -1264,6 +1709,10 @@
 
 
   // register ⌘K quick actions for Production & BOM
+  /* the supervisor panel renders the same Add to Finished Stock form, so it
+     shares this module's materials list rather than growing a second one */
+  window._erpUtil = Object.assign(window._erpUtil||{}, { materialsList, materialRole });
+
   window.ERPActions = Object.assign(window.ERPActions||{}, {
     newWO:  { ic:"⚙️", label:"New Work Order", run:()=>App.go("production",{openNew:true}) },
     newBOM: { ic:"🧬", label:"Create BOM",     run:()=>App.go("bom",{openNew:true}) },

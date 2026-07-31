@@ -132,19 +132,17 @@ function changePassword(userId, currentPassword, newPassword) {
   return { token: issueToken(fresh), user: fresh };
 }
 
-/** One-time boot sweep: any account still on its seeded "<username>@123"
-    password gets flagged so the UI forces a change at next login. */
-function flagDefaultPasswords() {
-  let flagged = 0;
+/** Clear any leftover forced-password-change flag. Nothing sets the flag any
+    more — changing a password is optional — so this only tidies up accounts
+    flagged by an earlier build, which would otherwise be prompted forever. */
+function clearPasswordChangeFlags() {
+  let cleared = 0;
   for (const u of users.listUsers()) {
-    if (u.mustChangePassword) continue;
-    const full = users.findById(u.id, true);
-    if (full && verifyPassword(u.username + "@123", full.pass)) {
-      users.patchDoc(u.id, { mustChangePassword: true });
-      flagged++;
-    }
+    if (!u.mustChangePassword) continue;
+    users.patchDoc(u.id, { mustChangePassword: false });
+    cleared++;
   }
-  return { flagged };
+  return { cleared };
 }
 
 /* ============================================================
@@ -167,8 +165,7 @@ function seedDefaultUsers() {
   if (users.countUsers() > 0) return { seeded: false, count: users.countUsers() };
   let n = 0;
   for (const du of DEFAULT_USERS) {
-    users.createUser({ ...du, pass: hashPassword(du.username + "@123"),
-      doc: { mustChangePassword: true } });
+    users.createUser({ ...du, pass: hashPassword(du.username + "@123") });
     n++;
   }
   return { seeded: true, count: n };
@@ -211,9 +208,9 @@ function updateUserAccount(id, patch) {
   const u = users.updateUser(id, out);
   if (!u) throw httpErr("User not found", 404);
   if (patch.password) {
-    // an admin-set password is temporary: the user must change it, and every
-    // session issued under the old password is revoked
-    return users.patchDoc(id, { mustChangePassword: true, tokenVersion: (u.tokenVersion || 0) + 1 });
+    // the new password stands on its own — no change is forced afterwards —
+    // but every session issued under the OLD password is still revoked
+    return users.patchDoc(id, { tokenVersion: (u.tokenVersion || 0) + 1 });
   }
   return u;
 }
@@ -223,7 +220,7 @@ function httpErr(msg, status) { const e = new Error(msg); e.status = status; ret
 module.exports = {
   hashPassword, verifyPassword, issueToken, verifyToken,
   login, userFromToken, seedDefaultUsers,
-  revokeTokens, changePassword, flagDefaultPasswords, IS_PROD,
+  revokeTokens, changePassword, clearPasswordChangeFlags, IS_PROD,
   createUserAccount, updateUserAccount,
   listUsers: () => users.listUsers(),
   deleteUser: (id) => users.deleteUser(id),

@@ -87,7 +87,7 @@ function stateForSupervisor(area, username) {
 
   // materials THIS area needs for the WO's current stage (quantities only, no cost)
   function stageMaterials(wo, stage) {
-    const plan = S.computeStagePlan(wo.itemId, wo.qty, d, wo.materialChoices);
+    const plan = S.computeStagePlan(wo.itemId, wo.qty, d, wo.materialChoices, wo.plan);
     if (!plan || !plan[stage.key]) return [];
     return plan[stage.key].consume.map(([rid, q]) => ({
       id: rid, name: (itemById[rid] || {}).name || rid,
@@ -145,21 +145,52 @@ function stateForSupervisor(area, username) {
   // with a per-unit recipe so the "Add to Finished Stock" form can preview what
   // will be consumed. No costs/prices — quantities only.
   const boms = d.boms || {};
-  const finishedProducts = d.items
-    .filter((i) => i.cat === "FG" && boms[i.id] && (boms[i.id].lines || []).length)
+  /* The floor's form picks a product and then a THICKNESS, and can book either
+     a finished good or a half-made (WORK IN PROCESS) roll — so the payload
+     carries the size fields that picker needs, and the WIP items alongside the
+     finished ones. A WIP roll has no recipe of its own: it draws on its
+     parent's, and only on what the coating stage consumes. */
+  const perUnitRecipe = (owner, roleFilter) => {
+    const bom = boms[owner.id];
+    if (!bom) return [];
+    const Y = bom.yield || 1;
+    // Lines may be legacy [id, qty] tuples OR rich objects from the real
+    // BOM import — toLegacy() flattens both to [id, perUnitOfFG].
+    return BC.toLegacy(bom, BC.metaFromItem(owner))
+      .filter(([rid]) => (roleFilter ? roleFilter(rid) : true))
+      .map(([rid, per]) => ({
+        id: rid, name: (itemById[rid] || {}).name || rid,
+        uom: (itemById[rid] || {}).uom || "", perUnit: per / Y,
+      }));
+  };
+  const sizeOf = (i) => ({
+    typeCode: i.typeCode || null,
+    productName: i.productName || i.name || i.id,
+    thicknessMM: i.thicknessMM != null ? i.thicknessMM : null,
+    gsm: i.gsm != null ? i.gsm : null,
+    tapeWidthMM: i.tapeWidthMM != null ? i.tapeWidthMM : null,
+  });
+  const producibleFg = d.items
+    .filter((i) => i.cat === "FG" && boms[i.id] && (boms[i.id].lines || []).length);
+  const fgProducts = producibleFg.map((i) => Object.assign(
+    { id: i.id, name: i.name, cat: "FG", uom: i.uom || "KG", recipe: perUnitRecipe(i) },
+    sizeOf(i),
+  ));
+  const fgById = Object.fromEntries(producibleFg.map((i) => [i.id, i]));
+  const wipProducts = d.items
+    .filter((i) => i.cat === "WIP" && i.stageOf && fgById[i.stageOf])
     .map((i) => {
-      const bom = boms[i.id];
-      const Y = bom.yield || 1;
-      return {
-        id: i.id, name: i.name, uom: i.uom || "KG",
-        // Lines may be legacy [id, qty] tuples OR rich objects from the real
-        // BOM import — toLegacy() flattens both to [id, perUnitOfFG].
-        recipe: BC.toLegacy(bom, BC.metaFromItem(i)).map(([rid, per]) => ({
-          id: rid, name: (itemById[rid] || {}).name || rid,
-          uom: (itemById[rid] || {}).uom || "", perUnit: per / Y,
-        })),
-      };
+      const parent = fgById[i.stageOf];
+      return Object.assign(
+        { id: i.id, name: i.name, cat: "WIP", uom: i.uom || "KG", stageOf: i.stageOf,
+          recipe: perUnitRecipe(parent, (rid) => ["base", "paste"].includes(S.materialRole(rid))) },
+        sizeOf(parent),
+        // a half-made roll keeps its own thickness when it has one
+        i.thicknessMM != null ? { thicknessMM: i.thicknessMM } : {},
+        { tapeWidthMM: null },
+      );
     });
+  const finishedProducts = fgProducts.concat(wipProducts);
   // warehouses the finished stock can be stored in (id/name/type/city, no locations detail)
   const warehouses = (d.warehouses || []).map((w) => ({ id: w.id, name: w.name, type: w.type || null, city: w.city || null }));
 

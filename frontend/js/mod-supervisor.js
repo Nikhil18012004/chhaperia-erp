@@ -621,42 +621,156 @@
       }
     },
 
+    /* The SAME form the office gets on the Production page: category (finished
+       goods or a half-made roll), the product picked first and its THICKNESS
+       second, GSM, the unit the floor actually counted in, and — for a
+       finished good — the tape width it was slit to. */
     openProduce() {
       const products = this.data.finishedProducts || [];
       const warehouses = this.data.warehouses || [];
       if (!products.length) { toast("No finished product has a BOM recipe yet — ask office to add one first.", { type: "warn" }); return; }
       const self = this;
+      const U = global._erpUtil || {};
       const fgWh = warehouses.find((w) => String(w.type || "").toLowerCase().includes("finish")) || warehouses[0];
+      const wipWh = warehouses.find((w) => w.id === "WH-WIP");
+      const isMtr = (u) => ["M", "MTR", "METER"].includes(String(u || "").toUpperCase());
+      /* what the store holds, summed across every warehouse that holds it —
+         materialStock is the floor's own (quantities-only) stock feed */
+      const matStock = this.data.materialStock || {};
+      const onHandOf = (id) => (matStock[id] || []).reduce((n, r) => n + (+r.qty || 0), 0);
 
-      const prodSel = MW.select(products.map((p) => ({ value: p.id, label: p.name })), () => draw(), products[0].id);
+      const wipStage = (p) => (/-S$/.test(p.id) || /slit/i.test(p.name || "")) ? "Slit Rolls" : "Coated Jumbo Roll";
+      const famOf = (p) => {
+        const fam = (U.familyCode ? U.familyCode(p.typeCode, p.thicknessMM) : "")
+          || (U.baseCode ? U.baseCode(p.typeCode || "") : "") || (p.typeCode || "");
+        return (p.cat === "WIP" ? "WIP-" : "FG-") + fam;
+      };
+      const keyOf = (p) => famOf(p) + "|" + (p.productName || p.name || p.id)
+        + "|" + (p.cat === "WIP" ? wipStage(p) : "");
+      const nameLabel = (k) => { const s = k.split("|"); return s[0] + " — " + s[1] + (s[2] ? " — " + s[2] : ""); };
+
+      const catSel = MW.select([{ value: "FG", label: "Finished Goods" }, { value: "WIP", label: "Work in Process" }],
+        () => buildPicker(), "FG");
+      const prodSel = MW.select([], () => buildThk(), null);
+      const thkSel = MW.select([], () => { fillParams(); }, null);
+      const gsmInp = H("input", { class: "input", type: "number", min: "0", step: "any", placeholder: "product GSM", oninput: () => draw() });
       const qtyInp = H("input", { class: "input", type: "number", min: "0", step: "any", value: "100", oninput: () => draw() });
+      const uomSel = MW.select([], () => draw(), "KG");
+      const tapeInp = H("input", { class: "input", type: "number", min: "0", step: "0.5", placeholder: "e.g. 25", oninput: () => draw() });
       const whSel = MW.select(warehouses.map((w) => ({ value: w.id, label: w.name + (w.type ? " · " + w.type : "") })), () => {}, fgWh ? fgWh.id : (warehouses[0] || {}).id);
-      [prodSel, qtyInp, whSel].forEach((el) => { el.style.width = "100%"; });
-      const preview = H("div", { style: "margin-top:16px" });
+      [catSel, prodSel, thkSel, gsmInp, qtyInp, uomSel, tapeInp, whSel].forEach((el) => { el.style.width = "100%"; });
+      const preview = H("div", { style: "grid-column:1/-1" });
+      const tapeField = gridField("Tape Width (mm)", tapeInp);
+      const convHint = H("div", { class: "muted", style: "grid-column:1/-1;font-size:11px;margin-top:-6px" });
 
-      function currentProduct() { return products.find((p) => p.id === prodSel.value) || products[0]; }
+      let byName = {};
+      function currentProduct() { return products.find((p) => p.id === thkSel.value) || null; }
+      function catNow() { return catSel.value; }
+
+      function buildPicker() {
+        const list = products.filter((p) => (p.cat || "FG") === catNow());
+        byName = {};
+        list.forEach((p) => { (byName[keyOf(p)] = byName[keyOf(p)] || []).push(p); });
+        Object.values(byName).forEach((a) => a.sort((x, y) => (x.thicknessMM || 0) - (y.thicknessMM || 0)));
+        const names = Object.keys(byName).sort();
+        prodSel.innerHTML = "";
+        names.forEach((n) => prodSel.appendChild(H("option", { value: n }, nameLabel(n))));
+        // the floor counts a jumbo in running metres; a slit finished roll never
+        uomSel.innerHTML = "";
+        const units = [{ v: "KG", l: "Kilogram (kg)" }, { v: "SQM", l: "Square Meter (sqm)" }];
+        if (catNow() !== "FG") units.push({ v: "MTR", l: "Meter (m)" });
+        units.forEach((u) => uomSel.appendChild(H("option", { value: u.v }, u.l)));
+        uomSel.value = "KG";
+        tapeField.style.display = catNow() === "FG" ? "" : "none";
+        // a half-made roll belongs in the WIP store, a finished one in finished goods
+        const want = catNow() === "FG" ? fgWh : (wipWh || fgWh);
+        if (want) whSel.value = want.id;
+        buildThk();
+      }
+      function buildThk() {
+        const group = byName[prodSel.value] || [];
+        thkSel.innerHTML = "";
+        group.forEach((p) => thkSel.appendChild(H("option", { value: p.id },
+          (p.thicknessMM != null ? p.thicknessMM + " mm" : (p.typeCode || p.id)) + " · " + p.id)));
+        if (group.length) thkSel.value = group[0].id;
+        fillParams();
+      }
+      function fillParams() {
+        const p = currentProduct() || {};
+        gsmInp.value = p.gsm != null ? p.gsm : "";
+        if (catNow() === "FG") tapeInp.value = p.tapeWidthMM != null ? p.tapeWidthMM : "";
+        draw();
+      }
+      /* the width the quantity is measured across — the slit tape for a
+         finished good, the full web for a jumbo */
+      function widthMM() {
+        if (catNow() === "FG") { const t = +tapeInp.value || 0; if (t > 0) return t; }
+        return 1000;
+      }
+      /* kg ⇄ sqm ⇄ metres, across the GSM and that width */
+      function derive() {
+        const q = +qtyInp.value || 0, unit = uomSel.value, gsm = +gsmInp.value || 0, w = widthMM() / 1000;
+        if (!q) return null;
+        let kg = null, sqm = null, len = null;
+        if (unit === "KG") { kg = q; if (gsm) { sqm = kg * 1000 / gsm; len = sqm / w; } }
+        else if (unit === "SQM") { sqm = q; len = sqm / w; if (gsm) kg = sqm * gsm / 1000; }
+        else { len = q; sqm = len * w; if (gsm) kg = sqm * gsm / 1000; }
+        return { kg, sqm, len, wid: widthMM() };
+      }
+      /* what actually posts: the item's OWN unit, whatever it was counted in */
+      function postQty() {
+        const p = currentProduct(); if (!p) return null;
+        const c = derive(); if (!c) return null;
+        const uom = String(p.uom || "KG").toUpperCase();
+        if (isMtr(uom)) return c.len;
+        if (uom === "SQM") return c.sqm;
+        return c.kg == null ? null : c.kg * ({ KG: 1, GRAM: 1000, MG: 1e6 }[uom] || 1);
+      }
       function draw() {
         const p = currentProduct();
-        const qty = +qtyInp.value || 0;
+        const c = derive();
+        const bits = [];
+        if (c) {
+          if (c.sqm != null) bits.push(fmtQty(c.sqm) + " sqm");
+          if (c.len != null) bits.push(fmtQty(c.len) + " m @ " + c.wid + " mm");
+          if (c.kg != null) bits.push(fmtQty(c.kg) + " kg");
+        }
+        convHint.textContent = bits.length ? "= " + bits.join("  ·  ")
+          : (c ? "Enter the GSM to convert between kg, sqm and metres" : "");
         preview.innerHTML = "";
-        preview.appendChild(H("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px", text: "Raw materials to be deducted from store" }));
-        if (!p.recipe || !p.recipe.length) { preview.appendChild(H("div", { class: "muted", text: "No recipe lines for this product." })); return; }
-        p.recipe.forEach((r) => {
-          preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)" }, [
-            H("span", { text: r.name }),
-            H("b", { text: fmtQty(r.perUnit * qty) + " " + (r.uom || "") }),
-          ]));
-        });
+        if (!p) return;
+        const qty = postQty() || 0;
+        if (!p.recipe || !p.recipe.length) {
+          preview.appendChild(H("div", { class: "muted", style: "font-size:12px;margin-top:12px",
+            text: "No BOM recipe for this product — no materials will be deducted." }));
+        } else {
+          /* the very same list New Work Order shows, from the very same
+             renderer — need, in store, and short, against live stock */
+          const rows = p.recipe.map((r) => ({
+            name: r.name, code: r.id !== r.name ? r.id : null, uom: r.uom || "",
+            need: r.perUnit * qty, have: onHandOf(r.id),
+          }));
+          if (U.materialsList) U.materialsList(preview, [{ label: null, lines: rows }],
+            { title: "Raw materials to be deducted from store" });
+        }
         preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13.5px;padding:10px 0 0;font-weight:700;color:var(--ok)" }, [
-          H("span", { text: "→ Added to finished stock" }),
+          H("span", { text: catNow() === "FG" ? "→ Added to finished stock" : "→ Added to work in process" }),
           H("b", { text: fmtQty(qty) + " " + (p.uom || "") }),
         ]));
       }
 
-      const body = H("div", {}, [
-        field("Finished product", prodSel),
-        field("Quantity produced", qtyInp),
-        field("Store finished stock in", whSel),
+      /* the SAME layout the office gets: a form-grid of .field cells, not the
+         floor's stacked one-per-row style, so both look identical */
+      const body = H("div", { class: "form-grid" }, [
+        gridField("Category", catSel),
+        gridField("Product", prodSel, "full"),
+        gridField("Thickness (mm)", thkSel),
+        gridField("GSM (g/m²)", gsmInp),
+        gridField("Quantity produced", qtyInp),
+        gridField("Unit of Quantity", uomSel),
+        tapeField,
+        gridField("Store it in", whSel),
+        convHint,
         preview,
       ]);
 
@@ -669,17 +783,26 @@
           H("button", { class: "btn primary", onclick: (e) => save(e.currentTarget), text: "Add to Finished Stock" }),
         ],
       });
-      draw();
+      buildPicker();
 
       async function save(btn) {
         const p = currentProduct();
-        const qty = +qtyInp.value || 0;
-        if (!qty || qty <= 0) { toast("Enter a valid quantity", { type: "warn" }); return; }
+        if (!p) { toast("Pick a product", { type: "warn" }); return; }
+        if (!(+qtyInp.value > 0)) { toast("Enter a valid quantity", { type: "warn" }); return; }
+        const tapeWidthMM = catNow() === "FG" ? (+tapeInp.value || null) : null;
+        if (catNow() === "FG" && !tapeWidthMM) { toast("Enter the tape width for a finished good", { type: "warn" }); return; }
+        const qty = postQty();
+        if (qty == null || !(qty > 0)) {
+          toast("Enter the GSM so the quantity can be converted to " + (p.uom || "KG"), { type: "warn" }); return;
+        }
         if (btn) { btn.disabled = true; btn.textContent = "…"; }
         try {
-          const res = await DB.production.addFinishedStock({ itemId: p.id, qty, wh: whSel.value });
+          const res = await DB.production.addFinishedStock({
+            itemId: p.id, qty: +qty.toFixed(3), wh: whSel.value,
+            tapeWidthMM, gsm: +gsmInp.value || null,
+          });
           mo.close();
-          const where = (res && res.produced && res.produced.whName) || "finished stock";
+          const where = (res && res.produced && res.produced.whName) || "stock";
           toast("Added " + fmtQty(qty) + " " + (p.uom || "") + " of " + p.name + " → " + where, { type: "ok" });
           await self.refresh();
         } catch (err) {
@@ -694,6 +817,15 @@
     return UI.h("div", { style: "margin-bottom:14px" }, [
       UI.h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px", text: label }),
       control,
+    ]);
+  }
+
+  /* the office's .field cell, but taking a live control instead of an HTML
+     string — so a form built here sits in a .form-grid and looks identical */
+  function gridField(label, control, cls) {
+    return UI.h("div", { class: "field" + (cls === "full" ? " full" : "") }, [
+      UI.h("label", { text: label }),
+      UI.h("div", {}, [control]),
     ]);
   }
 

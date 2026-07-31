@@ -197,8 +197,9 @@
   }
 
   /* ----- units of measure offered for manual stock intake ----- */
-  /* quantity is entered in kg or sqm; fabrics derive their length from it */
-  const UNITS=[ {v:"KG",l:"Kilogram (kg)"}, {v:"SQM",l:"Square Meter (sqm)"} ];
+  /* quantity is entered in kg, sqm or metres; webs and tapes convert between
+     all three from the GSM and the width */
+  const UNITS=[ {v:"KG",l:"Kilogram (kg)"}, {v:"SQM",l:"Square Meter (sqm)"}, {v:"MTR",l:"Meter (m)"} ];
 
   /* generate a fresh, unique item code within a category (e.g. RM-001) */
   function genItemId(cat){
@@ -281,46 +282,52 @@
   /* ----- FEATURE 2: add stock manually (existing item OR create new) ----- */
   function addStockForm(){
     const whs=ENG.data.warehouses;
-    /* Manual stock intake is for RAW materials only — finished goods arrive
-       through production, WIPs through the stage engine. Deduped by id so no
-       material shows up twice in the picker. */
-    const rawCatIds=new Set(ENG.data.categories.filter(c=>c.kind==="raw").map(c=>c.id));
-    const rawCats=ENG.data.categories.filter(c=>c.kind==="raw");
+    /* Manual stock intake covers RAW materials, WORK IN PROCESS and FINISHED
+       GOODS. FG/WIP normally arrive through production, but opening balances
+       and hand-counted rolls have to be enterable somewhere — this is it.
+       Deduped by id so no material shows up twice in the picker. */
+    const stockCats=ENG.data.categories.filter(c=>["raw","wip","fg"].includes(c.kind));
+    const stockCatIds=new Set(stockCats.map(c=>c.id));
     const items=[]; const seen=new Set();
-    ENG.data.items.forEach(i=>{ if(rawCatIds.has(i.cat) && !seen.has(i.id)){ seen.add(i.id); items.push(i); } });
-    /* thickness + GSM apply only to fabrics and tapes (metre-measured) */
+    ENG.data.items.forEach(i=>{ if(stockCatIds.has(i.cat) && !seen.has(i.id)){ seen.add(i.id); items.push(i); } });
     const isMtr=u=>["M","MTR","METER"].includes(String(u||"").toUpperCase());
-    /* label = "material — grade/type" (e.g. POLYESTER FABRIC — PWF11); the
-       item id is NOT repeated in the label — it just restated the name and
-       made every material look like it was listed twice. Fabrics/tapes add
-       their thickness, since each thickness is its own stock item. */
-    const rmLabel=i=>(i.material||i.name||i.id)+(i.grade?" — "+i.grade:"")
-      +((i.fabric||isMtr(i.uom))&&i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"");
+    /* label = "material — grade/type · thickness · CODE". The item code IS
+       shown here (asked for): on finished goods the code is how the floor
+       identifies the product, and the name alone is ambiguous across
+       thicknesses. Fabrics/tapes add their thickness, since each thickness
+       is its own stock item. */
+    const rmLabel=i=>(i.material||i.productName||i.name||i.id)+(i.grade?" — "+i.grade:"")
+      +(i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"")
+      +"  ·  "+i.id;
     items.sort((a,b)=>rmLabel(a).localeCompare(rmLabel(b)));
     const thkField=field("Thickness (mm)",`<input class="input" id="s_thk" type="number" step="0.001" placeholder="e.g. 0.05">`);
     const gsmField=field("GSM (g/m²)",`<input class="input" id="s_gsm" type="number" step="0.1" placeholder="e.g. 110">`);
-    const widField=field("Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="1000">`);
+    const widField=field("Web Width (mm)",`<input class="input" id="s_wid" type="number" step="0.1" placeholder="1000">`);
+    /* finished goods are slit to a customer width — that width is a property
+       of the roll being taken in, so it is asked for only for FG */
+    const tapeField=field("Tape Width (mm)",`<input class="input" id="s_tapewid" type="number" step="0.5" placeholder="e.g. 25">`);
     const lenField=field("Length (m)",`<input class="input" id="s_len" type="number" step="0.01" readonly placeholder="auto from quantity"><div class="muted" id="s_conv" style="font-size:11px;margin-top:3px"></div>`);
     /* single form: quantity sits right below the category, the unit (kg /
-       sqm) below it, and the auto-calculated length below the unit — the
+       sqm / m) below it, and the auto-calculated length below the unit — the
        length re-derives live from quantity, GSM and width */
     const body=h("div",{},[
-      h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick a raw material (or create a new one). Enter the quantity in kg or sqm — for fabrics and tapes the length is calculated from the GSM and the 1000 mm web width, and that length posts to the ledger."}),
+      h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick an item (or create a new one). Enter the quantity in kg, sqm or metres — for fabrics and tapes the other two are derived from the GSM and the width, and the item's own tracking unit is what posts to the ledger."}),
       h("div",{class:"form-grid"},[
         field("Scan / Barcode",`<input class="input" id="s_scan" placeholder="Scan or type barcode / item code, then press Enter">`,"full"),
-        field("Raw Material", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:rmLabel(i)}))),"__new")),
+        field("Item", selectHTML("s_item",[{v:"__new",l:"➕ Create new item…"}].concat(items.map(i=>({v:i.id,l:rmLabel(i)}))),"__new")),
       ]),
       h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Item & quantity"}),
       h("div",{id:"s_newblock"},[
         h("div",{class:"form-grid"},[
           field("Item Code",`<input class="input" id="s_code" placeholder="Auto if left blank (e.g. RM-1001)">`),
           field("Item Name",`<input class="input" id="s_name" placeholder="e.g. Copper Foil 0.05mm">`),
-          field("Category",selectHTML("s_cat",rawCats.map(c=>({v:c.id,l:c.name})),"RM")),
+          field("Category",selectHTML("s_cat",stockCats.map(c=>({v:c.id,l:c.name})),"RM")),
           thkField,
-          field("Quantity",`<input class="input" id="s_qty" type="number" step="0.001" placeholder="0">`),
           gsmField,
-          field("Unit (per)",selectHTML("s_uom",UNITS,"KG")),
+          field("Quantity",`<input class="input" id="s_qty" type="number" step="0.001" placeholder="0">`),
+          field("Unit of Quantity",selectHTML("s_uom",UNITS,"KG")),
           widField,
+          tapeField,
           lenField,
           field("Reorder Point",`<input class="input" id="s_reorder" type="number" value="0">`),
           field("HSN Code",`<input class="input" id="s_hsn" placeholder="e.g. 74102100">`),
@@ -345,7 +352,7 @@
         code.disabled=false; code.placeholder="Auto if left blank (e.g. RM-1001)";
         if(catEl) catEl.disabled=false;   // category editable only while creating
         setVal("s_code",""); setVal("s_name",""); setSel("s_cat","RM"); setSel("s_uom","KG");
-        setVal("s_thk",""); setVal("s_gsm",""); setVal("s_wid",""); setVal("s_len","");
+        setVal("s_thk",""); setVal("s_gsm",""); setVal("s_wid",""); setVal("s_tapewid",""); setVal("s_len","");
         setVal("s_reorder","0"); setVal("s_hsn","");
       } else {
         const it=ENG.item(sel.value)||{};
@@ -354,34 +361,53 @@
         setVal("s_name",it.name||""); setSel("s_cat",it.cat||"RM"); setSel("s_uom","KG");
         setVal("s_thk",it.thicknessMM!=null?it.thicknessMM:(it.thickness!=null?it.thickness:"")); setVal("s_gsm",it.gsm!=null?it.gsm:"");
         setVal("s_wid",it.width!=null?it.width:""); setVal("s_len",it.length!=null?it.length:"");
+        setVal("s_tapewid",it.tapeWidthMM!=null?it.tapeWidthMM:"");
         setVal("s_reorder",it.reorder!=null?it.reorder:"0");
         setVal("s_hsn",it.hsn||"");
       }
       updFab();
     }
-    /* thickness / GSM / width / length exist only for fabrics and tapes:
-       an existing item shows them when it IS a fabric (or metre-tracked);
-       a new item shows them when its quantity unit is sqm or a GSM is set */
-    let fabNow=false;
+    /* which category the form is working in — the picked item's own category
+       once it exists, otherwise whatever the Category select says */
+    function catNow(){
+      if(sel.value==="__new") return (UI.$("#s_cat")||{}).value||"RM";
+      return (ENG.item(sel.value)||{}).cat||"RM";
+    }
+    /* Thickness, GSM and the unit of quantity are ALWAYS offered — they are
+       real parameters of the stock being taken in, not fabric-only trivia.
+       Web width + derived length still belong to metre-tracked webs, and the
+       TAPE WIDTH is asked for on finished goods only. */
+    let fabNow=false, fgNow=false;
     function updFab(){
+      const cat=catNow();
+      fgNow=(cat==="FG");
       if(sel.value==="__new"){
         const u=(UI.$("#s_uom")||{}).value, gsm=+((UI.$("#s_gsm")||{}).value)||0;
-        fabNow=(u==="SQM")||gsm>0;
+        fabNow=(u==="SQM")||u==="MTR"||gsm>0;
       }
-      else { const it=ENG.item(sel.value)||{}; fabNow=!!it.fabric||isMtr(it.uom); }
-      [thkField,gsmField,widField,lenField].forEach(f=>{ f.style.display=fabNow?"":"none"; });
-      // fabrics/tapes default to the standard 1000 mm web width
+      else { const it=ENG.item(sel.value)||{}; fabNow=!!it.fabric||isMtr(it.uom)||fgNow||(+it.gsm||0)>0; }
+      tapeField.style.display=fgNow?"":"none";
+      [widField,lenField].forEach(f=>{ f.style.display=fabNow?"":"none"; });
+      // webs default to the standard 1000 mm width
       if(fabNow){ const w=UI.$("#s_wid"); if(w && !w.value) w.value=1000; }
       calcLen();
     }
-    /* the LENGTH derives from the quantity and varies with it:
-       kg → sqm = kg × 1000 / GSM;  sqm → length = sqm / (width/1000) */
+    /* the width the quantity is measured across: a finished good is the slit
+       TAPE width, everything else the web width */
+    function effWidth(){
+      if(fgNow){ const t=+((UI.$("#s_tapewid")||{}).value)||0; if(t>0) return t; }
+      return +((UI.$("#s_wid")||{}).value)||1000;
+    }
+    /* one converter for all three entry units — kg ⇄ sqm ⇄ metres, via the
+       GSM and the width. Whichever the item itself is tracked in is what
+       eventually posts to the ledger. */
     function fabDerive(q, unit){
-      const gsm=+((UI.$("#s_gsm")||{}).value)||0, wid=+((UI.$("#s_wid")||{}).value)||1000;
-      let sqm;
-      if(unit==="KG"){ if(!gsm) return null; sqm=q*1000/gsm; }
-      else sqm=q;
-      return { sqm, len:sqm/(wid/1000), wid };
+      const gsm=+((UI.$("#s_gsm")||{}).value)||0, wid=effWidth(), w=wid/1000;
+      let kg=null, sqm=null, len=null;
+      if(unit==="KG"){ kg=q; if(!gsm) return null; sqm=kg*1000/gsm; len=sqm/w; }
+      else if(unit==="SQM"){ sqm=q; len=sqm/w; if(gsm) kg=sqm*gsm/1000; }
+      else { len=q; sqm=len*w; if(gsm) kg=sqm*gsm/1000; }
+      return { kg, sqm, len, wid };
     }
     function calcLen(){
       const lenEl=UI.$("#s_len"), el=UI.$("#s_conv");
@@ -393,30 +419,39 @@
       const c=fabDerive(q, unit);
       if(!c){ lenEl.value=""; if(el){ el.textContent="Enter the GSM to convert kg → sqm → length"; el.style.color="var(--danger)"; } return; }
       lenEl.value=+c.len.toFixed(2);
-      if(el) el.textContent="= "+ENG.num(c.sqm,1)+" sqm → "+ENG.num(c.len,1)+" m @ "+c.wid+" mm width";
+      if(el) el.textContent="= "+ENG.num(c.sqm,1)+" sqm → "+ENG.num(c.len,1)+" m @ "+c.wid+" mm width"
+        +(c.kg!=null?" · "+ENG.num(c.kg,2)+" kg":"");
     }
     sel.onchange=fillParams; fillParams();
     const uomSel=UI.$("#s_uom"); if(uomSel) uomSel.addEventListener("change",updFab);
-    ["s_qty","s_wid"].forEach(id=>{ const el=UI.$("#"+id); if(el) el.addEventListener("input",calcLen); });
+    const catSel=UI.$("#s_cat"); if(catSel) catSel.addEventListener("change",updFab);
+    ["s_qty","s_wid","s_tapewid"].forEach(id=>{ const el=UI.$("#"+id); if(el) el.addEventListener("input",calcLen); });
     const gsmIn=UI.$("#s_gsm"); if(gsmIn) gsmIn.addEventListener("input",updFab);
     /* barcode scan: match by barcode or item code, select it, jump to qty */
     attachScan(UI.$("#s_scan"), (found)=>{
-      if(!rawCatIds.has(found.cat)){ toast(found.name+" is not a raw material — only RM stock can be added here",{type:"warn"}); return; }
+      if(!stockCatIds.has(found.cat)){ toast(found.name+" is not a stockable item",{type:"warn"}); return; }
       setSel("s_item",found.id); fillParams(); const q=UI.$("#s_qty"); if(q) q.focus(); });
     function save(){
       const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
       let qty=+g("s_qty"); const rate=+g("s_rate")||0, wh=g("s_wh"), qUnit=g("s_uom");
       if(!qty || isNaN(qty) || qty<=0){ toast("Enter a quantity greater than zero",{type:"warn"}); return; }
+      if(fgNow && !(+g("s_tapewid")>0)){ toast("Enter the tape width for a finished good",{type:"warn"}); return; }
+      /* the item's OWN tracking unit is what posts to the ledger — the entry
+         unit is only how the storeman happened to count it */
+      const postUom=String((sel.value!=="__new"
+        ? (ENG.item(sel.value)||{}).uom
+        : (fabNow?"MTR":"KG"))||"KG").toUpperCase();
       if(fabNow){
-        /* fabric/tape: the LENGTH is what posts to the ledger (metre-tracked) */
         const c=fabDerive(qty, qUnit);
         if(!c){ toast("Enter the GSM to convert kg to sqm and length",{type:"warn"}); return; }
-        qty=+c.len.toFixed(2);
+        if(isMtr(postUom)) qty=+c.len.toFixed(2);
+        else if(postUom==="SQM") qty=+c.sqm.toFixed(3);
+        else if(c.kg==null){ toast("Enter the GSM so the quantity can be converted to "+postUom,{type:"warn"}); return; }
+        else qty=+(c.kg*({KG:1,GRAM:1000,MG:1e6}[postUom]||1)).toFixed(3);
       } else {
-        if(qUnit==="SQM"){ toast("Square metres apply to fabrics and tapes — enter this material in kg",{type:"warn"}); return; }
+        if(qUnit!=="KG"){ toast("Square metres and metres apply to webs and tapes — enter this material in kg",{type:"warn"}); return; }
         /* chemicals: kg entry converted into the item's own tracking unit */
-        const uom=String((sel.value!=="__new"?(ENG.item(sel.value)||{}).uom:"KG")||"KG").toUpperCase();
-        qty=qty*({KG:1,GRAM:1000,MG:1e6}[uom]||1);
+        qty=qty*({KG:1,GRAM:1000,MG:1e6}[postUom]||1);
       }
       let itemId=sel.value, it;
       if(itemId==="__new"){
@@ -428,8 +463,9 @@
         itemId=code||genItemId(cat);
         const fab=fabNow;
         it={ id:itemId, name, cat, uom:fab?"MTR":"KG",
-          thicknessMM:fab?(+g("s_thk")||null):null, gsm:fab?(+g("s_gsm")||null):null, fabric:fab,
+          thicknessMM:+g("s_thk")||null, gsm:+g("s_gsm")||null, fabric:fab,
           width:+g("s_wid")||(fab?1000:null), length:+g("s_len")||null,
+          tapeWidthMM:fgNow?(+g("s_tapewid")||null):null,
           reorder:+g("s_reorder")||0, safety:0, lead:7,
           cost:rate||0, price:0, hsn:g("s_hsn").trim(), abc:"C", moq:0, active:true,
           barcode:"890"+Math.floor(Math.random()*1e7) };
@@ -438,16 +474,24 @@
         it=ENG.item(itemId);
         /* apply edited parameters back to the existing item (category stays
            locked; safety stock, selling price and lead time are managed
-           elsewhere; thickness/GSM belong only to fabrics and tapes) */
+           elsewhere). Thickness and GSM are only overwritten when a value was
+           actually typed, so opening a form and saving never blanks them. */
         it.name=g("s_name").trim()||it.name;
-        if(it.fabric||isMtr(it.uom)){ it.thicknessMM=+g("s_thk")||null; it.gsm=+g("s_gsm")||null; }
+        if(g("s_thk")!=="") it.thicknessMM=+g("s_thk")||null;
+        if(g("s_gsm")!=="") it.gsm=+g("s_gsm")||null;
+        if(fgNow && +g("s_tapewid")>0) it.tapeWidthMM=+g("s_tapewid");
         it.width=+g("s_wid")||((it.fabric||isMtr(it.uom))?1000:null); it.length=+g("s_len")||null;
         it.reorder=+g("s_reorder")||0;
         it.cost=rate||it.cost||0; it.hsn=g("s_hsn").trim();
       }
+      /* the movements table has no doc column, so anything that must survive
+         in the ledger goes into the note — the tape width of the roll taken
+         in is exactly that. `manual` is read by the server's WIP guard and
+         then dropped, which is all it is for. */
+      const tapeNote=(fgNow && +g("s_tapewid")>0) ? " · "+(+g("s_tapewid"))+" mm tape width" : "";
       const move={ id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()),
         itemId, wh, type:"GRN", qty, rate, ref:"MANUAL-"+Math.floor(Math.random()*9000+1000),
-        note:"Manual stock addition", by:(App.user&&App.user.username)||"user" };
+        note:"Manual stock addition"+tapeNote, manual:true, by:(App.user&&App.user.username)||"user" };
       ENG.data.movements.push(move);
       mo.close();
       toast(`${ENG.num(qty,2)} ${it.uom} added to ${it.name}`,{type:"ok",title:"Stock added"});
