@@ -350,11 +350,14 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
    popups through the OS, which has no colour-emoji support, so the flags
    never rendered there. Our own markup draws them like the rate list does. */
 .fx-pick{position:relative;min-width:0}
-.fx-pick-btn{display:flex;align-items:center;gap:6px;width:100%;cursor:pointer;
-  text-align:left;font-size:12.5px}
+/* the label is centred on the WHOLE button, so the caret is taken out of the
+   flow — symmetric padding on .fx-pick-cur keeps long labels off the caret */
+.fx-pick-btn{display:flex;align-items:center;justify-content:center;width:100%;cursor:pointer;
+  position:relative;text-align:center;font-size:12.5px}
 .fx-pick-btn[aria-expanded="true"]{border-color:var(--accent);box-shadow:var(--ring)}
-.fx-pick-cur{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.fx-pick-caret{flex:0 0 auto;font-size:9px;color:var(--text-mut)}
+.fx-pick-cur{min-width:0;padding:0 11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fx-pick-caret{position:absolute;right:7px;top:50%;transform:translateY(-50%);
+  font-size:9px;color:var(--text-mut);pointer-events:none}
 .fx-pick-pop{position:fixed;z-index:200;max-height:272px;overflow-y:auto;background:var(--panel);
   border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);padding:5px;
   min-width:min(250px,92vw);max-width:92vw}
