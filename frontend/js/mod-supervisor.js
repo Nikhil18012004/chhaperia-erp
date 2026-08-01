@@ -70,15 +70,26 @@
       if (av) av.textContent = (u.name || u.username).split(" ").map(x => x[0]).slice(0, 2).join("").toUpperCase();
     },
 
-    async refresh() {
+    /* opts.quiet — leave the cards on screen while refetching. Wiping them to
+         "Loading your jobs…" after every tap is what made the panel feel slow;
+         the data is only a few hundred milliseconds away.
+       opts.slim  — ask for the volatile parts only and keep the product
+         catalogue already in memory, which is ~70% of the payload. */
+    async refresh(opts) {
+      opts = opts || {};
       const view = UI.$("#view");
-      view.innerHTML = '<div class="sup-loading">Loading your jobs…</div>';
+      if (!opts.quiet) view.innerHTML = '<div class="sup-loading">Loading your jobs…</div>';
       try {
-        this.data = await DB.loadAsync(); // role-scoped supervisor view
+        const fresh = await DB.loadAsync({ slim: opts.slim });
+        // a slim reply carries no catalogue — keep the one we already have
+        this.data = fresh.slim
+          ? Object.assign({}, this.data, fresh, { finishedProducts: (this.data || {}).finishedProducts || [] })
+          : fresh;
         if (this.data && this.data.org) { const on = UI.$("#orgName"); if (on) on.textContent = this.data.org.short; }
         this.buildNav();
         this.render();
       } catch (err) {
+        if (opts.quiet) { toast(err.message, { type: "danger" }); return; }
         view.innerHTML = '<div class="sup-loading">⚠ ' + esc(err.message) + '</div>';
       }
     },
@@ -365,6 +376,18 @@
       }
 
       const actions = H("div", { class: "sup-actions" });
+      /* Part of this order could not be made — the store was short. The floor
+         must see that the job is NOT finished, but there is nothing for them
+         to do until the office releases the balance, so no buttons are shown. */
+      const pend = +w.pendingQty || 0;
+      if (pend > 0) {
+        const madeQ = (+w.completedQty || 0) + (+w.runQty || 0);
+        actions.appendChild(H("div", { class: "sup-partial",
+          text: "⏸ PARTIAL — " + ENG.num(pend) + " kg awaiting material" }));
+        actions.appendChild(H("div", { class: "muted", style: "font-size:11.5px;margin-top:4px",
+          text: ENG.num(w.qty) + " kg ordered · " + ENG.num(madeQ) + " kg covered · "
+            + ENG.num(pend) + " kg pending — the office will release it when the material arrives" }));
+      }
       if (w.dispatched) {
         actions.appendChild(H("div", { class: "sup-done-tag", text: "✓ Dispatched" }));
       } else if (w.mine) {
@@ -375,14 +398,16 @@
           actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "complete", e.currentTarget), text: "✓ Finish " + label }));
           actions.appendChild(H("button", { class: "sup-act ghost", onclick: (e) => this.act(w, "pause", e.currentTarget), text: "↩ Pause" }));
         }
-      } else if (w.myDone && !w.dispatched && (w.route || []).every((s) => s.status === "Completed") && (this.area === "slitting" || this.area === "all")) {
-        // fully made & packed, waiting to ship
+      } else if (w.myDone && !w.dispatched && pend <= 0 && (w.route || []).every((s) => s.status === "Completed") && (this.area === "slitting" || this.area === "all")) {
+        // fully made & packed, waiting to ship — an order still owing quantity
+        // is deliberately NOT dispatchable, however finished this run looks
         actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "dispatch", e.currentTarget), text: "🚚 Mark Dispatched" }));
-      } else if (!w.mine && !w.myDone) {
+      } else if (!w.mine && !w.myDone && pend <= 0) {
         actions.appendChild(H("div", { class: "sup-done-tag", style: "color:var(--text-mut)", text: "⏳ Waiting on " + ((STAGE_META[cur.key] || {}).label || cur.name) }));
       }
 
-      return H("div", { class: "sup-card" + (overdue ? " overdue" : "") }, [head, this.timeline(w), factsNode, mat, actions].filter(Boolean));
+      return H("div", { class: "sup-card" + (overdue ? " overdue" : "") + (pend > 0 ? " partial" : "") },
+        [head, this.timeline(w), factsNode, mat, actions].filter(Boolean));
     },
 
     async act(w, action, btn) {
@@ -391,7 +416,7 @@
         await DB.production.advance(w.id, action);
         const verb = { start: "started", complete: "completed", pause: "paused", dispatch: "dispatched" }[action] || action;
         toast((w.product ? w.product.name : w.id) + " — stage " + verb, { type: "ok" });
-        await this.refresh();
+        await this.refresh({ quiet: true, slim: true });
       } catch (err) {
         toast(err.message, { type: "danger" });
         if (btn) btn.disabled = false;
@@ -639,7 +664,8 @@
       const matStock = this.data.materialStock || {};
       const onHandOf = (id) => (matStock[id] || []).reduce((n, r) => n + (+r.qty || 0), 0);
 
-      const wipStage = (p) => (/-S$/.test(p.id) || /slit/i.test(p.name || "")) ? "Slit Rolls" : "Coated Jumbo Roll";
+      /* half-made stock is only ever the COATED JUMBO */
+      const wipStage = () => "Coated Jumbo Roll";
       const famOf = (p) => {
         const fam = (U.familyCode ? U.familyCode(p.typeCode, p.thicknessMM) : "")
           || (U.baseCode ? U.baseCode(p.typeCode || "") : "") || (p.typeCode || "");

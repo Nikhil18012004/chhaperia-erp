@@ -65,11 +65,16 @@ function sign(payloadStr) {
   return b64url(crypto.createHmac("sha256", SECRET).update(payloadStr).digest());
 }
 
-function issueToken(user) {
-  // v = the user's token version; bumping it (logout / password change /
-  // admin reset) instantly invalidates every previously issued token.
+function issueToken(user, sid) {
+  // v = the user's token version; bumping it (password change / admin reset)
+  //     instantly invalidates every outstanding token for the account.
+  // sid = this SIGN-IN's own id. One account may be signed in on several
+  //     machines at once — the shop floor shares logins — so signing out on
+  //     one of them revokes only that sid and leaves the others working.
+  //     Renewal carries the sid forward, so a session keeps one id for life.
   const payload = { uid: user.id, role: user.role, area: user.area || null,
-    v: user.tokenVersion || 0, exp: Date.now() + TOKEN_TTL_MS };
+    v: user.tokenVersion || 0, sid: sid || crypto.randomBytes(9).toString("hex"),
+    exp: Date.now() + TOKEN_TTL_MS };
   const payloadStr = b64url(JSON.stringify(payload));
   return payloadStr + "." + sign(payloadStr);
 }
@@ -98,6 +103,18 @@ function login(username, password) {
   return { token: issueToken(safe), user: safe };
 }
 
+/** Sliding session: a token past the halfway point of its life is reissued so
+    that ACTIVE use keeps someone signed in. Without this a session dies a hard
+    12 hours after sign-in, which lands mid-shift on anyone who starts early.
+    Returns null while the token is still fresh, so we are not re-signing and
+    re-setting the cookie on every single request. */
+function renewedToken(token, user) {
+  const payload = verifyToken(token);
+  if (!payload) return null;
+  if (payload.exp - Date.now() > TOKEN_TTL_MS / 2) return null;
+  return issueToken(user, payload.sid); // same session, later expiry
+}
+
 /** Resolve the user from a token (fresh from DB, so role changes apply).
     A token whose version lags the user's current one has been revoked. */
 function userFromToken(token) {
@@ -105,11 +122,30 @@ function userFromToken(token) {
   if (!payload) return null;
   const u = users.findById(payload.uid);
   if (!u || !u.active) return null;
-  if ((payload.v || 0) !== (u.tokenVersion || 0)) return null; // revoked
+  if ((payload.v || 0) !== (u.tokenVersion || 0)) return null; // account-wide revoke
+  if (payload.sid && isSessionRevoked(u, payload.sid)) return null; // this device signed out
   return u;
 }
 
-/** Invalidate every outstanding token for a user (logout / pw change). */
+/* ---- per-session revocation ----
+   Signing out must end THAT sign-in only, never the same account's other
+   machines. The list is pruned by expiry on every write, so it cannot grow
+   without bound — a revoked sid stops mattering once its token would have
+   expired anyway. */
+function isSessionRevoked(user, sid) {
+  return (user.revokedSids || []).some((r) => r && r.sid === sid && (r.exp || 0) > Date.now());
+}
+
+/** Revoke ONE sign-in (the device that clicked Sign Out). */
+function revokeSession(userId, sid) {
+  const u = users.findById(userId);
+  if (!u || !sid) return null;
+  const live = (u.revokedSids || []).filter((r) => r && (r.exp || 0) > Date.now());
+  if (!live.some((r) => r.sid === sid)) live.push({ sid, exp: Date.now() + TOKEN_TTL_MS });
+  return users.patchDoc(userId, { revokedSids: live });
+}
+
+/** Invalidate every outstanding token for a user (password change / reset). */
 function revokeTokens(userId) {
   const u = users.findById(userId);
   if (!u) return null;
@@ -218,8 +254,8 @@ function updateUserAccount(id, patch) {
 function httpErr(msg, status) { const e = new Error(msg); e.status = status; return e; }
 
 module.exports = {
-  hashPassword, verifyPassword, issueToken, verifyToken,
-  login, userFromToken, seedDefaultUsers,
+  hashPassword, verifyPassword, issueToken, verifyToken, renewedToken,
+  login, userFromToken, seedDefaultUsers, revokeSession,
   revokeTokens, changePassword, clearPasswordChangeFlags, IS_PROD,
   createUserAccount, updateUserAccount,
   listUsers: () => users.listUsers(),

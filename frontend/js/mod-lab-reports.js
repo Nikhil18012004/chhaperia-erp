@@ -139,14 +139,23 @@
      the requirement, the other two show what each stage actually measured.
      The TDS limits are only present for admin (the server withholds them from
      everyone else), so that column degrades to the verdict alone. */
+  /* A spec limit as a person writes it. A tolerance worked out in binary
+     floating point ("0.14 ± 0.015") can carry a 17-digit tail like
+     0.15500000000000003; twelve significant digits is beyond anything a TDS
+     states, so trimming there shows 0.155 without altering a real figure.
+     Non-numeric limits are passed through untouched. */
+  function sn(v) {
+    const x = +v;
+    return Number.isFinite(x) ? String(+x.toPrecision(12)) : esc(String(v));
+  }
   function specText(sp, unit) {
     if (!sp) return `<span class="muted">—</span>`;
     if (sp.unparsed) return `<span class="muted" title="Two thresholds in the source — left ungraded">${esc(sp.unparsed)}</span>`;
     const u = unit ? ` <span class="muted" style="font-size:10px">${unit}</span>` : "";
-    if (sp.min != null && sp.max != null) return `${sp.min} – ${sp.max}${u}`;
-    if (sp.min != null) return `≥ ${sp.min}${u}`;
-    if (sp.max != null) return `≤ ${sp.max}${u}`;
-    if (sp.nominal != null) return `${sp.nominal}${u}`;
+    if (sp.min != null && sp.max != null) return `${sn(sp.min)} – ${sn(sp.max)}${u}`;
+    if (sp.min != null) return `≥ ${sn(sp.min)}${u}`;
+    if (sp.max != null) return `≤ ${sn(sp.max)}${u}`;
+    if (sp.nominal != null) return `${sn(sp.nominal)}${u}`;
     return `<span class="muted">—</span>`;
   }
   function verdictOf(res) {
@@ -404,8 +413,8 @@
         const sp = spec[par.key] || {};
         host.insertAdjacentHTML("beforeend",
           `<div class="flex gap aic" style="margin-bottom:6px"><div style="flex:1;font-size:12.5px">${esc(par.label)} <span class="muted">(${par.unit})</span></div>` +
-          `<input class="input" id="sp_min_${par.key}" type="number" step="any" placeholder="min" style="width:110px" value="${sp.min != null ? esc(String(sp.min)) : ""}">` +
-          `<input class="input" id="sp_max_${par.key}" type="number" step="any" placeholder="max" style="width:110px" value="${sp.max != null ? esc(String(sp.max)) : ""}"></div>`);
+          `<input class="input" id="sp_min_${par.key}" type="number" step="any" placeholder="min" style="width:110px" value="${sp.min != null ? esc(sn(sp.min)) : ""}">` +
+          `<input class="input" id="sp_max_${par.key}" type="number" step="any" placeholder="max" style="width:110px" value="${sp.max != null ? esc(sn(sp.max)) : ""}"></div>`);
       });
     }
     rebuildSpec();

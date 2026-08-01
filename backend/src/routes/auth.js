@@ -48,9 +48,16 @@ function clearAuthCookie(res) {
 }
 
 function requireAuth(req, res, next) {
-  const user = auth.userFromToken(getToken(req));
+  const token = getToken(req);
+  const user = auth.userFromToken(token);
   if (!user) return res.status(401).json({ error: "Not authenticated" });
   req.user = user;
+  /* Sliding session — every authenticated request pushes the expiry back out
+     once the token is over halfway through its life. Someone actually using
+     the app is never signed out from under themselves; an idle machine still
+     lapses on its own, which is the point of having an expiry at all. */
+  const fresh = auth.renewedToken(token, user);
+  if (fresh) setAuthCookie(res, fresh);
   next();
 }
 
@@ -110,11 +117,16 @@ router.post("/login", (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Logout revokes every outstanding token for the user (token_version bump)
-// and clears the cookie — a stolen token dies with the session.
+// Logout ends THIS sign-in only — its own session id is revoked and the
+// cookie cleared. The same account signed in on another machine is left
+// alone, because one login is routinely shared across the floor.
 router.post("/logout", (req, res) => {
-  const user = auth.userFromToken(getToken(req));
-  if (user) { try { auth.revokeTokens(user.id); } catch {} }
+  const token = getToken(req);
+  const user = auth.userFromToken(token);
+  if (user) {
+    const payload = auth.verifyToken(token);
+    try { auth.revokeSession(user.id, payload && payload.sid); } catch {}
+  }
   clearAuthCookie(res);
   res.json({ ok: true });
 });

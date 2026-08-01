@@ -64,15 +64,25 @@
       throw new Error("Not authenticated");
     }
     if (!res.ok) {
-      let msg = res.status + " " + res.statusText;
-      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch {}
-      throw new Error(msg);
+      let msg = res.status + " " + res.statusText, body = null;
+      try { body = await res.json(); if (body && body.error) msg = body.error; } catch {}
+      /* Some 4xx answers carry detail the FORM has to act on — a material
+         shortage lists what is short and how much can still be made — so the
+         parsed body and status travel with the error instead of being lost. */
+      const e = new Error(msg);
+      e.status = res.status;
+      if (body && typeof body === "object") Object.assign(e, { body }, body.shortage ? {
+        shortage: body.shortage, canMake: body.canMake, pendingQty: body.pendingQty,
+      } : {});
+      throw e;
     }
     return res.status === 204 ? null : res.json();
   }
 
   /* ---- dataset ---- */
-  async function loadAsync() { return http("GET", "/state"); }
+  /* `slim` asks the server to leave out the bulky reference data the caller
+     already holds — used by the shop floor between stage actions. */
+  async function loadAsync(opts) { return http("GET", "/state" + ((opts && opts.slim) ? "?slim=1" : "")); }
 
   let saveTimer = null, pending = null;
   function save(data) {
@@ -226,6 +236,12 @@
   const production = {
     // advance a work order's CURRENT stage: start | pause | complete | dispatch
     advance(woId, action) { return http("POST", "/production/wo/" + woId + "/advance", { action }); },
+    // every remaining stage, in a single request
+    advanceAll(woId) { return http("POST", "/production/wo/" + woId + "/advance", { action: "complete", all: true }); },
+    // what raising this order would mean — shortage / pending, writes nothing
+    preview(body) { return http("POST", "/production/wo/preview", body); },
+    // office/admin release a pending balance (issues its material now)
+    resume(woId, qty) { return http("POST", "/production/wo/" + woId + "/resume", qty == null ? {} : { qty }); },
     // back-compat: advance by target status
     setStatus(woId, status) { return http("POST", "/production/wo/" + woId + "/status", { status }); },
     // office/admin: create a new work order (with a fresh multi-stage route)

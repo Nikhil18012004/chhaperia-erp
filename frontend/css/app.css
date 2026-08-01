@@ -1216,3 +1216,19 @@ canvas{display:block;width:100%}
   font-weight:800;letter-spacing:.06em}
 .pay-net b{font-size:19px}
 @media(max-width:680px){ .pay-who{grid-template-columns:1fr} .pay-cols{grid-template-columns:1fr} }
+
+/* ---- work order waiting on raw material -----------------------------------
+   The row is tinted so a pending order cannot be read as one merely in
+   progress, and the tint survives the zebra striping and hover of .tbl. */
+.tbl tbody tr.wo-pending > td,
+.tbl tbody tr.wo-pending:nth-child(even) > td { background: var(--danger-soft, #fdecec); }
+.tbl tbody tr.wo-pending:hover > td { background: var(--danger-soft, #fbdcdc); filter: brightness(0.98); }
+.tbl tbody tr.wo-pending > td:first-child { box-shadow: inset 3px 0 0 var(--danger, #d64545); }
+.wo-pending-tag { display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:.4px;
+  color: var(--danger, #d64545); border:1px solid var(--danger, #d64545); border-radius:4px;
+  padding:1px 7px; white-space:nowrap; }
+/* the supervisor's own partial badge */
+.sup-partial { display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:.4px;
+  color: var(--danger, #d64545); border:1px solid var(--danger, #d64545); border-radius:4px;
+  padding:2px 8px; margin-top:6px; }
+.sup-card.partial { border-color: var(--danger, #d64545); }

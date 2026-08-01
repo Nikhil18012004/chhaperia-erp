@@ -28,6 +28,12 @@
   // what the payroll tab is currently showing, so the header's print-all
   // button knows which run to print
   let payrollCtx = { run: null, slips: [] };
+  /* payslip picking on the payroll tab — which run the ticks belong to, the
+     ticks themselves, and what the search/department filter is narrowed to */
+  let paySelRunId = null, paySel = {}, paySearch = "", paySelDept = "all";
+  /* what Print / Export act on: the ticked payslips, or everything the search
+     is showing when nothing is ticked. Set by the payroll tab as it renders. */
+  let payActing = () => payrollCtx.slips || [];
   function workers() { return ENG.data.hrWorkers || []; }
   function wById(id) { return workers().find((w) => w.id === id) || { name: id }; }
   function attendance() { return ENG.data.hrAttendance || []; }
@@ -74,10 +80,7 @@
     if (curTab === "attendance") return [MW.excelMenu("hrattendance")];
     if (curTab === "leave") return [h("button", { class: "btn primary", onclick: () => leaveForm(), html: "＋ Apply Leave" })];
     if (curTab === "payroll") return [
-      h("button", { class: "btn", title: "Print every payslip of this run — two to an A4 sheet",
-        onclick: () => printPayslips(payrollCtx.slips || [], payrollCtx.run),
-        html: "🖨 Print All Payslips" }),
-      h("button", { class: "btn primary", onclick: () => runPayrollFlow(), html: "▶ Run Payroll" })];
+      h("button", { class: "btn primary", onclick: () => exportPayroll(), html: "🗎 Export" })];
     if (curTab === "settings") return [h("button", { class: "btn", onclick: () => leaveTypeForm(), html: "＋ Leave Type" })];
     return [];
   }
@@ -428,18 +431,24 @@
     const runs = payruns();
     const now = DB.helpers.today();
     const defPeriod = (params && params.period) || (runs[0] && runs[0].period) || `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
-    // run list + period picker
-    host.appendChild(h("div", { class: "toolbar", style: "gap:10px" }, [
-      h("div", { class: "field", style: "margin:0" }, [h("label", { text: "Pay Period" }), h("div", {}, h("input", { class: "input", type: "month", id: "pr_period", value: defPeriod, style: "max-width:170px" }))]),
-      h("button", { class: "btn primary", onclick: () => runPayrollFlow(UI.$("#pr_period").value), html: "▶ Run / Refresh" }),
-    ]));
-    if (!runs.length) { host.appendChild(h("div", { class: "empty", style: "margin-top:30px" }, [h("div", { class: "big", text: "💰" }), h("div", { style: "font-weight:700", text: "No pay runs yet" }), h("div", { class: "muted", style: "margin-top:6px", text: "Pick a month and click Run to generate payslips from attendance." })])); return; }
-    // runs strip
-    host.appendChild(h("div", { class: "flex gap wrap", style: "margin-bottom:14px" }, runs.map((r) => h("button", { class: "chip", style: "cursor:pointer;padding:8px 12px;border:1.5px solid " + (r.period === defPeriod ? "var(--accent)" : "var(--line)"), onclick: () => App.go("hr-payroll", { period: r.period }) }, [
-      h("span", { html: `<b>${r.period}</b> · ${badge(r.status === "Finalized" ? "ok" : "warn", r.status)} · net ${money((r.totals || {}).net || 0)}` })]))));
+    if (!runs.length) { host.appendChild(h("div", { class: "empty", style: "margin-top:30px" }, [h("div", { class: "big", text: "💰" }), h("div", { style: "font-weight:700", text: "No pay runs yet" }), h("div", { class: "muted", style: "margin-top:6px", text: "Payslips appear here once a pay run exists for a month." })])); return; }
     const run = runs.find((r) => r.period === defPeriod) || runs[0];
     const slips = payslips().filter((s) => s.payrunId === run.id);
     payrollCtx = { run, slips };
+    /* Which month is on screen. Payroll is view-only here, so this lists the
+       runs that actually exist rather than offering any month at all — picking
+       a month with no pay run would only ever show an empty screen. */
+    host.appendChild(h("div", { class: "toolbar", style: "gap:10px" }, [
+      h("div", { class: "field", style: "margin:0" }, [
+        h("label", { text: "Pay Period" }),
+        h("div", {}, MW.select(runs.map((r) => ({ value: r.period,
+          label: periodLabel(r.period) + "  ·  " + (r.status || "Draft")
+            + "  ·  net " + money((r.totals || {}).net || 0) })),
+        (v) => { if (v !== run.period) App.go("hr-payroll", { period: v }); }, run.period)),
+      ]),
+      h("span", { class: "muted", style: "font-size:12px;align-self:flex-end;padding-bottom:9px",
+        text: runs.length === 1 ? "1 pay run" : runs.length + " pay runs" }),
+    ]));
     const tot = (run.totals || {});
     host.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:14px" }, [
       kpi({ icon: "👷", label: "Workers Paid", value: num(slips.length) }),
@@ -447,11 +456,82 @@
       kpi({ icon: "🏦", label: "Deductions", value: money((tot.pf || 0) + (tot.esi || 0) + (tot.pt || 0)) }),
       kpi({ icon: "💰", label: "Net Payout", value: money(tot.net || 0) }),
     ]));
-    host.appendChild(h("div", { class: "flex gap", style: "margin-bottom:12px;justify-content:flex-end" }, [
-      h("button", { class: "btn danger", onclick: () => delRun(run), text: "🗑 Delete Run" }),
-      run.status !== "Finalized" ? h("button", { class: "btn primary", onclick: () => finalizeRun(run), text: "🔒 Finalize" }) : h("span", { class: "chip", html: badge("ok", "Finalized " + (run.generatedAt || "").slice(0, 10)) }),
+    /* A run can cover only some of the floor, so say plainly who is still
+       unpaid this month — otherwise a partial run looks like a complete one. */
+    const paid = {}; slips.forEach((s) => { paid[s.workerId] = true; });
+    const unpaid = workers().filter((w) => w.active !== false && !paid[w.id]);
+    if (unpaid.length) {
+      host.appendChild(h("div", { class: "flex gap wrap", style: "align-items:center;margin-bottom:12px;padding:10px 14px;border:1.5px solid var(--line);border-radius:10px" }, [
+        h("span", { html: `${badge("warn", "Partial run")} <b>${unpaid.length}</b> active worker${unpaid.length === 1 ? " is" : "s are"} not in this run` }),
+        h("span", { class: "muted", style: "font-size:12px;flex:1;min-width:120px",
+          text: unpaid.slice(0, 4).map((w) => w.name).join(", ") + (unpaid.length > 4 ? ` +${unpaid.length - 4} more` : "") }),
+      ]));
+    }
+    /* selection survives sorting and searching, but belongs to ONE run —
+       switching month must not carry ticks over to different people */
+    if (paySelRunId !== run.id) { paySelRunId = run.id; paySel = {}; paySearch = ""; paySelDept = "all"; }
+
+    const tableHost = h("div");
+    const countChip = h("span", { class: "chip" });
+    const printBtn = h("button", { class: "btn" });
+    const depts = [];
+    slips.forEach((s) => { const d = (s.dept || "").toLowerCase(); if (d && depts.indexOf(d) < 0) depts.push(d); });
+    depts.sort();
+
+    /* Every space-separated term must match somewhere — so "ram coat" finds
+       Ramesh on the coating floor, which a plain substring search cannot. */
+    const matches = (s) => {
+      if (paySelDept !== "all" && (s.dept || "").toLowerCase() !== paySelDept) return false;
+      const q = paySearch.trim().toLowerCase();
+      if (!q) return true;
+      const hay = [s.name, s.workerId, s.dept, s.designation].join(" ").toLowerCase();
+      return q.split(/\s+/).every((t) => hay.indexOf(t) >= 0);
+    };
+    const shown = () => slips.filter(matches);
+    const chosen = () => { const ids = Object.keys(paySel).filter((k) => paySel[k]);
+      return ids.length ? slips.filter((s) => paySel[s.workerId]) : []; };
+    /* nothing ticked = act on everything the search is showing */
+    const acting = () => (chosen().length ? chosen() : shown());
+    payActing = acting;   // the header's Export button acts on the same set
+
+    function syncBar() {
+      const n = chosen().length, v = shown().length;
+      countChip.textContent = n ? `${n} selected` : `${v} of ${slips.length} shown`;
+      countChip.style.borderColor = n ? "var(--accent)" : "var(--line)";
+      printBtn.innerHTML = n ? `🖨 Print Selected (${n})` : `🖨 Print All (${v})`;
+      printBtn.disabled = !acting().length;
+    }
+    const setAll = (on) => {
+      shown().forEach((s) => { if (on) paySel[s.workerId] = true; else delete paySel[s.workerId]; });
+      draw();
+    };
+    printBtn.onclick = () => printPayslips(acting(), run);
+
+    const searchBox = MW.searchInput("Search worker, code, department…", (v) => { paySearch = v; draw(); });
+    host.appendChild(h("div", { class: "toolbar", style: "gap:10px" }, [
+      searchBox,
+      MW.select([{ value: "all", label: "All Departments" }]
+        .concat(depts.map((d) => ({ value: d, label: cap(d) }))), (v) => { paySelDept = v; draw(); }, "all"),
+      h("button", { class: "btn ghost", onclick: () => setAll(true), text: "☑ Select All" }),
+      h("button", { class: "btn ghost", onclick: () => setAll(false), text: "Clear" }),
+      countChip,
+      h("div", { style: "margin-left:auto" }, printBtn),
     ]));
-    host.appendChild(table(slips, [
+    host.appendChild(tableHost);
+    draw();
+
+    function draw() {
+      tableHost.innerHTML = "";
+      tableHost.appendChild(buildTable(shown()));
+      syncBar();
+    }
+    function buildTable(rows) {
+      return table(rows, [
+      { key: "sel", label: "", noSort: true, width: "38px",
+        render: (r) => { const cb = h("input", { type: "checkbox", style: "width:16px;height:16px;cursor:pointer" });
+          cb.checked = !!paySel[r.workerId];
+          cb.onchange = () => { if (cb.checked) paySel[r.workerId] = true; else delete paySel[r.workerId]; syncBar(); };
+          return cb; } },
       { key: "worker", label: "Worker", render: (r) => `<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${cap(r.dept || "")}</div>`, sort: (r) => r.name },
       { key: "present", label: "Days", num: true, render: (r) => num(r.payableDays, 1), sort: (r) => r.payableDays },
       { key: "ot", label: "OT h", num: true, render: (r) => r.otHours ? num(r.otHours, 1) : "—", sort: (r) => r.otHours },
@@ -465,20 +545,32 @@
           ? money(r.advances) + (r.advance && r.advance.closing ? `<div class="cell-sub">${esc(money(r.advance.closing))} left</div>` : "")
           : "—" },
       { key: "net", label: "Net Pay", num: true, render: (r) => `<span class="strong">${money(r.net)}</span>`, sort: (r) => r.net },
-    ], { onRow: (r) => payslipDetail(r, run), empty: "No payslips" }));
+      /* mobileCards would take column ONE as the card title — that is now the
+         tick box, so the phone falls back to the stacked table instead */
+      ], { onRow: (r) => payslipDetail(r, run), mobileCards: false,
+        empty: paySearch || paySelDept !== "all" ? "No payslip matches that search" : "No payslips" });
+    }
   }
-  async function runPayrollFlow(period) {
-    period = period || (UI.$("#pr_period") && UI.$("#pr_period").value);
-    if (!period) { const now = DB.helpers.today(); period = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`; }
-    try {
-      await DB.hr.payroll.run(period, { force: true });
-      toast("Payroll generated for " + period, { type: "ok", title: "Payroll" });
-      await App.reloadState();
-      App.go("hr-payroll", { period });
-    } catch (e) { toast(e.message || "Payroll failed", { type: "danger" }); }
+  /* ---- export the run to Excel -------------------------------------------
+     One row per payslip, the same columns as the table on screen. It goes
+     through the shared preview first, so the figures can be checked before
+     the .xlsx is written. */
+  function exportPayroll() {
+    const run = payrollCtx.run;
+    // the ticked payslips, or everything the search is showing
+    const slips = run ? payActing() : [];
+    if (!run || !slips.length) { toast("Nothing to export — no payslips selected", { type: "warn" }); return; }
+    const n2 = (v) => Math.round((+v || 0) * 100) / 100;
+    const head = ["Worker", "Code", "Department", "Days", "OT Hours", "Gross",
+      "PF", "ESI", "PT", "Advance", "Net Pay"];
+    const rows = slips.map((s) => {
+      const d = s.deductions || {};
+      return [s.name || s.workerId, s.workerId, cap(s.dept || ""), n2(s.payableDays),
+        n2(s.otHours), n2(s.gross), n2(d.pf), n2(d.esi), n2(d.pt), n2(s.advances), n2(s.net)];
+    });
+    MW.dataPreview({ title: "Payroll " + run.period, head, rows,
+      name: "chhaperia_payroll_" + run.period + ".xlsx", sheet: "Payroll " + run.period });
   }
-  async function finalizeRun(run) { if (!await confirm(`Finalize payroll ${run.period}? Payslips will be locked (no further edits).`, { title: "Finalize Payroll" })) return; save(() => DB.hr.payroll.finalize(run.id), "payroll"); }
-  async function delRun(run) { if (!await confirm(`Delete payroll run ${run.period} and all its payslips?`, { title: "Delete Pay Run", danger: true })) return; save(() => DB.hr.payroll.remove(run.id), "payroll"); }
 
   /* ============================================================
      PAYSLIP — printed sheet
@@ -932,8 +1024,13 @@
       mo.close(); UI.$("#modalHost").hidden = true;
       await save(async () => {
         await DB.hr.advance.set(s.workerId, { amount, monthly, startPeriod, note });
-        // the instalment only reaches the payslips when the run is regenerated
-        if (run && run.status !== "Finalized") await DB.hr.payroll.run(run.period, { force: true });
+        /* The instalment only reaches the payslip when the run is regenerated —
+           but only THIS worker's slip changed, so regenerate just theirs. A
+           blanket re-run would drag every active worker into what may well be
+           a deliberately partial run. */
+        if (run && run.status !== "Finalized") {
+          await DB.hr.payroll.run(run.period, { force: true, workerIds: [s.workerId] });
+        }
         toast(amount ? "Advance set for " + s.name : "Advance cleared for " + s.name, { type: "ok" });
       }, "payroll");
     }

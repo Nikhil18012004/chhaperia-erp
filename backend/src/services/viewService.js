@@ -53,7 +53,12 @@ function stateForOfficer(user) {
      • raw-material & finished-goods QUANTITIES (no costs/values)
    Strips: prices, costs, customers, suppliers, sales, money.
    ============================================================ */
-function stateForSupervisor(area, username) {
+/* `opts.slim` drops `finishedProducts` — the product catalogue with a full
+   per-unit recipe expanded for each of the 200-odd products. It is ~70% of
+   this payload and it only feeds the occasional "Add to Finished Stock"
+   picker, so the floor does not need it resent after every Start/Finish tap.
+   Everything that a stage action can actually change is still included. */
+function stateForSupervisor(area, username, opts) {
   const d = fullState();
   const itemById = Object.fromEntries(d.items.map((i) => [i.id, i]));
   const custById = Object.fromEntries((d.customers || []).map((c) => [c.id, c]));
@@ -107,9 +112,13 @@ function stateForSupervisor(area, username) {
          only. Slitting and packing carry no owner, so every slitting and
          fibre-glass login keeps seeing them. */
       const ownedByMe = (st) => !st || !st.owner || st.owner === username;
+      /* An order with a balance waiting on raw material is NOT finished, so it
+         stays on the job list of every area that works it — flagged, with no
+         action to take — until the office resumes the balance. */
+      const partial = (+wo.pendingQty || 0) > 1e-6 && !wo.dispatched;
       const mine = area === "all"
         ? (cur.status !== "Completed" || !wo.dispatched)
-        : (S.areaCovers(area, cur.area) && cur.status !== "Completed" && ownedByMe(cur));
+        : ((S.areaCovers(area, cur.area) && cur.status !== "Completed" && ownedByMe(cur)) || partial);
       const myDone = area !== "all" && route.filter(isMyStage).every((r) => r.status === "Completed");
       return {
         id: wo.id, date: wo.date, due: wo.due, status: wo.status,
@@ -117,6 +126,13 @@ function stateForSupervisor(area, username) {
         product: { id: wo.itemId, name: it.name, typeCode: it.typeCode || null,
           uom: it.uom, widthMM: it.widthMM || null },
         qty: wo.qty,
+        /* the floor must be able to see that a job is only PART of the order:
+           what is on the machine now, what is already made, and what is still
+           waiting on raw material the office has to resume */
+        runQty: wo.runQty != null ? wo.runQty : wo.qty,
+        completedQty: +wo.completedQty || 0,
+        pendingQty: +wo.pendingQty || 0,
+        partial,
         widthMM: wo.widthMM != null ? wo.widthMM : null,   // the width this run is slit to
         customer: showCustomer ? customerForWO(wo) : undefined, // label info for slitting only
         updatedBy: wo.updatedBy || null, updatedAt: wo.updatedAt || null,
@@ -170,7 +186,8 @@ function stateForSupervisor(area, username) {
     gsm: i.gsm != null ? i.gsm : null,
     tapeWidthMM: i.tapeWidthMM != null ? i.tapeWidthMM : null,
   });
-  const producibleFg = d.items
+  const slim = !!(opts && opts.slim);
+  const producibleFg = slim ? [] : d.items
     .filter((i) => i.cat === "FG" && boms[i.id] && (boms[i.id].lines || []).length);
   const fgProducts = producibleFg.map((i) => Object.assign(
     { id: i.id, name: i.name, cat: "FG", uom: i.uom || "KG", recipe: perUnitRecipe(i) },
@@ -237,7 +254,9 @@ function stateForSupervisor(area, username) {
     org: { name: d.org.name, short: d.org.short, group: d.org.group },
     workorders: myWOs,
     stockItems: stock,           // names/uom only; live qty comes from /production/stock if needed
-    finishedProducts,            // producible FGs + per-unit recipe (for Add to Finished Stock)
+    // omitted entirely on a slim refresh — the client keeps the copy it has
+    ...(slim ? {} : { finishedProducts }), // producible FGs + per-unit recipe (Add to Finished Stock)
+    slim,                        // so the client knows not to overwrite what it cached
     warehouses,                  // storage choices for finished stock
     materialStock,               // itemId -> stores that hold it (for the excess-material form)
     warehouseStock,              // whId -> everything it holds (view-only Warehouses page)
@@ -283,9 +302,9 @@ function stateForLab() {
 }
 
 /** Top-level dispatcher by user. */
-function stateForUser(user) {
+function stateForUser(user, opts) {
   if (!user) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
-  if (user.role === "supervisor") return stateForSupervisor(user.area || "all", user.username);
+  if (user.role === "supervisor") return stateForSupervisor(user.area || "all", user.username, opts);
   if (user.role === "lab") return stateForLab();
   return stateForOfficer(user); // admin + office (office gets no lab spec values)
 }

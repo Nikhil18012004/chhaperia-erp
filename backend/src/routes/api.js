@@ -24,16 +24,24 @@ router.get("/health", (req, res) => {
 
 // Role-scoped read: admin/office get the full dataset, supervisors get their view.
 router.get("/state", requireAuth, (req, res, next) => {
-  try { res.json(view.stateForUser(req.user)); } catch (e) { next(e); }
+  // ?slim=1 — the floor's refresh after a stage action; skips the bulky
+  // product catalogue the client already holds. Ignored for other roles.
+  try { res.json(view.stateForUser(req.user, { slim: req.query.slim === "1" })); } catch (e) { next(e); }
 });
 
 // Supervisor (or office/admin) advances a work order's CURRENT stage.
 // action: start | pause | complete | dispatch  — area-scoped, money-free.
 // Stage transitions are driven by supervisors (their area) + admin; office
 // plans work orders but does not determine process stages.
+// `all: true` runs every remaining stage in this one request instead of the
+// browser firing a POST per stage.
 router.post("/production/wo/:id/advance", requireAuth, requireRole("supervisor", "admin"), (req, res, next) => {
-  try { res.json(production.advance(req.user, req.params.id, (req.body || {}).action)); }
-  catch (e) { next(e); }
+  const b = req.body || {};
+  try {
+    res.json(b.all && b.action === "complete"
+      ? production.advanceAll(req.user, req.params.id)
+      : production.advance(req.user, req.params.id, b.action));
+  } catch (e) { next(e); }
 });
 
 // Back-compat: advance by target status (maps to a stage action).
@@ -42,9 +50,23 @@ router.post("/production/wo/:id/status", requireAuth, requireRole("supervisor", 
   catch (e) { next(e); }
 });
 
+// What raising this order would mean — shortage, how much can be made now,
+// how much would be pending. Read-only; the New Work Order form warns from it.
+router.post("/production/wo/preview", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json(production.previewWorkOrder(req.user, req.body || {})); }
+  catch (e) { next(e); }
+});
+
 // Office/admin create a new work order (with a fresh multi-stage route).
+// A shortage answers 409 with the detail unless `allowShortage` is set.
 router.post("/production/wo", requireAuth, requireRole("admin", "office"), (req, res, next) => {
   try { res.status(201).json(production.createWorkOrder(req.user, req.body || {})); }
+  catch (e) { next(e); }
+});
+
+// Office/admin put a pending balance back on the floor — issues its material.
+router.post("/production/wo/:id/resume", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json(production.resumeWorkOrder(req.user, req.params.id, req.body || {})); }
   catch (e) { next(e); }
 });
 

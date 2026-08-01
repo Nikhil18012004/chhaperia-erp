@@ -385,7 +385,23 @@ function runPayroll(period, opts) {
   const st = repo.getState();
   const existing = repo.getPayrun("PR-" + period);
   if (existing && existing.status === "Finalized" && !opts.force) throw err("Pay run for " + period + " is finalized", 400);
-  const workers = st.hrWorkers.filter((w) => w.active !== false);
+  /* Payroll normally covers every active worker. `workerIds` narrows it to a
+     chosen few — the clerk who settles the coating floor today and the rest on
+     Friday. An explicit pick outranks the active filter, so someone who has
+     since left can still be given a final payslip. */
+  const asked = Array.isArray(opts.workerIds)
+    ? opts.workerIds.map(String).filter((id, i, a) => id && a.indexOf(id) === i) : null;
+  let workers;
+  if (asked && asked.length) {
+    const byId = {};
+    (st.hrWorkers || []).forEach((w) => { byId[w.id] = w; });
+    const unknown = asked.filter((id) => !byId[id]);
+    if (unknown.length) throw err("Unknown worker: " + unknown.join(", "), 400);
+    workers = asked.map((id) => byId[id]);
+  } else {
+    workers = (st.hrWorkers || []).filter((w) => w.active !== false);
+  }
+  if (!workers.length) throw err("No workers to pay", 400);
 
   // Resolve whether an "L" muster day is a PAID leave, honouring each leave
   // type's `paid` flag. Approved leave records are authoritative for the
@@ -406,13 +422,22 @@ function runPayroll(period, opts) {
   };
 
   const slips = workers.map((w) => computeSlip(w, period, cfg, isPaidLeaveDay, advanceForPeriod(w, period, st)));
-  const totals = slips.reduce((t, s) => ({ gross: t.gross + s.gross, net: t.net + s.net,
-    pf: t.pf + s.deductions.pf, esi: t.esi + s.deductions.esi, pt: t.pt + s.deductions.pt,
-    advances: t.advances + num(s.advances) }),
-    { gross: 0, net: 0, pf: 0, esi: 0, pt: 0, advances: 0 });
   const payrunId = "PR-" + period;
+  /* A run for a few people must not wipe the payslips already made for this
+     month, and the header has to agree with the list under it — so the totals
+     cover EVERY slip in the run, not just the ones recomputed just now. Slips
+     edited by hand keep their adjusted figures. */
+  const merged = {};
+  repo.payslipsForRun(payrunId).forEach((s) => { merged[s.workerId] = s; });
+  slips.forEach((s) => { merged[s.workerId] = s; });
+  const allSlips = Object.keys(merged).map((k) => merged[k]);
+  const totals = allSlips.reduce((t, s) => { const d = s.deductions || {};
+    return { gross: t.gross + num(s.gross), net: t.net + num(s.net),
+      pf: t.pf + num(d.pf), esi: t.esi + num(d.esi), pt: t.pt + num(d.pt),
+      advances: t.advances + num(s.advances) }; },
+    { gross: 0, net: 0, pf: 0, esi: 0, pt: 0, advances: 0 });
   const payrun = repo.putPayrun({ id: payrunId, period, status: "Draft", generatedAt: new Date().toISOString(),
-    workers: slips.length, totals: { gross: round(totals.gross), net: round(totals.net),
+    workers: allSlips.length, totals: { gross: round(totals.gross), net: round(totals.net),
       pf: round(totals.pf), esi: round(totals.esi), pt: round(totals.pt),
       advances: round(totals.advances) }, config: cfg });
   slips.forEach((s) => repo.putPayslip(Object.assign({ id: payrunId + ":" + s.workerId, payrunId }, s)));

@@ -179,7 +179,10 @@
       tbody.innerHTML="";
       if(!data.length){ tbody.appendChild(h("tr",{},h("td",{colspan:cols.length},h("div",{class:"empty"},[h("div",{class:"big",text:"∅"}),h("div",{text:opts.empty||"No records found"})])))); }
       data.forEach(r=>{
-        const tr=h("tr",{class:opts.onRow?"row-click":""});
+        // opts.rowClass lets a section flag whole rows (e.g. a work order that
+        // is still waiting on raw material)
+        const extra=opts.rowClass?(opts.rowClass(r)||""):"";
+        const tr=h("tr",{class:((opts.onRow?"row-click":"")+" "+extra).trim()});
         if(opts.onRow) tr.onclick=(e)=>{ if(e.target.closest("button,a,input,select")) return; opts.onRow(r); };
         cols.forEach(c=>{
           // data-label drives the stacked "card" table layout on phones

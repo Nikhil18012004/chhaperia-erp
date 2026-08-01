@@ -133,6 +133,10 @@
       if(message){ err.hidden=false; err.textContent=message; } else { err.hidden=true; }
       const form = $("#loginForm"), user=$("#loginUser"), pass=$("#loginPass"), btn=$("#loginBtn");
       user.value=""; pass.value="";
+      /* the button is the SAME element every time this screen is shown, and a
+         successful sign-in leaves it disabled reading "Signing in…" — reset it
+         here or switching user lands on a dead form. */
+      btn.disabled=false; btn.textContent="Sign In";
       setTimeout(()=>user.focus(), 50);
       form.onsubmit = async (e)=>{
         e.preventDefault();

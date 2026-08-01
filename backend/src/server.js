@@ -78,7 +78,16 @@ app.use((err, req, res, next) => {
   const status = err.status || 500;
   if (status >= 500) console.error("[api error]", err.stack || err.message);
   else console.warn("[api]", status, req.method, req.path, "—", err.message);
-  res.status(status).json({ error: status >= 500 ? "Internal server error" : (err.message || "Error") });
+  const out = { error: status >= 500 ? "Internal server error" : (err.message || "Error") };
+  /* A material shortage is a 409 the FORM has to act on — it shows what is
+     short and offers to raise the order with a pending balance — so that
+     detail travels with the message rather than being flattened away. */
+  if (status < 500 && err.shortage) {
+    out.shortage = err.shortage;
+    if (err.canMake != null) out.canMake = err.canMake;
+    if (err.pendingQty != null) out.pendingQty = err.pendingQty;
+  }
+  res.status(status).json(out);
 });
 
 const server = app.listen(PORT, () => {

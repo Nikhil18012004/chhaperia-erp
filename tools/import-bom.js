@@ -176,6 +176,12 @@ function parseSpec(raw) {
     s = s.replace(sci[0], String(val));
   }
   const n = (x) => parseFloat(String(x).replace(/,/g, ""));
+  /* Binary floating point cannot hold 0.14 + 0.015 exactly — it lands on
+     0.15500000000000003, which then prints in the report as a 17-digit
+     artefact. Twelve significant digits is far more precision than any TDS
+     carries and is well clear of where IEEE noise begins, so rounding the
+     ARITHMETIC results there loses nothing real. */
+  const fx = (v) => +(+v).toPrecision(12);
   // "MD ≥70 / TD ≥15" — two DIRECTIONAL limits (machine vs transverse/cross
   // direction), not two competing options. Split so both can actually grade.
   const DIR = /^(MD|TD|CD|LONG(?:ITUDINAL)?|TRANS(?:VERSE)?)\b/i;
@@ -193,9 +199,9 @@ function parseSpec(raw) {
   // two thresholds ("≥ 12 & 16", "<1500 / <1000") -> ambiguous on purpose
   if (/&/.test(s) || (s.match(/[<>≤≥]/g) || []).length > 1) return { unparsed: String(raw) };
   let m;
-  if ((m = s.match(/^([\d.]+)\s*±\s*([\d.]+)$/))) return { min: n(m[1]) - n(m[2]), max: n(m[1]) + n(m[2]), nominal: n(m[1]), tol: n(m[2]) };
+  if ((m = s.match(/^([\d.]+)\s*±\s*([\d.]+)$/))) return { min: fx(n(m[1]) - n(m[2])), max: fx(n(m[1]) + n(m[2])), nominal: n(m[1]), tol: n(m[2]) };
   // one-sided tolerance: "0.15 + 0.03" means 0.15 up to 0.18, never below
-  if ((m = s.match(/^([\d.]+)\s*\+\s*([\d.]+)$/))) return { min: n(m[1]), max: n(m[1]) + n(m[2]), nominal: n(m[1]) };
+  if ((m = s.match(/^([\d.]+)\s*\+\s*([\d.]+)$/))) return { min: n(m[1]), max: fx(n(m[1]) + n(m[2])), nominal: n(m[1]) };
   if ((m = s.match(/^[≥>]=?\s*([\d.]+)$/))) return { min: n(m[1]) };
   if ((m = s.match(/^[≤<]=?\s*([\d.]+)$/))) return { max: n(m[1]) };
   if ((m = s.match(/^([\d.]+)\s*[-–]\s*([\d.]+)$/))) return { min: n(m[1]), max: n(m[2]) };

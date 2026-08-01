@@ -130,6 +130,37 @@ try {
   // Excel's scientific notation must not be read as a whole number
   ok("scientific notation parses (3.3E-2 = 0.033 mm, not 3.3)",
     Math.abs(BC.numLoose("3.3000000000000002E-2") - 0.033) < 1e-9);
+
+  section("Sliding session — working through the day never signs you out");
+  {
+    const auth = require("../src/services/authService");
+    const user = { id: "U-SLIDE", role: "admin", area: null, tokenVersion: 0 };
+    const realNow = Date.now;
+    /* mint a token as if the clock were `msAgo` in the past, so a token's age
+       can be tested without waiting six hours for one to ripen */
+    const tokenAged = (msAgo) => {
+      Date.now = () => realNow() - msAgo;
+      try { return auth.issueToken(user); } finally { Date.now = realNow; }
+    };
+    const HOUR = 60 * 60 * 1000;
+
+    ok("a fresh token is left alone (no needless re-signing)",
+      auth.renewedToken(auth.issueToken(user), user) === null);
+    ok("a token 5h old is still left alone", auth.renewedToken(tokenAged(5 * HOUR), user) === null);
+
+    const old = tokenAged(7 * HOUR);
+    const renewed = auth.renewedToken(old, user);
+    ok("a token past halfway IS reissued", typeof renewed === "string" && renewed !== old);
+    ok("the reissued token verifies", !!auth.verifyToken(renewed));
+    ok("and it runs later than the one it replaced",
+      auth.verifyToken(renewed).exp > auth.verifyToken(old).exp);
+
+    // the whole point of an expiry is that an abandoned machine lapses
+    ok("an already-expired token is NEVER silently renewed",
+      auth.renewedToken(tokenAged(13 * HOUR), user) === null);
+    ok("nor is a forged one", auth.renewedToken("not.a.token", user) === null);
+    ok("Date.now was restored", Date.now === realNow);
+  }
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

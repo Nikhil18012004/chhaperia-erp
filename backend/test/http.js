@@ -235,6 +235,142 @@ async function run() {
     await call("DELETE", "/hr/workers/" + W.id, A);
   }
 
+  section("Complete-all runs every stage in ONE request");
+  {
+    const wos = (await call("GET", "/state", A)).d.workorders || [];
+    const open = wos.find((w) => w.status !== "Completed" && w.status !== "Dispatched");
+    if (!open) {
+      ok("no open work order to exercise complete-all — skipped", true);
+    } else {
+      const before = (open.route || []).filter((s) => s.status !== "Completed").length;
+      const r = await call("POST", "/production/wo/" + open.id + "/advance", A, { action: "complete", all: true });
+      ok("one call is accepted", r.status === 200, String(r.status));
+      ok("and it finishes the whole route in that single call",
+        r.d.status === "Completed" || r.d.status === "Dispatched",
+        r.d.status + " (had " + before + " stages left)");
+      ok("every stage is marked complete",
+        (r.d.route || []).every((s) => s.status === "Completed"),
+        (r.d.route || []).map((s) => s.key + ":" + s.status).join(","));
+      ok("completing an already-finished order does not throw",
+        [200, 400].includes((await call("POST", "/production/wo/" + open.id + "/advance", A, { action: "complete", all: true })).status));
+    }
+    ok("a plain advance still takes one stage only — `all` must be opt-in",
+      (await call("POST", "/production/wo/WO-NOPE/advance", A, { action: "complete" })).status === 404);
+  }
+
+  section("Slim floor refresh — the catalogue is not resent after every tap");
+  {
+    const full = (await call("GET", "/state", C)).d;
+    const thin = (await call("GET", "/state?slim=1", C)).d;
+    ok("the full view carries the product catalogue",
+      Array.isArray(full.finishedProducts) && full.finishedProducts.length > 0,
+      String((full.finishedProducts || []).length));
+    ok("the slim view leaves it out entirely", thin.finishedProducts === undefined);
+    ok("and says so, so the client keeps its own copy", thin.slim === true);
+    ok("the full view is not marked slim", full.slim === false);
+    // everything a stage action can actually change must survive the trim
+    ok("work orders still come through", Array.isArray(thin.workorders));
+    ok("same work orders as the full view", (thin.workorders || []).length === (full.workorders || []).length,
+      (thin.workorders || []).length + " vs " + (full.workorders || []).length);
+    ok("material stock still comes through", !!thin.materialStock);
+    ok("warehouse stock still comes through", !!thin.warehouseStock);
+    ok("stock items still come through", Array.isArray(thin.stockItems));
+    ok("the slim payload is materially smaller",
+      JSON.stringify(thin).length < JSON.stringify(full).length * 0.5,
+      Math.round(JSON.stringify(thin).length / 1024) + "KB vs " + Math.round(JSON.stringify(full).length / 1024) + "KB");
+    // slim is a floor convenience — it must never change what other roles get
+    const adminSlim = (await call("GET", "/state?slim=1", A)).d;
+    ok("admin is unaffected by slim", Array.isArray(adminSlim.items) && adminSlim.items.length > 0);
+    ok("a supervisor still cannot see money", thin.customers === undefined && thin.suppliers === undefined);
+  }
+
+  section("One account on several machines — signing out on one keeps the rest");
+  {
+    // a throwaway account, so signing it out cannot disturb the other suites
+    await call("POST", "/auth/users", A, { username: "multidev", name: "Multi Device",
+      role: "office", password: "multidev@123" });
+    const m1 = (await login("multidev", "multidev@123")).token;
+    const m2 = (await login("multidev", "multidev@123")).token;
+    const m3 = (await login("multidev", "multidev@123")).token;
+    ok("the same account can sign in more than once", !!m1 && !!m2 && !!m3);
+    ok("each sign-in gets its own token", m1 !== m2 && m2 !== m3);
+    ok("signing in again does NOT drop the earlier session",
+      (await call("GET", "/auth/me", m1)).status === 200);
+    ok("all three sessions work at once",
+      (await call("GET", "/auth/me", m2)).status === 200 && (await call("GET", "/auth/me", m3)).status === 200);
+
+    ok("signing out returns ok", (await call("POST", "/auth/logout", m2)).status === 200);
+    ok("the machine that signed out is done", (await call("GET", "/auth/me", m2)).status === 401);
+    ok("but the other machines stay signed in",
+      (await call("GET", "/auth/me", m1)).status === 200 && (await call("GET", "/auth/me", m3)).status === 200);
+    ok("a signed-out token cannot be reused later", (await call("GET", "/state", m2)).status === 401);
+
+    // changing the password is the deliberate account-wide kick
+    ok("password change succeeds",
+      (await call("POST", "/auth/change-password", m1,
+        { currentPassword: "multidev@123", newPassword: "multidev@456" })).status === 200);
+    ok("a password change DOES drop every other machine",
+      (await call("GET", "/auth/me", m3)).status === 401);
+
+    const u = ((await call("GET", "/auth/users", A)).d.users || []).find((x) => x.username === "multidev");
+    if (u) await call("DELETE", "/auth/users/" + u.id, A);
+  }
+
+  section("Payroll for selected workers — a partial run tops the month up");
+  {
+    const per = "2026-04";
+    const mk = async (id, name, rate) => {
+      await call("POST", "/hr/workers", A, { id, name, dept: "packing", payType: "daily",
+        dailyRate: rate, joined: "2020-01-01" });
+      for (let d = 1; d <= 26; d++) {
+        await call("POST", "/hr/attendance", A, { workerId: id, date: per + "-" + String(d).padStart(2, "0"), status: "P" });
+      }
+    };
+    await mk("EMP-SEL-1", "Selected One", 500);
+    await mk("EMP-SEL-2", "Selected Two", 600);
+    await mk("EMP-SEL-3", "Selected Three", 700);
+    const has = (r, id) => (r.d.payslips || []).some((s) => s.workerId === id);
+
+    const r1 = await call("POST", "/hr/payroll/run", A, { period: per, force: true, workerIds: ["EMP-SEL-1"] });
+    ok("a run can cover a single chosen worker", r1.status === 201 && r1.d.payslips.length === 1, String(r1.d.payslips.length));
+    ok("and it is the one that was asked for", has(r1, "EMP-SEL-1"));
+    ok("nobody else is paid by it", !has(r1, "EMP-SEL-2") && !has(r1, "EMP-SEL-3"));
+    ok("the run counts only who it paid", r1.d.payrun.workers === 1, String(r1.d.payrun.workers));
+    const net1 = r1.d.payslips[0].net;
+
+    const r2 = await call("POST", "/hr/payroll/run", A, { period: per, force: true, workerIds: ["EMP-SEL-2"] });
+    ok("paying the next person keeps the first one's payslip", has(r2, "EMP-SEL-1") && has(r2, "EMP-SEL-2"),
+      (r2.d.payslips || []).map((s) => s.workerId).join(","));
+    ok("the third is still unpaid", !has(r2, "EMP-SEL-3"));
+    ok("the run now counts both", r2.d.payrun.workers === 2, String(r2.d.payrun.workers));
+    const net2 = (r2.d.payslips.find((s) => s.workerId === "EMP-SEL-2") || {}).net;
+    ok("totals cover every slip in the run, not just the new one",
+      Math.abs(r2.d.payrun.totals.net - (net1 + net2)) < 0.5,
+      r2.d.payrun.totals.net + " vs " + (net1 + net2));
+
+    // a hand-edited slip must survive a later partial run and stay in the totals
+    await call("PATCH", "/hr/payslips/PR-" + per + ":EMP-SEL-1", A, { advances: 0 });
+    const r3 = await call("POST", "/hr/payroll/run", A, { period: per, force: true, workerIds: ["EMP-SEL-3"] });
+    ok("a third partial run adds to the same month", r3.d.payrun.workers === 3, String(r3.d.payrun.workers));
+
+    const rAll = await call("POST", "/hr/payroll/run", A, { period: per, force: true });
+    ok("running with no selection still covers everyone active",
+      has(rAll, "EMP-SEL-1") && has(rAll, "EMP-SEL-2") && has(rAll, "EMP-SEL-3") && rAll.d.payslips.length >= 3,
+      String(rAll.d.payslips.length));
+    const rEmpty = await call("POST", "/hr/payroll/run", A, { period: per, force: true, workerIds: [] });
+    ok("an empty selection means everyone, not nobody", rEmpty.d.payslips.length === rAll.d.payslips.length,
+      rEmpty.d.payslips.length + " vs " + rAll.d.payslips.length);
+    ok("an unknown worker is refused",
+      (await call("POST", "/hr/payroll/run", A, { period: per, force: true, workerIds: ["EMP-GHOST"] })).status === 400);
+    ok("a supervisor cannot run payroll for a selection",
+      (await call("POST", "/hr/payroll/run", C, { period: per, force: true, workerIds: ["EMP-SEL-1"] })).status === 403);
+
+    await call("DELETE", "/hr/payroll/PR-" + per, A);
+    await call("DELETE", "/hr/workers/EMP-SEL-1", A);
+    await call("DELETE", "/hr/workers/EMP-SEL-2", A);
+    await call("DELETE", "/hr/workers/EMP-SEL-3", A);
+  }
+
   section("Lab role: scoped payload + write limits");
   const lab = await login("lab", "lab@123");
   const LB = lab.token;
@@ -355,15 +491,115 @@ async function run() {
     && rCu[1].key === "rmprod" && rCu[1].owner === "coating2",
     rCu.map((r) => r.key + (r.owner ? "/" + r.owner : "")).join(" > "));
 
-  // a bought-in product with no stock is still refused — it must be purchased
+  /* A bought-in product with no stock is NOT refused any more — the factory
+     runs what it can and carries the rest as pending. It still cannot happen
+     silently: the office is answered 409 with the shortage until it says yes. */
   const bought = { id: "FG-TEST-BOUGHT", name: "Test bought-in tape", cat: "FG", uom: "KG",
     typeCode: "CH-PTFE-99", group: "OTHER TAPE SERIES", cost: 100, price: 200 };
   await call("POST", "/items", A, bought);
   await call("PUT", "/boms/" + bought.id, A, { yield: 100, lines: [[scarce.id, 1.2]] });
   const woBuy = await call("POST", "/production/wo", A, { itemId: bought.id, qty: 50 });
-  ok("bought-in + no stock -> refused, with a buy-it message",
-    woBuy.status === 400 && /bought in ready-made/.test(String(woBuy.d && woBuy.d.error || woBuy.d)),
+  ok("a shortage answers 409, not a silent create", woBuy.status === 409,
     woBuy.status + " " + JSON.stringify(woBuy.d).slice(0, 90));
+  ok("and it says exactly what is short",
+    Array.isArray(woBuy.d.shortage) && woBuy.d.shortage.length > 0
+      && woBuy.d.shortage[0].id === scarce.id,
+    JSON.stringify(woBuy.d.shortage || []).slice(0, 120));
+  ok("it reports how much can be made now", woBuy.d.canMake != null && woBuy.d.pendingQty > 0,
+    "canMake=" + woBuy.d.canMake + " pending=" + woBuy.d.pendingQty);
+  ok("nothing was created by the refused attempt",
+    !((await call("GET", "/state", A)).d.workorders || []).some((w) => w.itemId === bought.id));
+
+  section("Partial work order — make what the store covers, carry the rest");
+  {
+    const rm = { id: "RM-PART-TEST", name: "Partial test resin", cat: "RM", uom: "KG", cost: 10 };
+    const fgP = { id: "FG-PART-TEST", name: "Partial test tape", cat: "FG", uom: "KG",
+      typeCode: "CH-PART-01", group: "OTHER TAPE SERIES", cost: 50, price: 90 };
+    await call("POST", "/items", A, rm);
+    await call("POST", "/items", A, fgP);
+    // 1 kg of resin per 1 kg of tape, so the arithmetic is obvious
+    await call("PUT", "/boms/" + fgP.id, A, { yield: 100, lines: [[rm.id, 1]] });
+    // the store holds 50 kg; the order will be for 100 kg
+    await call("POST", "/movements", A, { id: "MV-PART-1", itemId: rm.id, type: "GRN",
+      qty: 50, rate: 10, wh: "WH-RM", date: "2026-01-01", manual: true });
+
+    const pv = await call("POST", "/production/wo/preview", A, { itemId: fgP.id, qty: 100 });
+    ok("preview says how much can be made", Math.abs(pv.d.canMake - 50) < 0.01, String(pv.d.canMake));
+    ok("preview says how much would be pending", Math.abs(pv.d.pendingQty - 50) < 0.01, String(pv.d.pendingQty));
+    ok("preview names the short material",
+      (pv.d.shortage || []).some((s) => s.id === rm.id), JSON.stringify(pv.d.shortage || []));
+    ok("preview writes nothing",
+      !((await call("GET", "/state", A)).d.workorders || []).some((w) => w.itemId === fgP.id));
+
+    const made = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 100, allowShortage: true });
+    ok("with consent the order IS raised for the full 100", made.status === 201 && made.d.qty === 100,
+      made.status + " qty=" + (made.d || {}).qty);
+    ok("50 goes to the floor", Math.abs(made.d.runQty - 50) < 0.01, String(made.d.runQty));
+    ok("50 is carried as pending", Math.abs(made.d.pendingQty - 50) < 0.01, String(made.d.pendingQty));
+    ok("nothing is completed yet", made.d.completedQty === 0, String(made.d.completedQty));
+    const woId = made.d.id;
+
+    // only the 50 being run may draw material — the pending half must cost nothing
+    const stockAfter = ((await call("GET", "/state", A)).d.movements || [])
+      .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("only the runnable 50 kg of material was issued", Math.abs(stockAfter) < 0.01,
+      "on hand " + stockAfter);
+
+    // finish the part that could be made
+    const done = await call("POST", "/production/wo/" + woId + "/advance", A, { action: "complete", all: true });
+    ok("finishing the run does NOT mark the order Completed", done.d.status === "Partial", done.d.status);
+    ok("the pending balance survives", Math.abs(done.d.pendingQty - 50) < 0.01, String(done.d.pendingQty));
+
+    // resuming before the material arrives must fail, and must not consume anything
+    const early = await call("POST", "/production/wo/" + woId + "/resume", A, {});
+    ok("resuming with an empty store is refused", early.status === 409, early.status + " " + JSON.stringify(early.d).slice(0, 80));
+    ok("and it says what is still short", Array.isArray(early.d.shortage) && early.d.shortage.length > 0);
+
+    // material arrives — but it is NOT reserved until somebody resumes
+    await call("POST", "/movements", A, { id: "MV-PART-2", itemId: rm.id, type: "GRN",
+      qty: 50, rate: 10, wh: "WH-RM", date: "2026-02-01", manual: true });
+    const freeStock = await call("POST", "/production/wo/preview", A, { itemId: fgP.id, qty: 50 });
+    ok("refilled stock stays free for other orders until the pending one is resumed",
+      freeStock.d.pendingQty === 0 && Math.abs(freeStock.d.canMake - 50) < 0.01,
+      "canMake=" + freeStock.d.canMake + " pending=" + freeStock.d.pendingQty);
+
+    const res = await call("POST", "/production/wo/" + woId + "/resume", A, {});
+    ok("resume is accepted once the material is in", res.status === 200, res.status + " " + JSON.stringify(res.d).slice(0, 80));
+    ok("the balance moves onto the floor", Math.abs(res.d.runQty - 50) < 0.01, String(res.d.runQty));
+    ok("nothing is left pending", res.d.pendingQty === 0, String(res.d.pendingQty));
+    ok("the first 50 is recorded as completed", Math.abs(res.d.completedQty - 50) < 0.01, String(res.d.completedQty));
+    ok("the route is ready to run again", (res.d.route || []).every((s) => s.status === "Pending"),
+      (res.d.route || []).map((s) => s.status).join(","));
+    const after = ((await call("GET", "/state", A)).d.movements || [])
+      .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+    ok("resuming issued the material there and then", Math.abs(after) < 0.01, "on hand " + after);
+
+    const fin = await call("POST", "/production/wo/" + woId + "/advance", A, { action: "complete", all: true });
+    ok("finishing the balance completes the order", fin.d.status === "Completed", fin.d.status);
+
+    ok("a supervisor cannot resume a pending order",
+      (await call("POST", "/production/wo/" + woId + "/resume", C, {})).status === 403);
+
+    /* a partial order must reach the floor flagged, and must NOT be
+       dispatchable while it still owes quantity */
+    const wo2 = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 80, allowShortage: true });
+    ok("a second partial order is raised", wo2.status === 201 && wo2.d.pendingQty > 0,
+      "pending=" + (wo2.d || {}).pendingQty);
+    // this product runs on a slitting line, so ask that floor's supervisor
+    const S1 = (await login("slitting1", "slitting1@123")).token;
+    const supSees = ((await call("GET", "/state", S1)).d.workorders || []).find((w) => w.id === wo2.d.id);
+    if (supSees) {
+      ok("the floor is told the order is partial", supSees.partial === true, String(supSees.partial));
+      ok("the floor sees the pending quantity", (+supSees.pendingQty || 0) > 0, String(supSees.pendingQty));
+      ok("the floor sees total, on-floor and completed",
+        supSees.qty === 80 && supSees.runQty != null && supSees.completedQty != null,
+        JSON.stringify({ q: supSees.qty, r: supSees.runQty, c: supSees.completedQty }));
+    } else {
+      ok("partial order reached the floor", false, "not visible to coating1");
+    }
+    await call("DELETE", "/production/wo/" + wo2.d.id, A);
+    await call("DELETE", "/production/wo/" + woId, A);
+  }
 
   section("Tape width is captured per work order");
   // width is an ORDER parameter (the run is slit to the ordered width), not a

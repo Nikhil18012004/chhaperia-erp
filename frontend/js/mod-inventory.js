@@ -8,7 +8,7 @@
 
   /* ============== STOCK ITEMS ============== */
   M.inventory = { title:"Stock Items", sub:"Auto-calculated inventory", render(root){
-    let filter={q:"", cat:"all", state:"all", from:"", to:""};
+    let filter={q:"", cat:"all", state:"all"};
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       MW.csvMenu(exportCSV),
       newItemMenu()
@@ -30,7 +30,6 @@
       MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
       MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
       MW.select([{value:"all",label:"All Status"},{value:"instock",label:"In Stock"},{value:"low",label:"Low Stock"},{value:"out",label:"Out of Stock"}], v=>{filter.state=v;draw();}),
-      MW.dateRange(filter, draw, {label:"Last Movement"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
     ]);
     root.appendChild(bar);
@@ -55,7 +54,6 @@
         if(r.it.cat==="WIP") return false;
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
         if(filter.state!=="all" && stockClass(r.st)!==filter.state) return false;
-        if(!MW.inDateRange(r.stock.lastMove, filter)) return false;
         if(filter.q){ const s=(r.it.name+" "+r.it.id+" "+(r.it.hsn||"")+" "+r.it.cat).toLowerCase(); if(!s.includes(filter.q)) return false; }
         return true;
       });

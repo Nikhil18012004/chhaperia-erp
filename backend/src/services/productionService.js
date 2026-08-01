@@ -96,7 +96,9 @@ function advance(user, woId, action) {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
     // post this stage's stock movements (skip for legacy WOs — old flow already did)
     if (!wo.legacy && !stage.posted) {
-      const plan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices, wo.plan);
+      // only the portion actually on the floor draws material
+      const runQ = wo.runQty != null ? wo.runQty : wo.qty;
+      const plan = S.computeStagePlan(wo.itemId, runQ, data, wo.materialChoices, wo.plan);
       if (plan && plan[stage.key]) {
         const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements);
         if (moves.length) repo.addMovements(moves);
@@ -111,10 +113,103 @@ function advance(user, woId, action) {
 
   wo.progress = calcProgress(route);
   wo.status = S.rollupStatus(wo);
+  /* A route that has run its course but still owes material-blocked quantity
+     is PARTIAL, not Completed — the order is not finished, and it has to keep
+     showing on the floor and on the board until the balance is resumed. */
+  if (wo.status === "Completed" && (+wo.pendingQty || 0) > 1e-6) wo.status = "Partial";
   wo.updatedBy = by; wo.updatedAt = now;
   repo.putWorkOrder(wo);
 
   return summarize(wo, data);
+}
+
+/* ============================================================
+   resumeWorkOrder — the office puts a pending balance back on the floor.
+   Pending material is never reserved: stock that arrives is free for any
+   order until somebody resumes THIS one, which issues it there and then.
+   That is why the check and the issue happen together, in one step.
+   ============================================================ */
+function resumeWorkOrder(user, id, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (user.role !== "admin" && user.role !== "office") throw err("Only the office can resume a pending order", 403);
+  body = body || {};
+  const data = fullState();
+  const wo = (data.workorders || []).find((w) => w.id === id);
+  if (!wo) throw err("Work order not found", 404);
+  if (wo.dispatched) throw err("This order has been dispatched", 400);
+  const pending = +wo.pendingQty || 0;
+  if (pending <= 1e-6) throw err("Nothing is pending on this work order", 400);
+  /* The portion already released has to be off the machines first. Judge that
+     by the ROUTE, not by wo.status — a finished partial run reads "Partial",
+     which is precisely the state resume exists to move on from. */
+  const runDone = (wo.route || []).length > 0 && (wo.route || []).every((r) => r.status === "Completed");
+  if ((+wo.runQty || 0) > 1e-6 && !runDone) {
+    throw err("Finish the quantity already on the floor before resuming the balance", 400);
+  }
+  const item = (data.items || []).find((i) => i.id === wo.itemId);
+  if (!item) throw err("Unknown product", 400);
+
+  // how much of the balance the store can cover NOW
+  const cap = maxMakeable(data, item, wo.materialChoices);
+  const want = body.qty != null ? +body.qty : pending;
+  if (!(want > 0)) throw err("Enter a valid quantity", 400);
+  if (want > pending + 1e-6) throw err("Only " + pending + " is pending on this order", 400);
+  const canDo = isFinite(cap) ? Math.floor(cap * 1000) / 1000 : want;
+  if (canDo < want - 1e-6) {
+    const e = err("The store still cannot cover " + want + " — it can make " + Math.max(0, canDo) + " right now.", 409);
+    e.shortage = shortageFor(data, item, want, wo.materialChoices);
+    e.canMake = Math.max(0, canDo);
+    throw e;
+  }
+
+  // issue this portion's raw material now, then hand the run to the floor
+  const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+  const net = { qty: want, fgQty: 0, wipQty: 0, makeQty: want, fgSources: [], wipSources: [] };
+  const stagePlan = S.computeStagePlan(wo.itemId, want, data, wo.materialChoices, net);
+  const moves = [];
+  if (stagePlan) {
+    (wo.route || []).forEach((r) => {
+      if (!stagePlan[r.key]) return;
+      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements)
+        .forEach((m) => moves.push(m));
+    });
+  }
+  if (moves.length) repo.addMovements(moves);
+
+  wo.completedQty = Math.round(((+wo.completedQty || 0) + (+wo.runQty || 0)) * 1000) / 1000;
+  wo.runQty = want;
+  wo.pendingQty = Math.round((pending - want) * 1000) / 1000;
+  if (wo.pendingQty <= 1e-6) { wo.pendingQty = 0; delete wo.shortage; delete wo.pendingSince; }
+  // the route runs again for this portion; the material is already issued, so
+  // every stage stays marked posted and cannot draw stock a second time
+  (wo.route || []).forEach((r) => {
+    r.status = "Pending"; r.posted = true;
+    delete r.doneBy; delete r.doneAt; delete r.startedBy; delete r.startedAt;
+  });
+  wo.stageIdx = 0;
+  wo.resumedBy = user.username; wo.resumedAt = new Date().toISOString();
+  wo.progress = 0;
+  wo.status = S.rollupStatus(wo);
+  repo.putWorkOrder(wo);
+  return summarize(wo, data);
+}
+
+/* Complete every remaining stage in ONE request.
+   "Complete all" used to fire a separate HTTP call per stage from the browser
+   — six round trips, each re-reading the whole dataset and re-checking the
+   same permissions. The loop belongs on this side of the wire. Each pass goes
+   through the ordinary advance(), so not one stage rule is duplicated or
+   skipped, and a stage that refuses still throws exactly as it would alone. */
+function advanceAll(user, woId) {
+  let wo = null, lastIdx = -1;
+  for (let pass = 0; pass < 12; pass++) {
+    wo = advance(user, woId, "complete");
+    if (wo.status === "Completed" || wo.status === "Dispatched") break;
+    // a route that stops moving would otherwise spin until the cap
+    if (wo.stageIdx === lastIdx) break;
+    lastIdx = wo.stageIdx;
+  }
+  return wo;
 }
 
 /* ============================================================
@@ -146,6 +241,101 @@ function assertMaterialsAvailable(data, item, qty, materialChoices) {
     throw err("This product is bought in ready-made, and the store is short: " + short.join("; ")
       + ". Raise a purchase order first.", 400);
   }
+}
+
+/* ============================================================
+   PARTIAL WORK ORDERS
+   An order for 100 kg with 50 kg of material in the store used to be refused
+   outright. That is the wrong answer for this factory: the floor makes the
+   50 kg it can, and the rest waits — sometimes for months — until the raw
+   material arrives. So the order is raised in full, the part that CAN be made
+   is released to the floor, and the remainder is carried as pending.
+
+   Quantities on a work order:
+     qty          what was ordered                        (100)
+     runQty       released to the floor right now         (50)
+     completedQty finished across all runs so far         (0 → 50)
+     pendingQty   still waiting for material              (50)
+   qty === completedQty + runQty + pendingQty, always.
+
+   Pending material is NOT reserved. Stock that arrives is free for any order
+   until somebody in the office resumes this one, which issues it there and
+   then (see resumeWorkOrder).
+   ============================================================ */
+
+/* per-unit material requirement of a product, wastage (yield) included */
+function perUnitNeed(data, item, materialChoices) {
+  const bom = (data.boms || {})[item.id];
+  if (!bom) return null;
+  const per = {};
+  BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}).forEach(([rid, p]) => {
+    per[rid] = (per[rid] || 0) + p / (bom.yield || 1);
+  });
+  return per;
+}
+
+function onHandMap(data) {
+  const onHand = {};
+  (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
+  return onHand;
+}
+
+/* How much of `item` the store can actually make right now. Infinity when the
+   recipe is unknown or needs nothing — never a fabricated ceiling. */
+function maxMakeable(data, item, materialChoices) {
+  const per = perUnitNeed(data, item, materialChoices);
+  if (!per) return Infinity;
+  const onHand = onHandMap(data);
+  let cap = Infinity;
+  Object.keys(per).forEach((rid) => {
+    const p = per[rid];
+    if (!(p > 0)) return;
+    cap = Math.min(cap, (onHand[rid] || 0) / p);
+  });
+  return cap;
+}
+
+/* What the store is short of to make `qty` — the list the office is warned
+   with before the order is raised anyway. */
+function shortageFor(data, item, qty, materialChoices) {
+  const per = perUnitNeed(data, item, materialChoices);
+  if (!per) return [];
+  const onHand = onHandMap(data);
+  return Object.keys(per)
+    .map((rid) => {
+      const need = per[rid] * qty, have = onHand[rid] || 0;
+      const it = (data.items || []).find((x) => x.id === rid) || {};
+      return { id: rid, name: it.name || rid, uom: it.uom || "",
+        need: Math.round(need * 1000) / 1000, have: Math.round(have * 1000) / 1000,
+        short: Math.round((need - have) * 1000) / 1000 };
+    })
+    .filter((r) => r.short > 1e-6);
+}
+
+/** What raising this order would mean — used by the New Work Order form to
+    warn BEFORE anything is written. Never mutates. */
+function previewWorkOrder(user, body) {
+  if (!user) throw err("Not authenticated", 401);
+  if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
+  body = body || {};
+  const data = fullState();
+  const item = (data.items || []).find((i) => i.id === body.itemId);
+  if (!item) throw err("Unknown product", 400);
+  const qty = +body.qty;
+  if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
+  const plan = S.planForRequirement(body.itemId, qty, data, {
+    widthMM: body.widthMM ? +body.widthMM : null, materialChoices: body.materialChoices,
+    fgQty: body.fgQty, wipQty: body.wipQty,
+  });
+  const makeQty = plan.makeQty || 0;
+  const cap = maxMakeable(data, item, body.materialChoices);
+  const canMake = Math.max(0, Math.min(makeQty, isFinite(cap) ? Math.floor(cap * 1000) / 1000 : makeQty));
+  const pending = Math.round((makeQty - canMake) * 1000) / 1000;
+  return {
+    qty, makeQty, fromStock: Math.round((qty - makeQty) * 1000) / 1000,
+    canMake, pendingQty: pending > 1e-6 ? pending : 0,
+    shortage: pending > 1e-6 ? shortageFor(data, item, makeQty, body.materialChoices) : [],
+  };
 }
 
 /* Tape width (mm) as entered on a work order. Blank clears it; anything that
@@ -253,10 +443,28 @@ function createWorkOrder(user, body) {
     fgQty: body.fgQty, wipQty: body.wipQty,
   });
 
-  // A run cannot be released without the materials to make it — but only the
-  // part being MANUFACTURED needs any, so the check follows the netted figure.
-  if (plan.makeQty > 0) {
-    assertMaterialsAvailable(data, item, plan.makeQty, body.materialChoices);
+  /* How much of the MANUFACTURED part the store can actually cover today.
+     Anything beyond that is carried as pending instead of the order being
+     refused — see the PARTIAL WORK ORDERS note above. A product we make
+     ourselves is exempt: its shortages are solved by routing the job through
+     its own RM production, not by waiting for a delivery. */
+  const makeQty = plan.makeQty || 0;
+  const inHouse = !!S.productOwner(item.id, data);
+  let runQty = makeQty, pendingQty = 0, shortage = [];
+  if (makeQty > 0 && !inHouse) {
+    const cap = maxMakeable(data, item, body.materialChoices);
+    if (isFinite(cap) && cap < makeQty - 1e-6) {
+      runQty = Math.max(0, Math.floor(cap * 1000) / 1000);
+      pendingQty = Math.round((makeQty - runQty) * 1000) / 1000;
+      shortage = shortageFor(data, item, makeQty, body.materialChoices);
+      // the office has to have seen the shortage and said yes
+      if (!body.allowShortage) {
+        const e = err("Only " + runQty + " of " + makeQty + " can be made — the store is short. "
+          + "Confirm to raise the order with the balance pending.", 409);
+        e.shortage = shortage; e.canMake = runQty; e.pendingQty = pendingQty;
+        throw e;
+      }
+    }
   }
 
   // next WO id
@@ -272,6 +480,10 @@ function createWorkOrder(user, body) {
     status: "Released", due: body.due || null, line,
     progress: 0, priority: body.priority || "Normal",
     plan,
+    // what is on the floor now, what is finished, what still waits for material
+    runQty: Math.round((qty - pendingQty) * 1000) / 1000,
+    completedQty: 0,
+    pendingQty,
     route: S.freshRoute({ line, itemId: body.itemId, qty, widthMM: width, plan,
       materialChoices: body.materialChoices }, data),
     stageIdx: 0, legacy: false,
@@ -299,8 +511,15 @@ function createWorkOrder(user, body) {
      marked as already posted so completing it later cannot draw the same
      stock a second time. Deleting the work order rolls all of it back
      (repo.deleteWorkOrder removes movements by ref). */
+  if (pendingQty > 0) { wo.shortage = shortage; wo.pendingSince = todayISO(); }
+  /* Only the part being RUN draws material. The finished / half-made rolls the
+     planner netted are real stock and are issued in full; the raw materials
+     scale to runQty, so a pending balance costs the store nothing until the
+     office resumes it. */
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
-  const stagePlan = S.computeStagePlan(wo.itemId, wo.qty, data, wo.materialChoices, plan);
+  const runNet = Object.assign({}, plan, { makeQty: runQty });
+  const runTotal = (plan.fgQty || 0) + (plan.wipQty || 0) + runQty;
+  const stagePlan = S.computeStagePlan(wo.itemId, runTotal, data, wo.materialChoices, runNet);
   const moves = [];
   if (stagePlan) {
     (wo.route || []).forEach((r) => {
@@ -569,6 +788,12 @@ function summarize(wo, data) {
     id: wo.id, status: wo.status, progress: wo.progress,
     stageIdx: wo.stageIdx, dispatched: !!wo.dispatched,
     widthMM: wo.widthMM != null ? wo.widthMM : null,
+    // total / on the floor / finished / waiting for material
+    qty: wo.qty,
+    runQty: wo.runQty != null ? wo.runQty : wo.qty,
+    completedQty: +wo.completedQty || 0,
+    pendingQty: +wo.pendingQty || 0,
+    shortage: wo.shortage || null,
     // how the requirement was met: from finished stock, from half-made stock,
     // and how much is genuinely being manufactured
     plan: wo.plan || null,
@@ -695,5 +920,6 @@ function createAdhocProduction(user, body) {
   };
 }
 
-module.exports = { advance, createWorkOrder, updateWorkOrder, produceFinished, recordExcessMaterial,
+module.exports = { advance, advanceAll, createWorkOrder, updateWorkOrder, produceFinished, recordExcessMaterial,
+  previewWorkOrder, resumeWorkOrder, maxMakeable, shortageFor,
   updateWorkOrderStatus, returnStock, createAdhocProduction, ACTIONS };

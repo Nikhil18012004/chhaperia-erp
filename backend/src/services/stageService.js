@@ -243,10 +243,10 @@ function finishedStockFor(fgId, data, widthMM) {
     .filter((r) => r.have > 0);
 }
 
-/* Half-made stock comes in two shapes: the COATED JUMBO (past coating, not yet
-   slit) and SLIT ROLLS (already through slitting). Only the jumbo can join a
-   job at slitting — feeding slit rolls back into slitting would cut them
-   twice, so they are excluded. */
+/* Half-made stock is the COATED JUMBO — past coating, not yet slit. That is
+   the only shape a job can join at slitting. Already-slit stock is not carried
+   as an item any more, but the guard stays: anything that reads as slit would
+   be cut a second time if it were offered here. */
 const isSlitRoll = (i) => /-S$/.test(String(i.id || "")) || /slit/i.test(String(i.name || ""));
 
 /** Half-made stock (coated, not yet slit) that can skip the coating stage. */
