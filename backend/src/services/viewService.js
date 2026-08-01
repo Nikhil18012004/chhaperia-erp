@@ -132,6 +132,7 @@ function stateForSupervisor(area, username, opts) {
         runQty: wo.runQty != null ? wo.runQty : wo.qty,
         completedQty: +wo.completedQty || 0,
         pendingQty: +wo.pendingQty || 0,
+        dispatchedQty: +wo.dispatchedQty || 0,
         partial,
         widthMM: wo.widthMM != null ? wo.widthMM : null,   // the width this run is slit to
         customer: showCustomer ? customerForWO(wo) : undefined, // label info for slitting only

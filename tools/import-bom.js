@@ -270,8 +270,12 @@ function build(products) {
     // Each thickness of a fabric/tape is its OWN stock item, so a work
     // order consumes exactly the thickness the recipe calls for. Ranged
     // thicknesses ("0.08-0.10") stay on the shared material item.
+    /* Three decimals of a millimetre — the precision this factory actually
+       measures to. Excel hands back "1.4999999999999999E-2" for 0.015, and a
+       4-decimal round left that tail in the item name and in the BOM. */
     const rawThk = BOM.numLoose(line.rmThk);
-    const thk = isFab && !BOM.isRanged(line.rmThk) && rawThk != null ? +(+rawThk).toFixed(4) : null;
+    const thk = isFab && !BOM.isRanged(line.rmThk) && rawThk != null
+      ? +(+rawThk).toFixed(BOM.THICKNESS_DP) : null;
     const id = rmId(name, grade) + (thk != null ? "-" + Math.round(thk * 1000) + "MIC" : "");
     if (!items.has(id)) {
       // NB: putItem() promotes the known columns and JSON-encodes whatever is
@@ -284,7 +288,9 @@ function build(products) {
         cat: "RM", uom: BOM.normUnit(line.unit) || "KG", cost: 0, price: 0,
         reorder: 0, safety: 0, lead: 7, group: isFab ? "FABRIC" : "CHEMICAL",
         material: name, grade: (BOM.isBlank(grade) ? null : grade),
-        thicknessMM: thk != null ? thk : BOM.numLoose(line.rmThk), gsm: BOM.numLoose(line.rmGsm),
+        thicknessMM: thk != null ? thk
+          : (BOM.numLoose(line.rmThk) == null ? null : +(+BOM.numLoose(line.rmThk)).toFixed(BOM.THICKNESS_DP)),
+        gsm: BOM.numLoose(line.rmGsm),
         fabric: isFab, source: "PRODUCT, TYPE WITH BOM FINAL.xlsx",
       });
     }
@@ -301,7 +307,7 @@ function build(products) {
     return {
       id: single, options,
       rm: l.rm, rmType: BOM.isBlank(l.rmType) ? null : l.rmType,
-      rmThk: BOM.isBlank(l.rmThk) ? null : l.rmThk,
+      rmThk: BOM.isBlank(l.rmThk) ? null : BOM.thk3(l.rmThk),
       rmGsm: BOM.isBlank(l.rmGsm) ? null : l.rmGsm,
       qty: qty == null ? 0 : qty, unit: BOM.normUnit(l.unit) || "KG",
       pickupPct: BOM.defaultPickup(l.rm),

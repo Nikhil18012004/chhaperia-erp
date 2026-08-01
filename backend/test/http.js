@@ -101,6 +101,71 @@ async function run() {
 
   const po = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01", lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
   ok("create PO 201", po.id && po.value === 2000);
+
+  /* Sheet goods — fabric, film, mica tape — are bought to a THICKNESS, and the
+     supplier cannot fill the order without it. It is set per LINE, because the
+     thickness this order needs is not always the one the item master carries. */
+  {
+    const poT = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 50, rate: 20, recd: 0, thicknessMM: 0.08 },
+        { itemId: rm, qty: 25, rate: 20, recd: 0 }] })).d;
+    ok("a PO line accepts a thickness", poT.lines[0].thicknessMM === 0.08, JSON.stringify(poT.lines[0]));
+    // the unit the order is PLACED in travels with the line and prints on the PO
+    const poU = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 500, rate: 2, recd: 0, uom: "MTR" }] })).d;
+    ok("a PO line accepts a unit of measure", poU.lines[0].uom === "MTR", JSON.stringify(poU.lines[0]));
+
+    /* A roll ordered in one unit and stocked in another is CONVERTED on
+       receipt, through its fixed width and its GSM — stock is only ever held
+       in the material's own unit. */
+    {
+      const roll = { id: "RM-ROLL-CONV", name: "Roll conversion test", cat: "RM", uom: "MTR",
+        cost: 1, gsm: 200, width: 1000 };          // 1 m = 0.2 kg, so 1 kg = 5 m
+      await call("POST", "/items", A, roll);
+      const poR = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+        lines: [{ itemId: roll.id, qty: 100, rate: 5, recd: 0, uom: "KG" }] })).d;
+      const rec = await call("POST", "/purchase-orders/" + poR.id + "/receive", A,
+        { wh: "WH-RM", lines: [{ i: 0, qty: 100 }] });
+      ok("a receipt in KG against a MTR-stocked roll is accepted", rec.status === 200,
+        rec.status + " " + JSON.stringify(rec.d).slice(0, 80));
+      const st = (await call("GET", "/state", A)).d;
+      const onHand = (st.movements || []).filter((m) => m.itemId === roll.id)
+        .reduce((n, m) => n + (+m.qty || 0), 0);
+      ok("100 kg lands in stock as 500 MTR", Math.abs(onHand - 500) < 0.01, String(onHand));
+      const mv = (st.movements || []).find((m) => m.itemId === roll.id);
+      ok("and the movement says what was converted", /100 KG received as 500 MTR/.test(String(mv && mv.note)),
+        String(mv && mv.note));
+      const poBack = (st.purchaseorders || []).find((p) => p.id === poR.id);
+      ok("the order's own progress stays in the unit it was placed in",
+        Math.abs(poBack.lines[0].recd - 100) < 0.01 && poBack.status === "Received",
+        poBack.lines[0].recd + " " + poBack.status);
+
+      // a material with no width/GSM cannot be reconciled — refuse, never guess
+      const opaque = { id: "RM-NOCONV", name: "No geometry", cat: "RM", uom: "MTR", cost: 1 };
+      await call("POST", "/items", A, opaque);
+      const poN = (await call("POST", "/purchase-orders", A, { supplierId: sup,
+        lines: [{ itemId: opaque.id, qty: 10, rate: 1, recd: 0, uom: "KG" }] })).d;
+      const recN = await call("POST", "/purchase-orders/" + poN.id + "/receive", A,
+        { wh: "WH-RM", lines: [{ i: 0, qty: 10 }] });
+      ok("an unconvertible unit is refused rather than posted wrong", recN.status === 400,
+        recN.status + " " + JSON.stringify(recN.d).slice(0, 90));
+      await call("DELETE", "/purchase-orders/" + poN.id, A);
+      await call("DELETE", "/purchase-orders/" + poR.id, A);
+    }
+    const uBack = ((await call("GET", "/state", A)).d.purchaseorders || []).find((p) => p.id === poU.id);
+    ok("the unit survives the round trip", uBack && uBack.lines[0].uom === "MTR");
+    await call("DELETE", "/purchase-orders/" + poU.id, A);
+    ok("a line without one is unaffected", poT.lines[1].thicknessMM === undefined);
+    const back = ((await call("GET", "/state", A)).d.purchaseorders || []).find((p) => p.id === poT.id);
+    ok("it survives the round trip to the database",
+      back && back.lines[0].thicknessMM === 0.08, JSON.stringify(back && back.lines[0]));
+    // and it must still be there after an edit that does not mention it
+    await call("PUT", "/purchase-orders/" + poT.id, A, { eta: "2026-09-01", lines: back.lines });
+    const back2 = ((await call("GET", "/state", A)).d.purchaseorders || []).find((p) => p.id === poT.id);
+    ok("and after the order is edited", back2 && back2.lines[0].thicknessMM === 0.08);
+    await call("DELETE", "/purchase-orders/" + poT.id, A);
+  }
+
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
 
   // Warehouse master-data edit (rename) — admin/office only
@@ -523,6 +588,8 @@ async function run() {
     await call("POST", "/movements", A, { id: "MV-PART-1", itemId: rm.id, type: "GRN",
       qty: 50, rate: 10, wh: "WH-RM", date: "2026-01-01", manual: true });
 
+    // this product runs on a slitting line, so that floor's supervisor sees it
+    const S1x = (await login("slitting1", "slitting1@123")).token;
     const pv = await call("POST", "/production/wo/preview", A, { itemId: fgP.id, qty: 100 });
     ok("preview says how much can be made", Math.abs(pv.d.canMake - 50) < 0.01, String(pv.d.canMake));
     ok("preview says how much would be pending", Math.abs(pv.d.pendingQty - 50) < 0.01, String(pv.d.pendingQty));
@@ -549,25 +616,54 @@ async function run() {
     const done = await call("POST", "/production/wo/" + woId + "/advance", A, { action: "complete", all: true });
     ok("finishing the run does NOT mark the order Completed", done.d.status === "Partial", done.d.status);
     ok("the pending balance survives", Math.abs(done.d.pendingQty - 50) < 0.01, String(done.d.pendingQty));
+    /* The run that WAS made reads 100% — the floor did finish it — but the
+       order stays open, because the rest of the quantity has not been made. */
+    ok("the finished run still reports 100%", done.d.progress === 100, String(done.d.progress));
+    ok("every stage of that run is complete",
+      (done.d.route || []).every((s) => s.status === "Completed"));
+    const boardRow = ((await call("GET", "/state", A)).d.workorders || []).find((w) => w.id === woId);
+    ok("and the board still calls it Partial, not Completed",
+      boardRow && boardRow.status === "Partial", boardRow && boardRow.status);
+    const floorRow = ((await call("GET", "/state", S1x)).d.workorders || []).find((w) => w.id === woId);
+    ok("the floor still sees it as its job",
+      floorRow && floorRow.partial === true && (+floorRow.pendingQty || 0) > 0,
+      JSON.stringify(floorRow && { partial: floorRow.partial, pending: floorRow.pendingQty }));
 
     // resuming before the material arrives must fail, and must not consume anything
     const early = await call("POST", "/production/wo/" + woId + "/resume", A, {});
     ok("resuming with an empty store is refused", early.status === 409, early.status + " " + JSON.stringify(early.d).slice(0, 80));
     ok("and it says what is still short", Array.isArray(early.d.shortage) && early.d.shortage.length > 0);
 
+    /* A PART delivery must put PART of the job back on the floor — 20 kg of
+       the 50 outstanding — and leave the rest pending, rather than being
+       refused until the whole balance turns up. */
+    await call("POST", "/movements", A, { id: "MV-PART-1B", itemId: rm.id, type: "GRN",
+      qty: 20, rate: 10, wh: "WH-RM", date: "2026-01-20", manual: true });
+    const half = await call("POST", "/production/wo/" + woId + "/resume", A, {});
+    ok("a part delivery resumes what it can cover", half.status === 200 && Math.abs(half.d.runQty - 20) < 0.01,
+      half.status + " run=" + (half.d || {}).runQty);
+    ok("and the remainder stays pending", Math.abs(half.d.pendingQty - 30) < 0.01, String(half.d.pendingQty));
+    ok("the 20 kg was issued, not reserved",
+      Math.abs(((await call("GET", "/state", A)).d.movements || [])
+        .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0)) < 0.01);
+    // finish that 20 so the rest can be resumed in turn
+    await call("POST", "/production/wo/" + woId + "/advance", A, { action: "complete", all: true });
+
     // material arrives — but it is NOT reserved until somebody resumes
     await call("POST", "/movements", A, { id: "MV-PART-2", itemId: rm.id, type: "GRN",
-      qty: 50, rate: 10, wh: "WH-RM", date: "2026-02-01", manual: true });
-    const freeStock = await call("POST", "/production/wo/preview", A, { itemId: fgP.id, qty: 50 });
+      qty: 30, rate: 10, wh: "WH-RM", date: "2026-02-01", manual: true });
+    const freeStock = await call("POST", "/production/wo/preview", A, { itemId: fgP.id, qty: 30 });
     ok("refilled stock stays free for other orders until the pending one is resumed",
-      freeStock.d.pendingQty === 0 && Math.abs(freeStock.d.canMake - 50) < 0.01,
+      freeStock.d.pendingQty === 0 && Math.abs(freeStock.d.canMake - 30) < 0.01,
       "canMake=" + freeStock.d.canMake + " pending=" + freeStock.d.pendingQty);
 
     const res = await call("POST", "/production/wo/" + woId + "/resume", A, {});
     ok("resume is accepted once the material is in", res.status === 200, res.status + " " + JSON.stringify(res.d).slice(0, 80));
-    ok("the balance moves onto the floor", Math.abs(res.d.runQty - 50) < 0.01, String(res.d.runQty));
+    ok("the last 30 moves onto the floor", Math.abs(res.d.runQty - 30) < 0.01, String(res.d.runQty));
     ok("nothing is left pending", res.d.pendingQty === 0, String(res.d.pendingQty));
-    ok("the first 50 is recorded as completed", Math.abs(res.d.completedQty - 50) < 0.01, String(res.d.completedQty));
+    // 50 from the first run + 20 from the part delivery
+    ok("everything made so far is recorded as completed",
+      Math.abs(res.d.completedQty - 70) < 0.01, String(res.d.completedQty));
     ok("the route is ready to run again", (res.d.route || []).every((s) => s.status === "Pending"),
       (res.d.route || []).map((s) => s.status).join(","));
     const after = ((await call("GET", "/state", A)).d.movements || [])
@@ -580,14 +676,111 @@ async function run() {
     ok("a supervisor cannot resume a pending order",
       (await call("POST", "/production/wo/" + woId + "/resume", C, {})).status === 403);
 
+    /* Splitting a big order into batches is a normal way to work, not only a
+       response to a shortage: release part now, ship it, release the next. */
+    {
+      await call("POST", "/movements", A, { id: "MV-BATCH-1", itemId: rm.id, type: "GRN",
+        qty: 100, rate: 10, wh: "WH-RM", date: "2026-05-01", manual: true });
+      const b = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 100, releaseQty: 30 });
+      ok("an order can be raised with only part released", b.status === 201, b.status + " " + JSON.stringify(b.d).slice(0, 70));
+      ok("30 goes to the floor", Math.abs(b.d.runQty - 30) < 0.01, String(b.d.runQty));
+      ok("70 is carried as pending", Math.abs(b.d.pendingQty - 70) < 0.01, String(b.d.pendingQty));
+      ok("a batch held back on purpose is not flagged as a shortage",
+        !b.d.shortage || b.d.shortage.length === 0, JSON.stringify(b.d.shortage));
+      // and only the released part drew material — the rest is still on the shelf
+      const left = ((await call("GET", "/state", A)).d.movements || [])
+        .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+      ok("the held-back batch has not consumed anything yet", Math.abs(left - 70) < 0.01, String(left));
+
+      await call("POST", "/production/wo/" + b.d.id + "/advance", A, { action: "complete", all: true });
+      await call("POST", "/production/wo/" + b.d.id + "/advance", A, { action: "dispatch" });
+      const nxt = await call("POST", "/production/wo/" + b.d.id + "/resume", A, { qty: 40 });
+      ok("the next batch can be a chosen size too", Math.abs(nxt.d.runQty - 40) < 0.01, String(nxt.d.runQty));
+      ok("and the remainder keeps waiting", Math.abs(nxt.d.pendingQty - 30) < 0.01, String(nxt.d.pendingQty));
+      ok("resuming more than is pending is refused",
+        (await call("POST", "/production/wo/" + b.d.id + "/resume", A, { qty: 999 })).status === 400);
+      await call("DELETE", "/production/wo/" + b.d.id, A);
+      /* Deleting the order reverses everything it issued, so the 100 kg staged
+         for this block is back on the shelf. Take it out again — the tests
+         that follow are about an EMPTY store and must start from one. */
+      const onShelf = ((await call("GET", "/state", A)).d.movements || [])
+        .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+      if (onShelf > 0.001) {
+        await call("POST", "/movements", A, { id: "MV-BATCH-Z", itemId: rm.id, type: "ADJ",
+          qty: -onShelf, wh: "WH-RM", date: "2026-05-02", manual: true });
+      }
+      const after = ((await call("GET", "/state", A)).d.movements || [])
+        .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+      ok("the store is back to empty for the tests that follow", Math.abs(after) < 0.01, String(after));
+    }
+
+    /* A partial order ships what it HAS made — the goods are real whether or
+       not the balance has arrived — and stays open for the rest. */
+    {
+      // 40 kg of material against a 60 kg order, so 40 is made and 20 pends
+      await call("POST", "/movements", A, { id: "MV-PART-3", itemId: rm.id, type: "GRN",
+        qty: 40, rate: 10, wh: "WH-RM", date: "2026-03-01", manual: true });
+      const p = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 60, allowShortage: true });
+      const pid = p.d.id;
+      const made = +p.d.runQty || 0;
+      ok("40 of the 60 is released, 20 pends", Math.abs(made - 40) < 0.01 && Math.abs(p.d.pendingQty - 20) < 0.01,
+        "run=" + made + " pending=" + p.d.pendingQty);
+      await call("POST", "/production/wo/" + pid + "/advance", A, { action: "complete", all: true });
+      const disp = await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" });
+      ok("the made portion of a pending order can be dispatched", disp.status === 200,
+        disp.status + " " + JSON.stringify(disp.d).slice(0, 80));
+      ok("it records how much went out", Math.abs(disp.d.dispatchedQty - made) < 0.01,
+        disp.d.dispatchedQty + " vs " + made);
+      ok("the order is NOT closed while quantity is still owed",
+        disp.d.dispatched === false && disp.d.pendingQty > 0,
+        "dispatched=" + disp.d.dispatched + " pending=" + disp.d.pendingQty);
+      ok("dispatching the same portion twice is refused",
+        (await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" })).status === 400);
+      const floor = ((await call("GET", "/state", S1x)).d.workorders || []).find((w) => w.id === pid);
+      ok("the floor is told how much has gone out",
+        floor && Math.abs((+floor.dispatchedQty || 0) - made) < 0.01,
+        JSON.stringify(floor && floor.dispatchedQty));
+
+      /* THE CYCLE: material arrives -> the balance goes back on the floor ->
+         it is made -> that portion ships too -> and the order finally closes. */
+      await call("POST", "/movements", A, { id: "MV-PART-4", itemId: rm.id, type: "GRN",
+        qty: 20, rate: 10, wh: "WH-RM", date: "2026-04-01", manual: true });
+      const again = await call("POST", "/production/wo/" + pid + "/resume", A, {});
+      ok("resuming puts the balance back on the floor",
+        again.status === 200 && Math.abs(again.d.runQty - 20) < 0.01 && again.d.pendingQty === 0,
+        "run=" + (again.d || {}).runQty + " pending=" + (again.d || {}).pendingQty);
+      ok("what already shipped is remembered across the resume",
+        Math.abs((+again.d.dispatchedQty || 0) - made) < 0.01, String(again.d.dispatchedQty));
+      ok("and the route is ready to be run again",
+        (again.d.route || []).every((s) => s.status === "Pending"));
+      /* A batched order runs slitting and packing more than once. The time
+         spent on the earlier batch is banked before the route is reset, so the
+         Time Status tab can total it rather than losing it. */
+      ok("each stage remembers it has already been run once",
+        (again.d.route || []).every((s) => (+s.runs || 0) === 1),
+        (again.d.route || []).map((s) => s.key + ":" + s.runs).join(","));
+      ok("and keeps the time already spent on it",
+        (again.d.route || []).every((s) => "priorMs" in s),
+        JSON.stringify((again.d.route || []).map((s) => s.priorMs)));
+      ok("the first start of each stage is preserved",
+        (again.d.route || []).every((s) => !!s.firstStartedAt),
+        JSON.stringify((again.d.route || []).map((s) => s.firstStartedAt)));
+      await call("POST", "/production/wo/" + pid + "/advance", A, { action: "complete", all: true });
+      const last = await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" });
+      ok("the second portion dispatches too", last.status === 200 &&
+        Math.abs(last.d.dispatchedQty - 60) < 0.01, "sent=" + (last.d || {}).dispatchedQty);
+      ok("with nothing owed the order is finally closed",
+        last.d.dispatched === true && last.d.pendingQty === 0,
+        "dispatched=" + last.d.dispatched + " pending=" + last.d.pendingQty);
+      await call("DELETE", "/production/wo/" + pid, A);
+    }
+
     /* a partial order must reach the floor flagged, and must NOT be
        dispatchable while it still owes quantity */
     const wo2 = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 80, allowShortage: true });
     ok("a second partial order is raised", wo2.status === 201 && wo2.d.pendingQty > 0,
       "pending=" + (wo2.d || {}).pendingQty);
-    // this product runs on a slitting line, so ask that floor's supervisor
-    const S1 = (await login("slitting1", "slitting1@123")).token;
-    const supSees = ((await call("GET", "/state", S1)).d.workorders || []).find((w) => w.id === wo2.d.id);
+    const supSees = ((await call("GET", "/state", S1x)).d.workorders || []).find((w) => w.id === wo2.d.id);
     if (supSees) {
       ok("the floor is told the order is partial", supSees.partial === true, String(supSees.partial));
       ok("the floor sees the pending quantity", (+supSees.pendingQty || 0) > 0, String(supSees.pendingQty));

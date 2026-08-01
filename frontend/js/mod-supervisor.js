@@ -94,11 +94,27 @@
       }
     },
 
-    /* bucket a WO from THIS area's perspective */
+    /* bucket a WO from THIS area's perspective.
+       An order still owing quantity is NOT done, however finished this run
+       looks — it stays in My Jobs until the whole order has been made. The
+       partial test comes first because `myDone` goes true the moment the
+       released portion is off the machines, which is exactly the state the
+       job has to keep being visible in. */
     buckets() {
       const g = { active: [], incoming: [], done: [] };
       (this.data.workorders || []).forEach((w) => {
-        if (w.dispatched || w.myDone) g.done.push(w);
+        const partial = (+w.pendingQty || 0) > 1e-6 && !w.dispatched;
+        const runDone = (w.route || []).length > 0 && (w.route || []).every((s) => s.status === "Completed");
+        const madeQ = (+w.completedQty || 0) + (+w.runQty || 0);
+        const toShip = madeQ - (+w.dispatchedQty || 0);
+        /* An order still owing quantity cycles between the two lists, and it is
+           the UNSHIPPED goods that decide which:
+             something made and not yet gone  -> Completed, to be dispatched
+             nothing waiting to go out        -> My Jobs, the order is open
+           So it lands in Completed when a run finishes, returns to My Jobs the
+           moment that portion ships, and does the same again for the next one. */
+        if (partial) g[(runDone && toShip > 0.001) ? "done" : "active"].push(w);
+        else if (w.dispatched || w.myDone || runDone) g.done.push(w);
         else if (w.mine) g.active.push(w);
         else g.incoming.push(w);   // upstream — coming to this area later
       });
@@ -326,8 +342,22 @@
       const due = w.due ? new Date(w.due) : null;
       const overdue = due && !w.dispatched && !w.myDone && DB.helpers.iso(due) < DB.helpers.iso(DB.helpers.today());
 
-      const chipCol = STATUS_COLOR[cur.status] || "var(--text-mut)";
+      /* Where this job stands, worked out once and used by the chip, the
+         warning box and the buttons — so all three tell the same story. */
+      const pend = +w.pendingQty || 0;
+      const madeQ = (+w.completedQty || 0) + (+w.runQty || 0);
+      const sentQ = +w.dispatchedQty || 0;
+      const runFinished = (w.route || []).length > 0 && (w.route || []).every((s) => s.status === "Completed");
+      const readyToShip = !w.dispatched && runFinished && (madeQ - sentQ) > 0.001
+        && (this.area === "slitting" || this.area === "all");
+
+      /* A finished run read "Packing · to start", because the chip only looked
+         at the current stage's status and a completed route leaves the pointer
+         on the last stage. Say what is actually true of the job. */
+      const chipCol = readyToShip ? "var(--ok)" : (STATUS_COLOR[cur.status] || "var(--text-mut)");
       const chipTxt = w.dispatched ? "Dispatched"
+        : readyToShip ? "Ready to dispatch"
+        : runFinished ? (pend > 0 ? "Waiting on material" : "Your part done")
         : (w.mine ? (STAGE_META[cur.key] || {}).label + " · " + (cur.status === "In Production" ? "in progress" : "to start")
           : (w.myDone ? "Your part done" : "At " + ((STAGE_META[cur.key] || {}).label || cur.name)));
 
@@ -377,19 +407,32 @@
 
       const actions = H("div", { class: "sup-actions" });
       /* Part of this order could not be made — the store was short. The floor
-         must see that the job is NOT finished, but there is nothing for them
-         to do until the office releases the balance, so no buttons are shown. */
-      const pend = +w.pendingQty || 0;
+         must see that the job is NOT finished; what it can DO about it depends
+         on whether there are finished goods waiting to go out. */
       if (pend > 0) {
-        const madeQ = (+w.completedQty || 0) + (+w.runQty || 0);
-        actions.appendChild(H("div", { class: "sup-partial",
-          text: "⏸ PARTIAL — " + ENG.num(pend) + " kg awaiting material" }));
-        actions.appendChild(H("div", { class: "muted", style: "font-size:11.5px;margin-top:4px",
-          text: ENG.num(w.qty) + " kg ordered · " + ENG.num(madeQ) + " kg covered · "
-            + ENG.num(pend) + " kg pending — the office will release it when the material arrives" }));
+        // headline and explanation are one warning, so they share one red box
+        actions.appendChild(H("div", { class: "sup-partial" }, [
+          H("div", { class: "sup-partial-head",
+            text: "⏸ PARTIAL — " + ENG.num(pend) + " kg awaiting material" }),
+          H("div", { class: "sup-partial-sub",
+            text: ENG.num(w.qty) + " kg ordered · " + ENG.num(madeQ) + " kg covered · "
+              + ENG.num(pend) + " kg pending — the office will release it when the material arrives" }),
+          // what has already gone out, so a part shipment is never sent twice
+          sentQ > 0 ? H("div", { class: "sup-partial-sub",
+            text: "🚚 " + ENG.num(sentQ) + " kg dispatched" + (madeQ - sentQ > 0.001
+              ? " · " + ENG.num(madeQ - sentQ) + " kg ready to dispatch" : "") }) : null,
+        ].filter(Boolean)));
       }
+      /* Goods that are MADE and not yet gone can always be dispatched — tested
+         BEFORE "is it my job", because a partial order is still the floor's job
+         while it waits for material, and that branch would otherwise swallow it
+         and offer no button at all. */
       if (w.dispatched) {
         actions.appendChild(H("div", { class: "sup-done-tag", text: "✓ Dispatched" }));
+      } else if (readyToShip) {
+        actions.appendChild(H("button", { class: "sup-act primary",
+          onclick: (e) => this.act(w, "dispatch", e.currentTarget),
+          text: "🚚 Dispatch " + ENG.num(madeQ - sentQ) + " kg" }));
       } else if (w.mine) {
         const label = (STAGE_META[cur.key] || {}).label || cur.name;
         if (cur.status === "Pending") {
@@ -398,10 +441,6 @@
           actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "complete", e.currentTarget), text: "✓ Finish " + label }));
           actions.appendChild(H("button", { class: "sup-act ghost", onclick: (e) => this.act(w, "pause", e.currentTarget), text: "↩ Pause" }));
         }
-      } else if (w.myDone && !w.dispatched && pend <= 0 && (w.route || []).every((s) => s.status === "Completed") && (this.area === "slitting" || this.area === "all")) {
-        // fully made & packed, waiting to ship — an order still owing quantity
-        // is deliberately NOT dispatchable, however finished this run looks
-        actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "dispatch", e.currentTarget), text: "🚚 Mark Dispatched" }));
       } else if (!w.mine && !w.myDone && pend <= 0) {
         actions.appendChild(H("div", { class: "sup-done-tag", style: "color:var(--text-mut)", text: "⏳ Waiting on " + ((STAGE_META[cur.key] || {}).label || cur.name) }));
       }

@@ -50,11 +50,18 @@
     return iw?+iw:null;
   }
   /* "0.05 × 25 mm" — thickness × width, the size a customer orders by. */
+  /* Trim the tail a binary float leaves behind (0.14000000000000001 -> 0.14).
+     Twelve significant digits is beyond anything a spec sheet states. */
+  const trimNum=(v)=>{ const x=+v; return Number.isFinite(x)?String(+x.toPrecision(12)):String(v); };
   function lineSize(l,it){
     it=it||ENG.item(l.itemId)||{};
-    const t=it.thicknessMM, w=lineWidth(l);
-    if(t!=null&&w) return t+" × "+w+" mm";
-    if(t!=null) return t+" mm";
+    /* A thickness set ON THE ORDER wins over the material's own: sheet goods
+       are bought to the thickness this order needs, which is not always the
+       one the item master happens to carry. */
+    const t=(l&&l.thicknessMM!=null)?l.thicknessMM:it.thicknessMM;
+    const w=lineWidth(l);
+    if(t!=null&&w) return trimNum(t)+" × "+w+" mm";
+    if(t!=null) return trimNum(t)+" mm thick";
     if(w) return w+" mm wide";
     return "";
   }
@@ -200,7 +207,10 @@
       const body = sugg.length? h("div",{},[
         h("p",{class:"dim",style:"margin-bottom:14px",text:`${sugg.length} item(s) are at or below their reorder point. Suggested quantities account for current stock + pending POs against target levels.`}),
         table(sugg,[
-          {key:"item",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div><div class="cell-sub">${r.it.id} · ${ENG.sup(r.it.supplierId)}</div>`,noSort:true},
+          // code and supplier stack, so neither is truncated by the other
+          {key:"item",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div>`
+            +`<div class="cell-sub">${r.it.id}</div>`
+            +`<div class="cell-sub">${ENG.sup(r.it.supplierId)}</div>`,noSort:true},
           {key:"onHand",label:"On Hand",num:true,render:r=>ENG.num(r.st.onHand,1),noSort:true},
           {key:"reorder",label:"Reorder Pt",num:true,render:r=>ENG.num(r.it.reorder),noSort:true},
           {key:"suggest",label:"Suggested",num:true,render:r=>`<span class="strong" style="color:var(--accent)">${ENG.num(r.st.suggest)} ${r.it.uom}</span>`,noSort:true},
@@ -276,9 +286,17 @@
       function collect(){ const out=[];
         lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#pl_item_"+i); if(!iEl) return;
           const id=iEl.value, qty=+UI.$("#pl_qty_"+i).value, rate=+UI.$("#pl_rate_"+i).value;
-          if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).cost, recd:0,
+          // the thickness now comes FROM the chosen item, never typed beside it
+          const thk=id?((ENG.item(id)||{}).thicknessMM):null;
+          const uEl=UI.$("#pl_uom_"+i);
+          const uom=uEl?String(uEl.value||"").toUpperCase():"";
+          if(id&&qty>0) out.push(Object.assign({itemId:id, qty, rate:rate||ENG.item(id).cost, recd:0,
             hsn:(UI.$("#pl_hsn_"+i).value||"").trim(),
-            discPct:+UI.$("#pl_disc_"+i).value||0, gstPct:+UI.$("#pl_gst_"+i).value||0}); });
+            discPct:+UI.$("#pl_disc_"+i).value||0, gstPct:+UI.$("#pl_gst_"+i).value||0},
+            // the thickness the supplier must deliver to, for sheet goods only
+            (thk!=null&&isFinite(thk)&&thk>0)?{thicknessMM:thk}:{},
+            // the unit this order is placed in
+            uom?{uom}:{})); });
         return out; }
       function draft(){
         const out=collect();
@@ -306,6 +324,13 @@
         if(!o.lines.length){ toast("Add at least one line with qty to print",{type:"warn"}); return; }
         printDoc("po",o);
       }
+      /* Units a PO can be raised in. Built from what the catalogue actually
+         uses, so the list never offers a unit this factory does not buy in. */
+      const UOMS=(()=>{
+        const s=new Set(["KG","MTR","PCS"]);
+        ENG.data.items.forEach(i=>{ const u=String(i.uom||"").trim().toUpperCase(); if(u&&u!=="-") s.add(u); });
+        return [...s].sort();
+      })();
       function addLine(seed){
         const rms=ENG.data.items.filter(i=>i.cat!=="FG");
         const idx=lines.length; lines.push({});
@@ -313,21 +338,107 @@
         const it=ENG.item(itemId)||{};
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:(typeof seed==="string"?ENG.status(seed).suggest:"");
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(typeof seed==="string"?ENG.item(seed).cost:"");
+        /* THICKNESS IS THE IDENTITY of a sheet material — every thickness of a
+           tape is its own stock item, with its own GSM and its own stock. So
+           this PICKS the item; it is not a number to type. A free box allowed
+           an order for 0.14 mm to be placed against the 0.08 mm item, which is
+           exactly what went wrong on PO-025/026/027. */
+        const familyOf=(x)=>{
+          if(!x||!x.material) return [];
+          return ENG.data.items.filter(i=>i.cat!=="FG" && i.material===x.material
+              && String(i.grade||"")===String(x.grade||"") && i.thicknessMM!=null)
+            .sort((a,b)=>(+a.thicknessMM||0)-(+b.thicknessMM||0));
+        };
+        const thkEl=h("select",{class:"select",id:"pl_thk_"+idx});
+        const fillThk=(x)=>{
+          const fam=familyOf(x);
+          thkEl.innerHTML="";
+          fam.forEach(f=>thkEl.appendChild(h("option",{value:f.id,
+            text:BOMCALC.thk3(f.thicknessMM)+" mm",selected:f.id===x.id?"selected":null})));
+          return fam;
+        };
+        // shown only when the material genuinely comes in more than one thickness
+        const syncThk=(x)=>{ const f=thkEl.closest(".doc-line-f"); if(!f) return;
+          const fam=fillThk(x);
+          f.hidden=!(isSheetGoods(x)&&fam.length>1);
+        };
+        thkEl.addEventListener("change",()=>{
+          const pick=ENG.item(thkEl.value); if(!pick) return;
+          const hid=UI.$("#pl_item_"+idx), vis=UI.$("#pl_item_"+idx+"_s");
+          if(!hid) return;
+          hid.value=pick.id;
+          if(vis) vis.value=pick.name+" — "+pick.id;   // keep the search box honest
+          hid.dispatchEvent(new Event("change",{bubbles:true}));
+        });
+
+        /* The unit this order is placed in. It defaults to how the material is
+           STOCKED, which is what a receipt posts against — choosing a different
+           one is allowed (a supplier may quote in rolls or metres) but the
+           warning below says plainly that the receipt will not convert it. */
+        const stockUom=String(it.uom||"").trim().toUpperCase();
+        const seedUom=(seed&&seed.uom)?String(seed.uom).toUpperCase():"";
+        const uomEl=h("select",{class:"select",id:"pl_uom_"+idx},
+          UOMS.map(u=>h("option",{value:u,text:u,selected:(seedUom||stockUom)===u?"selected":null})));
+        const uomWarn=h("div",{class:"muted",id:"pl_uomw_"+idx,
+          style:"font-size:10.5px;margin-top:3px;display:none"});
+        const qtyEl=h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal});
+        /* Suppliers quote tape either way round, so whichever unit is typed the
+           other is shown beside it — with the width and GSM it was worked out
+           from, so the figure can be checked rather than trusted. */
+        const convEl=h("div",{class:"muted",id:"pl_conv_"+idx,style:"font-size:10.5px;margin-top:3px"});
+        const syncConv=(x)=>{
+          const kpm=kgPerMetre(x), q=+qtyEl.value||0;
+          const u=String(uomEl.value||"").toUpperCase();
+          if(!kpm||!(q>0)||(u!=="KG"&&u!=="MTR")){ convEl.textContent=""; return; }
+          const basis=" ("+ENG.num(x.gsm,0)+" g/m² × "+ENG.num(x.width,0)+" mm)";
+          convEl.textContent = u==="KG" ? "= "+ENG.num(q/kpm,1)+" MTR"+basis
+                                        : "= "+ENG.num(q*kpm,2)+" kg"+basis;
+        };
+        /* Ordering in a different unit from the one a material is stocked in is
+           normal — a roll is quoted by length or by weight depending on the
+           supplier. The receipt converts it, so this states what will land in
+           stock rather than warning against it. It only objects when the two
+           units genuinely cannot be reconciled. */
+        const syncUom=(x)=>{
+          const su=String((x&&x.uom)||"").trim().toUpperCase();
+          const u=String(uomEl.value||"").toUpperCase();
+          if(!su || u===su){ uomWarn.style.display="none"; uomWarn.textContent=""; return; }
+          const one=BOMCALC.convertQty(1,u,su,x);
+          uomWarn.style.display="";
+          if(one==null){
+            uomWarn.style.color="var(--danger)";
+            uomWarn.textContent="Stocked in "+su+" and this cannot be converted — set the material's width and GSM, or order in "+su+".";
+          }else{
+            uomWarn.style.color="";
+            uomWarn.textContent="Stocked in "+su+" — the receipt converts it (1 "+u+" = "+ENG.num(one,4)+" "+su+").";
+          }
+        };
         const row=docLine(idx + 1,
           h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:i.name+" — "+i.id})),itemId,"Search material…")}),
           [
             ["HSN",      h("input",{class:"input",id:"pl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
-            ["Qty",      h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal})],
+            ["Thk (mm)", thkEl],
+            ["Qty",      qtyEl],
+            ["UOM",      uomEl],
             ["Rate (₹)", h("input",{class:"input",id:"pl_rate_"+idx,type:"number",placeholder:"0.00",value:rateVal})],
             ["Disc %",   h("input",{class:"input",id:"pl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""})],
             ["GST %",    h("input",{class:"input",id:"pl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)})],
           ],
           el=>{ el.remove(); lines[idx]=null; recalc(); });
         UI.$("#po_lines").appendChild(row);
+        // each note belongs under the field it is about
+        const uomCell=uomEl.closest(".doc-line-f"); if(uomCell) uomCell.appendChild(uomWarn);
+        const qtyCell=qtyEl.closest(".doc-line-f"); if(qtyCell) qtyCell.appendChild(convEl);
+        const cur=()=>ENG.item(UI.$("#pl_item_"+idx).value)||{};
+        syncThk(it); syncUom(it); syncConv(it);
+        qtyEl.addEventListener("input",()=>syncConv(cur()));
+        uomEl.addEventListener("change",()=>{ syncUom(cur()); syncConv(cur()); });
         // picking a material refreshes its HSN + GST defaults
         const hid=UI.$("#pl_item_"+idx);
         if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{};
           UI.$("#pl_hsn_"+idx).value=ni.hsn||""; UI.$("#pl_gst_"+idx).value=lineGstPct(null,ni);
+          syncThk(ni);
+          const nu=String(ni.uom||"").trim().toUpperCase(); if(nu) uomEl.value=nu; syncUom(ni); syncConv(ni);
           if(!UI.$("#pl_rate_"+idx).value) UI.$("#pl_rate_"+idx).value=ni.cost||""; recalc(); });
       }
       if(editPo) editPo.lines.forEach(l=>addLine(l)); else addLine(presetItem);
@@ -364,6 +475,26 @@
   function docSec(title){
     return h("div",{class:"doc-sec"},[h("span",{class:"doc-sec-t",text:title}), h("span",{class:"doc-sec-l"})]);
   }
+  /* Sheet goods — fabric, film, mica tape, anything supplied as a roll or a
+     sheet — are bought to a THICKNESS, and a supplier cannot fill the order
+     without being told which. Powders, pastes and liquids have no thickness.
+     A material already carrying one, or measured by length or area, is sheet
+     goods; the office can still correct the figure per order. */
+  function isSheetGoods(it){
+    if(!it) return false;
+    if(it.thicknessMM!=null) return true;
+    if(it.fabric===true) return true;
+    return ["MTR","M","METER","MTRS","SQM","ROLL"].includes(String(it.uom||"").toUpperCase());
+  }
+
+  /* Tape and sheet are quoted by length OR by weight depending on the supplier,
+     and the two convert through the roll's own width and GSM:
+         kg = metres × widthMM × gsm ÷ 1,000,000
+     Returns kg per metre, or null when the material does not carry both
+     figures — in which case nothing is shown rather than a made-up number. */
+  // the roll geometry lives in bomcalc, shared with the server that posts the
+  // receipt — so the figure on screen is the one that reaches stock
+  const kgPerMetre=(it)=>BOMCALC.kgPerMetre(it);
   function docLine(no, itemNode, fields, onRemove){
     return h("div",{class:"doc-line"},[
       h("div",{class:"doc-line-top"},[
@@ -644,8 +775,10 @@
         // quantity still free, so the operator picks the right ready stock
         const opts=ready.map(b=>{
           const size=lineSize({itemId:b.itemId,width:b.widthMM});
-          return {v:b.id, l:batchNo(b.id)+(size?" · "+size:"")+" · "+ENG.num(b.free,1)+" "+uom+" ready"
-            +(b.claimed?" (of "+ENG.num(b.made,1)+")":"")};
+          // the same three figures the hint below uses, so the two agree
+          return {v:b.id, l:batchNo(b.id)+(size?" · "+size:"")
+            +" · "+ENG.num(b.ordered,1)+" ordered · "+ENG.num(b.made,1)+" produced · "
+            +ENG.num(b.pending,1)+" pending"};
         });
         // keep a batch that is already on this order even once fully claimed
         (editSo&&editSo.lines||[]).forEach(l=>{
@@ -654,14 +787,26 @@
         return [{v:"",l:ready.length?"— pick a finished job —":"— nothing finished yet —"}].concat(opts);
       }
       /* a line-level note: what is standing ready for the product picked */
+      /* What is genuinely available against each finished job. A work order
+         that is still owing quantity has produced only part of it, so the
+         order is broken out — total, made, pending — rather than quoting the
+         ordered figure as if it were all standing ready. */
       function readyHint(itemId){
         const ready=ENG.readyBatches(itemId);
-        const free=ready.reduce((n,b)=>n+b.free,0);
         if(!ready.length) return "No finished job for this product yet — it can still be ordered and made to order.";
-        return "Ready to sell: "+ENG.num(free,1)+" "+((ENG.item(itemId)||{}).uom||"")+
-          " reserved from "+ready.length+" finished job"+(ready.length>1?"s":"")+
-          " · "+ready.slice(0,3).map(b=>batchNo(b.id)+" ("+ENG.num(b.free,1)+")").join(", ")+
-          (ready.length>3?" …":"");
+        /* One wording for every job, part-made or complete — a finished order
+           simply reads 0 still pending. The desk should not have to decode two
+           different formats to answer the same question. */
+        const many=ready.length>1;
+        const each=ready.slice(0,3).map(b=>{
+          let s=(many?batchNo(b.id)+" — ":"")
+            +ENG.num(b.ordered,1)+" ordered · "+ENG.num(b.made,1)+" produced · "
+            +ENG.num(b.pending,1)+" still pending";
+          // only worth saying when some of what was made is no longer available
+          if(Math.abs(b.free-b.made)>0.001) s+=" · "+ENG.num(b.free,1)+" free to sell";
+          return s;
+        });
+        return each.join("    ·    ")+(ready.length>3?" …":"");
       }
       function collect(){ const out=[];
         lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#sl_item_"+i); if(!iEl) return;
@@ -723,12 +868,22 @@
         const it=ENG.item(itemId)||{};
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(it.price||"");
+        /* A sales line is always in kg — the metre equivalent is shown beside
+           it purely so the desk can talk to a customer who orders by length.
+           It is a working aid only and never reaches the invoice. */
+        const sQtyEl=h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal});
+        const sConvEl=h("div",{class:"muted",id:"sl_conv_"+idx,style:"font-size:10.5px;margin-top:3px"});
+        const sSyncConv=(x)=>{
+          const kpm=kgPerMetre(x), q=+sQtyEl.value||0;
+          if(!kpm||!(q>0)){ sConvEl.textContent=""; return; }
+          sConvEl.textContent="= "+ENG.num(q/kpm,1)+" MTR ("+ENG.num(x.gsm,0)+" g/m² × "+ENG.num(x.width,0)+" mm)";
+        };
         const row=docLine(idx + 1,
           h("div",{html:U.searchSelect("sl_item_"+idx,fgs.map(i=>({v:i.id,l:i.name+(i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"")+" — "+(i.typeCode||i.id)})),itemId,"Search product…")}),
           [
             ["HSN",         h("input",{class:"input",id:"sl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
             ["Batch (W.O.)",h("div",{html:U.selectHTML("sl_batch_"+idx,batchOpts(itemId),(seed&&seed.batch)||"")})],
-            ["Qty (kg)",    h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal})],
+            ["Qty (kg)",    sQtyEl],
             ["Rate",        h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"0.00",value:rateVal})],
             ["Disc %",      h("input",{class:"input",id:"sl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""})],
             ["GST %",       h("input",{class:"input",id:"sl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)})],
@@ -737,9 +892,12 @@
         // what the floor already has finished and reserved for this product
         row.appendChild(h("div",{class:"so-ready",id:"sl_ready_"+idx,text:readyHint(itemId)}));
         UI.$("#so_lines").appendChild(row);
+        const sQtyCell=sQtyEl.closest(".doc-line-f"); if(sQtyCell) sQtyCell.appendChild(sConvEl);
+        sSyncConv(it);
+        sQtyEl.addEventListener("input",()=>sSyncConv(ENG.item(UI.$("#sl_item_"+idx).value)||{}));
         // picking a product refreshes HSN, GST, rate default + its batch (WO) list
         const hid=UI.$("#sl_item_"+idx);
-        if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{};
+        if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{}; sSyncConv(ni);
           UI.$("#sl_hsn_"+idx).value=ni.hsn||""; UI.$("#sl_gst_"+idx).value=lineGstPct(null,ni);
           if(!UI.$("#sl_rate_"+idx).value) UI.$("#sl_rate_"+idx).value=ni.price||"";
           const bSel=UI.$("#sl_batch_"+idx);
@@ -1042,7 +1200,8 @@
         `<td>${esc(it.name||l.itemId)}<div class="sub">${esc(size||l.itemId)}</div></td>`+
         `<td class="c">${esc(l.hsn||it.hsn||"—")}</td>`+
         (anyBatch?`<td class="c">${esc(l.batch?batchNo(l.batch):"—")}</td>`:"")+
-        `<td class="r">${ENG.num(l.qty,2)}</td><td class="c">${esc(isPO?(it.uom||"KG"):"KG")}</td>`+
+        // a PO prints the unit it was PLACED in; a sales invoice is always kg
+        `<td class="r">${ENG.num(l.qty,2)}</td><td class="c">${esc(isPO?(l.uom||it.uom||"KG"):"KG")}</td>`+
         `<td class="r">${IN(l.rate)}</td>`+
         (anyDisc?`<td class="r">${l.discPct?l.discPct+"%":"—"}</td>`:"")+
         `<td class="r">${lc.gstPct}%</td>`+

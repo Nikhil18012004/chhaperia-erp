@@ -389,8 +389,23 @@
     });
     return wos.map(w=>{
       const used=claimed[w.id]||0;
-      return { id:w.id, itemId:w.itemId, made:+w.qty||0, claimed:used,
-               free:Math.max(0,(+w.qty||0)-used),
+      /* What is sellable is what has actually been PRODUCED, less anything
+         already shipped — not what was ordered. An order still owing material
+         has made only part of its quantity, and selling the rest of it would
+         promise goods that do not exist. A work order with no partial fields
+         (every ordinary one) falls back to its ordered quantity and behaves
+         exactly as before. */
+      const ordered=+w.qty||0;
+      const partial=(w.runQty!=null||w.completedQty!=null||w.pendingQty!=null);
+      const made=partial
+        ? Math.round(((+w.completedQty||0)+(+w.runQty||0))*1000)/1000
+        : ordered;
+      const sent=+w.dispatchedQty||0;
+      const sellable=Math.max(0, made-sent);
+      return { id:w.id, itemId:w.itemId,
+               ordered, made, sent, pending:+w.pendingQty||0,
+               claimed:used,
+               free:Math.max(0, sellable-used),
                // the width this run was slit to — travels with the batch so a
                // sales order shows the dimensions of the stock it is claiming
                widthMM:(w.widthMM!=null&&w.widthMM!=="")?+w.widthMM:null,

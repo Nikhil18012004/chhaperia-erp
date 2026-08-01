@@ -582,7 +582,11 @@ function rollupStatus(wo) {
   const route = wo.route || [];
   if (!route.length) return wo.status || "Released";
   const allDone = route.every((r) => r.status === "Completed");
-  if (allDone) return "Completed";
+  /* An order that still owes material-blocked quantity is NOT finished, however
+     complete this run looks. It reports Partial so it keeps its place on the
+     board and on the floor's job list until the balance has been made — only
+     the last run, with nothing pending, closes it. */
+  if (allDone) return (+wo.pendingQty || 0) > 1e-6 ? "Partial" : "Completed";
   const anyStarted = route.some((r) => r.status !== "Pending");
   return anyStarted ? "In Production" : "Released";
 }

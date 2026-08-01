@@ -305,12 +305,17 @@
     }
     return s; // date-only (legacy work orders)
   }
-  function durBetween(a,b){
-    if(!a||!b||String(a).indexOf("T")<0||String(b).indexOf("T")<0) return "—";
-    const ms=new Date(b)-new Date(a); if(isNaN(ms)||ms<0) return "—";
+  // a span of milliseconds as "3h 20m" — the one place durations are worded
+  function durMs(ms){
+    if(!isFinite(ms)||ms<0) return "—";
     const mins=Math.round(ms/60000), hh=Math.floor(mins/60), mm=mins%60;
     if(mins<1) return "<1m";
     return hh? (hh+"h "+mm+"m") : (mm+"m");
+  }
+  function durBetween(a,b){
+    if(!a||!b||String(a).indexOf("T")<0||String(b).indexOf("T")<0) return "—";
+    const ms=new Date(b)-new Date(a); if(isNaN(ms)||ms<0) return "—";
+    return durMs(ms);
   }
   // per-stage timing table shown under the "Time Status" tab of a work order
   function stageTimeStatus(wo){
@@ -330,16 +335,33 @@
       if(done) duration=durBetween(started,done);
       else if(s.status==="In Production" && started) duration="⏱ "+durBetween(started,nowISO);
       else duration="—";
+      /* A batched order runs the same stages over and over. This run's time is
+         only part of the story, so the time banked from earlier batches is
+         added in and the total for the stage is what is reported. */
+      const prior=+s.priorMs||0;
+      let thisMs=0;
+      if(done&&started) thisMs=Math.max(0,Date.parse(done)-Date.parse(started));
+      else if(s.status==="In Production"&&started) thisMs=Math.max(0,Date.now()-Date.parse(started));
+      const runs=(+s.runs||0)+(done?1:0);
+      const totalMs=prior+thisMs;
       return { stage:STAGE_LABEL[s.key]||s.name||s.key, status:s.status,
-        started:fmtDT(started), completed:fmtDT(done), duration, by:s.doneBy||s.startedBy||"—",
+        started:fmtDT(s.firstStartedAt||started), completed:fmtDT(done), duration,
+        runs, prior, totalMs,
+        total: totalMs>0 ? (prior>0?durMs(totalMs):duration) : "—",
+        by:s.doneBy||s.startedBy||"—",
         cur:(i===(wo.stageIdx||0))&&!wo.dispatched&&s.status!=="Completed" };
     });
+    const anyRepeat=rows.some(r=>r.runs>1||r.prior>0);
     wrap.appendChild(table(rows,[
       {key:"stage",label:"Stage",cls:"ctr",noSort:true,render:r=>`<span class="cell-main">${esc(r.stage)}</span>${r.cur?' <span class="chip" style="color:var(--info);border-color:var(--info)">current</span>':''}`},
       {key:"status",label:"Status",noSort:true,render:r=>badge(r.status==="Completed"?"ok":r.status==="In Production"?"info":"warn",r.status)},
       {key:"started",label:"Started",noSort:true,render:r=>esc(r.started)},
       {key:"completed",label:"Completed",noSort:true,render:r=>esc(r.completed)},
-      {key:"duration",label:"Duration",noSort:true,render:r=>`<span class="mono">${esc(r.duration)}</span>`},
+      {key:"duration",label:anyRepeat?"This batch":"Duration",noSort:true,render:r=>`<span class="mono">${esc(r.duration)}</span>`},
+      // only worth a column when the order has actually been run more than once
+      ...(anyRepeat?[{key:"total",label:"Total (all batches)",noSort:true,render:r=>
+        `<span class="mono strong">${esc(r.total)}</span>`
+        +(r.runs>1?`<div class="cell-sub">${r.runs} runs</div>`:"")}]:[]),
       {key:"by",label:"By",noSort:true,render:r=>esc(r.by)},
     ],{empty:"No stages"}));
     // summary: total lead time + dispatch
@@ -347,6 +369,14 @@
     const lastDone=wo.dispatchedAt||wo.packedAt||rt.map(s=>s.doneAt).filter(x=>x&&String(x).indexOf("T")>=0).sort().slice(-1)[0];
     const parts=[];
     if(starts[0]&&lastDone) parts.push("Total lead time: "+durBetween(starts[0],lastDone));
+    /* On a batched order the useful figure is the time actually spent on the
+       machines across every run — the lead time above includes the waiting. */
+    if(anyRepeat){
+      const worked=rows.reduce((n,r)=>n+(r.totalMs||0),0);
+      if(worked>0) parts.push("Time on the machines, all batches: "+durMs(worked));
+      const batches=rows.reduce((n,r)=>Math.max(n,r.runs||0),0);
+      if(batches>1) parts.push(batches+" production batches");
+    }
     if(wo.dispatched&&wo.dispatchedAt) parts.push("Dispatched: "+fmtDT(wo.dispatchedAt)+(wo.dispatchedBy?(" · by "+wo.dispatchedBy):""));
     if(parts.length) wrap.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:12px",text:parts.join("    ·    ")}));
     return wrap;
@@ -362,7 +392,10 @@
     ]));
 
     const wos=ENG.data.workorders;
-    const isDone=w=>w.status==="Completed"||w.status==="Dispatched";
+    /* "Partial" is deliberately NOT done: an order still owing quantity stays
+       in Active / Released, at 100% for the run that WAS made, until the whole
+       ordered quantity has been produced. */
+    const isDone=w=>(w.status==="Completed"||w.status==="Dispatched") && !((+w.pendingQty||0)>1e-6);
     const active=wos.filter(w=>!isDone(w));
     const done=wos.filter(isDone);
     const out30=ENG.dailySeries(30).prod.reduce((a,b)=>a+b,0);
@@ -402,20 +435,17 @@
           const pend=+r.pendingQty||0, doneQ=+r.completedQty||0;
           const head=`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`;
           if(pend<=0 && doneQ<=0) return head;
+          /* stacked, never side by side — the column stays narrow and each
+             figure is read on its own line */
           const bits=[];
           if(doneQ>0) bits.push(`${ENG.num(doneQ)} done`);
           if((+r.runQty||0)>0) bits.push(`${ENG.num(r.runQty)} on floor`);
           if(pend>0) bits.push(`<span style="color:var(--danger);font-weight:700">${ENG.num(pend)} pending</span>`);
-          return head+`<div class="cell-sub">${bits.join(" · ")}</div>`;
+          return head+bits.map(b=>`<div class="cell-sub">${b}</div>`).join("");
         }},
         {key:"date",label:"Start",render:r=>`<span style="white-space:nowrap">${r.date||"—"}</span>`,sort:r=>r.date||""},
-        {key:"stage",label:"Stage",cls:"ctr",sort:r=>(r.stageIdx||0),render:r=>{
-          const pend=+r.pendingQty||0;
-          if(pend<=0) return stageCell(r);
-          // the pending sign sits with the stage, where the eye already goes
-          return `<div class="wo-pending-tag">⏸ PENDING · ${ENG.num(pend)} kg</div>`
-            +`<div class="cell-sub">awaiting raw material</div>`;
-        }},
+        // the stage stays the stage — the pending warning has its own line below
+        {key:"stage",label:"Stage",cls:"ctr",render:r=>stageCell(r),sort:r=>(r.stageIdx||0)},
         {key:"line",label:"Line",render:r=>`<span class="chip">${esc(r.line)}</span>`,sort:r=>r.line},
         {key:"due",label:"Due",render:r=>`<span style="white-space:nowrap">${r.due||"—"}</span>`,sort:r=>r.due},
         // progress + status share one column, stacked one over the other, so
@@ -425,7 +455,27 @@
       ],{onRow:r=>woDetail(r),empty:"No work orders",
         /* the whole row goes light red while material is owed, so a pending
            order cannot be mistaken for one that is simply in progress */
-        rowClass:r=>((+r.pendingQty||0)>0 ? "wo-pending" : "")}));
+        rowClass:r=>((+r.pendingQty||0)>0 ? "wo-pending" : ""),
+        /* The warning runs the full width UNDER the row rather than inside the
+           Stage cell, which was widening the table and forcing a sideways
+           scroll to read it. */
+        rowAfter:r=>{
+          const pend=+r.pendingQty||0;
+          if(pend<=0) return null;
+          const madeQ=(+r.completedQty||0)+(+r.runQty||0);
+          /* Name the exact material and code it is waiting on — "waiting for
+             material" sends people to the store to add the wrong one. */
+          const short=(r.shortage||[]).map(s=>`${esc(s.name)} (${esc(s.id)})`).join(", ");
+          const sent=+r.dispatchedQty||0;
+          return `<div class="wo-pending-note">`
+            +`<span class="wo-pending-tag">⏸ PENDING · ${ENG.num(pend)} kg</span>`
+            +`<span>${ENG.num(r.qty)} kg ordered</span>`
+            +`<span>${ENG.num(madeQ)} kg produced</span>`
+            +(sent>0?`<span>🚚 ${ENG.num(sent)} kg dispatched</span>`:"")
+            +`<span class="strong">${ENG.num(pend)} kg awaiting raw material</span>`
+            +(short?`<span>needs ${short}</span>`:"")
+            +`</div>`;
+        }}));
     }
     draw();
     if(params&&params.openNew){ params.openNew=false; woForm(); }
@@ -528,8 +578,12 @@
        whether to raise it anyway. Nothing is reserved by saying yes — the
        pending balance only takes material when the office resumes it. */
     function shortageConfirm(e, qty){
+      /* The CODE is shown under the name on purpose: CP25G and CM25G read
+         almost identically but are different mica entirely, and stocking the
+         wrong one looks like the order refusing to move. */
       const rows=(e.shortage||[]).map(s=>h("tr",{},[
-        h("td",{style:"padding:4px 8px",text:s.name}),
+        h("td",{style:"padding:4px 8px"},[h("div",{text:s.name}),
+          h("div",{class:"cell-sub mono",text:s.id||""})]),
         h("td",{class:"num",style:"padding:4px 8px;text-align:right",text:ENG.num(s.need,2)+" "+(s.uom||"")}),
         h("td",{class:"num",style:"padding:4px 8px;text-align:right",text:ENG.num(s.have,2)}),
         h("td",{class:"num",style:"padding:4px 8px;text-align:right;color:var(--danger);font-weight:700",
@@ -558,19 +612,49 @@
     }
 
     /* ---- put a pending balance back on the floor -------------------------- */
+    /* How much of the balance to put back on the floor. A big order is usually
+       run in batches — make a part, ship it, run the next — so the office says
+       how much this time rather than always releasing everything. */
+    function askResumeQty(wo, pend){
+      const inp=h("input",{class:"input",id:"rs_qty",type:"number",min:"0",step:"any",
+        value:String(pend),style:"max-width:180px"});
+      const body=h("div",{},[
+        h("div",{class:"muted",style:"font-size:12.5px;line-height:1.6;margin-bottom:10px"},
+          `${ENG.num(pend)} kg of ${wo.id} is still to be made. Release the whole balance, or just the `
+          +`batch you want to run now — the rest stays pending and can be resumed again later.`),
+        h("div",{class:"field"},[h("label",{text:"Release now (kg)"}),h("div",{},inp)]),
+        h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px"},
+          "Its raw material is issued from the store as soon as you release it. If the store cannot "
+          +"cover the amount asked for, whatever it can cover goes and the rest stays pending."),
+      ]);
+      return new Promise(resolve=>{
+        const mo2=modal({title:"▶ Resume "+wo.id, sub:"Put the pending quantity back on the floor", body,
+          foot:[h("button",{class:"btn ghost",onclick:()=>{mo2.close();resolve(null);},text:"Cancel"}),
+            h("button",{class:"btn primary",onclick:()=>{
+              const q=+inp.value;
+              if(!(q>0)){ toast("Enter a quantity to release",{type:"warn"}); return; }
+              if(q>pend+1e-6){ toast(`Only ${ENG.num(pend)} kg is pending`,{type:"warn"}); return; }
+              mo2.close(); resolve(q);
+            },text:"Release to the floor"})]});
+      });
+    }
     async function resumeWO(wo){
       const pend=+wo.pendingQty||0;
       if(!(pend>0)) return;
-      if(!await confirm(`Resume ${wo.id}? ${ENG.num(pend)} kg will be released to the floor and its `
-        +`raw material issued from the store now.`,{title:"Resume Pending Work"})) return;
+      const want=await askResumeQty(wo,pend);
+      if(want==null) return;
       try{
-        const fresh=await DB.production.resume(wo.id);
+        const fresh=await DB.production.resume(wo.id,want);
         patchWO(fresh); draw();
-        toast(`${wo.id} resumed — ${ENG.num(fresh.runQty)} kg released`,{type:"ok",title:"Back on the floor"});
+        const left=+fresh.pendingQty||0;
+        toast(left>0
+          ? `${wo.id} — ${ENG.num(fresh.runQty)} kg released, ${ENG.num(left)} kg still pending`
+          : `${wo.id} resumed — ${ENG.num(fresh.runQty)} kg released, nothing left pending`,
+          {type:left>0?"warn":"ok",title:"Back on the floor"});
       }catch(e){
         if(e.status===409 && e.shortage){
-          toast(`Still short — the store can make ${ENG.num(e.canMake||0)} kg of ${ENG.num(pend)} kg`,
-            {type:"warn",title:"Not enough material"});
+          toast(`The store still has nothing this job can be made from — ${ENG.num(pend)} kg stays pending`,
+            {type:"warn",title:"No material yet"});
           return;
         }
         toast("Resume failed: "+e.message,{type:"danger"});
@@ -639,7 +723,16 @@
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
           ...(wo.widthMM?[["Width",wo.widthMM+" mm"]]:[]),
           ...(it.thicknessMM!=null&&wo.widthMM?[["Size",it.thicknessMM+" × "+wo.widthMM+" mm"]]:[]),
-          ["Quantity",ENG.num(wo.qty)+" kg"],["Line",wo.line],["Status",badge((wo.status==="Completed"||wo.status==="Dispatched")?"ok":"info",wo.status)],
+          ["Ordered",ENG.num(wo.qty)+" kg"],
+          /* On a partial order the ordered figure alone says nothing about
+             where the job actually stands — what has been made and what is
+             still waiting on material belong beside it. */
+          ...((+wo.pendingQty||0)>0?[
+            ["Produced",`<span class="strong">${ENG.num((+wo.completedQty||0)+(+wo.runQty||0))}</span> kg`],
+            ["Pending",`<span class="strong" style="color:var(--danger)">${ENG.num(wo.pendingQty)}</span> kg awaiting material`],
+          ]:[]),
+          ["Line",wo.line],
+          ["Status",badge(wo.status==="Completed"||wo.status==="Dispatched"?"ok":wo.status==="Partial"?"danger":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
         (()=>{ const lp=bom?layerPanel(it,bom.lines):null; return lp?h("div",{style:"margin-top:14px"},lp):h("span"); })(),
@@ -1032,6 +1125,10 @@
            run and travels with the batch onto the invoice. */
         U.field("Tape Width (mm)",`<input class="input" id="w_width" type="number" min="0" step="0.5" placeholder="e.g. 25"><div class="muted" id="w_wnote" style="font-size:11px;margin-top:3px"></div>`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Slitting A")),
+        /* A large order is often run in batches. Blank means release the lot;
+           a smaller figure puts that much on the machines now and carries the
+           rest as pending, to be resumed batch by batch. */
+        U.field("Release Now (kg)",`<input class="input" id="w_release" type="number" min="0" step="any" placeholder="whole quantity"><div class="muted" style="font-size:11px;margin-top:3px">Leave blank to release the whole order</div>`),
         U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
         U.field("Priority",U.selectHTML("w_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
       ]);
@@ -1267,6 +1364,13 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
         if(!qty||qty<=0){ toast("Enter a valid quantity",{type:"warn"}); return; }
         // a shortage is not a stop — the server prices it and the office confirms
         const payload={itemId, qty, line:UI.$("#w_line").value, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
+        const relEl=UI.$("#w_release");
+        if(relEl && relEl.value!==""){
+          const rel=+relEl.value;
+          if(!(rel>0)){ toast("Enter a valid quantity to release",{type:"warn"}); return; }
+          if(rel>qty+1e-6){ toast("Cannot release more than the order quantity",{type:"warn"}); return; }
+          if(rel<qty-1e-6) payload.releaseQty=rel;
+        }
         const wmm=+UI.$("#w_width").value; if(wmm>0) payload.widthMM=wmm;
         /* how much to take off the shelf — sent explicitly (0 included, which
            is why this is not a truthiness check) so the server draws exactly
@@ -1467,7 +1571,7 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
       const mo=modal({title:"BOM · "+(U.familyCode(fg.typeCode,fg.thicknessMM)||fg.typeCode||fgId), sub:fg.name+(fg.thicknessMM!=null?" · "+fg.thicknessMM+" mm":""), wide:true, body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
           // prints the recipe that is on screen, alternate variant included
-          h("button",{class:"btn",onclick:()=>printBomCosting(fgId,altIdx),html:"🖨 Print Costing"}),
+          h("button",{class:"btn",onclick:()=>printBomCosting(fgId,altIdx),html:"🖨 Print Cost of Material"}),
           App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
 
       function draw(){
@@ -1559,10 +1663,14 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
       draw();
     }
 
-    /* ----- printable BOM costing sheet -------------------------------------
-       The recipe as a costing document: every raw material, the layer it
-       belongs to, what a batch needs, its rate and the money that comes to —
-       then the batch total and the cost per kg of finished tape.
+    /* ----- printable COST OF MATERIAL sheet ---------------------------------
+       What a batch of this product costs in materials: each material once,
+       what it needs, its rate and the money that comes to, then the batch
+       total and the cost per kg of finished tape.
+       This sheet is meant to leave the building, so it states quantities and
+       money but NOT how the product is put together — no layer structure, and
+       a material used in more than one place is shown once with its
+       quantities added. The on-screen BOM still shows the full recipe.
        The per-kg figure is derived FROM the batch total the same way the
        on-screen roll-up derives it, so paper and screen can never disagree.
        A line whose material is not linked to a stock item has no rate to cost
@@ -1579,15 +1687,12 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
       const org=ENG.data.org||{};
       const co=(org.companies&&org.companies[0])||{name:org.name||"Chhaperia"};
 
-      /* same layer grouping and order the details view shows */
-      const idxLines=BOMCALC.normalize(src.lines).map((l,i)=>Object.assign({_i:i},l));
-      const grps=layerGroups(idxLines);
-      const ordered=[];
-      grps.forEach((grp,gi)=>{
-        const label=grp.label||(grps.length>1?"LAYER "+(gi+1):"LAYER 1");
-        grp.lines.forEach(l=>{ if(c.lines[l._i]) ordered.push({layer:label,cl:c.lines[l._i]}); });
-      });
-      const rowsSrc=ordered.length?ordered:c.lines.map(cl=>({layer:"",cl}));
+      /* This sheet leaves the building, so it must not give the recipe away.
+         The layer structure is not shown, and a material used on more than one
+         layer appears ONCE with its quantities added up — 10 kg of SAP on top
+         and 10 on the bottom reads as 20 kg. What the sheet still tells the
+         truth about is the total material and what it costs. */
+      const rowsSrc=c.lines.map(cl=>({layer:"",cl}));
 
       /* Cost first, render second — the share-of-cost column needs the batch
          total before a single row can be written. */
@@ -1605,8 +1710,8 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
         const ka=BOMCALC.toKg(qty,a), kb=BOMCALC.toKg(1,b);
         return (ka!=null&&kb)?ka/kb:null;
       }
-      let batchTotal=0, unpriced=0, converted=0, n=0;
-      const data=rowsSrc.map(({layer,cl})=>{
+      let batchTotal=0, unpriced=0, converted=0;
+      const rows=rowsSrc.map(({layer,cl})=>{
         const r=cl.id?ENG.item(cl.id):null;
         const rate=r?(((ENG.stock(cl.id)||{}).avgCost)||r.cost||0):0;
         const qty=+cl.qty||0;
@@ -1614,119 +1719,224 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
         const cq=r?inStockUnit(qty,cl.unit,stockU):null;
         const priced=!!(cl.id&&rate&&cq!=null);
         const amt=priced?cq*rate:null;
-        if(priced) batchTotal+=amt; else unpriced++;
         const shifted=priced&&cq!==qty;
-        if(shifted) converted++;
         return {layer, cl, r, rate, qty, amt, cq, stockU, shifted,
+          // carried per row so repeats can be added together
+          consSqm:cl.consumptionPerSqm, consKg:cl.consumptionPerKg,
           name:r?(r.material||r.name||cl.id):(cl.rm||cl.id||"—"),
           grade:r?(r.grade||r.id||"—"):(cl.rmType||"—")};
       });
 
-      let lastLayer=null;
-      const trs=data.map(d=>{
-        let out="";
-        if(d.layer&&d.layer!==lastLayer){
-          lastLayer=d.layer;
-          out+='<tr class="lay"><td colspan="8">'+esc(d.layer)+"</td></tr>";
+      /* Fold repeats together. Keyed on the stock item where there is one, so
+         the same material bought under one code merges however many places the
+         recipe uses it; unlinked lines fall back to name + grade. Quantities,
+         consumption and money add; the rate does not. */
+      const byMat={}, merged=[];
+      rows.forEach(d=>{
+        const key=d.cl.id||("~"+d.name+"|"+d.grade+"|"+(d.cl.unit||""));
+        const at=byMat[key];
+        if(!at){ byMat[key]=d; d.mergedFrom=1; merged.push(d); return; }
+        at.mergedFrom++;
+        at.qty+=d.qty;
+        if(at.cq!=null&&d.cq!=null) at.cq+=d.cq; else at.cq=null;
+        if(at.amt!=null&&d.amt!=null) at.amt+=d.amt; else at.amt=null;
+        if(at.consSqm!=null&&d.consSqm!=null) at.consSqm+=d.consSqm; else at.consSqm=null;
+        if(at.consKg!=null&&d.consKg!=null) at.consKg+=d.consKg; else at.consKg=null;
+        at.shifted=at.shifted||d.shifted;
+        // a line unit that differs between repeats can no longer be stated
+        if(BOMCALC.normUnit(at.cl.unit)!==BOMCALC.normUnit(d.cl.unit)) at.mixedUnit=true;
+      });
+      /* Read the sheet the way the tape is built: the fabric it is carried on
+         first, then the carbon that coats it, then everything else. Within a
+         group the dearest lines lead, so the money is at the top of each. */
+      const rank=(d)=>d.cl.fabric?0:(/CARBON/i.test(d.name)?1:2);
+      const data=merged.slice().sort((a,b)=>
+        (rank(a)-rank(b)) || ((b.amt||0)-(a.amt||0)));
+      data.forEach(d=>{
+        if(d.amt!=null) batchTotal+=d.amt; else unpriced++;
+        if(d.shifted) converted++;
+        /* Consumption per line is in that line's own unit, so where repeats
+           used different units their figures cannot simply be added either —
+           restate it from the converted quantity, in the stocking unit. */
+        if(d.mixedUnit&&d.cq!=null){
+          d.consKg=c.fgKgPerBatch?d.cq/c.fgKgPerBatch:null;
+          d.consSqm=c.batchSqm?d.cq/c.batchSqm:null;
         }
-        n++;
+      });
+
+
+      /* Same document furniture as the purchase order and the invoice — logo
+         band, orange rule, barred title, info panel, dark-headed table, notes
+         beside a totals block, dark footer strip — so the three read as one
+         family. What changes is what a costing sheet needs and they do not:
+         the two party panels become PRODUCT and BASIS, the table carries layer
+         sections and a share-of-cost column, and the grand total is the cost
+         per kilo rather than money owed. */
+      // needed by the per-kg basis inside the row loop, so declared before it
+      const fgKg=c.fgKgPerBatch;
+      const perKg=fgKg?batchTotal/(fgKg*yld):null;
+      const maxPct = data.reduce((m,d)=>
+        (d.amt!=null&&batchTotal>0)? Math.max(m, d.amt/batchTotal*100) : m, 0);
+      let rowN=0;
+      const trs=data.map(d=>{
+        const out="";
+        rowN++;
         const pct=(d.amt!=null&&batchTotal>0)?(d.amt/batchTotal*100):null;
+        const barW=(pct!=null&&maxPct>0)?Math.max(3,Math.round(pct/maxPct*46)):0;
+        /* A fabric is the SUBSTRATE — it is laid down by area, so it is bought,
+           planned and costed by the square metre. Everything else (pastes,
+           resins, chemicals) ends up inside the tape by weight, so it is costed
+           against a kilogram of finished goods. Showing each on the basis the
+           floor actually uses beats forcing both onto one. */
+        const fab=!!d.cl.fabric;
+        const cons=fab?d.consSqm:d.consKg;
+        const per=fab?"sqm":"kg";
+        const denom=fab?c.batchSqm:(fgKg?fgKg*yld:null);
+        const costPer=(d.amt!=null&&denom)?d.amt/denom:null;
         return out+"<tr>"
-          +'<td class="c dim">'+n+"</td>"
-          +'<td class="nm">'+esc(d.name)
-            +(d.cl.ranged?'<span class="rng">ranged</span>':"")+"</td>"
-          +'<td class="mono dim">'+esc(d.grade)+"</td>"
-          +'<td class="r">'+IN(d.qty,3)
-            +(d.shifted?'<div class="sub">= '+IN(d.cq,4)+" "+esc(BOMCALC.normUnit(d.stockU))+"</div>":"")+"</td>"
-          +'<td class="c dim">'+esc(d.cl.unit||"—")+"</td>"
-          +'<td class="r">'+(d.rate?IN(d.rate):'<span class="dim">—</span>')+"</td>"
-          +'<td class="r b">'+(d.amt!=null?IN(d.amt):'<span class="dim">—</span>')+"</td>"
-          +'<td class="r dim">'+(pct==null?"—":pct.toFixed(1)+"%")+"</td>"
+          +'<td class="c">'+rowN+"</td>"
+          /* No grade and no GSM on any line. Which grade of a material we buy,
+             and at what weight, is ours — this sheet leaves the building. The
+             fabric tag stays: it says nothing about the recipe, it explains why
+             that row is costed per square metre rather than per kilo. */
+          +"<td><b>"+esc(d.name)+"</b>"
+            +(fab?'<span class="fab">fabric</span>':"")+"</td>"
+          /* Adding 8 kg to 500 g gives 508 of nothing. Where repeats were
+             written in different units the quantity is stated in the material's
+             own stocking unit, which is the only one they all convert to. */
+          +'<td class="r">'+(d.mixedUnit&&d.cq!=null? IN(d.cq,4)
+            : IN(d.qty,3)+(d.shifted?'<div class="sub">= '+IN(d.cq,4)+" "+esc(BOMCALC.normUnit(d.stockU))+"</div>":""))+"</td>"
+          +'<td class="c">'+esc(d.mixedUnit?(BOMCALC.normUnit(d.stockU)||"—"):(d.cl.unit||"—"))+"</td>"
+          +'<td class="r">'+(cons==null?"—":IN(cons,4)+' <span class="per">/'+per+"</span>")+"</td>"
+          +'<td class="r">'+(d.rate?IN(d.rate):"—")+"</td>"
+          +'<td class="r"><b>'+(costPer==null?"—":IN(costPer,2))+"</b>"
+            +'<div class="per">₹ / '+per+"</div></td>"
+          +'<td class="r"><b>'+(d.amt!=null?IN(d.amt):"—")+"</b>"
+            +(pct==null?"":'<div class="sub">'
+              +'<span class="shw"><span class="shb" style="width:'+barW+'px"></span></span> '+pct.toFixed(1)+"%</div>")+"</td>"
           +"</tr>";
       }).join("");
 
-      const fgKg=c.fgKgPerBatch;
-      const perKg=fgKg?batchTotal/(fgKg*yld):null;
       const code=U.familyCode(fg.typeCode,fg.thicknessMM)||fg.typeCode||fg.id;
       const today=DB.helpers.iso(DB.helpers.today());
       const variant=(bom.alternates&&bom.alternates.length>1)
         ? (src.label||("Variant "+((altIdx||0)+1))) : "";
-      const notes=[];
-      notes.push("Rates are the moving average cost held in stock for each material, per its stocking unit.");
-      if(converted) notes.push(converted+" line"+(converted>1?"s are":" is")+" recorded in a different unit from the one "
-        +(converted>1?"those materials are":"that material is")+" stocked and priced in; the converted quantity is shown beneath, and it is that figure the amount is based on.");
-      if(unpriced) notes.push(unpriced+" line"+(unpriced>1?"s carry":" carries")+" no linked stock item, no rate, or a unit that cannot be reconciled with the stocking unit — "
-        +(unpriced>1?"they are":"it is")+" shown with a dash and excluded from the totals.");
-      if(perKg==null) notes.push("The per-kg figure needs this product's FG GSM to be set.");
-      if(c.rangedLines) notes.push("Ranged lines are costed at the material named here; the actual one is chosen against live stock when the work order is issued.");
+      const logo=location.origin+"/assets/logo-invoice.png";
+      const ip=(k,v)=>'<div class="ip"><span>'+esc(k)+"</span><b>"+v+"</b></div>";
+      /* Only what would MISLEAD if left unsaid. The explanatory notes went with
+         the panel they lived in; these are the ones that change how a figure
+         should be read, so they survive as one line under the table. */
+      const warn=[];
+      if(converted) warn.push(converted+" line"+(converted>1?"s are":" is")+" priced in a different unit from the one entered — the converted quantity is shown beneath it and the amount follows that figure.");
+      if(unpriced) warn.push(unpriced+" line"+(unpriced>1?"s have":" has")+" no rate and "+(unpriced>1?"are":"is")+" left out of the totals.");
+      if(perKg==null) warn.push("The per-kg figures need this product's FG GSM to be set.");
+      if(c.rangedLines) warn.push("A ranged line is costed at the material named here; the one used is chosen against live stock at issue.");
 
-      /* Plain black-on-white, rules only — no fills, no colour, no logo. It
-         photocopies cleanly, costs nothing to print, and reads like the Tally
-         statements the office already works from. Monospace so the figures
-         line up column-wise without relying on tabular-figure support. */
-      const kv=(k,v)=>'<div class="kv"><span>'+esc(k)+'</span><span>'+v+"</span></div>";
       const html='<!doctype html><html><head><meta charset="utf-8">'
-        +"<title>BOM Costing — "+esc(code)+"</title><style>"
-        +"@page{size:A4;margin:14mm}"
-        +"*{margin:0;padding:0;box-sizing:border-box}"
-        +'body{font:11.5px/1.5 "Courier New",Consolas,monospace;color:#000;background:#fff}'
-        +".ctr{text-align:center}"
-        +".co{font-size:13px;font-weight:700;letter-spacing:1px}"
-        +".ttl{font-size:12px;font-weight:700;letter-spacing:3px;margin-top:2px}"
-        +".addr{font-size:9.5px;margin-top:2px}"
-        +".rule{border-top:1px solid #000;margin:7px 0}"
-        +".dbl{border-top:3px double #000;margin:7px 0}"
-        +".info{display:grid;grid-template-columns:1fr 1fr;gap:1px 26px;margin:2px 0}"
-        +".kv{display:flex;justify-content:space-between;gap:10px}"
-        +".kv span:first-child{white-space:nowrap}"
-        +".kv span:last-child{font-weight:700;text-align:right}"
-        +"table{width:100%;border-collapse:collapse;margin-top:2px}"
-        +"th{text-align:left;font-weight:700;font-size:10px;letter-spacing:.5px;text-transform:uppercase;"
-        +"padding:4px 4px;border-top:1px solid #000;border-bottom:1px solid #000}"
-        +"td{padding:2.5px 4px;font-size:11px;vertical-align:top}"
-        +"th.r,td.r{text-align:right}th.c,td.c{text-align:center}"
-        +"tr.lay td{font-weight:700;font-size:10px;letter-spacing:.5px;text-transform:uppercase;padding-top:8px}"
-        +".sub{font-size:9.5px}"
-        +"tfoot td{padding:4px}"
-        +"tfoot tr.t td{border-top:1px solid #000;font-weight:700}"
-        +"tfoot tr.g td{border-top:1px solid #000;border-bottom:3px double #000;font-weight:700}"
-        +".notes{font-size:9.5px;margin-top:9px}"
-        +".notes div{margin-bottom:2px}"
-        +".sign{margin-top:40px;display:flex;justify-content:space-between;font-size:10px}"
-        +".sign span{border-top:1px solid #000;padding-top:4px;min-width:170px;text-align:center}"
+        +"<title>Cost of Material "+esc(code)+"</title><style>"
+        +"@page{size:A4;margin:8mm}"
+        +"*{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}"
+        +'body{font:12px/1.38 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}'
+        /* The logo carries its own white background, so it is set ON white at
+           full size rather than plated onto a dark band — which is what made it
+           look stuck on. The charcoal and orange stay, as the rule under it. */
+        +".mast{display:flex;align-items:center;justify-content:space-between;gap:26px;padding:2px 0 11px}"
+        +".mast .lg img{height:92px;width:auto;max-width:350px;object-fit:contain;display:block}"
+        +".mast .who{text-align:right;color:#3a3f44;font-size:10.5px;line-height:1.55;max-width:330px}"
+        +".conm{font-size:13px;font-weight:800;color:#26282b;letter-spacing:.2px}"
+        +".co-ids{margin-top:4px;color:#26282b;font-weight:700}"
+        +".co-ids span{color:#F06820;font-weight:800}"
+        +".rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -20px}"
+        // the document name, plainly: black, bold, centred, nothing around it
+        +".titlebar{text-align:center;margin:11px 0 10px}"
+        +".titlebar .t{font-size:19px;font-weight:800;letter-spacing:3.5px;text-transform:uppercase;color:#000}"
+        +".info{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:8px}"
+        +".ip{display:flex;justify-content:space-between;gap:8px;font-size:11px}"
+        +".ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}"
+        // full-width product band — the loudest thing on the page after the title
+        +".prod{border:1px solid #e0c4ac;border-left:5px solid #F06820;background:#fff8f3;"
+        +"border-radius:0 8px 8px 0;padding:9px 14px;margin-bottom:8px}"
+        +".pnm{font-weight:800;font-size:15.5px;line-height:1.25;color:#26282b}"
+        +".pmeta{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px 8px;font-size:10.5px;color:#6d5544}"
+        +".pmeta span{background:#fff;border:1px solid #ecd6c4;border-radius:3px;padding:1px 8px}"
+        +".pmeta .pc{background:#F06820;border-color:#F06820;color:#fff;font-weight:800;letter-spacing:.5px}"
+        +".warn{margin:0 0 8px;font-size:9.5px;line-height:1.5;color:#8a6d3b}"
+        +"table.items{width:100%;border-collapse:collapse;margin-bottom:8px}"
+        +"table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;"
+        +"padding:5.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}"
+        +"table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:11.5px;vertical-align:top}"
+        +"table.items tbody tr:nth-child(even) td{background:#f6f7f8}"
+        +"td.r,th.r{text-align:right} td.c,th.c{text-align:center}"
+        +"td .sub{font-size:9.5px;color:#777}"
+        +".rng{font-size:8.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#8a6d3b;"
+        +"background:#fcf3dc;border:1px solid #e6d4a8;border-radius:3px;padding:0 4px;margin-left:5px}"
+        +".shw{display:inline-block;width:46px;height:5px;background:#e9ecef;border-radius:3px;vertical-align:middle;overflow:hidden}"
+        +".shb{display:block;height:5px;background:#F06820;border-radius:3px}"
+        +".per{font-size:9px;color:#8a9096;font-weight:600;letter-spacing:.2px}"
+        +".fab{display:inline-block;margin-left:5px;font-size:8.5px;font-weight:700;letter-spacing:.4px;"
+        +"text-transform:uppercase;color:#1f6f8b;background:#e8f3f7;border:1px solid #b9d9e5;border-radius:3px;padding:0 4px}"
+        +".bottom{display:flex;justify-content:flex-end;margin-bottom:6px}"
+        +".br{width:340px}"
+        +"table.tot{width:100%;border-collapse:collapse;height:fit-content}"
+        +"table.tot td{border:1px solid #d8dbde;padding:5px 12px;font-size:12px}"
+        +"table.tot td:first-child{color:#555}"
+        +"table.tot td:last-child{text-align:right;font-weight:700}"
+        +"table.tot tr:nth-child(even) td{background:#f6f7f8}"
+        +"table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}"
+        +".sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:10.5px;color:#777}"
+        +".sig{text-align:center;color:#1a1c1e}"
+        +".sig .ln{border-top:1.5px solid #555;margin-top:24px;padding-top:5px;min-width:210px;font-weight:700}"
+        +".strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;"
+        +"padding:6px 14px;border-radius:6px;margin-top:14px}.strip b{color:#F58024}"
         +"</style></head><body>"
-        +'<div class="ctr"><div class="co">'+esc((co.name||"Chhaperia").toUpperCase())+"</div>"
-        +(co.address?'<div class="addr">'+esc(co.address)+"</div>":"")
-        +'<div class="ttl">MATERIAL COSTING SHEET</div></div>'
-        +'<div class="rule"></div>'
+        +'<div class="mast"><div class="lg"><img src="'+logo+'" alt=""></div>'
+        +'<div class="who"><div class="conm">'+esc(co.name||"Chhaperia")+"</div>"
+        +(co.address?"<div>"+esc(co.address)+"</div>":"")
+        +(co.gstin?'<div class="co-ids"><span>GSTIN</span> '+esc(co.gstin)+"</div>":"")
+        +"</div></div><div class=\"rule\"></div>"
+        +'<div class="titlebar"><span class="t">Cost of Material</span></div>'
+        /* The product runs the full width and is the loudest thing under the
+           masthead — it is what the sheet is about. The figures that used to
+           sit in a second panel are folded into the strip below it, so nothing
+           needed to read the per-sqm and per-kg columns is lost. */
+        +'<div class="prod"><div class="pnm">'+esc(fg.name||fg.id)+"</div>"
+        +'<div class="pmeta"><span class="pc">'+esc(code)+"</span>"
+        +(fg.thicknessMM!=null?"<span>"+esc(fg.thicknessMM)+" mm</span>":"")
+        // no recipe name and no layer count — neither is ours to hand out
+        +"</div></div>"
         +'<div class="info">'
-        +kv("Product",esc(fg.name||fg.id))
-        +kv("Code",esc(code))
-        +kv("Thickness",fg.thicknessMM!=null?esc(fg.thicknessMM)+" mm":"—")
-        +kv("Yield",(yld*100).toFixed(0)+"%")
-        +kv("Batch",esc(meta.batchWidthMM)+" x "+esc(meta.batchLengthM)+" m")
-        +kv("Batch area",IN(c.batchSqm,0)+" sqm")
-        +kv("FG GSM",c.fgGsm!=null?IN(c.fgGsm,0)+" g/m2":"not set")
-        +kv("Finished / batch",fgKg?IN(fgKg,1)+" kg":"—")
-        +kv("Recipe",variant?esc(variant):"Standard")
-        +kv("Printed",esc(today))
+        +ip("Costing Ref",esc(code)+"/"+esc(String(today).slice(0,7)))
+        +ip("Date",esc(today))
+        +ip("Yield",(yld*100).toFixed(0)+"%")
+        // the batch reads as the whole equation on one line
+        +ip("Batch",esc(meta.batchWidthMM)+" mm × "+esc(meta.batchLengthM)+" mtr = "+IN(c.batchSqm,0)+" sqm")
+        +ip("FG GSM",c.fgGsm!=null?IN(c.fgGsm,0)+" g/m²":"not set")
+        +ip("Finished / batch",fgKg?IN(fgKg,1)+" kg":"—")
+        +ip("Components",String(data.length))
+        +ip("Costed",(data.length-unpriced)+" of "+data.length)
         +"</div>"
-        +'<div class="rule"></div>'
-        +"<table><thead><tr>"
-        +'<th class="c" style="width:24px">#</th><th>Material</th>'
-        +'<th style="width:84px">Grade</th><th class="r" style="width:80px">Qty</th>'
-        +'<th class="c" style="width:42px">Unit</th><th class="r" style="width:72px">Rate</th>'
-        +'<th class="r" style="width:86px">Amount</th><th class="r" style="width:46px">Cost%</th>'
+        +'<table class="items"><thead><tr>'
+        +'<th class="c" style="width:24px">Sl.</th><th>Raw Material</th>'
+        +'<th class="r" style="width:76px">Qty / Batch</th><th class="c" style="width:40px">Unit</th>'
+        +'<th class="r" style="width:84px">Consumption</th><th class="r" style="width:70px">Rate (₹)</th>'
+        +'<th class="r" style="width:76px">Cost</th>'
+        +'<th class="r" style="width:92px">Amount (₹)</th>'
         +"</tr></thead><tbody>"
-        +(trs||'<tr><td colspan="8" class="c">No components</td></tr>')
-        +"</tbody><tfoot>"
-        +'<tr class="t"><td colspan="6" class="r">TOTAL PER BATCH</td>'
-        +'<td class="r">'+IN(batchTotal)+'</td><td class="r">'+(batchTotal>0?"100.0%":"—")+"</td></tr>"
-        +'<tr class="g"><td colspan="6" class="r">COST PER KG OF FINISHED GOODS</td>'
-        +'<td class="r">'+(perKg==null?"—":IN(perKg))+'</td><td></td></tr>'
-        +"</tfoot></table>"
-        +'<div class="notes">'+notes.map(t=>"<div>* "+esc(t)+"</div>").join("")+"</div>"
-        +'<div class="sign"><span>Prepared by</span><span>Checked by</span><span>Authorised</span></div>'
+        +(trs||'<tr><td colspan="8" class="c">No components</td></tr>')+"</tbody></table>"
+        /* The bordered notes panel is gone. Anything that would MISLEAD if left
+           unsaid — a converted unit, an uncosted line, a missing GSM — still
+           has to be said, so it runs as one quiet line under the table instead
+           of a boxed block. With nothing to warn about, nothing prints. */
+        +(warn.length?'<div class="warn">'+warn.map(t=>esc(t)).join(" ")+"</div>":"")
+        +'<div class="bottom"><div class="br"><table class="tot">'
+        +"<tr><td>Total material cost — per batch</td><td>₹ "+IN(batchTotal)+"</td></tr>"
+        +"<tr><td>Finished output — per batch</td><td>"+(fgKg?IN(fgKg,1)+" kg":"—")+"</td></tr>"
+        +'<tr class="g"><td>Cost per kg of FG</td><td>'+(perKg==null?"—":"₹ "+IN(perKg))+"</td></tr>"
+        +"</table></div></div>"
+        +'<div class="sign"><div>Costing prepared from the approved bill of materials.</div>'
+        +'<div class="sig"><div>For '+esc(co.name||"Chhaperia")+'</div><div class="ln">Authorised Signatory</div></div></div>'
+        +'<div class="strip"><span>'+esc(co.name||"Chhaperia")+" — <b>Cost of Material</b></span>"
+        +"<span>"+esc(code)+" · "+esc(today)+"</span></div>"
         +"</body></html>";
 
       const w=window.open("","_blank");

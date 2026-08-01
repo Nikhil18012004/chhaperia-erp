@@ -74,6 +74,51 @@
     return s === "" || s === "-" || s === "--";
   }
   function isRanged(v) { return !isBlank(v) && RANGE_RE.test(String(v)); }
+
+  /* ---- roll geometry: length <-> weight ------------------
+     Tape and sheet are quoted by length OR by weight depending on the
+     supplier, and the two convert through the roll's own width and GSM:
+         kg = metres x widthMM x gsm / 1,000,000
+     The width is fixed per material and the GSM is its spec, so the figure is
+     exact, not an estimate. Returns null when the material does not carry
+     both — nothing is guessed. */
+  function kgPerMetre(item) {
+    if (!item) return null;
+    var gsm = numLoose(item.gsm), wmm = numLoose(item.width);
+    if (gsm == null || wmm == null || gsm <= 0 || wmm <= 0) return null;
+    return (wmm * gsm) / 1e6;
+  }
+  /* Restate `qty` from one unit into another for a sheet material. Handles
+     MTR <-> KG through the roll, and plain mass conversions (g, mg) through
+     toKg(). Returns null when the two units cannot be reconciled, so a caller
+     can refuse rather than post a wrong quantity into stock. */
+  function convertQty(qty, fromUnit, toUnit, item) {
+    var q = numLoose(qty);
+    if (q == null) return null;
+    var a = normUnit(fromUnit), b = normUnit(toUnit);
+    if (!a || !b || a === b) return q;
+    var ka = toKg(1, a), kb = toKg(1, b);
+    if (ka != null && kb != null) return (q * ka) / kb;   // both are masses
+    var kpm = kgPerMetre(item);
+    if (kpm) {
+      if (a === "MTR" && kb != null) return (q * kpm) / kb;   // length -> mass
+      if (b === "MTR" && ka != null) return (q * ka) / kpm;   // mass -> length
+    }
+    return null;
+  }
+
+  /* THICKNESS_DP — this factory measures thickness to three decimals of a
+     millimetre. Anything finer is an artefact of Excel or of binary floating
+     point, never a real measurement. */
+  var THICKNESS_DP = 3;
+  function thk3(v) {
+    if (v == null || v === "") return null;
+    var s = String(v).trim();
+    if (isRanged(s)) return s;                 // a span stays a span
+    var n = numLoose(s);
+    if (n == null) return s;                   // not a number — pass it through
+    return String(+n.toFixed(THICKNESS_DP));
+  }
   /* Excel hands back scientific notation for small thicknesses
      ("3.3000000000000002E-2"). Missing the exponent would read that
      as 3.3 mm instead of 0.033 mm, so it is matched explicitly. */
@@ -128,7 +173,13 @@
       id: l.id || l.rawId || l.itemId || null,
       rm: l.rm || l.materialName || null,
       rmType: isBlank(l.rmType) ? null : String(l.rmType).trim(),
-      rmThk: isBlank(l.rmThk) ? null : String(l.rmThk).trim(),
+      /* Thickness is measured to three decimals and no further. Excel hands
+         back "1.4999999999999999E-2" and binary arithmetic leaves tails like
+         0.14000000000000001; both mean 0.015 and 0.14. Bind the value here,
+         where EVERY line passes through, so the same figure reaches matching,
+         costing, the screen and the printed sheet. A range ("0.08-0.10") is
+         left alone — it is a span, not a measurement. */
+      rmThk: isBlank(l.rmThk) ? null : thk3(l.rmThk),
       rmGsm: isBlank(l.rmGsm) ? null : String(l.rmGsm).trim(),
       qty: qty == null ? 0 : qty,
       unit: normUnit(l.unit) || "KG",
@@ -306,6 +357,8 @@
     BATCH: BATCH, batchSqm: batchSqm,
     normUnit: normUnit, toKg: toKg,
     isBlank: isBlank, isRanged: isRanged, num: num, numLoose: numLoose,
+    thk3: thk3, THICKNESS_DP: THICKNESS_DP,
+    kgPerMetre: kgPerMetre, convertQty: convertQty,
     defaultPickup: defaultPickup, PICKUP_RULES: PICKUP_RULES,
     normalizeLine: normalizeLine, normalize: normalize,
     isFabric: isFabric, compute: compute, toLegacy: toLegacy,

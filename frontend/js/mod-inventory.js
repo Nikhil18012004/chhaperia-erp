@@ -63,7 +63,11 @@
       UI.$("#invCount").textContent=data.length+" items";
       tableHost.innerHTML="";
       tableHost.appendChild(table(data,[
-        {key:"name",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div><div class="cell-sub">${r.it.id} · ${catName(r.it.cat)} · HSN ${r.it.hsn||"—"}</div>`,sort:r=>r.it.name},
+        // each detail on its own line, not run together across the column
+        {key:"name",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div>`
+          +`<div class="cell-sub">${r.it.id}</div>`
+          +`<div class="cell-sub">${catName(r.it.cat)}</div>`
+          +`<div class="cell-sub">HSN ${r.it.hsn||"—"}</div>`,sort:r=>r.it.name},
         {key:"thk",label:"Thickness",num:true,render:r=>r.it.thicknessMM!=null?`<span class="mono">${ENG.num(r.it.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:r=>r.it.thicknessMM||0},
         {key:"lastMove",label:"Last Move",render:r=>r.stock.lastMove||"—",sort:r=>r.stock.lastMove||""},
         {key:"onHand",label:"On Hand",num:true,render:r=>`<span class="strong">${ENG.num(r.st.onHand,2)}</span> <span class="muted">${r.it.uom}</span>`,sort:r=>r.st.onHand},

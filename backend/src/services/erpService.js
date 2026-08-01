@@ -173,10 +173,31 @@ function receivePurchaseOrder(poId, body, user) {
     const pend = l.qty - (l.recd || 0);
     if (rq > pend) rq = pend;
     if (rq > 0) {
+      /* A roll may be ordered by length and invoiced by weight, or the other
+         way round. Stock is only ever held in the material's OWN unit, so the
+         received quantity is restated into it here — through the roll's fixed
+         width and its GSM, which makes the figure exact rather than a guess.
+         The PO line keeps its own unit; only the stock movement is converted. */
+        const item = repo.getItem(l.itemId) || {};
+        const from = l.uom || item.uom;
+        let stockQty = rq;
+        let note = "Goods receipt vs PO";
+        if (BC.normUnit(from) !== BC.normUnit(item.uom)) {
+          const conv = BC.convertQty(rq, from, item.uom, item);
+          if (conv == null) {
+            throw err("Cannot receive " + rq + " " + from + " of " + (item.name || l.itemId)
+              + " — it is stocked in " + (item.uom || "?")
+              + " and the two cannot be reconciled. Set the material's width and GSM, or order in "
+              + (item.uom || "its stocking unit") + ".", 400);
+          }
+          stockQty = Math.round(conv * 1000) / 1000;
+          note = "Goods receipt vs PO — " + rq + " " + BC.normUnit(from)
+            + " received as " + stockQty + " " + BC.normUnit(item.uom);
+        }
       moves.push({ id: "MV-" + Date.now() + "-" + l.itemId, date, itemId: l.itemId, wh,
-        type: "GRN", qty: rq, rate: l.rate || 0, ref: po.id, note: "Goods receipt vs PO",
+        type: "GRN", qty: stockQty, rate: l.rate || 0, ref: po.id, note,
         supplierId: po.supplierId, by });
-      l.recd = +((l.recd || 0) + rq).toFixed(3);
+      l.recd = +((l.recd || 0) + rq).toFixed(3);   // progress is in the ORDER's unit
     }
   });
   if (!moves.length) throw err("No quantity to receive", 400);

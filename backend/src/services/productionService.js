@@ -29,6 +29,7 @@ function err(msg, status) { const e = new Error(msg); e.status = status || 400; 
 let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
 const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+const r3 = (n) => Math.round((+n || 0) * 1000) / 1000;
 
 function fullState() {
   if (repo.isEmpty()) repo.saveState(buildSeed());
@@ -83,7 +84,16 @@ function advance(user, woId, action) {
 
   if (action === "dispatch") {
     if (!route.every((r) => r.status === "Completed")) throw err("Finish packing before dispatch", 400);
-    wo.dispatched = true; wo.dispatchedBy = by; wo.dispatchedAt = now;
+    /* A partial order ships what it HAS made. The goods on the floor are real
+       whether or not the balance has arrived, so dispatch releases the made
+       quantity and the order stays open for the rest. Only an order with
+       nothing pending is closed outright. */
+    const madeNow = r3((+wo.completedQty || 0) + (+wo.runQty || 0));
+    const already = +wo.dispatchedQty || 0;
+    if (madeNow - already <= 1e-6) throw err("Nothing new to dispatch on this order", 400);
+    wo.dispatchedQty = madeNow;
+    wo.dispatchedBy = by; wo.dispatchedAt = now;
+    if ((+wo.pendingQty || 0) <= 1e-6) wo.dispatched = true;
   } else if (action === "start") {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
     stage.status = "In Production";
@@ -105,6 +115,10 @@ function advance(user, woId, action) {
       }
       stage.posted = true;
     }
+    /* A stage finished without ever being started — "Complete all" does this —
+       had no measurable time. Stamp the start now so the duration is a real
+       zero rather than an unknown, and every stage has a bounded span. */
+    if (!stage.startedAt) { stage.startedAt = now; stage.startedBy = stage.startedBy || by; }
     stage.status = "Completed"; stage.doneBy = by; stage.doneAt = now;
     // hand off to the next stage (next area's panel picks it up)
     if (idx < route.length - 1) wo.stageIdx = idx + 1;
@@ -112,11 +126,7 @@ function advance(user, woId, action) {
   }
 
   wo.progress = calcProgress(route);
-  wo.status = S.rollupStatus(wo);
-  /* A route that has run its course but still owes material-blocked quantity
-     is PARTIAL, not Completed — the order is not finished, and it has to keep
-     showing on the floor and on the board until the balance is resumed. */
-  if (wo.status === "Completed" && (+wo.pendingQty || 0) > 1e-6) wo.status = "Partial";
+  wo.status = S.rollupStatus(wo);   // reports Partial while quantity is owed
   wo.updatedBy = by; wo.updatedAt = now;
   repo.putWorkOrder(wo);
 
@@ -154,18 +164,23 @@ function resumeWorkOrder(user, id, body) {
   const want = body.qty != null ? +body.qty : pending;
   if (!(want > 0)) throw err("Enter a valid quantity", 400);
   if (want > pending + 1e-6) throw err("Only " + pending + " is pending on this order", 400);
+  /* Release whatever the store CAN cover and leave the rest pending — a part
+     delivery should put part of the job back on the floor, not be refused
+     until the whole balance has arrived. Only a store that can make nothing
+     at all is an error. */
   const canDo = isFinite(cap) ? Math.floor(cap * 1000) / 1000 : want;
-  if (canDo < want - 1e-6) {
-    const e = err("The store still cannot cover " + want + " — it can make " + Math.max(0, canDo) + " right now.", 409);
+  const take = Math.round(Math.min(want, Math.max(0, canDo)) * 1000) / 1000;
+  if (!(take > 1e-6)) {
+    const e = err("The store still has nothing this job can be made from.", 409);
     e.shortage = shortageFor(data, item, want, wo.materialChoices);
-    e.canMake = Math.max(0, canDo);
+    e.canMake = 0;
     throw e;
   }
 
   // issue this portion's raw material now, then hand the run to the floor
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
-  const net = { qty: want, fgQty: 0, wipQty: 0, makeQty: want, fgSources: [], wipSources: [] };
-  const stagePlan = S.computeStagePlan(wo.itemId, want, data, wo.materialChoices, net);
+  const net = { qty: take, fgQty: 0, wipQty: 0, makeQty: take, fgSources: [], wipSources: [] };
+  const stagePlan = S.computeStagePlan(wo.itemId, take, data, wo.materialChoices, net);
   const moves = [];
   if (stagePlan) {
     (wo.route || []).forEach((r) => {
@@ -177,12 +192,21 @@ function resumeWorkOrder(user, id, body) {
   if (moves.length) repo.addMovements(moves);
 
   wo.completedQty = Math.round(((+wo.completedQty || 0) + (+wo.runQty || 0)) * 1000) / 1000;
-  wo.runQty = want;
-  wo.pendingQty = Math.round((pending - want) * 1000) / 1000;
+  wo.runQty = take;
+  wo.pendingQty = Math.round((pending - take) * 1000) / 1000;
   if (wo.pendingQty <= 1e-6) { wo.pendingQty = 0; delete wo.shortage; delete wo.pendingSince; }
-  // the route runs again for this portion; the material is already issued, so
-  // every stage stays marked posted and cannot draw stock a second time
+  else { wo.shortage = shortageFor(data, item, wo.pendingQty, wo.materialChoices); wo.pendingSince = todayISO(); }
+  /* The route runs again for this portion, so its timestamps are cleared —
+     but the time the floor spent on the LAST run is real and must not vanish
+     with them. Bank each stage's elapsed time and the number of runs, so the
+     Time Status tab can report the total across every batch of the order. */
   (wo.route || []).forEach((r) => {
+    if (r.startedAt && r.doneAt) {
+      const ms = Date.parse(r.doneAt) - Date.parse(r.startedAt);
+      if (isFinite(ms) && ms > 0) r.priorMs = (+r.priorMs || 0) + ms;
+    }
+    if (r.status === "Completed") r.runs = (+r.runs || 0) + 1;
+    if (r.startedAt && !r.firstStartedAt) r.firstStartedAt = r.startedAt;
     r.status = "Pending"; r.posted = true;
     delete r.doneBy; delete r.doneAt; delete r.startedBy; delete r.startedAt;
   });
@@ -467,6 +491,19 @@ function createWorkOrder(user, body) {
     }
   }
 
+  /* A big order is often run in batches even when the store is full — the
+     floor makes a part, it ships, and the next part follows. `releaseQty`
+     puts only that much on the machines now; the remainder is carried exactly
+     like a material-blocked balance and released the same way, by resuming. */
+  const rel = body.releaseQty == null || body.releaseQty === "" ? null : +body.releaseQty;
+  if (rel != null) {
+    if (!isFinite(rel) || rel <= 0) throw err("Enter a valid quantity to release", 400);
+    if (rel < runQty - 1e-6) {
+      pendingQty = Math.round((pendingQty + (runQty - rel)) * 1000) / 1000;
+      runQty = Math.round(rel * 1000) / 1000;
+    }
+  }
+
   // next WO id
   let max = 0;
   (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
@@ -511,7 +548,11 @@ function createWorkOrder(user, body) {
      marked as already posted so completing it later cannot draw the same
      stock a second time. Deleting the work order rolls all of it back
      (repo.deleteWorkOrder removes movements by ref). */
-  if (pendingQty > 0) { wo.shortage = shortage; wo.pendingSince = todayISO(); }
+  if (pendingQty > 0) {
+    // a balance held back on purpose is not a shortage, and must not read as one
+    if (shortage.length) wo.shortage = shortage;
+    wo.pendingSince = todayISO();
+  }
   /* Only the part being RUN draws material. The finished / half-made rolls the
      planner netted are real stock and are issued in full; the raw materials
      scale to runQty, so a pending balance costs the store nothing until the
@@ -793,6 +834,7 @@ function summarize(wo, data) {
     runQty: wo.runQty != null ? wo.runQty : wo.qty,
     completedQty: +wo.completedQty || 0,
     pendingQty: +wo.pendingQty || 0,
+    dispatchedQty: +wo.dispatchedQty || 0,
     shortage: wo.shortage || null,
     // how the requirement was met: from finished stock, from half-made stock,
     // and how much is genuinely being manufactured
@@ -800,7 +842,10 @@ function summarize(wo, data) {
     route: (wo.route || []).map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq,
       owner: r.owner || null, line: r.line || null,
       qty: r.qty != null ? r.qty : (wo.qty != null ? wo.qty : null),
-      status: r.status, doneBy: r.doneBy, doneAt: r.doneAt })),
+      status: r.status, doneBy: r.doneBy, doneAt: r.doneAt,
+      startedAt: r.startedAt || null, startedBy: r.startedBy || null,
+      // time already spent on this stage in earlier batches of the same order
+      priorMs: +r.priorMs || 0, runs: +r.runs || 0, firstStartedAt: r.firstStartedAt || null })),
     spec: S.specForWO(wo, data),
     updatedAt: wo.updatedAt,
   };

@@ -195,6 +195,19 @@
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
+        /* opts.rowAfter lets a section hang a full-width note under a row —
+           a warning that would otherwise have to squeeze into one cell and
+           push the whole table sideways. */
+        if(opts.rowAfter){
+          const extra=opts.rowAfter(r);
+          if(extra){
+            const td=h("td",{colspan:cols.length,class:"row-after-cell"});
+            if(extra instanceof Node) td.appendChild(extra); else td.innerHTML=extra;
+            const xtr=h("tr",{class:"row-after"+(opts.rowClass?" "+(opts.rowClass(r)||""):"")});
+            xtr.appendChild(td);
+            tbody.appendChild(xtr);
+          }
+        }
       });
       // phone compact cards mirror the (sorted) data order
       if(cards){
