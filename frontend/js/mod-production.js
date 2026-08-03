@@ -532,6 +532,9 @@
           // width is a slitting parameter, not a material one — it can still be
           // corrected after the run has started, right up to dispatch
           U.field("Tape Width (mm)",`<input class="input" id="we_width" type="number" min="0" step="0.5" placeholder="e.g. 25" value="${wo.widthMM!=null?wo.widthMM:""}">`),
+          // the roll being fed — correctable too, since a delivery can arrive
+          // at a width the recipe did not assume
+          U.field("Material Width (mm)",`<input class="input" id="we_mwidth" type="number" min="0" step="0.5" placeholder="e.g. 1000" value="${wo.matWidthMM!=null?wo.matWidthMM:""}">`),
           U.field("Production Line",U.selectHTML("we_line",LINES.map(l=>({v:l,l})),wo.line)),
           U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
           U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
@@ -545,7 +548,8 @@
           saveBtn]});
       async function save(){
         const patch={ id:UI.$("#we_id").value.trim(), due:UI.$("#we_due").value, priority:UI.$("#we_prio").value,
-          widthMM:UI.$("#we_width").value===""?null:+UI.$("#we_width").value };
+          widthMM:UI.$("#we_width").value===""?null:+UI.$("#we_width").value,
+          matWidthMM:UI.$("#we_mwidth").value===""?null:+UI.$("#we_mwidth").value };
         if(!patch.id){ toast("Enter a work order number",{type:"warn"}); return; }
         if(!started){
           patch.qty=+UI.$("#we_qty").value;
@@ -721,7 +725,14 @@
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
-          ...(wo.widthMM?[["Width",wo.widthMM+" mm"]]:[]),
+          ...(wo.widthMM?[["Tape Width",wo.widthMM+" mm"]]:[]),
+          ...(wo.matWidthMM?[["Material Width",wo.matWidthMM+" mm"]]:[]),
+          /* The one figure the slitter actually works to: how many tapes come
+             off a roll, and what is left over as trim. Stated rather than left
+             to be worked out on the floor. */
+          ...(wo.matWidthMM&&wo.widthMM&&Math.floor(wo.matWidthMM/wo.widthMM)>=1?[["Cut",
+            (()=>{ const n=Math.floor(wo.matWidthMM/wo.widthMM), trim=wo.matWidthMM-n*wo.widthMM;
+              return n+" × "+ENG.num(wo.widthMM,1)+" mm per roll"+(trim>0.001?" · "+ENG.num(trim,1)+" mm trim":" · no trim"); })()]]:[]),
           ...(it.thicknessMM!=null&&wo.widthMM?[["Size",it.thicknessMM+" × "+wo.widthMM+" mm"]]:[]),
           ["Ordered",ENG.num(wo.qty)+" kg"],
           /* On a partial order the ordered figure alone says nothing about
@@ -1124,6 +1135,13 @@
            slit to whatever width the customer ordered, so it is captured on the
            run and travels with the batch onto the invoice. */
         U.field("Tape Width (mm)",`<input class="input" id="w_width" type="number" min="0" step="0.5" placeholder="e.g. 25"><div class="muted" id="w_wnote" style="font-size:11px;margin-top:3px"></div>`),
+        /* Two widths live on a run and they are easy to confuse. The one above
+           is the TAPE — what the customer ordered and what the run is slit to.
+           This one is the MATERIAL — the jumbo roll being fed, a property of
+           the substrate rather than of the order, so it is filled in from the
+           recipe and left editable for the delivery that comes in off-standard.
+           The floor needs both: their ratio is how many tapes come off a roll. */
+        U.field("Material Width (mm)",`<input class="input" id="w_mwidth" type="number" min="0" step="0.5" placeholder="from the recipe"><div class="muted" id="w_mwnote" style="font-size:11px;margin-top:3px"></div>`),
         U.field("Production Line",U.selectHTML("w_line",[{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Slitting A")),
         /* A large order is often run in batches. Blank means release the lot;
            a smaller figure puts that much on the machines now and carries the
@@ -1164,6 +1182,37 @@
         const w=+UI.$("#w_width").value||0;
         el.textContent = thk==null ? (w?"Size "+w+" mm wide":"")
           : (w? "Size "+thk+" × "+w+" mm" : "Thickness "+thk+" mm — enter the width this run is slit to"); };
+      /* ---- the width of the material going in -------------------------------
+         Taken from the SUBSTRATE of this product's recipe — the fabric line,
+         which is the roll that actually goes on the machine. Every roll in the
+         catalogue is 1000 mm today, but that is a fact about the stock rather
+         than a rule, so it is read from the material and not hard-coded. */
+      const itemWidth=(id)=>{ const r=id?ENG.item(id):null; const w=r?+r.width:0; return w>0?w:null; };
+      const recipeMatWidth=(fgId)=>{
+        const fg=fgId?ENG.item(fgId):null, bom=fgId?ENG.data.boms[fgId]:null;
+        if(!fg||!bom) return null;
+        const src=(bom.alternates&&bom.alternates[0])||bom;
+        let cl=[];
+        try{ cl=BOMCALC.compute({lines:BOMCALC.normalize(src.lines||[])},BOMCALC.metaFromItem(fg)).lines||[]; }
+        catch(e){ return null; }
+        // the substrate first; failing a flagged one, the first material that has a width
+        const sub=cl.find(l=>l.fabric&&itemWidth(l.id))||cl.find(l=>itemWidth(l.id));
+        return sub?itemWidth(sub.id):null;
+      };
+      let mwTouched=false;      // once the planner types a width, stop overwriting it
+      const matWidthHint=()=>{ const el=UI.$("#w_mwnote"); if(!el) return;
+        const mw=+UI.$("#w_mwidth").value||0, tw=+UI.$("#w_width").value||0;
+        el.style.color="";
+        if(!mw){ el.textContent="Blank takes the roll width from the recipe"; return; }
+        if(!tw){ el.textContent=ENG.num(mw,0)+" mm roll — enter the tape width to see the cut"; return; }
+        const n=Math.floor(mw/tw);
+        if(n<1){ el.style.color="var(--danger)"; el.textContent="The tape is wider than the roll — check both figures"; return; }
+        const trim=mw-n*tw;
+        el.textContent=n+" × "+ENG.num(tw,1)+" mm per "+ENG.num(mw,0)+" mm roll"
+          +(trim>0.001?" · "+ENG.num(trim,1)+" mm trim":" · no trim"); };
+      const syncMatWidth=()=>{ const el=UI.$("#w_mwidth"); if(!el) return;
+        if(!mwTouched){ const d=recipeMatWidth(UI.$("#w_item").value); el.value=d!=null?d:""; }
+        matWidthHint(); };
       /* ---- netting the requirement against stock already on the shelf -------
          Mirrors the server (stageService.planForRequirement) so the planner
          sees the same answer before pressing Create: finished goods of the
@@ -1249,7 +1298,7 @@
         ]);
       }
 
-      const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
+      const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); syncMatWidth(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         // show the stages this product will actually run, and keep the line in
         // the area that starts it (a one-material product never enters coating)
         const rt=routeFor(id,qty), lineSel=UI.$("#w_line"), pool=LINES_BY_AREA[rt.area]||[];
@@ -1357,7 +1406,11 @@
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), createBtn]});
       setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); /* the width decides WHICH finished stock can be used, so it re-nets the
    whole plan rather than just refreshing its own hint */
-UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
+UI.$("#w_width").addEventListener("input",recalc);
+// the material width is the planner's to override, so typing in it only
+// refreshes its own hint — it must never re-net the plan or be overwritten
+UI.$("#w_mwidth").addEventListener("input",()=>{ mwTouched=true; matWidthHint(); });
+recalc(); },50);
       async function save(){
         const itemId=UI.$("#w_item").value, qty=qtyKg();
         if(qty==null){ toast("This product has no GSM — enter the quantity in kg",{type:"warn"}); return; }
@@ -1372,6 +1425,8 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
           if(rel<qty-1e-6) payload.releaseQty=rel;
         }
         const wmm=+UI.$("#w_width").value; if(wmm>0) payload.widthMM=wmm;
+        // recorded even when it came from the recipe, so the job says which roll it assumed
+        const mwmm=+UI.$("#w_mwidth").value; if(mwmm>0) payload.matWidthMM=mwmm;
         /* how much to take off the shelf — sent explicitly (0 included, which
            is why this is not a truthiness check) so the server draws exactly
            what the planner chose rather than as much as it can */

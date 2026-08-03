@@ -372,6 +372,19 @@ function widthOf(v) {
   return w;
 }
 
+/* Width (mm) of the MATERIAL going in — the jumbo roll being fed — as opposed
+   to the tape width the run is slit to. Two different measurements: the store
+   holds 1000 mm rolls and the customer orders 25 mm tape, and the floor needs
+   both on the job to know how many tapes come off a roll. Same validation, its
+   own message, so an operator is told which of the two is wrong. */
+function matWidthOf(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const w = +v;
+  if (!isFinite(w) || w <= 0) throw err("Enter a valid material width in mm", 400);
+  if (w > 5000) throw err("Material width looks wrong — enter it in millimetres", 400);
+  return w;
+}
+
 /* updateWorkOrder — edit a planned run. Due date, priority and tape width can
    change any time before dispatch; quantity and line only while NOTHING has
    been posted or completed (stage movements are derived from them). */
@@ -416,6 +429,10 @@ function updateWorkOrder(user, id, body) {
     const width = widthOf(body.widthMM);
     if (width == null) delete wo.widthMM; else wo.widthMM = width;
   }
+  if (body.matWidthMM !== undefined) {
+    const mw = matWidthOf(body.matWidthMM);
+    if (mw == null) delete wo.matWidthMM; else wo.matWidthMM = mw;
+  }
   if (body.qty !== undefined) {
     const q = +body.qty;
     if (!q || q <= 0) throw err("Enter a valid quantity", 400);
@@ -456,6 +473,8 @@ function createWorkOrder(user, body) {
   // also what finished stock has to match before it can be used, so it is
   // resolved BEFORE the requirement is netted.
   const width = widthOf(body.widthMM);
+  // and the width of the roll being FED, which is a property of the material
+  const matWidth = matWidthOf(body.matWidthMM);
 
   /* Net the requirement against stock that already exists: finished goods go
      straight to packing, half-made rolls skip coating and start at slitting,
@@ -527,6 +546,7 @@ function createWorkOrder(user, body) {
     createdBy: user.username, createdAt: new Date().toISOString(),
   };
   if (width != null) wo.widthMM = width;
+  if (matWidth != null) wo.matWidthMM = matWidth;
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId, data);
   if (spec && body[spec.key] != null && body[spec.key] !== "") wo[spec.key] = body[spec.key];
@@ -829,6 +849,7 @@ function summarize(wo, data) {
     id: wo.id, status: wo.status, progress: wo.progress,
     stageIdx: wo.stageIdx, dispatched: !!wo.dispatched,
     widthMM: wo.widthMM != null ? wo.widthMM : null,
+    matWidthMM: wo.matWidthMM != null ? wo.matWidthMM : null,
     // total / on the floor / finished / waiting for material
     qty: wo.qty,
     runQty: wo.runQty != null ? wo.runQty : wo.qty,

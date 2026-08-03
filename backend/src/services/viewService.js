@@ -135,6 +135,9 @@ function stateForSupervisor(area, username, opts) {
         dispatchedQty: +wo.dispatchedQty || 0,
         partial,
         widthMM: wo.widthMM != null ? wo.widthMM : null,   // the width this run is slit to
+        // and the width of the roll going in — slitting needs both to know how
+        // many tapes come off one roll and how much edge is left over
+        matWidthMM: wo.matWidthMM != null ? wo.matWidthMM : null,
         customer: showCustomer ? customerForWO(wo) : undefined, // label info for slitting only
         updatedBy: wo.updatedBy || null, updatedAt: wo.updatedAt || null,
         // routing / stage hand-off

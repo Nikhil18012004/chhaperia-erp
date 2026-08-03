@@ -845,6 +845,35 @@ async function run() {
   ok("the slitting board is told the width to slit to", !!slitWRow && slitWRow.widthMM === 25,
     slitWRow ? String(slitWRow.widthMM) : "not on the board");
 
+  /* The MATERIAL's width is a second, separate measurement: the jumbo roll
+     being fed, against the tape width the run is slit to. Slitting needs both
+     — 1000 ÷ 25 is how many tapes come off a roll — so it travels the same
+     road as the tape width and is validated on its own terms. */
+  const woM = await call("POST", "/production/wo", A, { itemId: fg, qty: 10, widthMM: 25, matWidthMM: 1000 });
+  ok("a work order accepts the material's width too",
+    woM.d && woM.d.matWidthMM === 1000 && woM.d.widthMM === 25,
+    JSON.stringify(woM.d && { m: woM.d.matWidthMM, t: woM.d.widthMM }));
+  const woMFull = (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woM.d.id);
+  ok("both widths are stored on the work order",
+    woMFull && woMFull.matWidthMM === 1000 && woMFull.widthMM === 25,
+    woMFull ? woMFull.matWidthMM + "/" + woMFull.widthMM : "not found");
+  ok("the material width can be corrected later",
+    (await call("PATCH", "/production/wo/" + woM.d.id, A, { matWidthMM: 1250 })).d.matWidthMM === 1250);
+  ok("correcting one width leaves the other alone",
+    (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woM.d.id).widthMM === 25);
+  ok("a blank material width clears it",
+    (await call("PATCH", "/production/wo/" + woM.d.id, A, { matWidthMM: "" })).d.matWidthMM === null);
+  ok("a negative material width is rejected",
+    (await call("PATCH", "/production/wo/" + woM.d.id, A, { matWidthMM: -5 })).status === 400);
+  ok("a material width in metres is rejected as a wrong unit",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, matWidthMM: 25000 })).status === 400);
+  ok("a work order with no material width is still valid",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d.matWidthMM === null);
+  await call("PATCH", "/production/wo/" + woM.d.id, A, { matWidthMM: 1000 });
+  const slitMRow = ((await call("GET", "/state", slitW.token)).d.workorders || []).find((w) => w.id === woM.d.id);
+  ok("the slitting board is told what roll is going in", !!slitMRow && slitMRow.matWidthMM === 1000,
+    slitMRow ? String(slitMRow.matWidthMM) : "not on the board");
+
   section("A production stage shows only on its owner's board");
   const supSees = async (tok) => {
     const d = (await call("GET", "/state", tok)).d;
