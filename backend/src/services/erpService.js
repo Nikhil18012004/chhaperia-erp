@@ -10,6 +10,15 @@ const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const BC = require("../../../frontend/js/bomcalc");
 
+/* Movement ids. A timestamp alone is not unique — several movements are posted
+   inside the same millisecond, and keying the tail on the item id collides the
+   moment one document names the same item twice (a two-lot delivery received
+   against one PO used to throw UNIQUE constraint failed and 500 on the user).
+   A process counter makes the tail strictly increasing instead. Same shape as
+   stageService/productionService, which already learned this. */
+let _mvSeq = 0;
+function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
+
 /** Load the full dataset; seed automatically on first run. */
 function getState() {
   if (repo.isEmpty()) {
@@ -149,7 +158,7 @@ function addMovement(m) {
   }
   m.qty = +m.qty;
   if (m.rate != null && m.rate !== "") m.rate = +m.rate || 0;
-  if (!m.id) m.id = "MV-" + Date.now() + "-" + Math.floor(Math.random() * 1e4);
+  if (!m.id) m.id = mvId();
   if (!m.date) m.date = todayISO();
   repo.addMovement(m);
   return { ok: true, id: m.id };
@@ -194,7 +203,7 @@ function receivePurchaseOrder(poId, body, user) {
           note = "Goods receipt vs PO — " + rq + " " + BC.normUnit(from)
             + " received as " + stockQty + " " + BC.normUnit(item.uom);
         }
-      moves.push({ id: "MV-" + Date.now() + "-" + l.itemId, date, itemId: l.itemId, wh,
+      moves.push({ id: mvId(), date, itemId: l.itemId, wh,
         type: "GRN", qty: stockQty, rate: l.rate || 0, ref: po.id, note,
         supplierId: po.supplierId, by });
       l.recd = +((l.recd || 0) + rq).toFixed(3);   // progress is in the ORDER's unit
@@ -276,7 +285,7 @@ function dispatchSalesOrder(soId, body, user) {
   const wh = body.wh || "WH-FG";
   const by = (user && user.username) || "sales";
   const moves = (so.lines || []).map((l) => ({
-    id: "MV-" + Date.now() + "-" + l.itemId, date, itemId: l.itemId, wh, type: "SALE",
+    id: mvId(), date, itemId: l.itemId, wh, type: "SALE",
     qty: -Math.abs(num(l.qty)), rate: l.rate || 0, ref: so.id, note: "Dispatch vs SO", by,
   }));
   if (moves.length) repo.addMovements(moves);

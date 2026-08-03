@@ -625,8 +625,10 @@
           return `<div class="cell-main">${esc(U.trim(it.name||r.itemId,30))}</div><div class="cell-sub">${esc(sz||r.itemId)}</div>`;},noSort:true}];
       if(anyBatch) cols.push({key:"batch",label:"Batch No.",render:r=>r.batch?`<span class="mono">${esc(batchNo(r.batch))}</span>`:'<span class="muted">—</span>',noSort:true});
       cols.push(
-        {key:"qty",label:"Qty",num:true,render:r=>ENG.num(r.qty)+" kg",noSort:true},
-        {key:"stock",label:"In Stock",num:true,render:r=>{const h2=ENG.stock(r.itemId).onHand;return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(h2,1)}</span>`;},noSort:true},
+        // the quantity is in the product's own unit — never assume kg
+        {key:"qty",label:"Qty",num:true,render:r=>ENG.num(r.qty)+" "+((ENG.item(r.itemId)||{}).uom||"kg"),noSort:true},
+        {key:"stock",label:"In Stock",num:true,render:r=>{const h2=ENG.stock(r.itemId).onHand;const u=(ENG.item(r.itemId)||{}).uom||"kg";
+          return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(h2,1)} ${esc(u)}</span>`;},noSort:true},
         {key:"rate",label:"Rate",num:true,render:r=>"₹"+ENG.num(r.rate),noSort:true},
         {key:"gst",label:"GST %",num:true,render:r=>lineGstPct(r,ENG.item(r.itemId)),noSort:true},
         {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true});
@@ -775,9 +777,11 @@
         // quantity still free, so the operator picks the right ready stock
         const opts=ready.map(b=>{
           const size=lineSize({itemId:b.itemId,width:b.widthMM});
-          // the same three figures the hint below uses, so the two agree
+          /* The same three figures the hint below uses, so the two agree. The
+             unit is stated once, on the first figure — the desk was reading
+             bare numbers and could not tell kg from metres. */
           return {v:b.id, l:batchNo(b.id)+(size?" · "+size:"")
-            +" · "+ENG.num(b.ordered,1)+" ordered · "+ENG.num(b.made,1)+" produced · "
+            +" · "+ENG.num(b.ordered,1)+" "+uom+" ordered · "+ENG.num(b.made,1)+" produced · "
             +ENG.num(b.pending,1)+" pending"};
         });
         // keep a batch that is already on this order even once fully claimed
@@ -793,6 +797,7 @@
          ordered figure as if it were all standing ready. */
       function readyHint(itemId){
         const ready=ENG.readyBatches(itemId);
+        const uom=(ENG.item(itemId)||{}).uom||"kg";
         if(!ready.length) return "No finished job for this product yet — it can still be ordered and made to order.";
         /* One wording for every job, part-made or complete — a finished order
            simply reads 0 still pending. The desk should not have to decode two
@@ -800,7 +805,7 @@
         const many=ready.length>1;
         const each=ready.slice(0,3).map(b=>{
           let s=(many?batchNo(b.id)+" — ":"")
-            +ENG.num(b.ordered,1)+" ordered · "+ENG.num(b.made,1)+" produced · "
+            +ENG.num(b.ordered,1)+" "+uom+" ordered · "+ENG.num(b.made,1)+" produced · "
             +ENG.num(b.pending,1)+" still pending";
           // only worth saying when some of what was made is no longer available
           if(Math.abs(b.free-b.made)>0.001) s+=" · "+ENG.num(b.free,1)+" free to sell";
@@ -868,22 +873,28 @@
         const it=ENG.item(itemId)||{};
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:"";
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(it.price||"");
-        /* A sales line is always in kg — the metre equivalent is shown beside
-           it purely so the desk can talk to a customer who orders by length.
-           It is a working aid only and never reaches the invoice. */
+        /* A sales line is in the PRODUCT'S OWN unit — that is the unit the
+           dispatch movement is posted in, and mica tape is stocked in metres,
+           not kg. The label says which, and the other unit is shown beside it
+           purely so the desk can talk to a customer who orders the other way.
+           The equivalent is a working aid only and never reaches the invoice. */
         const sQtyEl=h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal});
         const sConvEl=h("div",{class:"muted",id:"sl_conv_"+idx,style:"font-size:10.5px;margin-top:3px"});
         const sSyncConv=(x)=>{
           const kpm=kgPerMetre(x), q=+sQtyEl.value||0;
-          if(!kpm||!(q>0)){ sConvEl.textContent=""; return; }
-          sConvEl.textContent="= "+ENG.num(q/kpm,1)+" MTR ("+ENG.num(x.gsm,0)+" g/m² × "+ENG.num(x.width,0)+" mm)";
+          const u=BOMCALC.normUnit((x&&x.uom)||"KG");
+          if(!kpm||!(q>0)||(u!=="KG"&&u!=="MTR")){ sConvEl.textContent=""; return; }
+          const basis=" ("+ENG.num(x.gsm,0)+" g/m² × "+ENG.num(x.width,0)+" mm)";
+          sConvEl.textContent=u==="MTR"
+            ? "= "+ENG.num(q*kpm,1)+" KG"+basis
+            : "= "+ENG.num(q/kpm,1)+" MTR"+basis;
         };
         const row=docLine(idx + 1,
           h("div",{html:U.searchSelect("sl_item_"+idx,fgs.map(i=>({v:i.id,l:i.name+(i.thicknessMM!=null?" · "+i.thicknessMM+" mm":"")+" — "+(i.typeCode||i.id)})),itemId,"Search product…")}),
           [
             ["HSN",         h("input",{class:"input",id:"sl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
             ["Batch (W.O.)",h("div",{html:U.selectHTML("sl_batch_"+idx,batchOpts(itemId),(seed&&seed.batch)||"")})],
-            ["Qty (kg)",    sQtyEl],
+            ["Qty ("+((it.uom||"kg"))+")", sQtyEl],
             ["Rate",        h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"0.00",value:rateVal})],
             ["Disc %",      h("input",{class:"input",id:"sl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""})],
             ["GST %",       h("input",{class:"input",id:"sl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)})],
@@ -893,11 +904,14 @@
         row.appendChild(h("div",{class:"so-ready",id:"sl_ready_"+idx,text:readyHint(itemId)}));
         UI.$("#so_lines").appendChild(row);
         const sQtyCell=sQtyEl.closest(".doc-line-f"); if(sQtyCell) sQtyCell.appendChild(sConvEl);
+        // the label carries the product's unit, so it has to move with the product
+        const sQtyLab=sQtyCell&&sQtyCell.querySelector("label");
+        const sSyncUom=(x)=>{ if(sQtyLab) sQtyLab.textContent="Qty ("+((x&&x.uom)||"kg")+")"; };
         sSyncConv(it);
         sQtyEl.addEventListener("input",()=>sSyncConv(ENG.item(UI.$("#sl_item_"+idx).value)||{}));
         // picking a product refreshes HSN, GST, rate default + its batch (WO) list
         const hid=UI.$("#sl_item_"+idx);
-        if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{}; sSyncConv(ni);
+        if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{}; sSyncConv(ni); sSyncUom(ni);
           UI.$("#sl_hsn_"+idx).value=ni.hsn||""; UI.$("#sl_gst_"+idx).value=lineGstPct(null,ni);
           if(!UI.$("#sl_rate_"+idx).value) UI.$("#sl_rate_"+idx).value=ni.price||"";
           const bSel=UI.$("#sl_batch_"+idx);
@@ -1200,8 +1214,11 @@
         `<td>${esc(it.name||l.itemId)}<div class="sub">${esc(size||l.itemId)}</div></td>`+
         `<td class="c">${esc(l.hsn||it.hsn||"—")}</td>`+
         (anyBatch?`<td class="c">${esc(l.batch?batchNo(l.batch):"—")}</td>`:"")+
-        // a PO prints the unit it was PLACED in; a sales invoice is always kg
-        `<td class="r">${ENG.num(l.qty,2)}</td><td class="c">${esc(isPO?(l.uom||it.uom||"KG"):"KG")}</td>`+
+        /* A PO prints the unit it was PLACED in. A sales line has no unit of
+           its own — it is in the product's stocking unit, which is what the
+           dispatch movement posts, so mica tape invoices in MTR and printing
+           a flat "KG" here mis-stated the consignment. */
+        `<td class="r">${ENG.num(l.qty,2)}</td><td class="c">${esc(isPO?(l.uom||it.uom||"KG"):(it.uom||"KG"))}</td>`+
         `<td class="r">${IN(l.rate)}</td>`+
         (anyDisc?`<td class="r">${l.discPct?l.discPct+"%":"—"}</td>`:"")+
         `<td class="r">${lc.gstPct}%</td>`+

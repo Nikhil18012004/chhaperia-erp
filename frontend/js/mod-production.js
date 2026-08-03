@@ -1746,14 +1746,69 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
         // a line unit that differs between repeats can no longer be stated
         if(BOMCALC.normUnit(at.cl.unit)!==BOMCALC.normUnit(d.cl.unit)) at.mixedUnit=true;
       });
+      /* Carbon is bought under several GRADES — CLOFT 908, HS150, 250 R — and a
+         recipe may draw on more than one, typically a different grade per layer
+         (FG-CHDSW-25 puts CLOFT 908 on the top and HS150 on the bottom). They
+         are consumed together, not chosen between. This sheet deliberately
+         prints no grade, so two of them would otherwise appear as two identical
+         "CARBON PASTE" rows a reader cannot tell apart. Fold them into ONE line
+         at the combined quantity and combined cost, and restate the rate as
+         what the blend actually costs per unit consumed. Paste and powder stay
+         apart — those are different materials, not two grades of one. The BOM
+         screen is untouched: it still shows every grade exactly as entered. */
+      const carbonKind=(d)=>{
+        const n=String(d.name||"").toUpperCase();
+        if(!/CARBON/.test(n)) return null;
+        return /POWDER/.test(n)?"CARBON POWDER":"CARBON PASTE";
+      };
+      const carbonAt={}, folded=[];
+      merged.forEach(d=>{
+        const kind=carbonKind(d);
+        if(!kind){ folded.push(d); return; }
+        // every grade is a mass, so kilos are the one unit they all share
+        const kg=(d.cq!=null)?BOMCALC.toKg(d.cq,d.stockU||"KG"):null;
+        const at=carbonAt[kind];
+        if(!at){
+          d.name=kind; d.carbonKg=kg; d.carbonGrades=1;
+          d.carbonUnpriced=(d.amt==null)?1:0;
+          d.carbonUnits=new Set([BOMCALC.normUnit(d.stockU||"KG")]);
+          d.carbonLineUnits=new Set([BOMCALC.normUnit(d.cl.unit)]);
+          carbonAt[kind]=d; folded.push(d); return;
+        }
+        at.carbonGrades++;
+        at.mergedFrom=(at.mergedFrom||1)+1;
+        at.qty+=d.qty;
+        at.carbonUnits.add(BOMCALC.normUnit(d.stockU||"KG"));
+        at.carbonLineUnits.add(BOMCALC.normUnit(d.cl.unit));
+        if(at.carbonKg!=null&&kg!=null) at.carbonKg+=kg; else at.carbonKg=null;
+        /* Keep the money we DO know. A grade with no rate in the item master
+           cannot be costed, but that is no reason to throw away the cost of the
+           grade beside it — the missing rate is reported under the table. */
+        if(d.amt!=null) at.amt=(at.amt||0)+d.amt; else at.carbonUnpriced++;
+        if(at.consSqm!=null&&d.consSqm!=null) at.consSqm+=d.consSqm; else at.consSqm=null;
+        if(at.consKg!=null&&d.consKg!=null) at.consKg+=d.consKg; else at.consKg=null;
+        at.shifted=at.shifted||d.shifted;
+      });
+      Object.keys(carbonAt).forEach(k=>{
+        const at=carbonAt[k];
+        if(at.carbonGrades<2) return;          // a single grade prints as it always did
+        at.cq=at.carbonKg;
+        // where the grades were not all stocked alike, kilos are the honest unit
+        if(!(at.carbonUnits.size===1&&at.carbonUnits.has("KG"))){ at.stockU="KG"; at.mixedUnit=true; }
+        if(at.carbonLineUnits.size>1) at.mixedUnit=true;
+        at.rate=(at.amt!=null&&at.cq)?at.amt/at.cq:0;
+      });
+
       /* Read the sheet the way the tape is built: the fabric it is carried on
          first, then the carbon that coats it, then everything else. Within a
          group the dearest lines lead, so the money is at the top of each. */
       const rank=(d)=>d.cl.fabric?0:(/CARBON/i.test(d.name)?1:2);
-      const data=merged.slice().sort((a,b)=>
+      const data=folded.slice().sort((a,b)=>
         (rank(a)-rank(b)) || ((b.amt||0)-(a.amt||0)));
       data.forEach(d=>{
-        if(d.amt!=null) batchTotal+=d.amt; else unpriced++;
+        // a folded carbon line reports the grades inside it that carry no rate
+        if(d.amt!=null) batchTotal+=d.amt; else if(!d.carbonUnpriced) unpriced++;
+        if(d.carbonUnpriced) unpriced+=d.carbonUnpriced;
         if(d.shifted) converted++;
         /* Consumption per line is in that line's own unit, so where repeats
            used different units their figures cannot simply be added either —
@@ -1828,7 +1883,8 @@ UI.$("#w_width").addEventListener("input",recalc); recalc(); },50);
          should be read, so they survive as one line under the table. */
       const warn=[];
       if(converted) warn.push(converted+" line"+(converted>1?"s are":" is")+" priced in a different unit from the one entered — the converted quantity is shown beneath it and the amount follows that figure.");
-      if(unpriced) warn.push(unpriced+" line"+(unpriced>1?"s have":" has")+" no rate and "+(unpriced>1?"are":"is")+" left out of the totals.");
+      // "material", not "line" — a folded carbon line can hide an uncosted grade
+      if(unpriced) warn.push(unpriced+" material"+(unpriced>1?"s have":" has")+" no rate and "+(unpriced>1?"are":"is")+" left out of the totals.");
       if(perKg==null) warn.push("The per-kg figures need this product's FG GSM to be set.");
       if(c.rangedLines) warn.push("A ranged line is costed at the material named here; the one used is chosen against live stock at issue.");
 

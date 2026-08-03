@@ -166,6 +166,33 @@ async function run() {
     await call("DELETE", "/purchase-orders/" + poT.id, A);
   }
 
+  /* One document may name the same material twice — a delivery that arrives in
+     two lots, at two rates, is one order with two lines. Every line still has
+     to post its OWN stock movement, so the ids must differ even when the item
+     and the millisecond do not. This used to 500 on the user. */
+  {
+    const poD = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 30, rate: 20, recd: 0 }, { itemId: rm, qty: 70, rate: 22, recd: 0 }] })).d;
+    const recD = await call("POST", "/purchase-orders/" + poD.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 30 }, { i: 1, qty: 70 }] });
+    ok("a PO naming one item on two lines receives both at once", recD.status === 200 && recD.d.posted === 2,
+      recD.status + " " + JSON.stringify(recD.d).slice(0, 90));
+    const stD = (await call("GET", "/state", A)).d;
+    const mvD = (stD.movements || []).filter((m) => m.ref === poD.id);
+    ok("both lots are posted under distinct ids", mvD.length === 2 && mvD[0].id !== mvD[1].id,
+      mvD.map((m) => m.id).join(" "));
+    ok("and the full 100 lands in stock", Math.abs(mvD.reduce((n, m) => n + (+m.qty || 0), 0) - 100) < 0.01);
+    await call("DELETE", "/purchase-orders/" + poD.id, A);
+
+    // the same trap on the way out: one order, one product, two lines
+    const soD = (await call("POST", "/sales-orders", A, { customerId: cust,
+      lines: [{ itemId: fg, qty: 4, rate: 100 }, { itemId: fg, qty: 6, rate: 110 }] })).d;
+    const dispD = await call("POST", "/sales-orders/" + soD.id + "/dispatch", A, {});
+    ok("an SO naming one product on two lines dispatches both", dispD.status === 200 && dispD.d.posted === 2,
+      dispD.status + " " + JSON.stringify(dispD.d).slice(0, 90));
+    await call("DELETE", "/sales-orders/" + soD.id, A);
+  }
+
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
 
   // Warehouse master-data edit (rename) — admin/office only
