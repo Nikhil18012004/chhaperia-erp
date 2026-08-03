@@ -174,6 +174,6 @@
 
   // ⌘K quick action
   window.ERPActions = Object.assign(window.ERPActions || {}, {
-    newTransporter: { ic: "🚚", label: "New Transporter", run: () => App.go("dispatch", { openNew: true }) },
+    newTransporter: { mod: "dispatch", create: true, ic: "🚚", label: "New Transporter", run: () => App.go("dispatch", { openNew: true }) },
   });
 })();

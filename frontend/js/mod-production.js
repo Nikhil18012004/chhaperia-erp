@@ -2372,7 +2372,7 @@ recalc(); },50);
   window._erpUtil = Object.assign(window._erpUtil||{}, { materialsList, materialRole });
 
   window.ERPActions = Object.assign(window.ERPActions||{}, {
-    newWO:  { ic:"⚙️", label:"New Work Order", run:()=>App.go("production",{openNew:true}) },
-    newBOM: { ic:"🧬", label:"Create BOM",     run:()=>App.go("bom",{openNew:true}) },
+    newWO:  { mod:"production", create:true, ic:"⚙️", label:"New Work Order", run:()=>App.go("production",{openNew:true}) },
+    newBOM: { mod:"bom", create:true, ic:"🧬", label:"Create BOM",     run:()=>App.go("bom",{openNew:true}) },
   });
 })();

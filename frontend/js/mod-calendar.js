@@ -570,6 +570,6 @@
 
   // ⌘K quick action
   window.ERPActions = Object.assign(window.ERPActions || {}, {
-    newAppointment: { ic: "📅", label: "New Appointment", run: () => App.go("calendar", { openNew: true }) },
+    newAppointment: { mod: "calendar", create: true, ic: "📅", label: "New Appointment", run: () => App.go("calendar", { openNew: true }) },
   });
 })();

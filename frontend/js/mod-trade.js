@@ -1582,7 +1582,7 @@
 
   // register ⌘K quick actions for Procurement & Sales
   window.ERPActions = Object.assign(window.ERPActions||{}, {
-    newPO: { ic:"🛒", label:"New Purchase Order", run:()=>App.go("purchase",{openNew:true}) },
-    newSO: { ic:"🧾", label:"New Sales Order",    run:()=>App.go("sales",{openNew:true}) },
+    newPO: { mod:"purchase", create:true, ic:"🛒", label:"New Purchase Order", run:()=>App.go("purchase",{openNew:true}) },
+    newSO: { mod:"sales", create:true, ic:"🧾", label:"New Sales Order",    run:()=>App.go("sales",{openNew:true}) },
   });
 })();

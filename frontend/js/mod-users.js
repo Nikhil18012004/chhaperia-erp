@@ -158,7 +158,7 @@
   // register the ⌘K quick action for user management (admin-only; gate the run
   // so a non-admin who somehow sees it doesn't hit the 403 users page)
   window.ERPActions = Object.assign(window.ERPActions || {}, {
-    newUser: { ic: "👥", label: "New User", run: () => {
+    newUser: { mod: "users", create: true, ic: "👥", label: "New User", run: () => {
       if (App.user && App.user.role === "admin") App.go("users", { openNew: true });
       else UI.toast("User management is admin-only", { type: "warn" });
     } },

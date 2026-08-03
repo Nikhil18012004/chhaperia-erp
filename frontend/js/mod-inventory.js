@@ -939,8 +939,8 @@
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {
-    addStock:    { ic:"📦", label:"Add Stock",             run:()=>addStockForm() },
-    receivePO:   { ic:"🚚", label:"Receive via PO",        run:()=>receiveStockForm() },
-    newItem:     { ic:"＋", label:"New Item",               run:()=>itemForm() },
+    addStock:    { mod:"inventory", create:true, ic:"📦", label:"Add Stock",             run:()=>addStockForm() },
+    receivePO:   { mod:"inventory", create:true, ic:"🚚", label:"Receive via PO",        run:()=>receiveStockForm() },
+    newItem:     { mod:"inventory", create:true, ic:"＋", label:"New Item",               run:()=>itemForm() },
   });
 })();

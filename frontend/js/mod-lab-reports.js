@@ -467,6 +467,6 @@
 
   // ⌘K quick action
   window.ERPActions = Object.assign(window.ERPActions || {}, {
-    newLabReport: { ic: "🧪", label: "New Lab Report", run: () => App.go("lab-reports", { view: "reports", openNew: true }) },
+    newLabReport: { mod: "lab-reports", create: true, ic: "🧪", label: "New Lab Report", run: () => App.go("lab-reports", { view: "reports", openNew: true }) },
   });
 })();

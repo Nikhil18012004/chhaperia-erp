@@ -982,6 +982,6 @@
 
   // register the ⌘K quick action for CRM
   window.ERPActions = Object.assign(window.ERPActions || {}, {
-    newLead: { ic: "🎯", label: "New Lead", run: () => App.go("crm", { openNew: true }) },
+    newLead: { mod: "crm", create: true, ic: "🎯", label: "New Lead", run: () => App.go("crm", { openNew: true }) },
   });
 })();
