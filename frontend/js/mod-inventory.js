@@ -148,12 +148,19 @@
         {key:"balance",label:"Balance",num:true,render:r=>`<span class="strong mono">${ENG.num(r.balance,2)}</span>`,noSort:true},
       ],{empty:"No movements"})
     ]);
+    /* A role that may READ this section is not necessarily allowed to change
+       it (the lab incharge), and the two shortcuts below jump to sections it
+       may not be able to open at all. Each is offered only where it leads
+       somewhere — the server refuses the write either way. */
+    const mayEdit=!App.canWrite||App.canWrite("inventory");
+    const mayLedger=!App.canAccess||App.canAccess("ledger");
+    const mayBuy=!App.canAccess||App.canAccess("purchase");
     modal({title:it.name, sub:it.id+" · "+catName(it.cat), wide:true, body,
       foot:[
-        h("button",{class:"btn",onclick:()=>{App.go("ledger",{item:id});UI.$("#modalHost").hidden=true;},text:"📒 Full Ledger"}),
-        st.suggest?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${ENG.num(st.suggest)} ${it.uom})`}):null,
-        h("button",{class:"btn ghost",onclick:()=>itemForm(it),text:"✎ Edit"})
-      ]});
+        mayLedger?h("button",{class:"btn",onclick:()=>{App.go("ledger",{item:id});UI.$("#modalHost").hidden=true;},text:"📒 Full Ledger"}):null,
+        (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${ENG.num(st.suggest)} ${it.uom})`}):null,
+        mayEdit?h("button",{class:"btn ghost",onclick:()=>itemForm(it),text:"✎ Edit"}):null
+      ].filter(Boolean)});
   }
 
   /* ----- item create/edit form ----- */

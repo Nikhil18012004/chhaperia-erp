@@ -8,16 +8,21 @@
      decoupled from the inventory `items` table and seeded from the
      factory's finished-goods list. It is REPLACED when the real
      product data file (codes + BOM + stages + TDS specs) arrives.
-   • Each product carries material-TYPE flags (mica / waterBlocking /
-     semiConductive) that decide WHICH test parameters apply:
-       - common (always): tensile, elongation, thickness, mass/area
-       - waterBlocking  : swelling speed + heights (1/3/10 min)
-       - semiConductive : surface + volume resistance
-       - mica           : breakdown voltage (BDV)
    • A per-product `spec` map {param:{min,max}} lives on the product
      (BACKEND-ONLY — never sent to the data-entry form). On submit the
      server grades entered values against it → Pass/Fail per param +
      overall. Until specs are loaded from the TDS, overall = "Pending".
+   • WHICH PARAMETERS A REPORT CARRIES is decided by that spec: a
+     product is tested on exactly the parameters the Products master
+     states a limit for, and on nothing else. A product whose spec has
+     not been loaded yet falls back to the material-TYPE catalogue —
+     flags (mica / waterBlocking / semiConductive) selecting from
+     common + swelling + resistance + BDV — so it can still be measured.
+   • A WORK ORDER IS A BATCH. The batch number printed on an invoice is
+     the work order's own number, so a certificate is tied to a job by
+     `woId`, and findable by either the W.O. number or the plain batch
+     number. Coating cannot be finished until that certificate carries a
+     complete measurement (see coatingGate).
    • `refMode` is per product: daily-made/stocked goods use a BATCH
      number; made-to-order goods use a LOT / work-order number.
    ============================================================ */
@@ -70,18 +75,55 @@ function applicableParams(flags) {
 }
 
 /* ============================================================
+   WHICH PARAMETERS THIS PRODUCT IS TESTED ON
+   The Products master is the authority: a parameter belongs on the
+   report when the product's spec states a limit for it. `specKeys`
+   is the redacted form the non-admin payload carries — the keys
+   without the limits — so every role agrees on the parameter list
+   while only admin sees the thresholds.
+   ============================================================ */
+function hasLimit(sp) {
+  return !!sp && (sp.min != null || sp.max != null || sp.nominal != null || sp.unparsed != null);
+}
+function specKeys(product) {
+  const spec = (product || {}).spec || {};
+  return Object.keys(spec).filter((k) => hasLimit(spec[k]));
+}
+/** The parameter rows a report for this product carries, in catalog order. */
+function paramsForProduct(product, flags) {
+  product = product || {};
+  const keys = Array.isArray(product.specKeys) ? product.specKeys : specKeys(product);
+  const picked = PARAMS.filter((p) => keys.indexOf(p.key) >= 0);
+  // no spec loaded yet — fall back to the material-type catalogue so the
+  // product is still measurable rather than having no parameters at all
+  return picked.length ? picked : applicableParams(flags || product.flags);
+}
+/** True when every parameter of `params` carries a value. */
+function setComplete(values, params) {
+  if (!params || !params.length) return false;
+  return params.every((p) => num((values || {})[p.key]) != null);
+}
+/** The parameters still missing a value. */
+function missingParams(values, params) {
+  return (params || []).filter((p) => num((values || {})[p.key]) == null);
+}
+
+/* ============================================================
    PASS / FAIL — grade entered values against the product spec.
    Spec shape: { paramKey: { min?, max? } }. A param with a value
    but no spec is "na" (awaiting TDS). Overall is:
      Fail    → any applicable param fails its spec
      Pass    → at least one param evaluated and none failed
      Pending → no param could be evaluated (no specs yet)
+   `params` is the row list from paramsForProduct(); a flags object
+   is still accepted so older callers keep working.
    ============================================================ */
-function evaluate(values, spec, flags) {
+function evaluate(values, spec, params) {
   values = values || {}; spec = spec || {};
+  const rows = Array.isArray(params) ? params : applicableParams(params);
   const results = {};
   let anyEval = false, anyFail = false;
-  applicableParams(flags).forEach((p) => {
+  rows.forEach((p) => {
     const v = num(values[p.key]);
     if (v == null) { results[p.key] = "—"; return; }           // not entered
     const sp = spec[p.key];
@@ -112,6 +154,12 @@ function normalizeProduct(p) {
     code: String(p.code || "").trim(),
     thickness: p.thickness != null ? String(p.thickness).trim() : "",
     series: p.series || "",
+    /* The import links every lab product to the inventory item it tests, and
+       carries its GSM. Both were being dropped on the first edit through the
+       API — and the item link is what ties a work order to its certificate,
+       so losing it would quietly disable the coating gate. */
+    itemId: p.itemId != null ? String(p.itemId).trim() || null : null,
+    gsm: p.gsm != null && p.gsm !== "" && !isNaN(+p.gsm) ? +p.gsm : null,
     flags: { mica: !!flags.mica, waterBlocking: !!flags.waterBlocking, semiConductive: !!flags.semiConductive },
     refMode: p.refMode === "lot" ? "lot" : "batch",
     spec,
@@ -155,9 +203,9 @@ function listReports() { return repo.getState().labReports || []; }
    compared side by side. `values` remains the report's headline set (the lab
    reading once it exists, else the production one) so every existing caller
    keeps working. */
-function pickValues(raw, flags) {
+function pickValues(raw, params) {
   const out = {};
-  applicableParams(flags).forEach((p) => { const v = num((raw || {})[p.key]); if (v != null) out[p.key] = v; });
+  (params || []).forEach((p) => { const v = num((raw || {})[p.key]); if (v != null) out[p.key] = v; });
   return out;
 }
 /** Which measurement set a writer owns, from their role. */
@@ -176,6 +224,9 @@ function buildReport(body, existing, user) {
   const src = body.flags && typeof body.flags === "object" ? body.flags : (product.flags || deriveFlags(product.name));
   const flags = { mica: !!src.mica, waterBlocking: !!src.waterBlocking, semiConductive: !!src.semiConductive };
   const base = existing || {};
+  // the product's spec decides the parameter rows — the type toggles only
+  // matter for a product whose spec has not been loaded yet
+  const params = paramsForProduct(product, flags);
 
   // Which set is this write? Explicit `source` wins, else infer from the role.
   const owned = sourceForUser(user);
@@ -183,14 +234,14 @@ function buildReport(body, existing, user) {
 
   let prodValues = base.prodValues || {};
   let labValues = base.labValues || {};
-  if (body.prodValues) prodValues = pickValues(body.prodValues, flags);
-  if (body.labValues) labValues = pickValues(body.labValues, flags);
+  if (body.prodValues) prodValues = pickValues(body.prodValues, params);
+  if (body.labValues) labValues = pickValues(body.labValues, params);
   if (body.values) {
     // A plain `values` write lands in the set the writer owns. A supervisor
     // can never overwrite the lab's reading, and the lab can never overwrite
     // the floor's — they are separate records of the same batch.
-    if (target === "production") prodValues = pickValues(body.values, flags);
-    else labValues = pickValues(body.values, flags);
+    if (target === "production") prodValues = pickValues(body.values, params);
+    else labValues = pickValues(body.values, params);
   }
   if (owned && user && user.role === "supervisor" && body.labValues) {
     throw err("Production entry cannot write the lab incharge's measurements", 403);
@@ -199,8 +250,8 @@ function buildReport(body, existing, user) {
     throw err("Lab entry cannot write the production floor's measurements", 403);
   }
 
-  const prodGraded = evaluate(prodValues, product.spec, flags);
-  const labGraded = evaluate(labValues, product.spec, flags);
+  const prodGraded = evaluate(prodValues, product.spec, params);
+  const labGraded = evaluate(labValues, product.spec, params);
   // headline = the lab reading once present, otherwise the floor's
   const hasLab = Object.keys(labValues).length > 0;
   const values = hasLab ? labValues : prodValues;
@@ -216,12 +267,18 @@ function buildReport(body, existing, user) {
     refNo: String(body.refNo != null ? body.refNo : base.refNo || "").trim(),
     reportDate: body.reportDate || base.reportDate || todayISO(),
     flags,
+    // the parameters this certificate covers, as the Products master defined
+    // them at the time of writing
+    paramKeys: params.map((p) => p.key),
     values,
     results: graded.results,
     result: graded.result,
     // the two independent measurement sets + their own grades
     prodValues, prodResults: prodGraded.results, prodResult: prodGraded.result,
     labValues, labResults: labGraded.results, labResult: labGraded.result,
+    // has each stage measured EVERY parameter? the coating gate reads this
+    prodComplete: setComplete(prodValues, params),
+    labComplete: setComplete(labValues, params),
     prodBy: body.prodBy != null ? String(body.prodBy).trim()
       : (target === "production" && user ? user.username : (base.prodBy || "")),
     labBy: body.labBy != null ? String(body.labBy).trim()
@@ -235,10 +292,11 @@ function buildReport(body, existing, user) {
 }
 
 /** Find an existing report for the same batch/lot so the two stages merge. */
-function findByRef(productId, refNo) {
+function findByRef(productId, refNo, reports) {
   const ref = String(refNo || "").trim();
   if (!ref) return null;
-  return listReports().find((r) => r.productId === productId && String(r.refNo || "").trim() === ref) || null;
+  return (reports || listReports())
+    .find((r) => r.productId === productId && String(r.refNo || "").trim() === ref) || null;
 }
 
 function createReport(body, user) {
@@ -251,13 +309,203 @@ function createReport(body, user) {
 function updateReport(id, patch, user) {
   const existing = repo.getLabReport(id);
   if (!existing) throw err("Report not found", 404);
-  // merge so a partial patch (e.g. just assignee) keeps productId/values
-  const merged = Object.assign({}, existing, patch || {}, { id });
+  patch = patch || {};
+  // merge so a partial patch (e.g. just assignee) keeps productId/refNo
+  const merged = Object.assign({}, existing, patch, { id });
+  /* …but NOT the measurement sets. buildReport already carries those forward
+     from `existing`, and folding them into the patch made it look as though
+     the writer had submitted them: the lab incharge editing a batch the floor
+     had already measured was refused for "writing the production floor's
+     measurements", and a patch of nothing but an assignee copied one stage's
+     readings into the other's column. Only what the caller actually sent is
+     treated as a write. */
+  if (!patch.prodValues) delete merged.prodValues;
+  if (!patch.labValues) delete merged.labValues;
+  if (!patch.values) delete merged.values;
   return repo.putLabReport(buildReport(merged, existing, user));
 }
 function deleteReport(id) {
   if (!repo.getLabReport(id)) throw err("Report not found", 404);
   return repo.deleteLabReport(id);
+}
+
+/* ============================================================
+   WORK ORDERS ARE BATCHES
+   A job on the floor and a batch on a certificate are the same
+   thing, so the two are joined here rather than by whoever happens
+   to be typing. `woId` is the real link; refNo is matched as well
+   so a certificate written by hand against the batch number (or the
+   full W.O. number) still counts.
+   ============================================================ */
+function batchNoOf(woId) {
+  return String(woId || "").replace(/^WO[\s-]*/i, "") || String(woId || "");
+}
+
+/** The lab product that tests a given inventory item. */
+function productForItem(itemId, products) {
+  const id = String(itemId || "");
+  if (!id) return null;
+  const list = products || listProducts();
+  return list.find((p) => p.itemId && String(p.itemId) === id)
+    // the import links every product to its item; this is the belt-and-braces
+    // path for a product added by hand, whose code is the item id less "FG-"
+    || list.find((p) => p.code && "FG-" + String(p.code) === id)
+    || null;
+}
+
+/** The certificate covering a work order, however it was referenced. */
+function reportForWO(wo, reports, product) {
+  const id = String((wo && wo.id) || "");
+  if (!id) return null;
+  const bn = batchNoOf(id);
+  const list = reports || listReports();
+  return list.find((r) => String(r.woId || "") === id)
+    || list.find((r) => (!product || r.productId === product.id)
+      && [id, bn].indexOf(String(r.refNo || "").trim()) >= 0)
+    || null;
+}
+
+/** Does this job pass through the coating floor? */
+function hasCoatingStage(wo) {
+  return ((wo && wo.route) || []).some((r) => r && r.area === "coating");
+}
+
+/**
+ * Where a work order stands with QC.
+ * Returns { woId, batchNo, product, params, report, prodValues, labValues,
+ *           prodComplete, labComplete, missingProd, missingLab, coating }.
+ * `data` is an already-loaded state (avoids a second full read).
+ */
+function labStatusForWO(wo, data) {
+  data = data || {};
+  const products = data.labProducts || listProducts();
+  const reports = data.labReports || listReports();
+  const product = productForItem(wo && wo.itemId, products);
+  const params = product ? paramsForProduct(product) : [];
+  const report = product ? reportForWO(wo, reports, product) : reportForWO(wo, reports, null);
+  const prodValues = (report && report.prodValues) || {};
+  const labValues = (report && report.labValues) || {};
+  return {
+    woId: (wo || {}).id || null,
+    batchNo: batchNoOf((wo || {}).id),
+    itemId: (wo || {}).itemId || null,
+    product: product
+      ? { id: product.id, code: product.code, name: product.name, thickness: product.thickness, refMode: product.refMode || "batch" }
+      : null,
+    params: params.map((p) => ({ key: p.key, label: p.label, unit: p.unit })),
+    reportId: report ? report.id : null,
+    prodValues, labValues,
+    prodComplete: setComplete(prodValues, params),
+    labComplete: setComplete(labValues, params),
+    missingProd: missingParams(prodValues, params).map((p) => p.label),
+    missingLab: missingParams(labValues, params).map((p) => p.label),
+    coating: hasCoatingStage(wo),
+  };
+}
+
+/* ============================================================
+   THE COATING GATE
+   A coated batch does not leave the coating floor unmeasured. The
+   supervisor who ran it records the production reading against the
+   work order; until every parameter the Products master asks for
+   carries a value, the stage cannot be completed. A lab reading
+   counts too — the point is that the batch HAS been measured, not
+   who held the micrometer.
+   ============================================================ */
+function coatingGate(wo, data) {
+  const st = labStatusForWO(wo, data);
+  if (!st.product) {
+    // nothing in the lab master tests this product — there is no certificate
+    // to demand, and refusing the stage would strand the job on the floor
+    return { ok: true, reason: "no-lab-product", status: st };
+  }
+  if (!st.params.length) return { ok: true, reason: "no-parameters", status: st };
+  if (st.prodComplete || st.labComplete) return { ok: true, reason: "measured", status: st };
+  const missing = st.reportId ? st.missingProd : st.params.map((p) => p.label);
+  return {
+    ok: false,
+    reason: st.reportId ? "incomplete" : "missing",
+    status: st,
+    message: "Lab report required before coating can be finished — batch "
+      + st.batchNo + " (" + (st.product.code || st.product.name) + ") still needs "
+      + missing.length + " reading" + (missing.length === 1 ? "" : "s") + ": "
+      + missing.join(", ") + ".",
+  };
+}
+
+/* ============================================================
+   THE FINISHED-STOCK GATE
+   Nothing is booked into a store unmeasured either. Stock added by
+   hand carries no work order, so the batch is named by whoever
+   books it and the certificate is filed against that. The rule is
+   otherwise the coating gate's: every parameter the Products
+   master asks for, or the booking is refused.
+
+   Returns { ok, required, product, params, refNo, values, message }.
+   `values` is the set to record once the caller's own writes have
+   gone through — validated here, saved by the caller.
+   ============================================================ */
+function finishedStockGate(itemId, body, data) {
+  body = body || {}; data = data || {};
+  const products = data.labProducts || listProducts();
+  const reports = data.labReports || listReports();
+  const product = productForItem(itemId, products);
+  const params = product ? paramsForProduct(product) : [];
+  const base = { required: !!(product && params.length), product, params };
+  // nothing in the lab master tests this product — there is no certificate to ask for
+  if (!base.required) return Object.assign({ ok: true, reason: "no-parameters" }, base);
+
+  const refNo = String(body.refNo != null ? body.refNo : (body.batchNo || "")).trim();
+  if (!refNo) {
+    return Object.assign({ ok: false, reason: "no-batch" }, base, {
+      message: "Enter the batch / lot number this stock was made on — its lab report is filed against it.",
+    });
+  }
+  const existing = findByRef(product.id, refNo, reports);
+  const already = existing
+    && (setComplete(existing.prodValues, params) || setComplete(existing.labValues, params));
+  if (already) return Object.assign({ ok: true, reason: "already-measured", refNo, reportId: existing.id }, base);
+
+  const supplied = body.labValues || body.values || null;
+  const missing = missingParams(supplied || {}, params);
+  if (missing.length) {
+    return Object.assign({ ok: false, reason: supplied ? "incomplete" : "missing", refNo }, base, {
+      missing: missing.map((p) => p.label),
+      message: "Enter the lab report for batch " + refNo + " before booking this stock — "
+        + missing.length + " reading" + (missing.length === 1 ? "" : "s") + " missing: "
+        + missing.map((p) => p.label).join(", ") + ".",
+    });
+  }
+  return Object.assign({ ok: true, reason: "supplied", refNo, values: pickValues(supplied, params),
+    reportId: existing ? existing.id : null }, base);
+}
+
+/**
+ * Every work order the lab still owes a reading on, newest first.
+ * `stage` says what is outstanding: "production" (the floor has not
+ * measured a coated batch yet) or "lab" (the incharge's own reading).
+ */
+function pendingLabWork(data) {
+  data = data || {};
+  const wos = data.workorders || [];
+  const out = [];
+  wos.forEach((wo) => {
+    if (!wo || wo.dispatched) return;
+    const st = labStatusForWO(wo, data);
+    if (!st.product || !st.params.length) return;
+    if (st.labComplete) return;                       // the lab is done with it
+    out.push(Object.assign({}, st, {
+      date: wo.date || null,
+      due: wo.due || null,
+      qty: wo.qty != null ? wo.qty : null,
+      status: wo.status || null,
+      productName: st.product.name,
+      productCode: st.product.code,
+      // the floor still owes its reading on a coating job that has not been measured
+      stage: st.coating && !st.prodComplete ? "production" : "lab",
+    }));
+  });
+  return out.sort((a, b) => String(b.woId).localeCompare(String(a.woId)));
 }
 
 /* ============================================================
@@ -397,7 +645,10 @@ function ensureLab() {
 
 module.exports = {
   PARAMS, deriveFlags, applicableParams, evaluate,
+  specKeys, paramsForProduct, setComplete, missingParams,
   listProducts, createProduct, updateProduct, deleteProduct, setProductSpec,
   listReports, createReport, updateReport, deleteReport,
+  batchNoOf, productForItem, reportForWO, hasCoatingStage, findByRef,
+  labStatusForWO, coatingGate, finishedStockGate, pendingLabWork,
   ensureLab,
 };

@@ -10,13 +10,25 @@
   const M = {};
 
   /* ----- page header ----- */
+  /* VIEW-ONLY SECTIONS
+     A role may be allowed to LOOK at a section without being allowed to change
+     it — the lab incharge reads Stock Items, Warehouses, Production and
+     Products & BOM, and writes only lab reports. Every page puts its primary
+     controls in the head, so they are dropped here rather than in each module:
+     nobody is handed a "＋ New …" button that the server will refuse at the
+     end of the form. The server enforces the same split independently. */
+  function readOnlyHere(){
+    return !!(global.App && App.canWrite && !App.canWrite());
+  }
   function pageHead(title, sub, actions){
+    const ro = readOnlyHere();
     return h("div",{class:"page-head"},[
       h("div",{},[
-        h("div",{class:"page-title"},[ h("span",{class:"dot"}), title ]),
+        h("div",{class:"page-title"},[ h("span",{class:"dot"}), title,
+          ro?h("span",{class:"chip",style:"margin-left:10px;font-size:10.5px;font-weight:700",text:"VIEW ONLY"}):null ]),
         sub?h("div",{class:"page-sub",text:sub}):null
       ]),
-      actions?h("div",{class:"actions"}, actions):null
+      (actions && !ro)?h("div",{class:"actions"}, actions):null
     ]);
   }
 
@@ -285,5 +297,5 @@
   }
 
   global.M = M;
-  global.MW = { pageHead, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview, excelMenu };
+  global.MW = { pageHead, readOnlyHere, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview, excelMenu };
 })(window);

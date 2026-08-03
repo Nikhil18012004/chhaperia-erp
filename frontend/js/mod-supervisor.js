@@ -20,6 +20,11 @@
   const AREA_ICON = { coating: "🎨", slitting: "✂️", fiberglass: "🧵", all: "🏭" };
   const STAGE_META = {
     coating:    { ic: "🎨", label: "Coating" },
+    /* the RM-production stage IS the coating floor — its stage NAME carries
+       whose line it is ("RM Production — Gautam Saw"), which is the wrong
+       thing to print on a button. Without this entry the timeline pill and
+       every button read the raw key, "rmprod". */
+    rmprod:     { ic: "🎨", label: "Coating" },
     production: { ic: "🧵", label: "Production" },
     weaving:    { ic: "🧶", label: "Weaving" },
     wbcoat:     { ic: "🎨", label: "WB Coating" },
@@ -405,6 +410,27 @@
         ]);
       }
 
+      /* QC on a coated batch. The work order's number IS the batch number, and
+         the reading has to be in before the stage can be closed — so the card
+         says what is outstanding rather than letting Finish fail at the server. */
+      const lab = w.lab && w.lab.required ? w.lab : null;
+      const labBlocking = !!(lab && cur.area === "coating" && !lab.entered);
+      /* No banner while the reading is outstanding: the action button already
+         says "Enter Lab Report", and a warning strip repeating it was noise on
+         a card the floor reads at a glance. Once the reading IS in, a slim
+         confirmation stays — it is the only way back to correct a value. */
+      let labBox = null;
+      if (lab && lab.entered && w.mine && !w.dispatched) {
+        labBox = H("div", { class: "sup-lab done" }, [
+          H("div", { class: "sup-lab-main" }, [
+            H("div", { class: "sup-lab-t", text: "✓ Lab report entered" }),
+            H("div", { class: "sup-lab-s",
+              text: "Batch " + lab.batchNo + " · " + lab.params.length + " reading" + (lab.params.length === 1 ? "" : "s") + " recorded" }),
+          ]),
+          H("button", { class: "sup-lab-btn", onclick: () => this.openLab(w), text: "✎ Edit reading" }),
+        ]);
+      }
+
       const actions = H("div", { class: "sup-actions" });
       /* Part of this order could not be made — the store was short. The floor
          must see that the job is NOT finished; what it can DO about it depends
@@ -434,11 +460,22 @@
           onclick: (e) => this.act(w, "dispatch", e.currentTarget),
           text: "🚚 Dispatch " + ENG.num(madeQ - sentQ) + " kg" }));
       } else if (w.mine) {
+        /* ONE BUTTON, ONE NEXT STEP.
+           A coated stage runs Start → Enter Lab Report → Complete, and the
+           button is only ever whichever of those comes next. A locked
+           "Finish" sitting beside a separate reading button asked the floor
+           to work out the order for themselves; this states it. */
         const label = (STAGE_META[cur.key] || {}).label || cur.name;
         if (cur.status === "Pending") {
           actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "start", e.currentTarget), text: "▶ Start " + label }));
         } else if (cur.status === "In Production") {
-          actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "complete", e.currentTarget), text: "✓ Finish " + label }));
+          if (labBlocking) {
+            actions.appendChild(H("button", { class: "sup-act primary", onclick: () => this.openLab(w),
+              title: "Batch " + lab.batchNo + " — " + (lab.missing.length || lab.params.length) + " reading(s) to record",
+              text: "🧪 Enter Lab Report" }));
+          } else {
+            actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "complete", e.currentTarget), text: "✓ Complete " + label }));
+          }
           actions.appendChild(H("button", { class: "sup-act ghost", onclick: (e) => this.act(w, "pause", e.currentTarget), text: "↩ Pause" }));
         }
       } else if (!w.mine && !w.myDone && pend <= 0) {
@@ -446,7 +483,69 @@
       }
 
       return H("div", { class: "sup-card" + (overdue ? " overdue" : "") + (pend > 0 ? " partial" : "") },
-        [head, this.timeline(w), factsNode, mat, actions].filter(Boolean));
+        [head, this.timeline(w), factsNode, mat, labBox, actions].filter(Boolean));
+    },
+
+    /* ============================================================
+       The floor's lab reading. One field per parameter the Products
+       master states a limit for — the limits themselves never come
+       down here, so a reading cannot be nudged until it passes.
+       Saving it is what unlocks "Finish Coating".
+       ============================================================ */
+    async openLab(w) {
+      const self = this;
+      let sheet;
+      try { sheet = await DB.production.labSheet(w.id); }
+      catch (err) { toast(err.message, { type: "danger" }); return; }
+      if (!sheet.product) { toast("No lab product is linked to this item — ask the office to link one.", { type: "warn" }); return; }
+      if (!sheet.params.length) { toast("No test parameters are set for this product yet.", { type: "warn" }); return; }
+
+      const inputs = {};
+      const grid = H("div", { class: "sup-lab-grid" }, sheet.params.map((p) => {
+        const v = sheet.prodValues && sheet.prodValues[p.key];
+        const inp = H("input", { class: "input", type: "number", step: "any", inputmode: "decimal",
+          value: v == null ? "" : String(v) });
+        inputs[p.key] = inp;
+        return H("div", { class: "sup-lab-fld" }, [
+          H("label", {}, [H("span", { text: p.label }), H("span", { class: "u", text: p.unit || "" })]),
+          inp,
+        ]);
+      }));
+      const remarks = H("input", { class: "input", placeholder: "Optional — anything odd about this batch" });
+
+      const save = H("button", { class: "btn primary", text: "Save reading" });
+      save.onclick = async () => {
+        const values = {};
+        const missing = [];
+        sheet.params.forEach((p) => {
+          const raw = (inputs[p.key].value || "").trim();
+          if (raw === "" || isNaN(+raw)) missing.push(p.label); else values[p.key] = +raw;
+        });
+        if (missing.length) { toast("Still to measure: " + missing.join(", "), { type: "warn" }); return; }
+        save.disabled = true; save.textContent = "Saving…";
+        try {
+          await DB.production.saveLab(w.id, { values, remarks: (remarks.value || "").trim() });
+          mo.close();
+          toast("Lab reading saved for batch " + sheet.batchNo, { type: "ok" });
+          await self.refresh({ quiet: true, slim: true });
+        } catch (err) {
+          toast(err.message, { type: "danger" });
+          save.disabled = false; save.textContent = "Save reading";
+        }
+      };
+
+      const mo = UI.modal({
+        title: "🧪 Lab report — batch " + sheet.batchNo,
+        sub: (sheet.product.code || "") + " · " + sheet.product.name,
+        body: H("div", {}, [
+          H("div", { class: "sup-lab-ctx", html:
+            "Measure the batch you have just coated. <b>Every</b> reading is needed before this stage can be finished. "
+            + "The lab incharge adds their own measurement to the same certificate after slitting." }),
+          grid,
+          H("div", { class: "sup-lab-fld", style: "margin-top:12px" }, [H("label", {}, [H("span", { text: "Remarks" })]), remarks]),
+        ]),
+        foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }), save],
+      });
     },
 
     async act(w, action, btn) {
@@ -764,6 +863,7 @@
         const p = currentProduct() || {};
         gsmInp.value = p.gsm != null ? p.gsm : "";
         if (catNow() === "FG") tapeInp.value = p.tapeWidthMM != null ? p.tapeWidthMM : "";
+        drawLab(p.id);
         draw();
       }
       /* the width the quantity is measured across — the slit tape for a
@@ -826,6 +926,54 @@
 
       /* the SAME layout the office gets: a form-grid of .field cells, not the
          floor's stacked one-per-row style, so both look identical */
+      /* Nothing goes into a store unmeasured. The batch is named here (there
+         is no work order behind hand-booked stock) and the readings taken
+         against it; the server refuses the booking without a complete set.
+         Parameters come from the product's entry under Lab Reports → Products
+         and are fetched per product, so a half-made roll picks up its parent's
+         spec — and no limit is ever sent to the floor. */
+      const batchInp2 = H("input", { class: "input", placeholder: "e.g. 0042" });
+      batchInp2.style.width = "100%";
+      const labHost = H("div", { style: "grid-column:1/-1" });
+      let labParams = [], labFor = null;
+
+      async function drawLab(itemId) {
+        if (!itemId || itemId === labFor) return;
+        labFor = itemId; labParams = [];
+        labHost.innerHTML = "";
+        let sheet = null;
+        try { sheet = await DB.production.finishedLabSheet(itemId); }
+        catch (e) { labHost.appendChild(H("div", { class: "muted", style: "font-size:11.5px", text: "Could not load the test parameters — " + (e.message || e) })); return; }
+        if (labFor !== itemId) return;                 // the picker moved on
+        if (!sheet || !sheet.required) {
+          labHost.appendChild(H("div", { class: "muted", style: "font-size:11.5px;padding:8px 0",
+            text: "No lab parameters are set for this product — nothing to measure before booking." }));
+          return;
+        }
+        labParams = sheet.params || [];
+        labHost.appendChild(H("div", { class: "sup-lab-ctx", style: "margin:10px 0",
+          html: "🧪 <b>Lab report required</b> — measure the batch you have just made. Every reading is needed before this stock can be booked." }));
+        const grid = H("div", { class: "sup-lab-grid" });
+        labParams.forEach((p) => {
+          const inp = H("input", { class: "input", type: "number", step: "any", inputmode: "decimal" });
+          inp.setAttribute("data-lab", p.key);
+          grid.appendChild(H("div", { class: "sup-lab-fld" }, [
+            H("label", {}, [H("span", { text: p.label }), H("span", { class: "u", text: p.unit || "" })]),
+            inp,
+          ]));
+        });
+        labHost.appendChild(grid);
+      }
+      const labValuesNow = () => {
+        const o = {};
+        labHost.querySelectorAll("input[data-lab]").forEach((el) => {
+          const v = (el.value || "").trim();
+          if (v !== "" && !isNaN(+v)) o[el.getAttribute("data-lab")] = +v;
+        });
+        return o;
+      };
+      const labMissing = () => labParams.filter((p) => labValuesNow()[p.key] == null).map((p) => p.label);
+
       const body = H("div", { class: "form-grid" }, [
         gridField("Category", catSel),
         gridField("Product", prodSel, "full"),
@@ -835,7 +983,9 @@
         gridField("Unit of Quantity", uomSel),
         tapeField,
         gridField("Store it in", whSel),
+        gridField("Batch / lot no", batchInp2),
         convHint,
+        labHost,
         preview,
       ]);
 
@@ -860,12 +1010,22 @@
         if (qty == null || !(qty > 0)) {
           toast("Enter the GSM so the quantity can be converted to " + (p.uom || "KG"), { type: "warn" }); return;
         }
+        /* the batch has to be named and measured before it can go into a store
+           — said here so the floor is told what is missing, enforced anyway
+           by the server */
+        const batch = (batchInp2.value || "").trim();
+        if (labParams.length) {
+          if (!batch) { toast("Enter the batch / lot no — the lab report is filed against it", { type: "warn" }); return; }
+          const miss = labMissing();
+          if (miss.length) { toast("Enter every lab reading first — missing: " + miss.join(", "),
+            { type: "warn", title: "Lab report required" }); return; }
+        }
         if (btn) { btn.disabled = true; btn.textContent = "…"; }
         try {
-          const res = await DB.production.addFinishedStock({
+          const res = await DB.production.addFinishedStock(Object.assign({
             itemId: p.id, qty: +qty.toFixed(3), wh: whSel.value,
             tapeWidthMM, gsm: +gsmInp.value || null,
-          });
+          }, labParams.length ? { refNo: batch, labValues: labValuesNow() } : {}));
           mo.close();
           const where = (res && res.produced && res.produced.whName) || "stock";
           toast("Added " + fmtQty(qty) + " " + (p.uom || "") + " of " + p.name + " → " + where, { type: "ok" });

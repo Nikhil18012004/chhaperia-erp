@@ -173,19 +173,35 @@ function materialCheck(fgId, qty, data, choices) {
 
 /* ============================================================
    ROUTE SELECTION
-   A work order looks at the store FIRST: if the material this product is made
-   from is already there in the quantity needed, the job starts at SLITTING.
-   If it is not, the job starts at the RM PRODUCTION stage of whoever makes
-   that product (and, for the copper-woven tape, at fibre-glass weaving before
-   it) so the material gets produced first. A bought-in product has no
-   production stage — it can only be slit once the goods are in.
+   WHO MAKES THE PRODUCT decides the route:
+
+     • a product nobody here makes is BOUGHT IN ready-made — there is
+       nothing to laminate, so it is only slit and packed;
+     • a product we make runs its owner's RM PRODUCTION stage (and, for the
+       copper-woven tape, fibre-glass weaving before it), then slitting and
+       packing.
+
+   Raw material sitting in the store does NOT shorten that route. This used
+   to route a stocked job straight to slitting, on the reading that "the
+   material is already there" — but the material being checked is the BOM's
+   RAW materials (non-woven fabric, SAP, bondex, solvents). Having those in
+   the store is what makes it possible to COAT; it is not a coated web, and
+   slitting it would be slitting bare fabric. The effect was that a coated
+   product skipped the coating floor entirely whenever the store was stocked,
+   which is exactly when it should have been running.
+
+   The one thing that genuinely skips coating is a HALF-MADE COATED JUMBO on
+   the shelf, and that is decided separately, by netting the requirement
+   against WIP stock (planForRequirement / wipStockFor below).
+
+   How much raw material is in the store still matters — it decides how much
+   of the order can be released to the floor now and how much is carried as
+   pending (see productionService.maxMakeable) — but not which stages run.
    ============================================================ */
 function routeStagesFor(fgId, data, opts) {
   opts = opts || {};
   const owner = productOwner(fgId, data);
-  const chk = materialCheck(fgId, opts.qty, data, opts.materialChoices);
-  const haveMaterial = chk.ok;                       // no BOM => nothing to miss
-  if (haveMaterial || !owner) return [STAGE.slit(true), STAGE.pack()];
+  if (!owner) return [STAGE.slit(true), STAGE.pack()];   // bought in ready-made
   const stages = [];
   if (needsFibreFirst(fgId, data)) stages.push(STAGE.weave());
   stages.push(STAGE.rm(owner));
@@ -639,15 +655,28 @@ function ensureStageModel(data) {
       wo.legacy = seeded.legacy;
       changed = true;
     } else if (!wo.legacy) {
-      // the product's route may have changed (e.g. its BOM is down to a single
-      // material, so it now skips coating). Re-route only while NOTHING has
-      // started — a job in flight keeps the route it was planned with.
-      const untouched = wo.route.every((r) => r.status === "Pending" && !r.posted);
+      /* The product's route may have changed — its BOM is down to a single
+         material, or (as of the routing fix) a product we make now runs its
+         coating stage whether or not the store happens to hold the raw
+         material. Re-route only while NOTHING HAS STARTED; a job in flight
+         keeps the route it was planned with.
+
+         The test used to be "pending AND unposted", which never fired: a work
+         order draws its whole requirement the moment it is released, so every
+         stage is already marked posted and no released order could ever pick
+         up a corrected route. Posting state is CARRIED OVER instead — the
+         stock has been issued for this order either way, and a rebuilt route
+         must not give any stage licence to issue it a second time. */
+      const started = wo.route.some((r) => r.status !== "Pending");
       const want = routeStagesFor(wo.itemId, data,
         { qty: wo.qty, materialChoices: wo.materialChoices }).map((s) => s.key).join(">");
-      if (untouched && wo.route.map((r) => r.key).join(">") !== want) {
+      if (!started && wo.route.map((r) => r.key).join(">") !== want) {
+        const wasPosted = wo.route.every((r) => r.posted);
         wo.route = freshRoute(wo, data);
+        wo.route.forEach((r) => { r.posted = wasPosted; });
         wo.stageIdx = 0;
+        // the plan's own note of whether this job coats has to follow the route
+        if (wo.plan) wo.plan.hasCoating = wo.route.some((r) => r.area === "coating");
         // the line has to follow the route to the area that now starts the job
         const line = lineForProduct(wo.itemId, data, wo.line);
         if (line !== wo.line) wo.line = line;

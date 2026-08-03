@@ -1077,6 +1077,30 @@ canvas{display:block;width:100%}
 .sup-act.primary:hover{filter:brightness(1.07)}
 .sup-act.ghost{flex:0 0 auto;min-width:auto;background:var(--panel-2);color:var(--text-dim);border:1px solid var(--line)}
 .sup-act:disabled{opacity:.6;cursor:wait}
+/* a stage held back by an unmet requirement, not by a request in flight */
+.sup-act.blocked{background:var(--panel-2);color:var(--text-mut);border:1px dashed var(--line)}
+.sup-act.blocked:disabled{cursor:not-allowed;opacity:1}
+
+/* ---- QC on a coated batch: what the floor still has to measure ---- */
+.sup-lab{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:13px;padding:11px 13px;
+  border-radius:10px;border:1px solid var(--warn,#d97706);
+  background:color-mix(in srgb,var(--warn,#d97706) 10%,transparent)}
+.sup-lab.done{border-color:var(--line);background:var(--panel-2)}
+.sup-lab-main{flex:1;min-width:180px}
+.sup-lab-t{font-size:13.5px;font-weight:800;color:var(--warn,#d97706)}
+.sup-lab.done .sup-lab-t{color:var(--ok)}
+.sup-lab-s{margin-top:3px;font-size:12px;color:var(--text-dim);line-height:1.5}
+.sup-lab-btn{flex:0 0 auto;padding:9px 14px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;
+  background:var(--panel-2);color:var(--text-dim);border:1px solid var(--line);transition:var(--tr)}
+.sup-lab-btn.urge{background:var(--warn,#d97706);color:#fff;border-color:transparent}
+.sup-lab-btn:hover{filter:brightness(1.07)}
+.sup-lab-ctx{margin-bottom:14px;padding:10px 12px;border-radius:9px;background:var(--panel-2);
+  border:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--text-dim)}
+.sup-lab-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.sup-lab-fld label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:5px;
+  font-size:12px;font-weight:700;color:var(--text-dim)}
+.sup-lab-fld label .u{font-weight:500;font-size:11px;color:var(--text-mut)}
+.sup-lab-fld .input{width:100%}
 .sup-done-tag{flex:1;text-align:center;padding:13px;color:var(--ok);font-weight:800;background:var(--ok-soft,rgba(22,163,74,.12));border-radius:12px}
 .sup-empty{text-align:center;padding:50px 20px;color:var(--text-mut)}
 .sup-empty .big{font-size:46px;margin-bottom:10px}
@@ -1387,29 +1411,3 @@ canvas{display:block;width:100%}
   .cal-ag-date{flex-basis:46px}
 }
 
-/* ============================================================
-   GLOBAL CREATE MENU
-   The same registry ⌘K reads, behind one button — because a
-   keyboard palette is invisible to anyone who has not been told
-   it exists, and the floor's tablets have no keyboard at all.
-   ============================================================ */
-.create-drop{position:relative;flex:0 0 auto}
-.create-trigger{white-space:nowrap;gap:6px}
-.create-trigger .caret{font-size:9px;opacity:.8;transition:transform .16s}
-.create-trigger.open .caret{transform:rotate(180deg)}
-.create-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:60;min-width:216px;
-  background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;
-  box-shadow:0 18px 44px rgba(0,0,0,.28);display:flex;flex-direction:column;gap:2px;
-  animation:createIn .14s ease}
-@keyframes createIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
-.create-opt{display:flex;align-items:center;gap:10px;width:100%;cursor:pointer;
-  border:none;background:transparent;border-radius:8px;padding:8px 10px;text-align:left;
-  font-size:12.5px;font-weight:600;color:var(--text-dim);transition:background .13s,color .13s}
-.create-opt:hover{background:var(--panel-2);color:var(--text)}
-.create-opt-ic{flex:0 0 20px;text-align:center;font-size:14px}
-@media (max-width:640px){
-  /* the label goes, the button stays — creating is a primary action on a tablet */
-  .create-trigger{padding-left:11px;padding-right:11px}
-  .create-trigger .caret{display:none}
-  .create-menu{right:auto;left:0;min-width:200px}
-}

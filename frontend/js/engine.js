@@ -372,6 +372,11 @@
       prod30, sold30, activeWO, alertCount: alerts().length,
       openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate,
       calToday:calendarDue(openPO, openSO),
+      /* Batches still owing a QC reading — the server works the list out
+         (labService.pendingLabWork); this is only its count, for the nav pill.
+         Every role counts the same batches, because the lab incharge works
+         the same list the office sees. */
+      labPending:(D.labPending||[]).length,
       hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 

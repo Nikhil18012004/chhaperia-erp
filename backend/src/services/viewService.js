@@ -10,6 +10,7 @@
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
+const LAB = require("./labService");
 const BC = require("../../../frontend/js/bomcalc");
 
 /* map a work order's free-text line to a production area */
@@ -31,16 +32,34 @@ function fullState() {
    report is graded against, and the people entering reports must not be able
    to read it — otherwise a measured value can be tuned until it passes.
    Grading happens server-side, so office only needs to know WHETHER a spec
-   exists, never what it says. Admin owns the spec editor and keeps the values. */
+   exists, never what it says. Admin owns the spec editor and keeps the values.
+
+   `specKeys` goes out to everyone: WHICH parameters a product is tested on is
+   the shape of the report form, not a threshold anybody can grade against by
+   eye — the numbers stay behind. */
+function redactSpec(p) {
+  return Object.assign({}, p, {
+    spec: {},
+    specSet: !!(p.spec && Object.keys(p.spec).length),
+    specKeys: LAB.specKeys(p),
+  });
+}
+/* Which jobs still owe a measurement. Computed here, from the unredacted
+   products, so every role reads the same list off one calculation. */
+function labPendingFor(d) {
+  try { return LAB.pendingLabWork(d); } catch { return []; }
+}
+
 function stateForOfficer(user) {
   const d = fullState();
   const isAdmin = user && user.role === "admin";
-  if (!isAdmin && Array.isArray(d.labProducts)) {
-    d.labProducts = d.labProducts.map((p) => Object.assign({}, p, {
-      spec: {},
-      specSet: !!(p.spec && Object.keys(p.spec).length),
-    }));
+  const pending = labPendingFor(d);
+  if (Array.isArray(d.labProducts)) {
+    d.labProducts = isAdmin
+      ? d.labProducts.map((p) => Object.assign({}, p, { specKeys: LAB.specKeys(p) }))
+      : d.labProducts.map(redactSpec);
   }
+  d.labPending = pending;
   return d;
 }
 
@@ -148,6 +167,24 @@ function stateForSupervisor(area, username, opts) {
         stage: { key: cur.key, name: cur.name, area: cur.area, seq: cur.seq, status: cur.status },
         myStageKey: myStage.key,
         spec: S.specForWO(wo, d),   // order spec (e.g. copper-wire count), or null
+        /* QC for a coated batch: the parameters this product is tested on (no
+           limits — the floor must not be able to grade its own reading by eye)
+           and what has been measured so far. Null for a job that never touches
+           the coating floor, so no other panel grows a lab form. */
+        lab: LAB.hasCoatingStage({ route }) ? (() => {
+          const st = LAB.labStatusForWO(wo, d);
+          return {
+            batchNo: st.batchNo,
+            product: st.product,
+            params: st.params,
+            values: st.prodValues,
+            entered: st.prodComplete,
+            labEntered: st.labComplete,
+            missing: st.missingProd,
+            // nothing in the lab master tests this product — no certificate is due
+            required: !!(st.product && st.params.length),
+          };
+        })() : null,
         mine, myDone, dispatched: !!wo.dispatched,
         // recipe for THIS area's stage (quantities only)
         materials: stageMaterials(wo, myStage),
@@ -297,10 +334,21 @@ function stateForLab() {
     salesorders: d.salesorders || [],
     suppliers: d.suppliers || [],
     customers: d.customers || [],          // sales orders reference them by id
-    labProducts: (d.labProducts || []).map((p) => Object.assign({}, p, {
-      spec: {}, specSet: !!(p.spec && Object.keys(p.spec).length),
-    })),
-    labReports: d.labReports || [],
+    labProducts: (d.labProducts || []).map(redactSpec),
+    /* The person taking the measurements is never shown the VERDICT either —
+       the same reason the spec limits are withheld from them. A reading whose
+       Pass/Fail is visible can be nudged until it passes, and the grade adds
+       nothing to the job of measuring. Grading stays server-side; the office
+       reads the result. `prodComplete` / `labComplete` are not grades — they
+       only say whether a stage has finished measuring — so they stay. */
+    labReports: (d.labReports || []).map((r) => {
+      const out = Object.assign({}, r);
+      ["result", "results", "prodResult", "prodResults", "labResult", "labResults"]
+        .forEach((k) => { delete out[k]; });
+      return out;
+    }),
+    // the incharge's own worklist: every job still owing a reading
+    labPending: labPendingFor(d),
     generatedAt: new Date().toISOString(),
   };
 }

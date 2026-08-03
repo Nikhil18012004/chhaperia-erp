@@ -545,12 +545,240 @@ async function run() {
     ok("lab stage merges into the SAME report (no duplicate certificate)", p2.d.id === p1.d.id);
     ok("both measurement sets are kept side by side",
       Object.keys(p2.d.prodValues || {}).length > 0 && Object.keys(p2.d.labValues || {}).length > 0);
+    /* the person who took the measurement is never shown its verdict — the
+       same rule as the spec limits. The grade is computed and stored; it just
+       does not come back to them. */
+    ok("the lab's own write comes back with no verdict on it",
+      p2.d.result === undefined && p2.d.labResult === undefined && p2.d.prodResult === undefined,
+      JSON.stringify({ result: p2.d.result, lab: p2.d.labResult, prod: p2.d.prodResult }));
+    ok("nor does the lab payload carry one",
+      ((await call("GET", "/state", LB)).d.labReports || [])
+        .every((r) => r.result === undefined && r.labResult === undefined && r.prodResult === undefined));
+    // …but it WAS graded, and the office sees it
+    const asOffice = ((await call("GET", "/state", A)).d.labReports || []).find((r) => r.id === p1.d.id);
     ok("each stage grades independently (production Pass, lab Fail)",
-      p2.d.prodResult === "Pass" && p2.d.labResult === "Fail",
-      p2.d.prodResult + "/" + p2.d.labResult);
-    ok("headline result follows the lab reading once present", p2.d.result === "Fail");
+      asOffice.prodResult === "Pass" && asOffice.labResult === "Fail",
+      asOffice.prodResult + "/" + asOffice.labResult);
+    ok("headline result follows the lab reading once present", asOffice.result === "Fail");
     ok("lab writer is attributed", p2.d.labBy === "lab");
     ok("lab CANNOT delete a certificate (403)", (await call("DELETE", "/lab/reports/" + p1.d.id, LB)).status === 403);
+  }
+
+  /* ============================================================
+     COATING CANNOT BE FINISHED UNTIL THE BATCH HAS BEEN MEASURED
+     The work order IS the batch. A job that passes through the
+     coating floor has to carry a lab reading before the supervisor
+     can close the stage, and the reading covers exactly the
+     parameters the Products master states a limit for.
+     ============================================================ */
+  section("A coated batch cannot leave the floor unmeasured");
+  {
+    // a water-blocking tape Gautam (coating1) makes, whose material is short —
+    // so the job starts at his RM-production stage on the coating floor
+    const rmC = { id: "RM-LABGATE", name: "Lab gate fabric", cat: "RM", uom: "KG", cost: 20 };
+    const fgC = { id: "FG-LABGATE", name: "Lab gate water blocking tape", cat: "FG", uom: "KG",
+      typeCode: "CHDNW-98", group: "WATER BLOCKING SERIES", cost: 100, price: 200 };
+    await call("POST", "/items", A, rmC);
+    await call("POST", "/items", A, fgC);
+    await call("PUT", "/boms/" + fgC.id, A, { yield: 100, lines: [[rmC.id, 1.2]] });
+
+    // the lab product that tests it: linked to the item, tested on TWO
+    // parameters even though its type would imply more
+    const lp = await call("POST", "/lab/products", A, {
+      id: "LP-LABGATE", name: "Lab gate water blocking tape", code: "CHDNW-98",
+      thickness: "0.25", series: "Water Blocking", itemId: fgC.id,
+      flags: { waterBlocking: true, semiConductive: true, mica: false },
+      spec: { thickness: { min: 0.2, max: 0.3 }, tensile: { min: 30 } },
+    });
+    ok("a lab product keeps the item it tests", lp.status === 201 && lp.d.itemId === fgC.id,
+      JSON.stringify(lp.d && lp.d.itemId));
+    // editing it must not quietly drop that link — the gate depends on it
+    const lpEdit = await call("PATCH", "/lab/products/LP-LABGATE", A, { series: "Water Blocking" });
+    ok("and keeps it through an edit", lpEdit.d.itemId === fgC.id, JSON.stringify(lpEdit.d.itemId));
+
+    const woL = await call("POST", "/production/wo", A, { itemId: fgC.id, qty: 40 });
+    ok("the job starts on the coating floor", (woL.d.route || [])[0] && woL.d.route[0].area === "coating",
+      (woL.d.route || []).map((r) => r.key + "/" + r.area).join(" > "));
+    const woLid = woL.d.id;
+
+    const started = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "start" });
+    ok("the supervisor can start coating", started.status === 200);
+
+    const blocked = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "complete" });
+    ok("but CANNOT finish it without a lab report (409)", blocked.status === 409, blocked.status + "");
+    ok("and is told which batch and which readings are missing",
+      /Lab report required/.test(blocked.d.error || "") && /Thickness/.test(blocked.d.error || ""),
+      JSON.stringify(blocked.d).slice(0, 160));
+    ok("the stage really did not move",
+      (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].status === "In Production");
+
+    /* the sheet the floor is asked to fill: ONLY the parameters the product's
+       spec names, and never the limits themselves */
+    const sheet = await call("GET", "/production/wo/" + woLid + "/lab", C);
+    ok("the floor is given the parameter list", sheet.status === 200 && sheet.d.params.length === 2,
+      JSON.stringify((sheet.d.params || []).map((p) => p.key)));
+    ok("it is exactly what the Products master states a limit for",
+      (sheet.d.params || []).map((p) => p.key).sort().join(",") === "tensile,thickness",
+      (sheet.d.params || []).map((p) => p.key).join(","));
+    ok("the type would have implied more — the spec wins, not the flags",
+      !(sheet.d.params || []).some((p) => ["elongation", "massPerArea", "swellSpeed", "surfaceResistance"].includes(p.key)));
+    ok("no spec limits reach the person doing the measuring",
+      !/"min"|"max"/.test(JSON.stringify(sheet.d)), JSON.stringify(sheet.d).slice(0, 120));
+    ok("the batch number is the work order's own number", sheet.d.batchNo === woLid.replace(/^WO-/, ""),
+      sheet.d.batchNo + " vs " + woLid);
+
+    const half = await call("POST", "/production/wo/" + woLid + "/lab", C, { values: { thickness: 0.25 } });
+    ok("a half-filled sheet is refused", half.status === 400 && /Tensile/.test(half.d.error || ""),
+      JSON.stringify(half.d).slice(0, 120));
+
+    const rec = await call("POST", "/production/wo/" + woLid + "/lab", C, { values: { thickness: 0.25, tensile: 44 } });
+    ok("a complete reading is accepted", rec.status === 201, JSON.stringify(rec.d).slice(0, 120));
+    ok("it is graded against the hidden spec", rec.d.report.prodResult === "Pass", rec.d.report.prodResult);
+    ok("the certificate is tied to the work order", rec.d.report.woId === woLid, rec.d.report.woId);
+    ok("the certificate carries only the two parameters",
+      (rec.d.report.paramKeys || []).sort().join(",") === "tensile,thickness",
+      (rec.d.report.paramKeys || []).join(","));
+
+    const done = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "complete" });
+    ok("NOW the supervisor can finish coating", done.status === 200, done.status + " " + JSON.stringify(done.d).slice(0, 90));
+    ok("and the job moved on to slitting",
+      (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].status === "Completed");
+
+    /* the incharge's worklist, and the second measurement on the same batch */
+    const labSt = (await call("GET", "/state", LB)).d;
+    const row = (labSt.labPending || []).find((p) => p.woId === woLid);
+    ok("the batch appears on the lab incharge's pending list", !!row,
+      JSON.stringify((labSt.labPending || []).map((p) => p.woId)));
+    ok("it shows the floor has measured it and the lab has not",
+      row && row.prodComplete === true && row.labComplete === false && row.stage === "lab",
+      row ? row.stage + " prod=" + row.prodComplete + " lab=" + row.labComplete : "");
+
+    const labWrite = await call("PATCH", "/lab/reports/" + rec.d.report.id, LB, { values: { thickness: 0.26, tensile: 41 } });
+    ok("the incharge's reading merges into the SAME certificate", labWrite.d.id === rec.d.report.id);
+    ok("both readings are kept side by side",
+      Object.keys(labWrite.d.prodValues).length === 2 && Object.keys(labWrite.d.labValues).length === 2);
+    const after = (await call("GET", "/state", LB)).d;
+    ok("and the batch leaves the pending list", !(after.labPending || []).some((p) => p.woId === woLid));
+
+    /* the floor writes its own reading only, and only for its own jobs */
+    ok("a supervisor still cannot post a certificate directly (403)",
+      (await call("POST", "/lab/reports", C, { productId: "LP-LABGATE", refNo: "X" })).status === 403);
+    /* the reading belongs to the coating floor that ran the batch — not to
+       slitting, and not to the OTHER RM line */
+    const S2 = (await login("slitting1", "slitting1@123")).token;
+    ok("slitting cannot record a coating measurement (403)",
+      (await call("GET", "/production/wo/" + woLid + "/lab", S2)).status === 403);
+    const C2 = (await login("coating2", "coating2@123")).token;
+    ok("nor can the other RM line, whose job it is not (403)",
+      (await call("POST", "/production/wo/" + woLid + "/lab", C2, { values: { thickness: 0.1, tensile: 1 } })).status === 403);
+  }
+
+  /* ============================================================
+     NOTHING GOES INTO A STORE UNMEASURED EITHER
+     Stock booked by hand carries no work order, so the batch is
+     named by whoever books it — and the same complete reading is
+     required before the movement is posted.
+     ============================================================ */
+  section("Finished stock cannot be booked without a lab report");
+  {
+    // plenty of the raw material so nothing but QC can refuse the booking
+    await call("POST", "/movements", A, { itemId: "RM-LABGATE", type: "GRN",
+      qty: 5000, rate: 20, wh: "WH-PNY", date: "2026-01-01", manual: true });
+    const onHand = async (id) => {
+      const st = (await call("GET", "/state", A)).d;
+      return (st.movements || []).filter((m) => m.itemId === id)
+        .reduce((n, m) => n + (+m.qty || 0), 0);
+    };
+    const before = await onHand("FG-LABGATE");
+    const book = (extra) => call("POST", "/production/finished", C,
+      Object.assign({ itemId: "FG-LABGATE", qty: 10, wh: "WH-FG", tapeWidthMM: 25, gsm: 100 }, extra || {}));
+
+    const noBatch = await book();
+    ok("booking without a batch number is refused (409)", noBatch.status === 409, noBatch.status + "");
+    ok("and it says why", /batch \/ lot number/.test(noBatch.d.error || ""), JSON.stringify(noBatch.d).slice(0, 120));
+
+    const noVals = await book({ refNo: "LOT-1" });
+    ok("a named batch with no readings is refused", noVals.status === 409, noVals.status + "");
+    ok("and it lists what is missing",
+      /Thickness/.test(noVals.d.error || "") && /Tensile/.test(noVals.d.error || ""),
+      JSON.stringify(noVals.d).slice(0, 150));
+
+    const partial = await book({ refNo: "LOT-1", labValues: { thickness: 0.25 } });
+    ok("a half-filled reading is refused", partial.status === 409 && /Tensile/.test(partial.d.error || ""),
+      JSON.stringify(partial.d).slice(0, 120));
+
+    ok("not one refused attempt booked any stock", (await onHand("FG-LABGATE")) === before,
+      before + " -> " + (await onHand("FG-LABGATE")));
+
+    const good = await book({ refNo: "LOT-1", labValues: { thickness: 0.25, tensile: 40 } });
+    ok("a complete reading books the stock", good.status === 201, JSON.stringify(good.d).slice(0, 120));
+    ok("the stock really landed", (await onHand("FG-LABGATE")) === before + 10,
+      before + " -> " + (await onHand("FG-LABGATE")));
+    ok("a certificate was raised for the batch",
+      !!(good.d.labReport && good.d.labReport.id) && good.d.batchNo === "LOT-1",
+      JSON.stringify(good.d.labReport));
+    ok("and it was graded against the hidden spec", good.d.labReport.result === "Pass", good.d.labReport.result);
+
+    // a batch already measured does not have to be measured twice
+    const again = await book({ refNo: "LOT-1" });
+    ok("adding more to a batch already measured needs no re-entry", again.status === 201, again.status + "");
+
+    /* the sheet the form builds itself from — parameters, never limits */
+    const sheet = await call("GET", "/production/finished/FG-LABGATE/lab", C);
+    ok("the form can ask what this product is tested on",
+      sheet.status === 200 && sheet.d.required === true && sheet.d.params.length === 2,
+      JSON.stringify((sheet.d.params || []).map((p) => p.key)));
+    ok("no spec limit reaches the person measuring", !/"min"|"max"/.test(JSON.stringify(sheet.d)));
+
+    /* a half-made roll is graded against its PARENT product's spec — it is the
+       same web, measured before it is slit */
+    await call("POST", "/items", A, { id: "WIP-LABGATE", name: "Lab gate coated jumbo",
+      cat: "WIP", uom: "KG", stageOf: "FG-LABGATE" });
+    const wipSheet = await call("GET", "/production/finished/WIP-LABGATE/lab", C);
+    ok("a half-made roll inherits its parent's parameters",
+      wipSheet.status === 200 && wipSheet.d.required === true
+        && (wipSheet.d.params || []).length === 2 && wipSheet.d.recipeOwnerId === "FG-LABGATE",
+      JSON.stringify(wipSheet.d.params && wipSheet.d.params.map((p) => p.key)));
+    const wipNoVals = await call("POST", "/production/finished", C,
+      { itemId: "WIP-LABGATE", qty: 5, wh: "WH-WIP", gsm: 100, refNo: "LOT-W1" });
+    ok("and it cannot be booked unmeasured either", wipNoVals.status === 409, wipNoVals.status + "");
+    // put the master back as it was — a later section asserts no WIP item exists
+    await call("DELETE", "/items/WIP-LABGATE", A);
+
+    /* a product the lab does not test is not held up */
+    await call("POST", "/items", A, { id: "RM-FREE", name: "Untested resin", cat: "RM", uom: "KG", cost: 5 });
+    await call("POST", "/items", A, { id: "FG-FREE", name: "Untested tape", cat: "FG", uom: "KG",
+      typeCode: "CH-FREE", group: "OTHER TAPE SERIES", cost: 10, price: 20 });
+    await call("PUT", "/boms/FG-FREE", A, { yield: 100, lines: [["RM-FREE", 1]] });
+    await call("POST", "/movements", A, { itemId: "RM-FREE", type: "GRN", qty: 500, rate: 5,
+      wh: "WH-PNY", date: "2026-01-01", manual: true });
+    const free = await call("POST", "/production/finished", C,
+      { itemId: "FG-FREE", qty: 5, wh: "WH-FG", tapeWidthMM: 25, gsm: 100 });
+    ok("a product with no lab parameters books freely", free.status === 201,
+      free.status + " " + JSON.stringify(free.d).slice(0, 90));
+  }
+
+  section("A job that never touches coating is not held up by QC");
+  {
+    // material IS in store, so the route is Slitting → Packing: no coating
+    // stage, so no certificate is demanded and the floor is not blocked
+    const rmS = { id: "RM-NOGATE", name: "No gate fabric", cat: "RM", uom: "KG", cost: 20 };
+    const fgS = { id: "FG-NOGATE", name: "No gate tape", cat: "FG", uom: "KG",
+      typeCode: "CH-NOGATE", group: "OTHER TAPE SERIES", cost: 100, price: 200 };
+    await call("POST", "/items", A, rmS);
+    await call("POST", "/items", A, fgS);
+    await call("PUT", "/boms/" + fgS.id, A, { yield: 100, lines: [[rmS.id, 1]] });
+    await call("POST", "/movements", A, { id: "MV-NOGATE", itemId: rmS.id, type: "GRN",
+      qty: 500, rate: 20, wh: "WH-RM", date: "2026-01-01", manual: true });
+    await call("POST", "/lab/products", A, { id: "LP-NOGATE", name: "No gate tape", code: "CH-NOGATE",
+      itemId: fgS.id, spec: { thickness: { min: 0.1, max: 0.2 } } });
+    const woS = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 20 });
+    ok("the job skips coating", !(woS.d.route || []).some((r) => r.area === "coating"),
+      (woS.d.route || []).map((r) => r.key).join(" > "));
+    const S1b = (await login("slitting1", "slitting1@123")).token;
+    await call("POST", "/production/wo/" + woS.d.id + "/advance", S1b, { action: "start" });
+    ok("slitting finishes with no lab report at all",
+      (await call("POST", "/production/wo/" + woS.d.id + "/advance", S1b, { action: "complete" })).status === 200);
   }
 
   /* ---- supervisor floor actions ---- */
@@ -567,8 +795,8 @@ async function run() {
   ok("adhoc needs enough geometry to weigh the run",
     (await call("POST", "/production/adhoc", C, { itemId: fg, rolls: 1 })).status === 400);
 
-  section("The store decides where a work order starts");
-  // plenty of stock for the recipe -> nothing to produce, start at slitting
+  section("Who makes the product decides where a work order starts");
+  // a product we do not make is bought in ready-made -> slit and pack only
   await call("POST", "/movements", A, { itemId: rm, type: "GRN", qty: 100000, wh: "WH-PNY", rate: 10 });
   const rm2 = st.items.filter((i) => i.cat !== "FG" && i.id !== rm)[0].id;
   await call("POST", "/movements", A, { itemId: rm2, type: "GRN", qty: 100000, wh: "WH-PNY", rate: 10 });
@@ -580,10 +808,10 @@ async function run() {
   // the netting is deliberately kept out of it (netting has its own section).
   const woStk = await call("POST", "/production/wo", A, { itemId: fg, qty: 10, widthMM: 25 });
   const rStk = (woStk.d && woStk.d.route) || [];
-  ok("material in store -> straight to Slitting → Packing",
+  ok("a bought-in product -> straight to Slitting → Packing",
     rStk.length === 2 && rStk[0].key === "slitting" && rStk[1].key === "packing",
     rStk.map((r) => r.key).join(" > "));
-  ok("no production stage is planned when the material is there",
+  ok("nothing we do not make gets a production stage",
     rStk.every((r) => r.key !== "rmprod" && r.area !== "coating"), rStk.map((r) => r.area).join(","));
   const woStkFull = (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woStk.d.id);
   ok("it sits on a slitting line", /^Slitting/.test(woStkFull.line), woStkFull.line);
@@ -601,6 +829,31 @@ async function run() {
   const rMake = (woMake.d && woMake.d.route) || [];
   ok("material short + we make it -> starts at RM production",
     rMake.length === 3 && rMake[0].key === "rmprod", rMake.map((r) => r.key).join(" > "));
+
+  /* RAW MATERIAL IN THE STORE DOES NOT SKIP COATING.
+     It used to: a stocked job went straight to slitting, which meant a coated
+     product bypassed the coating floor exactly when it was ready to run — and
+     slitting bare fabric is not a process. Only a half-made COATED JUMBO
+     skips coating, and that is decided by netting, not by the route. */
+  const plenty = { id: "RM-TEST-PLENTY", name: "Well stocked fabric", cat: "RM", uom: "KG", cost: 50 };
+  const gaut2 = { id: "FG-TEST-WB-STOCKED", name: "Stocked water blocking tape", cat: "FG", uom: "KG",
+    typeCode: "CHDNW-97", group: "WATER BLOCKING SERIES", cost: 100, price: 200 };
+  await call("POST", "/items", A, plenty);
+  await call("POST", "/items", A, gaut2);
+  await call("PUT", "/boms/" + gaut2.id, A, { yield: 100, lines: [[plenty.id, 1.2]] });
+  await call("POST", "/movements", A, { itemId: plenty.id, type: "GRN",
+    qty: 100000, rate: 50, wh: "WH-PNY", date: "2026-01-01", manual: true });
+  const woStocked = await call("POST", "/production/wo", A, { itemId: gaut2.id, qty: 50 });
+  const rStocked = (woStocked.d && woStocked.d.route) || [];
+  ok("the same product WITH material in store still runs coating first",
+    rStocked[0] && rStocked[0].key === "rmprod" && rStocked[0].area === "coating",
+    rStocked.map((r) => r.key + "/" + r.area).join(" > "));
+  ok("and it sits on the coating floor's line, not a slitting line",
+    /^RM Production/.test((await call("GET", "/state", A)).d.workorders
+      .find((w) => w.id === woStocked.d.id).line),
+    (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woStocked.d.id).line);
+  ok("so the coating supervisor can see and start it",
+    (await call("POST", "/production/wo/" + woStocked.d.id + "/advance", C, { action: "start" })).status === 200);
   ok("the production stage is owned by the person who makes that family",
     rMake[0].owner === "coating1" && /Gautam/.test(rMake[0].name),
     rMake[0].owner + " · " + rMake[0].name);

@@ -44,6 +44,18 @@ router.post("/production/wo/:id/advance", requireAuth, requireRole("supervisor",
   } catch (e) { next(e); }
 });
 
+/* The coating floor's own lab reading for a job. GET returns the parameters
+   the Products master asks for (never the limits — grading stays server-side);
+   POST records the production measurement against the batch. Coating cannot be
+   completed until this is in, which is why it lives beside the stage actions. */
+router.get("/production/wo/:id/lab", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.json(production.labSheet(req.user, req.params.id)); } catch (e) { next(e); }
+});
+router.post("/production/wo/:id/lab", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.status(201).json(production.recordLabReading(req.user, req.params.id, req.body || {})); }
+  catch (e) { next(e); }
+});
+
 // Back-compat: advance by target status (maps to a stage action).
 router.post("/production/wo/:id/status", requireAuth, requireRole("supervisor", "admin"), (req, res, next) => {
   try { res.json(production.updateWorkOrderStatus(req.user, req.params.id, (req.body || {}).status)); }
@@ -72,6 +84,11 @@ router.post("/production/wo/:id/resume", requireAuth, requireRole("admin", "offi
 
 // Supervisor/admin record finished stock made on the floor: deduct raw
 // materials from the store per BOM + add the produced qty to a chosen warehouse.
+/* The QC sheet a product must carry before it can be booked into store —
+   the parameter list only, never the limits. */
+router.get("/production/finished/:itemId/lab", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.json(production.finishedStockLabSheet(req.user, req.params.itemId)); } catch (e) { next(e); }
+});
 router.post("/production/finished", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
   try { res.status(201).json(production.produceFinished(req.user, req.body || {})); }
   catch (e) { next(e); }
@@ -220,11 +237,22 @@ router.put("/lab/products/:id/spec", requireAuth, requireRole("admin"), (req, re
 // never the product master and never the spec (those stay admin/office above),
 // so the yardstick cannot be edited by the person being measured against it.
 const rwLab = requireRole("admin", "office", "lab");
+/* The reply carries the graded certificate — but the person who took the
+   measurement is not shown its verdict (the same rule as the spec limits, and
+   as the lab payload in viewService). Without this the grade would come
+   straight back in the response to their own write. */
+function forWriter(report, user) {
+  if (!user || user.role !== "lab") return report;
+  const out = Object.assign({}, report);
+  ["result", "results", "prodResult", "prodResults", "labResult", "labResults"]
+    .forEach((k) => { delete out[k]; });
+  return out;
+}
 router.post("/lab/reports", requireAuth, rwLab, (req, res, next) => {
-  try { res.status(201).json(lab.createReport(req.body || {}, req.user)); } catch (e) { next(e); }
+  try { res.status(201).json(forWriter(lab.createReport(req.body || {}, req.user), req.user)); } catch (e) { next(e); }
 });
 router.patch("/lab/reports/:id", requireAuth, rwLab, (req, res, next) => {
-  try { res.json(lab.updateReport(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+  try { res.json(forWriter(lab.updateReport(req.params.id, req.body || {}, req.user), req.user)); } catch (e) { next(e); }
 });
 // Deleting a certificate is a records decision — kept with admin/office.
 router.delete("/lab/reports/:id", requireAuth, rw, (req, res, next) => {

@@ -258,6 +258,13 @@
     // supervisor/admin: record finished stock made — deducts raws by BOM,
     // adds the produced qty to a warehouse. payload: { itemId, qty, wh }
     addFinishedStock(payload) { return http("POST", "/production/finished", payload); },
+    /* the coating floor's QC reading for a batch. `labSheet` returns the
+       parameters the Products master asks for (never the limits); `saveLab`
+       records the measurement — coating cannot be finished without it. */
+    labSheet(woId) { return http("GET", "/production/wo/" + enc(woId) + "/lab"); },
+    saveLab(woId, payload) { return http("POST", "/production/wo/" + enc(woId) + "/lab", payload); },
+    // the readings a product must carry before it can be booked into store
+    finishedLabSheet(itemId) { return http("GET", "/production/finished/" + enc(itemId) + "/lab"); },
     // floor actions: send material back to a store / record an unplanned run
     returnStock(payload) { return http("POST", "/production/return", payload); },
     adhoc(payload) { return http("POST", "/production/adhoc", payload); },

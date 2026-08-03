@@ -216,8 +216,6 @@
       // theme + accent are system settings — only admin may change them
       const admin=this.isAdmin();
       const themeBtn=$("#themeToggle"); if(themeBtn) themeBtn.hidden=!admin;
-      // what a role may create changes with the role, so rebuild it here too
-      this.buildCreateMenu();
     },
 
     buildNav(){
@@ -475,58 +473,6 @@
     },
     closeNavDrawer(){ $("#app").classList.remove("collapsed"); this.syncNavScrim(); },
 
-    /* ---- the global Create menu ----------------------------------------
-       Every "New X" form in the app already registers itself in ERPActions so
-       the ⌘K palette can reach it — but a keyboard palette is invisible to
-       anyone who has not been told it exists, and on the floor's tablets there
-       is no keyboard at all. This puts the same registry behind one button.
-
-       Only actions tagged `create` appear (navigation-only ones like "HR:
-       Workers" do not belong under Create), and each is filtered by the same
-       canAccess/canWrite rules the sidebar uses, so a lab incharge is never
-       offered a purchase order. The server enforces this independently. */
-    createItems(){
-      const acts=global.ERPActions||{};
-      return Object.keys(acts).map(k=>acts[k])
-        .filter(a=>a && a.create)
-        .filter(a=>!a.mod || (this.canAccess(a.mod) && this.canWrite(a.mod)));
-    },
-    buildCreateMenu(){
-      const menu=$("#createMenu"), drop=$("#createDrop");
-      if(!menu||!drop) return;
-      const items=this.createItems();
-      // a role with nothing to create should not be shown an empty menu
-      drop.hidden=!items.length;
-      menu.innerHTML="";
-      items.forEach(a=>menu.appendChild(h("button",{class:"create-opt",role:"menuitem",
-        onclick:()=>{ this.closeCreateMenu(); try{ a.run(); }catch(e){ UI.toast(e.message,{type:"danger"}); } }},[
-        h("span",{class:"create-opt-ic",text:a.ic||"＋"}),
-        h("span",{text:a.label.replace(/^New\s+/,"")}),
-      ])));
-    },
-    openCreateMenu(){
-      const menu=$("#createMenu"), btn=$("#createBtn");
-      if(!menu||!menu.hidden) return;
-      this.buildCreateMenu();
-      menu.hidden=false; btn.classList.add("open"); btn.setAttribute("aria-expanded","true");
-      setTimeout(()=>document.addEventListener("click",this._createDocClose,true),0);
-    },
-    closeCreateMenu(){
-      const menu=$("#createMenu"), btn=$("#createBtn");
-      if(!menu||menu.hidden) return;
-      menu.hidden=true; btn.classList.remove("open"); btn.setAttribute("aria-expanded","false");
-      document.removeEventListener("click",this._createDocClose,true);
-    },
-    bindCreateMenu(){
-      const btn=$("#createBtn"), drop=$("#createDrop");
-      if(!btn||!drop) return;
-      this._createDocClose=(e)=>{ if(!drop.contains(e.target)) this.closeCreateMenu(); };
-      btn.onclick=(e)=>{ e.stopPropagation();
-        $("#createMenu").hidden ? this.openCreateMenu() : this.closeCreateMenu(); };
-      document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") this.closeCreateMenu(); });
-      this.buildCreateMenu();
-    },
-
     bindChrome(){
       $("#themeToggle").onclick=()=>this.setTheme(this.theme==="dark"?"light":"dark");
       this.navScrim=h("div",{class:"nav-scrim",onclick:()=>this.closeNavDrawer()});
@@ -537,7 +483,6 @@
       $("#closeDrawer").onclick=()=>this.closeDrawer();
       $("#scrim").onclick=()=>this.closeDrawer();
       $("#searchTrigger").onclick=()=>this.openCmdk();
-      this.bindCreateMenu();
       // org name/sub from data — the user chip (name/avatar) is set by
       // applyRoleChrome() from the logged-in account, never from org contacts.
       const org=ENG.data.org;

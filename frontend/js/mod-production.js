@@ -12,7 +12,11 @@
   const U = window._erpUtil;
 
   /* ============== PRODUCTION ============== */
-  const STAGE_LABEL={coating:"Coating",slitting:"Slitting",packing:"Packing",production:"Production",weaving:"Weaving",wbcoat:"WB Coating",fiberglass:"Fiber-Glass"};
+  /* `rmprod` is the RM-production stage — the coating floor. Its stage NAME
+     carries whose line it is ("RM Production — Gautam Saw"), which is not what
+     belongs on a button; without an entry here every label fell through to the
+     bare word "stage". */
+  const STAGE_LABEL={coating:"Coating",rmprod:"Coating",slitting:"Slitting",packing:"Packing",production:"Production",weaving:"Weaving",wbcoat:"WB Coating",fiberglass:"Fiber-Glass"};
   // products that carry a per-order production spec (mirrors backend stageService)
   const ORDER_SPEC={ "FG-CU-WBT": { key:"copperWires", label:"Copper wires (per tape)" } };
   /* WHO MAKES WHAT + WHERE A JOB STARTS — mirrors the server
@@ -62,17 +66,24 @@
       return have+1e-6>=need;
     });
   }
+  /* Mirrors stageService.routeStagesFor: WHO MAKES IT decides the route, not
+     what is in the store. Raw material on the shelf is what lets the coating
+     floor run — it is not a coated web, so it never shortens the route. Only
+     a half-made coated jumbo skips coating, and that is the netting panel's
+     job. `stocked` is still reported so the form can say whether the run can
+     start immediately or is waiting on material. */
   function routeFor(itemId, qty){
     const owner=productOwner(itemId);
-    if(materialInStore(itemId,qty) || !owner)
-      return { stages:["Slitting","Packing & Dispatch"], area:"slitting", ready:true, owner:null };
+    const stocked=materialInStore(itemId,qty);
+    if(!owner)
+      return { stages:["Slitting","Packing & Dispatch"], area:"slitting", ready:true, bought:true, stocked, owner:null };
     const stages=[];
     const fibreFirst=FIBRE_FIRST.some(p=>famMatches(famOf(itemId),p));
     if(fibreFirst) stages.push(OWNERS.fibre.label);
     stages.push(owner.label);
     stages.push("Slitting","Packing & Dispatch");
     const first=fibreFirst?OWNERS.fibre:owner;
-    return { stages, area:first.area, line:first.line, owner:first, ready:false };
+    return { stages, area:first.area, line:first.line, owner:first, ready:false, bought:false, stocked };
   }
   const LINES_BY_AREA={ coating:["RM Production 1","RM Production 2"],
     slitting:["Slitting A","Slitting B"],
@@ -192,24 +203,121 @@
     });
   }
 
-  function layerPanel(fg, rawLines){
+  /* The layer build-up — the recipe as the floor reads it: each layer, the
+     materials in it, and how much of each.
+     `opts.qtyOf(line)` overrides the printed quantity, so a work order can
+     show what THIS run consumes instead of the BOM's per-batch figures;
+     `opts.choices` resolves ranged lines to the material actually picked;
+     `opts.always` keeps the panel for a single-layer product, which the BOM
+     view suppresses (there is no layer story) but a work order still needs. */
+  /* ---- typing into a box that redraws the form around it -------------------
+     The "take from stock" quantities re-run the whole calculation on every
+     keystroke, which rebuilds the panel and destroys the input being typed
+     into. These two keep that usable:
+       numish   — strips anything that is not a digit or a point, so a stray
+                  character cannot poison the figure;
+       keepCaret— notes which of these boxes has focus and where the caret is,
+                  runs the rebuild, then puts both back. Without it the field
+                  loses focus after a single character. */
+  const numish=s=>String(s==null?"":s).replace(/[^\d.]/g,"");
+  function keepCaret(fn){
+    const a=document.activeElement;
+    const id=a&&a.id&&/^net_|^fssrc_/.test(a.id)?a.id:null;
+    const pos=id?a.selectionStart:null;
+    fn();
+    if(!id) return;
+    const el=UI.$("#"+id);
+    if(!el) return;
+    el.focus();
+    try{ el.setSelectionRange(pos,pos); }catch(e){ /* not a caret-bearing field */ }
+  }
+
+  /* ---- QC on a coated batch ------------------------------------------------
+     A job sitting on the coating floor cannot be completed until the batch has
+     been measured. `labPending` is worked out server-side (labService), so the
+     office, the floor and the lab all read one list rather than three
+     calculations that can disagree.
+     Returns the outstanding row, or null when nothing is owed. */
+  function labOwedBy(w){
+    const cur=curStage(w);
+    if(!cur || cur.area!=="coating" || cur.status==="Completed") return null;
+    const row=(ENG.data.labPending||[]).find(p=>p.woId===w.id);
+    if(!row || !row.coating || row.prodComplete) return null;
+    return row;
+  }
+
+  /* The office's copy of the floor's reading sheet. Same endpoint, same rules —
+     the parameters come from the product's entry under Lab Reports → Products
+     and the spec limits never leave the server. */
+  async function woLabForm(wo){
+    let sheet;
+    try{ sheet=await DB.production.labSheet(wo.id); }
+    catch(e){ toast(e.message||String(e),{type:"danger"}); return; }
+    if(!sheet.product){ toast("No lab product is linked to this item",{type:"warn"}); return; }
+    if(!(sheet.params||[]).length){ toast("No test parameters are set for this product yet",{type:"warn"}); return; }
+
+    const grid=h("div",{class:"form-grid"});
+    sheet.params.forEach(p=>{
+      const v=(sheet.prodValues||{})[p.key];
+      grid.insertAdjacentHTML("beforeend",
+        `<div class="field"><label>${esc(p.label)} <span class="muted" style="font-weight:500">(${esc(p.unit||"")})</span></label>`
+        +`<div><input class="input" id="wolv_${esc(p.key)}" type="number" step="any" value="${v==null?"":esc(String(v))}"></div></div>`);
+    });
+    const remarks=h("div",{class:"form-grid"},[U.field("Remarks",`<input class="input" id="wolv_rem" placeholder="Optional — anything odd about this batch">`,"full")]);
+    const saveBtn=h("button",{class:"btn primary",text:"Save reading"});
+    const mo=modal({title:"🧪 Lab report — batch "+sheet.batchNo, wide:true,
+      sub:(sheet.product.code||"")+" · "+sheet.product.name,
+      body:h("div",{},[
+        h("div",{class:"muted",style:"font-size:12px;margin-bottom:12px;line-height:1.6",
+          text:"Every reading is needed before coating can be completed. Values are graded against this product's TDS spec on save; the lab incharge adds their own measurement to the same certificate after slitting."}),
+        grid, remarks,
+      ]),
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), saveBtn]});
+
+    saveBtn.onclick=async()=>{
+      const values={}; const missing=[];
+      sheet.params.forEach(p=>{ const el=UI.$("#wolv_"+p.key); const raw=el?el.value.trim():"";
+        if(raw===""||isNaN(+raw)) missing.push(p.label); else values[p.key]=+raw; });
+      if(missing.length){ toast("Still to measure: "+missing.join(", "),{type:"warn"}); return; }
+      saveBtn.disabled=true; saveBtn.textContent="Saving…";
+      try{
+        await DB.production.saveLab(wo.id,{values, remarks:(UI.$("#wolv_rem").value||"").trim()});
+        mo.close();
+        toast("Lab reading saved for batch "+sheet.batchNo,{type:"ok"});
+        await reloadState(); App.go("production");
+      }catch(e){
+        toast(e.message||String(e),{type:"danger"});
+        saveBtn.disabled=false; saveBtn.textContent="Save reading";
+      }
+    };
+  }
+
+  function layerPanel(fg, rawLines, opts){
+    opts=opts||{};
     if(!fg || !rawLines) return null;
-    const lines=BOMCALC.normalize(rawLines);
+    const lines=opts.choices
+      ? BOMCALC.resolve({lines:rawLines}, opts.choices)
+      : BOMCALC.normalize(rawLines);
     if(!lines.length) return null;
     const groups=layerGroups(lines);
-    if(groups.length<2) return null;   // no layer story to tell
+    if(groups.length<2 && !opts.always) return null;   // no layer story to tell
     const box=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"});
     box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
-      text:"≡ Layer build-up · "+groups.length+" layers"}));
+      text: opts.title || ("≡ Layer build-up · "+groups.length+" layer"+(groups.length===1?"":"s"))}));
+    if(opts.note) box.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-bottom:2px",text:opts.note}));
     groups.forEach((g,gi)=>{
-      box.appendChild(h("div",{style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:"+(gi?12:6)+"px 0 4px;color:var(--accent)",
+      const many=groups.length>1;
+      if(many) box.appendChild(h("div",{style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:"+(gi?12:6)+"px 0 4px;color:var(--accent)",
         text:g.label||("LAYER "+(gi+1))}));
       g.lines.forEach(l=>{
-        box.appendChild(h("div",{class:"flex aic",style:"gap:8px;padding:3px 0 3px 14px;font-size:12.5px;border-left:2px solid var(--line);margin-left:2px"},[
+        const q=opts.qtyOf?opts.qtyOf(l):l.qty;
+        const unit=(l.id&&(ENG.item(l.id)||{}).uom)||l.unit||"";
+        box.appendChild(h("div",{class:"flex aic",style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:12.5px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
           h("span",{style:"font-weight:600",text:matLineName(l)}),
           matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null,
           matLineSpec(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:matLineSpec(l)}):null,
-          h("span",{class:"muted mono",style:"margin-left:auto;font-size:11px;flex:0 0 auto",text:ENG.num(l.qty,2)+" "+(l.unit||"")})
+          h("span",{class:"mono",style:"margin-left:auto;font-size:11.5px;flex:0 0 auto;font-weight:700",
+            text:ENG.num(q,2)+" "+unit})
         ]));
       });
     });
@@ -516,7 +624,21 @@
       }
       if(!finished && App.isAdmin()){
         const cur=curStage(r);
-        wrap.appendChild(h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();advanceStage(r,cur);},text:cur&&cur.status==="Pending"?"Start "+(STAGE_LABEL[cur.key]||"stage"):"Finish "+(STAGE_LABEL[cur.key]||"stage")}));
+        const label=(cur&&STAGE_LABEL[cur.key])||"stage";
+        /* ONE BUTTON, ONE NEXT STEP — the same sequence the floor sees:
+           Start Coating → Enter Lab Report → Complete Coating. The office
+           drives stages too, so it cannot be shown a Complete button the
+           server is going to refuse. */
+        const owes=labOwedBy(r);
+        if(cur&&cur.status==="Pending"){
+          wrap.appendChild(h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();advanceStage(r,cur);},text:"▶ Start "+label}));
+        } else if(owes){
+          wrap.appendChild(h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();woLabForm(r);},
+            title:"Batch "+owes.batchNo+" — "+(owes.missingProd.length||owes.params.length)+" reading(s) to record",
+            text:"🧪 Enter Lab Report"}));
+        } else {
+          wrap.appendChild(h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();advanceStage(r,cur);},text:"✓ Complete "+label}));
+        }
         wrap.appendChild(h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();completeWO(r);},text:"Complete all"}));
       } else {
         wrap.appendChild(h("button",{class:"btn sm ghost",onclick:e=>{e.stopPropagation();woDetail(r);},text:"View"}));
@@ -734,8 +856,47 @@
 
     function woDetail(wo){
       const it=ENG.item(wo.itemId); const bom=ENG.data.boms[wo.itemId];
-      const rows = bom? BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(it)).map(([rid,per])=>{ const need=per*wo.qty/bom.yield; const st=ENG.stock(rid); const r=ENG.item(rid)||{};
-        return {rid, name:r.id?(r.material||r.name):rid, code:r.id?(r.grade||"—"):"—", per, need, have:st.onHand, ok:st.onHand>=need, uom:r.uom||""}; }):[];
+
+      /* ---- WHAT THIS JOB DRAWS FROM THE STORE -----------------------------
+         The same list New Work Order showed when the job was raised, sized the
+         same way — because it is the same calculation, run over what the order
+         actually recorded. The old table disagreed with the form the planner
+         filled in on two counts:
+           • it costed the WHOLE ordered quantity. A run part-served from
+             finished or half-made stock only draws raw material for the part
+             being MADE, which is what wo.plan stores and what the server
+             issues (stageService.computeStagePlan sizes on net.makeQty).
+           • it read the BOM raw, ignoring the ranged-material picks saved on
+             the order — so it could name a different material than the one
+             that will be issued.
+         Both are read off the work order here, so the detail, the creation
+         form and the movements can no longer tell three different stories. */
+      const net = wo.plan || null;
+      const makeQty = net && net.makeQty != null ? +net.makeQty : (+wo.qty || 0);
+      const resolved = bom ? BOMCALC.resolve(bom, wo.materialChoices || {}) : [];
+      const cc = bom ? BOMCALC.compute({lines:resolved}, BOMCALC.metaFromItem(it)) : null;
+      const perOf = l => (cc && cc.fgKgPerBatch) ? l.qty/cc.fgKgPerBatch : l.qty;
+      const needOf = l => bom ? perOf(l)*makeQty/bom.yield : 0;
+      const needBy = {};   // a fabric can sit in two layers — the store is shared
+      resolved.forEach(l=>{ if(l.id) needBy[l.id]=(needBy[l.id]||0)+needOf(l); });
+
+      /* One list, in the layer build-up the floor already reads — the recipe
+         with the quantity THIS run consumes, rather than the BOM's per-batch
+         figures. Nothing else: the store position belongs on the stock pages,
+         not on every job sheet. */
+      const uomIt=(it||{}).uom||"kg";
+      const fgQty=+(net&&net.fgQty)||0, wipQty=+(net&&net.wipQty)||0;
+      const took=[];
+      if(fgQty>0.001) took.push(ENG.num(fgQty,2)+" "+uomIt+" from finished stock");
+      if(wipQty>0.001) took.push(ENG.num(wipQty,2)+" "+uomIt+" from half-made stock");
+      const note = took.length
+        ? "For the "+ENG.num(makeQty,2)+" "+uomIt+" being made — "+took.join(" and ")+" needs no raw material."
+        : "For the "+ENG.num(makeQty,2)+" "+uomIt+" this order produces.";
+      const matHost = bom
+        ? (layerPanel(it, bom.lines, { choices: wo.materialChoices || {}, qtyOf: needOf,
+            note, always: true, title: "Materials for this order" })
+           || h("div",{class:"muted",style:"font-size:12px",text:"No materials on this recipe"}))
+        : h("div",{class:"muted",style:"font-size:12px",text:"No BOM for this product"});
       // ---- Details pane ----
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
@@ -761,17 +922,8 @@
           ["Status",badge(wo.status==="Completed"||wo.status==="Dispatched"?"ok":wo.status==="Partial"?"danger":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
-        (()=>{ const lp=bom?layerPanel(it,bom.lines):null; return lp?h("div",{style:"margin-top:14px"},lp):h("span"); })(),
-        h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Material Requirements (auto from BOM)"}),
-        table(rows,[
-          {key:"name",label:"Component",render:r=>`<div class="cell-main">${esc(r.name)}</div>`,noSort:true},
-          {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.code)}</span>`,noSort:true},
-          {key:"per",label:"Per kg",num:true,render:r=>ENG.num(r.per,3),noSort:true},
-          {key:"need",label:"Required",num:true,render:r=>`<span class="strong">${ENG.num(r.need,2)}</span> ${r.uom}`,noSort:true},
-          {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1),noSort:true},
-          {key:"ok",label:"",noSort:true,render:r=>badge(r.ok?"ok":"danger",r.ok?"Available":"Short")},
-        ],{empty:"No BOM"})
-      ]);
+        h("div",{style:"margin-top:14px"},matHost),
+      ].filter(Boolean));
       // ---- Time Status pane (per-stage timing of the production route) ----
       const timePane=stageTimeStatus(wo); timePane.hidden=true;
       // ---- tab bar ----
@@ -816,11 +968,21 @@
       const convHint=h("div",{class:"muted",style:"grid-column:1/-1;font-size:11px;margin-top:-6px",id:"fs_conv"});
       const matHost=h("div",{style:"grid-column:1/-1"});
       const srcHost=h("div",{style:"grid-column:1/-1"});
+      /* Nothing goes into a store unmeasured — the readings for this batch are
+         taken here, and the server refuses the booking without them. The
+         parameters come from the product's entry under Lab Reports → Products;
+         the limits stay on the server, so a reading cannot be nudged until it
+         passes. */
+      const labHost=h("div",{style:"grid-column:1/-1"});
+      let labParams=[];          // what this product is tested on
+      let labFor=null;           // the item the sheet was fetched for
       /* Sourcing part of a run from stock already on the shelf is an ADMIN
          control — the floor books what it made, it does not decide what the
          run is built from. */
       const canSource=((App.user||{}).role==="admin");
-      let fsFgWanted=0, fsWipWanted=0;
+      // *Wanted = the number in play; *Typed = the raw string being typed, kept
+      // so a redraw never overwrites a half-entered figure (null = untouched)
+      let fsFgWanted=0, fsWipWanted=0, fsFgTyped=null, fsWipTyped=null;
       let fsChoices={};   // ranged BOM line index -> the stock item chosen
       let fsShort=[];     // materials short of stock — blocks the booking
       const body=h("div",{class:"form-grid"},[
@@ -831,7 +993,9 @@
         uomField,
         tapeField,
         U.field("Store it in",U.selectHTML("fs_wh",whs.map(w=>({v:w.id,l:w.name+(w.type?" · "+w.type:"")})),fgStore)),
+        U.field("Batch / lot no",`<input class="input" id="fs_batch" placeholder="e.g. 0042"><div class="muted" style="font-size:10.5px;margin-top:3px">The lab report is filed against this number</div>`),
         convHint,
+        labHost,
         srcHost,
         matHost,
       ]);
@@ -927,7 +1091,37 @@
         const set=(id,v)=>{const e=UI.$("#"+id); if(e) e.value=(v==null?"":v);};
         set("fs_gsm",pick("gsm"));
         if(catNow==="FG") set("fs_tapewid",it.tapeWidthMM!=null?it.tapeWidthMM:"");
+        drawLab(it.id);
         calc();
+      }
+
+      /* the QC block: one field per parameter the Products master states a
+         limit for. Asked of the server so a half-made roll picks up its
+         PARENT's spec, and so no limit is ever sent to the browser. */
+      async function drawLab(itemId){
+        if(!itemId || itemId===labFor) return;
+        labFor=itemId; labParams=[];
+        labHost.innerHTML="";
+        let sheet=null;
+        try{ sheet=await DB.production.finishedLabSheet(itemId); }
+        catch(e){ labHost.appendChild(h("div",{class:"muted",style:"font-size:11.5px",text:"Could not load the test parameters — "+(e.message||e)})); return; }
+        if(labFor!==itemId) return;                       // the picker moved on
+        if(!sheet || !sheet.required){
+          labHost.appendChild(h("div",{class:"muted",style:"font-size:11.5px;padding:8px 0",
+            text:"No lab parameters are set for this product — nothing to measure before booking."}));
+          return;
+        }
+        labParams=sheet.params||[];
+        labHost.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:6px 0 2px",
+          text:"🧪 Lab report — required before this stock can be booked"}));
+        labHost.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-bottom:8px",
+          text:"Graded against "+((sheet.product||{}).code||"the product")+"'s spec on submit. The lab incharge adds their own reading to the same certificate later."}));
+        const grid=h("div",{class:"form-grid",style:"margin:0"});
+        labParams.forEach(p=>{
+          grid.insertAdjacentHTML("beforeend",
+            `<div class="field"><label>${esc(p.label)} <span class="muted" style="font-weight:500">(${esc(p.unit||"")})</span></label><div><input class="input" id="fslv_${esc(p.key)}" type="number" step="any"></div></div>`);
+        });
+        labHost.appendChild(grid);
       }
       /* kg ⇄ sqm ⇄ metres across the GSM and the width being produced */
       function width(){
@@ -958,7 +1152,9 @@
             el.textContent=bits.length?"= "+bits.join(" · "):"Enter the GSM to convert between kg, sqm and metres";
           }
         }
-        drawMaterials();
+        // the redraw is what the stock boxes trigger on every keystroke —
+        // keep the caret in whichever one is being typed into
+        keepCaret(drawMaterials);
       }
       /* the SAME list New Work Order shows — layer headings, and every row
          carrying its live need / in-store / short figures. A half-made roll
@@ -991,20 +1187,30 @@
         const wipQty=Math.max(0,Math.min(fsWipWanted,s.wipAvail,qty-fgQty));
         const makeQty=qty-fgQty-wipQty;
         if(!(s.fgAvail>0||s.wipAvail>0)) return {fgQty:0,wipQty:0,makeQty:qty};
-        const row=(icon,label,val,max,onInput)=>h("div",{class:"flex between aic",
-            style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
-          h("div",{style:"min-width:0"},[h("div",{text:icon+" "+label}),
-            h("div",{class:"muted",style:"font-size:11px",text:ENG.num(max,2)+" "+(uom||"")+" available"})]),
-          h("input",{class:"input",type:"number",min:"0",step:"any",value:ENG.num(val,2),
-            style:"width:110px;text-align:right;flex:0 0 auto",oninput:e=>onInput(e.target.value)}),
-        ]);
+        /* Same three typing fixes as New Work Order's panel: the box keeps
+           what was TYPED while it has focus (so a capped figure never
+           overwrites a half-typed number), it is a text field with a decimal
+           keypad (a number field rejects ENG.num's thousands separator), and
+           the caret is restored after the redraw each keystroke triggers. */
+        const row=(id,icon,label,typed,drawn,max,onInput)=>{
+          const differs=typed!=null && Math.abs((+typed||0)-drawn)>0.005;
+          return h("div",{class:"flex between aic",
+              style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+            h("div",{style:"min-width:0"},[h("div",{text:icon+" "+label}),
+              h("div",{class:"muted",style:"font-size:11px",
+                text:ENG.num(max,2)+" "+(uom||"")+" available"+(differs?"  ·  taking "+ENG.num(drawn,2):"")})]),
+            h("input",{class:"input",id:id,type:"text",inputmode:"decimal",autocomplete:"off",
+              value: typed!=null? typed : String(Math.round(drawn*100)/100),
+              style:"width:110px;text-align:right;flex:0 0 auto",oninput:e=>onInput(e.target.value)}),
+          ]);
+        };
         srcHost.appendChild(h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},[
           h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
             text:"Build from stock — the rest is made from raw materials"}),
-          s.fgAvail>0? row("📦","Finished stock",fgQty,s.fgAvail,
-            v=>{ fsFgWanted=Math.max(0,+v||0); calc(); }):null,
-          s.wipAvail>0? row("🧵","Half-made stock",wipQty,s.wipAvail,
-            v=>{ fsWipWanted=Math.max(0,+v||0); calc(); }):null,
+          s.fgAvail>0? row("fssrc_fg","📦","Finished stock",fsFgTyped,fgQty,s.fgAvail,
+            v=>{ const c=numish(v); fsFgTyped=c===""?null:c; fsFgWanted=+c||0; calc(); }):null,
+          s.wipAvail>0? row("fssrc_wip","🧵","Half-made stock",fsWipTyped,wipQty,s.wipAvail,
+            v=>{ const c=numish(v); fsWipTyped=c===""?null:c; fsWipWanted=+c||0; calc(); }):null,
           h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
             h("span",{text:"To make from raw materials"}),
             h("span",{text:ENG.num(makeQty,2)+" "+(uom||"")}),
@@ -1099,6 +1305,12 @@
       ["fs_qty","fs_gsm","fs_tapewid"].forEach(id=>{ const e=UI.$("#"+id); if(e) e.addEventListener("input",calc); });
       buildPicker();   // also renders the unit select and binds its change
 
+      const batchNow=()=>((UI.$("#fs_batch")||{}).value||"").trim();
+      const labValuesNow=()=>{ const o={};
+        labParams.forEach(p=>{ const e=UI.$("#fslv_"+p.key); const v=e?e.value.trim():"";
+          if(v!==""&&!isNaN(+v)) o[p.key]=+v; });
+        return o; };
+
       async function save(btn){
         const el=UI.$("#fs_item");
         const itemId=el?el.value:"";
@@ -1110,6 +1322,16 @@
           {type:"danger",title:"Insufficient stock"}); return; }
         const tapeWidthMM=catNow==="FG"?(+UI.$("#fs_tapewid").value||null):null;
         if(catNow==="FG" && !tapeWidthMM){ toast("Enter the tape width for a finished good",{type:"warn"}); return; }
+        /* the batch has to be named and measured before it can go into a store.
+           Checked here so the floor is told what is missing rather than being
+           bounced by the server; the server refuses it either way. */
+        if(labParams.length){
+          if(!batchNow()){ toast("Enter the batch / lot no — the lab report is filed against it",{type:"warn"}); return; }
+          const miss=labParams.filter(p=>{const e=UI.$("#fslv_"+p.key); const v=e?e.value.trim():"";
+            return v===""||isNaN(+v);}).map(p=>p.label);
+          if(miss.length){ toast("Enter every lab reading first — missing: "+miss.join(", "),
+            {type:"warn",title:"Lab report required"}); return; }
+        }
         /* book the output in the ITEM's own unit, whatever it was counted in —
            the same conversion the materials preview above is sized by */
         const postUom=String(it.uom||"KG").toUpperCase();
@@ -1123,6 +1345,9 @@
              write back. GSM stays editable and does get saved. */
           const r=await DB.production.addFinishedStock(Object.assign(
             {itemId, qty, wh, tapeWidthMM, gsm:+UI.$("#fs_gsm").value||null},
+            // the batch this run is booked as, and its measured values — the
+            // server refuses the booking without a complete set
+            labParams.length?{refNo:batchNow(), labValues:labValuesNow()}:{},
             // which material was picked for each ranged BOM line — so the issue
             // posts the material actually chosen, exactly as a work order does
             Object.keys(fsChoices).length?{materialChoices:fsChoices}:{},
@@ -1280,32 +1505,54 @@
       }
       /* How much comes off the shelf is the PLANNER'S choice, not a fixed
          calculation: each source gets an editable quantity, capped at what is
-         actually there, and whatever is left over is manufactured. */
+         actually there, and whatever is left over is manufactured.
+
+         TYPING IN THESE BOXES USED TO BE IMPOSSIBLE, for three reasons, all
+         fixed here:
+           • every keystroke re-ran recalc(), which rebuilt this panel and
+             destroyed the very input being typed into — so focus was lost
+             after one character. The caret is now put back afterwards.
+           • the value shown was the CAPPED result, so typing "5" then "0"
+             against 47 available rewrote the box to "47" mid-keystroke and
+             the next character landed on the end of that. While the box has
+             focus it now shows exactly what was typed; the effective figure
+             is stated beside it instead.
+           • `type=number` silently rejects the thousands separator that
+             ENG.num puts in ("1,234.00"), so a large figure blanked the box.
+             These are text inputs with a decimal keypad hint. */
       let fgWanted=null, wipWanted=null;   // null = "take whatever is available"
       function netPanel(plan, uom){
         const avFg=plan.fgAvailable||0, avWip=plan.wipAvailable||0;
         if(!(avFg>0 || avWip>0)) return null;
-        const row=(icon,label,val,max,dest,src,onInput)=>h("div",{class:"flex between aic",
-            style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
-          h("div",{style:"min-width:0"},[
-            h("div",{text:icon+" "+label}),
-            h("div",{class:"muted",style:"font-size:11px",
-              text:(src&&src.length? src.map(s=>s.name+" · "+ENG.num(s.qty,2)).join(" · ")+"  ·  " : "")
-                +ENG.num(max,2)+" "+(uom||"")+" available"}),
-          ]),
-          h("div",{class:"flex aic",style:"gap:8px;flex:0 0 auto"},[
-            h("input",{class:"input",type:"number",min:"0",step:"any",value:ENG.num(val,2),
-              style:"width:110px;text-align:right",oninput:e=>onInput(e.target.value)}),
-            h("div",{class:"muted",style:"font-size:11px;white-space:nowrap;min-width:96px",text:dest}),
-          ]),
-        ]);
+        const row=(id,icon,label,typed,drawn,max,dest,src,onInput)=>{
+          // what is actually drawn can differ from what was typed (capped at
+          // the shelf, or at what is still outstanding) — say so rather than
+          // overwriting the box
+          const differs=typed!=null && Math.abs((+typed||0)-drawn)>0.005;
+          return h("div",{class:"flex between aic",
+              style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+            h("div",{style:"min-width:0"},[
+              h("div",{text:icon+" "+label}),
+              h("div",{class:"muted",style:"font-size:11px",
+                text:(src&&src.length? src.map(s=>s.name+" · "+ENG.num(s.qty,2)).join(" · ")+"  ·  " : "")
+                  +ENG.num(max,2)+" "+(uom||"")+" available"
+                  +(differs? "  ·  taking "+ENG.num(drawn,2) : "")}),
+            ]),
+            h("div",{class:"flex aic",style:"gap:8px;flex:0 0 auto"},[
+              h("input",{class:"input",id:id,type:"text",inputmode:"decimal",autocomplete:"off",
+                value: typed!=null? typed : String(Math.round(drawn*100)/100),
+                style:"width:110px;text-align:right",oninput:e=>onInput(e.target.value)}),
+              h("div",{class:"muted",style:"font-size:11px;white-space:nowrap;min-width:96px",text:dest}),
+            ]),
+          ]);
+        };
         return h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},[
           h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
             text:"Take from stock — the rest is made from raw materials"}),
-          avFg>0? row("📦","Finished stock",plan.fgQty,avFg,"→ packing",plan.fgSources,
-            v=>{ fgWanted=v===""?null:Math.max(0,+v||0); recalc(); }):null,
-          (avWip>0&&plan.hasCoating)? row("🧵","Half-made stock",plan.wipQty,avWip,"→ slitting",plan.wipSources,
-            v=>{ wipWanted=v===""?null:Math.max(0,+v||0); recalc(); }):null,
+          avFg>0? row("net_fg","📦","Finished stock",fgWanted,plan.fgQty,avFg,"→ packing",plan.fgSources,
+            v=>{ const c=numish(v); fgWanted=c===""?null:c; recalc(); }):null,
+          (avWip>0&&plan.hasCoating)? row("net_wip","🧵","Half-made stock",wipWanted,plan.wipQty,avWip,"→ slitting",plan.wipSources,
+            v=>{ const c=numish(v); wipWanted=c===""?null:c; recalc(); }):null,
           h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
             h("span",{text:"To manufacture from raw materials"}),
             h("span",{text:ENG.num(plan.makeQty,2)+" "+(uom||"")}),
@@ -1313,7 +1560,10 @@
         ]);
       }
 
-      const recalc=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); syncMatWidth(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
+      // every rebuild goes through keepCaret, so typing in the stock boxes above
+      // survives the re-render it triggers
+      const recalc=()=>keepCaret(recalcNow);
+      const recalcNow=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); syncMatWidth(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         // show the stages this product will actually run, and keep the line in
         // the area that starts it (a one-material product never enters coating)
         const rt=routeFor(id,qty), lineSel=UI.$("#w_line"), pool=LINES_BY_AREA[rt.area]||[];
@@ -1323,11 +1573,13 @@
         routeHost.appendChild(h("div",{class:"wo-route"},[
           h("span",{class:"wo-route-lbl",text:"Route"}),
           h("span",{class:"wo-route-path",text:rt.stages.join("  \u2192  ")}),
-          rt.ready
-            ? h("span",{class:"chip",style:"font-size:10.5px",
-                text:own?"material in store \u2014 straight to slitting":"bought in \u2014 slit & pack"})
-            : h("span",{class:"chip",style:"font-size:10.5px;border-color:var(--warn);color:var(--warn)",
-                text:"material short \u2014 "+rt.owner.person+" produces it first"}),
+          rt.bought
+            ? h("span",{class:"chip",style:"font-size:10.5px",text:"bought in \u2014 slit & pack"})
+            : rt.stocked
+              ? h("span",{class:"chip",style:"font-size:10.5px",
+                  text:rt.owner.person+" produces it \u2014 material in store"})
+              : h("span",{class:"chip",style:"font-size:10.5px;border-color:var(--warn);color:var(--warn)",
+                  text:"material short \u2014 only part of the run can start"}),
         ]));
         // per-order production spec (e.g. copper-wire count) for products that need it
         specHost.innerHTML="";
@@ -1338,7 +1590,9 @@
         /* net the requirement before anything else is worked out — the
            materials list below sizes itself to what is actually MADE */
         const widthNow=(UI.$("#w_width")||{}).value;
-        const plan=netPlan(id, qty, widthNow, !rt.ready && !!own);
+        // every product we make passes through coating, so a half-made jumbo
+        // is drawable for any of them — the store's raw stock is irrelevant here
+        const plan=netPlan(id, qty, widthNow, !!own);
         const uomNow=(ENG.item(id)||{}).uom||"";
         const panel=netPanel(plan, uomNow);
         if(panel) matHost.appendChild(panel);

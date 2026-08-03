@@ -267,7 +267,6 @@
       // screen without scrolling past everyone else
       MW.searchInput("Search worker, code, designation…", (v) => { q = v.toLowerCase().trim(); draw(); }),
       MW.select([{ value: "all", label: "All Departments" }, ...DEPTS.map((d) => ({ value: d, label: cap(d) }))], (v) => { dept = v; draw(); }),
-      h("button", { class: "btn", onclick: () => manualEntry(), html: "✎ Mark Attendance" }),
       h("button", { class: "btn primary", onclick: () => simulate(), html: "🔌 Simulate Biometric Punches" }),
     ]);
     host.appendChild(bar);
@@ -353,7 +352,10 @@
         foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
           h("button", { class: "btn primary", onclick: () => { const p = { workerId: w.id, date: ds, status: UI.$("#d_status").value, inTime: UI.$("#d_in").value, outTime: UI.$("#d_out").value, otHours: +UI.$("#d_ot").value || 0, note: UI.$("#d_note").value }; mo.close(); save(() => DB.hr.attendance(p), "attendance"); }, text: "Save" })] });
     }
-    function manualEntry() { const list = workers().filter((w) => w.active !== false); if (list.length) dayEntry(list[0], iso(), null); }
+    /* The "Mark Attendance" button is gone: it opened dayEntry on an arbitrary
+       first worker, which is not how anyone marks a day. Attendance is edited
+       where it is read — tap the worker's cell in the muster and dayEntry
+       opens on that worker and that date. */
 
     async function simulate() {
       const active = workers().filter((w) => w.active !== false && w.deviceUid);

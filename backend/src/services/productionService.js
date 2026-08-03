@@ -16,6 +16,7 @@
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
+const LAB = require("./labService");
 const { getLineForItem } = require("./routing");
 const BC = require("../../../frontend/js/bomcalc");
 
@@ -104,6 +105,15 @@ function advance(user, woId, action) {
     stage.status = "Pending";
   } else if (action === "complete") {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
+    /* A COATED BATCH IS NOT FINISHED UNTIL IT HAS BEEN MEASURED.
+       The supervisor who ran the coating records the reading against this
+       work order — its number IS the batch number — and only then can the
+       stage be closed and the job handed on. Enforced here rather than in
+       the browser, so no panel and no direct API call can walk past it. */
+    if (stage.area === "coating") {
+      const gate = LAB.coatingGate(wo, data);
+      if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
+    }
     // post this stage's stock movements (skip for legacy WOs — old flow already did)
     if (!wo.legacy && !stage.posted) {
       // only the portion actually on the floor draws material
@@ -234,6 +244,83 @@ function advanceAll(user, woId) {
     lastIdx = wo.stageIdx;
   }
   return wo;
+}
+
+/* ============================================================
+   THE FLOOR'S LAB READING
+   The coating supervisor measures the batch they have just run and
+   records it against the work order. It is the same certificate the
+   lab incharge later adds their own reading to — one batch, one
+   document, two independent measurements (see labService).
+
+   The floor writes the PRODUCTION set only; labService refuses a
+   supervisor who tries to write the lab's. The parameters are the
+   ones the Products master states a limit for, and every one of them
+   must carry a value: a half-filled sheet would open the very gap
+   the coating gate exists to close.
+   ============================================================ */
+function labWOFor(user, woId, data) {
+  if (!user) throw err("Not authenticated", 401);
+  const isOffice = user.role === "admin" || user.role === "office";
+  if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
+  const found = repo.getWorkOrder(woId);
+  if (!found || !found.id) throw err("Work order not found", 404);
+  const wo = withRoute(found, data);
+  if (!isOffice) {
+    /* A supervisor measures the batch THEY coated. The reading belongs to the
+       coating stage, so it is that stage — not merely the job — that must be
+       theirs, owner included: the two RM lines never see each other's work,
+       and slitting has no business recording a coating measurement. Judged on
+       the ROUTE rather than the current stage, so a reading can still be
+       corrected after the job has moved on. */
+    const mine = (wo.route || []).some((r) => r.area === "coating"
+      && S.areaCovers(user.area || "all", r.area)
+      && (!r.owner || r.owner === user.username));
+    if (!mine) throw err("The lab reading for this job belongs to the coating floor that runs it", 403);
+  }
+  return wo;
+}
+
+/** What the floor has to measure for this job, and what it has measured so far. */
+function labSheet(user, woId) {
+  const data = fullState();
+  const wo = labWOFor(user, woId, data);
+  const st = LAB.labStatusForWO(wo, data);
+  return Object.assign({}, st, {
+    qty: wo.qty, runQty: wo.runQty != null ? wo.runQty : wo.qty,
+    // the floor's own reading is what it is asked for; the lab's is shown as context
+    required: st.coating,
+  });
+}
+
+function recordLabReading(user, woId, body) {
+  body = body || {};
+  const data = fullState();
+  const wo = labWOFor(user, woId, data);
+  const st = LAB.labStatusForWO(wo, data);
+  if (!st.product) throw err("No lab product is linked to " + (wo.itemId || "this product") + " — the office must link one before a reading can be recorded", 400);
+  if (!st.params.length) throw err("No test parameters are defined for " + (st.product.code || st.product.name) + " — set its spec in Lab Reports → Products first", 400);
+
+  const values = body.values || body.prodValues || {};
+  const missing = st.params.filter((p) => { const v = values[p.key]; return v == null || v === "" || isNaN(+v); });
+  if (missing.length) {
+    throw err("Enter every reading before submitting — missing: " + missing.map((p) => p.label).join(", "), 400);
+  }
+
+  const payload = {
+    productId: st.product.id,
+    refNo: st.batchNo,                 // the batch number IS the work order number
+    woId: wo.id,
+    source: "production",
+    values,
+    testedBy: body.testedBy != null ? String(body.testedBy) : (user.name || user.username),
+    remarks: body.remarks != null ? String(body.remarks) : undefined,
+  };
+  if (payload.remarks === undefined) delete payload.remarks;
+  const saved = st.reportId
+    ? LAB.updateReport(st.reportId, payload, user)
+    : LAB.createReport(payload, user);
+  return { workOrder: wo.id, report: saved, status: LAB.labStatusForWO(wo, fullState()) };
 }
 
 /* ============================================================
@@ -639,6 +726,19 @@ function produceFinished(user, body) {
   const warehouse = (data.warehouses || []).find((w) => w.id === body.wh);
   if (!warehouse) throw err("Choose a valid warehouse to store the finished stock", 400);
 
+  /* ---- NOTHING GOES INTO A STORE UNMEASURED --------------------------------
+     Same rule as the coating gate, at the other end of the line: stock is
+     only booked once the batch carries a lab report covering every parameter
+     the Products master states a limit for. This stock has no work order, so
+     the batch is named by whoever books it and the certificate is filed
+     against that name. Validated BEFORE any movement is posted, so a refused
+     booking leaves nothing behind; the reading itself is written after the
+     stock lands, once the booking is known to have succeeded.
+     A half-made roll is graded against its parent product's spec — it is the
+     same web, measured before it is slit. */
+  const gate = LAB.finishedStockGate(recipeOwnerId, body, data);
+  if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
+
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
   const Y = bom.yield || 1;
   const by = user.username;
@@ -726,13 +826,47 @@ function produceFinished(user, body) {
   if (body.thicknessMM != null && body.thicknessMM !== "") patch.thicknessMM = +body.thicknessMM || null;
   if (body.gsm != null && body.gsm !== "") patch.gsm = +body.gsm || null;
   if (Object.keys(patch).length) repo.putItem(Object.assign({}, item, patch));
+
+  /* the batch's certificate, now that the stock is really in. Readings taken
+     on the floor are the PRODUCTION set; the lab incharge adds theirs to the
+     same document later, exactly as for a coated work order. */
+  let labReport = null;
+  if (gate.values) {
+    labReport = LAB.createReport({
+      productId: gate.product.id, refNo: gate.refNo, source: "production",
+      values: gate.values,
+      testedBy: body.testedBy != null ? String(body.testedBy) : (user.name || user.username),
+    }, user);
+  }
+
   return {
     ok: true, ref,
     produced: { itemId: item.id, name: item.name, qty, uom: item.uom || "", wh: warehouse.id, whName: warehouse.name },
     // how the run was met: off the shelf vs actually made from the recipe
     fromStock: { fgQty: fromStock.fgQty, wipQty: fromStock.wipQty, makeQty },
     consumed,
+    batchNo: gate.refNo || null,
+    labReport: labReport ? { id: labReport.id, result: labReport.prodResult } : null,
   };
+}
+
+/**
+ * What the lab asks for before a given product can be booked into store.
+ * The form calls this to build its readings block; it never carries the spec
+ * limits, so nobody can tune a measurement until it passes.
+ */
+function finishedStockLabSheet(user, itemId) {
+  if (!user) throw err("Not authenticated", 401);
+  if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
+  const data = fullState();
+  const item = (data.items || []).find((i) => i.id === itemId);
+  if (!item) throw err("Unknown product", 400);
+  const ownerId = item.cat === "WIP" ? (item.stageOf || "") : item.id;
+  const g = LAB.finishedStockGate(ownerId, {}, data);
+  return { itemId: item.id, recipeOwnerId: ownerId, required: g.required,
+    product: g.product ? { id: g.product.id, code: g.product.code, name: g.product.name,
+      refMode: g.product.refMode || "batch" } : null,
+    params: g.params };
 }
 
 /* ============================================================
@@ -988,4 +1122,5 @@ function createAdhocProduction(user, body) {
 
 module.exports = { advance, advanceAll, createWorkOrder, updateWorkOrder, produceFinished, recordExcessMaterial,
   previewWorkOrder, resumeWorkOrder, maxMakeable, shortageFor,
+  labSheet, recordLabReading, finishedStockLabSheet,
   updateWorkOrderStatus, returnStock, createAdhocProduction, ACTIONS };
