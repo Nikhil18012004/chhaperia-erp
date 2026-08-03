@@ -309,10 +309,13 @@ function buildSeed() {
   ];
   const leadSources = ["Exhibition (Wire India)", "Website Enquiry", "Referral", "Cold Call", "Existing Customer", "Trade Directory"];
   const leadOwners = ["Sales Desk", "Marketing Desk"];
-  const actTypes = ["Call", "Email", "Meeting", "Site Visit", "Quotation Sent"];
+  const actTypes = ["Call", "Email", "Meeting", "Site Visit", "Sample Sent", "Quotation Sent"];
   const lostReasons = ["Price too high", "Lost to competitor", "Project delayed", "Spec mismatch", "No budget"];
-  const stages = ["New", "Contacted", "Quoted", "Won", "Lost"];
-  const stageWeights = [22, 25, 28, 15, 10]; // rough realistic distribution
+  const couriers = ["Blue Dart", "DTDC", "Professional Couriers", "Hand delivered", "Gati"];
+  // Sample sits between Contacted and Quoted: the trial reel goes out before
+  // any price does, so a real pipeline always has leads parked there
+  const stages = ["New", "Contacted", "Sample", "Quoted", "Won", "Lost"];
+  const stageWeights = [20, 20, 17, 21, 13, 9]; // rough realistic distribution
 
   function weightedStage(){
     let r = ri(1, 100), acc = 0;
@@ -334,7 +337,7 @@ function buildSeed() {
     // build a short activity history appropriate to the stage
     const reached = stages.indexOf(stage);
     const activities = [];
-    const baseTypes = ["Call", "Email", "Meeting", "Quotation Sent"];
+    const baseTypes = ["Call", "Email", "Meeting", "Sample Sent", "Quotation Sent"];
     const nAct = Math.max(1, Math.min(reached + ri(0, 1), 4));
     for (let a = 0; a < nAct; a++){
       activities.push({
@@ -363,6 +366,18 @@ function buildSeed() {
     };
 
     // stage-specific fields
+    // The trial reel exists from the Sample stage onward — a lead that died at
+    // Contacted never got one, which is why Lost is not in this list.
+    if (stage === "Sample" || stage === "Quoted" || stage === "Won"){
+      lead.sample = {
+        product: fg.id, productName: fg.name, qty: ri(1, 5), uom: fg.uom || "KG",
+        sentDate: daysAgo(Math.max(0, createdAgo - ri(3, 10))),
+        courier: pick(couriers), awb: "AWB" + ri(100000, 999999),
+        // still out at the Sample stage; anything past it was cleared to quote
+        verdict: stage === "Sample" ? pick(["Awaiting feedback", "Awaiting feedback", "Approved"]) : "Approved",
+        note: "Trial reel for line qualification",
+      };
+    }
     if (stage === "Quoted" || stage === "Won" || stage === "Lost"){
       lead.quotedValue = Math.round(value * rf(0.9, 1.05));
       lead.quoteDate = daysAgo(Math.max(0, createdAgo - ri(2, 8)));

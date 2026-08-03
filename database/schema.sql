@@ -159,7 +159,9 @@ CREATE TABLE IF NOT EXISTS leads (
   id             TEXT PRIMARY KEY,
   company        TEXT NOT NULL,
   contact        TEXT,
-  stage          TEXT,                 -- New|Contacted|Quoted|Won|Lost
+  stage          TEXT,                 -- New|Contacted|Sample|Quoted|Won|Lost
+                                       -- Sample = a trial reel is with the
+                                       -- prospect; they price only after it runs
   value          REAL DEFAULT 0,       -- estimated deal value (₹)
   owner          TEXT,
   created        TEXT,

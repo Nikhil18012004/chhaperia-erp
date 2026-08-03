@@ -384,7 +384,7 @@
 
   M.production = { title:"Production", sub:"Work orders & material consumption", render(root, params){
     let tab="active";
-    let filter={from:"", to:""};
+    let filter={from:"", to:"", q:""};
     root.appendChild(pageHead("Production Control","Each stage consumes its materials and hands the job to the next stage; nothing is booked into store on the way",[
       // the floor has this in its own panel — office/admin get it here too
       h("button",{class:"btn",onclick:()=>finishedStockForm(),html:"➕ Add to Finished Stock"}),
@@ -411,6 +411,7 @@
     ]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
+      MW.searchInput("Search WO no., product, code, stage, line…", v=>{filter.q=v.toLowerCase().trim();draw();}),
       MW.dateRange(filter, draw, {label:"Start Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"prodCount"}))
     ]));
@@ -418,9 +419,23 @@
 
     function segBtn(label,key){ const b=h("button",{class:tab===key?"on":"",text:label,onclick:()=>{tab=key;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
 
+    /* The floor calls a job by its number, the office by the product, and a
+       supervisor by the line or the stage it is sitting on — one box takes all
+       three, plus the family code the shop drawings carry. */
+    function woMatch(w){
+      if(!filter.q) return true;
+      const it=ENG.item(w.itemId)||{};
+      // the stage the row SHOWS, not a raw key — "slitting" has to match what
+      // the Stage column reads
+      const cur=curStage(w)||{};
+      const hay=[w.id, it.name, w.itemId, it.typeCode, U.familyCode(it.typeCode,it.thicknessMM),
+        STAGE_LABEL[cur.key]||cur.name, w.status, w.line, w.date, w.due];
+      return hay.filter(Boolean).join(" ").toLowerCase().includes(filter.q);
+    }
+
     function draw(){
       let data = tab==="active"?active : tab==="done"?done : wos;
-      data=data.filter(w=>MW.inDateRange(w.date, filter));
+      data=data.filter(w=>woMatch(w)&&MW.inDateRange(w.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
       const c=UI.$("#prodCount"); if(c) c.textContent=data.length+" work orders";
       host.innerHTML="";
@@ -452,7 +467,7 @@
         // the action buttons pull further left and the board fits a single view
         {key:"progress",label:"Progress",render:r=>`<div style="min-width:86px;display:flex;flex-direction:column;gap:6px;align-items:flex-start"><div style="width:100%">${meter(r.progress, r.progress>66?"ok":r.progress>33?"warn":"danger")}<div class="muted" style="font-size:11px;margin-top:3px">${r.progress}%</div></div>${badge((r.status==="Completed"||r.status==="Dispatched")?"ok":r.status==="In Production"||r.status==="In Progress"?"info":"warn",r.status)}</div>`,sort:r=>r.progress},
         {key:"act",label:"",noSort:true,render:r=>woActions(r)},
-      ],{onRow:r=>woDetail(r),empty:"No work orders",
+      ],{onRow:r=>woDetail(r),empty:filter.q?"No work order matches that search":"No work orders",
         /* the whole row goes light red while material is owed, so a pending
            order cannot be mistaken for one that is simply in progress */
         rowClass:r=>((+r.pendingQty||0)>0 ? "wo-pending" : ""),

@@ -87,7 +87,7 @@
   /* ============== PROCUREMENT ============== */
   M.purchase = { title:"Procurement", sub:"Purchase orders & receipts", render(root, params){
     let tab="open";
-    let filter={from:"", to:""};
+    let filter={from:"", to:"", q:""};
     root.appendChild(pageHead("Procurement","Auto-suggested reorders, open POs and goods receipts that post straight to stock",[
       h("button",{class:"btn",onclick:reorderWizard,html:"🪄 Reorder Suggestions"}),
       h("button",{class:"btn primary",onclick:()=>poForm(params&&params.create),html:"＋ New PO"})
@@ -105,14 +105,25 @@
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open / Partial","open"),segBtn("Received","done"),segBtn("All","all")]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
+      MW.searchInput("Search PO no., supplier, item, status…", v=>{filter.q=v.toLowerCase().trim();draw();}),
       MW.dateRange(filter, draw, {label:"Order Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"poCount"}))
     ]));
     const host=h("div"); root.appendChild(host);
     function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=k;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
+    /* One box across everything a buyer looks a PO up by: the number, the
+       supplier, the status, the dates, and the items sitting on the order —
+       so "mica" finds the POs carrying mica without knowing their numbers. */
+    function poMatch(p){
+      if(!filter.q) return true;
+      const hay=[p.id, ENG.sup(p.supplierId), p.status, p.refNo, p.date, p.eta]
+        .concat(p.lines.map(l=>l.itemId))
+        .concat(p.lines.map(l=>(ENG.item(l.itemId)||{}).name));
+      return hay.filter(Boolean).join(" ").toLowerCase().includes(filter.q);
+    }
     function draw(){
       let data = tab==="open"?open : tab==="done"?pos.filter(p=>p.status==="Received") : pos;
-      data=data.filter(p=>MW.inDateRange(p.date, filter));
+      data=data.filter(p=>poMatch(p)&&MW.inDateRange(p.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
       const c=UI.$("#poCount"); if(c) c.textContent=data.length+" purchase orders";
       host.innerHTML="";
@@ -129,7 +140,7 @@
           printBtn("po",r),
           r.status!=="Received"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();receivePO(r);},text:"Receive"}):h("span",{class:"muted",text:"✓"})
         ])},
-      ],{onRow:r=>poDetail(r),empty:"No purchase orders"}));
+      ],{onRow:r=>poDetail(r),empty:filter.q?"No purchase order matches that search":"No purchase orders"}));
     }
     draw();
     // ⌘K "New Purchase Order" lands here with openNew; consume the flag so a
@@ -549,7 +560,7 @@
   /* ============== SALES ============== */
   M.sales = { title:"Sales Orders", sub:"Demand & dispatch", render(root, params){
     let tab="open";
-    let filter={from:"", to:""};
+    let filter={from:"", to:"", q:""};
     root.appendChild(pageHead("Sales Orders","Customer demand, ATP checks and dispatches that deduct finished goods automatically",[
       h("button",{class:"btn primary",onclick:()=>soForm(),html:"＋ New Sales Order"})
     ]));
@@ -566,14 +577,26 @@
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open","open"),segBtn("Dispatched","done"),segBtn("All","all")]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
+      MW.searchInput("Search SO no., customer, item, batch, invoice…", v=>{filter.q=v.toLowerCase().trim();draw();}),
       MW.dateRange(filter, draw, {label:"Order Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"soCount"}))
     ]));
     const host=h("div"); root.appendChild(host);
     function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=k;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
+    /* Sales looks an order up by whatever the caller quotes on the phone: the
+       SO number, the customer, their own PO number, the invoice, or the batch
+       running against it — so all of them feed the one box. */
+    function soMatch(s){
+      if(!filter.q) return true;
+      const hay=[s.id, ENG.custName(s.customerId), s.status, s.priority, s.invoiceNo, s.custPoNo, s.date, s.promised]
+        .concat(s.lines.map(l=>l.itemId))
+        .concat(s.lines.map(l=>(ENG.item(l.itemId)||{}).name))
+        .concat(s.lines.map(l=>l.batch?batchNo(l.batch):null));
+      return hay.filter(Boolean).join(" ").toLowerCase().includes(filter.q);
+    }
     function draw(){
       let data = tab==="open"?open : tab==="done"?sos.filter(s=>s.status==="Dispatched") : sos;
-      data=data.filter(s=>MW.inDateRange(s.date, filter));
+      data=data.filter(s=>soMatch(s)&&MW.inDateRange(s.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
       const c=UI.$("#soCount"); if(c) c.textContent=data.length+" sales orders";
       host.innerHTML="";
@@ -591,7 +614,7 @@
           printBtn("so",r),
           r.status!=="Dispatched"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();dispatchSO(r);},text:"Dispatch"}):h("span",{class:"muted",text:"✓"})
         ])},
-      ],{onRow:r=>soDetail(r),empty:"No sales orders"}));
+      ],{onRow:r=>soDetail(r),empty:filter.q?"No sales order matches that search":"No sales orders"}));
     }
     draw();
     if(params&&params.openNew){ params.openNew=false; soForm(); }
@@ -959,34 +982,59 @@
     ]));
     const spend=ENG.purchaseBySupplier(365);
     const spendMap={}; spend.forEach(s=>spendMap[s.id]=s.value);
-    const grid=h("div",{class:"grid cols-2"});
-    ENG.data.suppliers.forEach(s=>{
-      const items=ENG.data.items.filter(i=>i.supplierId===s.id);
-      grid.appendChild(h("div",{class:"card hover"},[
-        h("div",{class:"flex between aic"},[
-          h("div",{},[h("h3",{style:"font-size:15px",text:s.name}),h("div",{class:"muted",style:"font-size:12px",text:[s.city,s.country].filter(Boolean).join(", ")+" · "+(s.category||"General")})]),
-          h("div",{class:"avatar",style:"background:linear-gradient(135deg,var(--c"+((ENG.data.suppliers.indexOf(s)%8)+1)+"),var(--accent-600))",text:s.name.slice(0,2).toUpperCase()})
-        ]),
-        h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
-          stat("Rating","★ "+s.rating), stat("On-Time",s.onTime+"%"), stat("Terms",s.terms),
-        ]),
-        s.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+s.gst+(partyStateCode(s)?" · "+GST.stateName(partyStateCode(s)):"")}):null,
-        h("div",{style:"margin-bottom:10px"},[ h("div",{class:"flex between",style:"font-size:11px;margin-bottom:4px"},[h("span",{class:"muted",text:"On-time delivery"}),h("span",{class:"muted",text:s.onTime+"%"})]), h("div",{html:meter(s.onTime,s.onTime>92?"ok":s.onTime>85?"warn":"danger")}) ]),
-        h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
-          h("span",{class:"muted",text:items.length+" items supplied"}),
-          h("span",{class:"strong",text:ENG.money(spendMap[s.id]||0)+" / yr"})
-        ]),
-        h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
-          "👤 "+(s.contact||"—")+" · ", MW.phoneCell(s.phone),
-          ...(s.email ? [" · ", MW.emailLink(s.email,{mode:"compose"})] : []),
-        ]),
-        h("div",{class:"flex gap",style:"margin-top:12px;padding-top:10px;border-top:1px solid var(--line);justify-content:flex-end"},[
-          // delete lives inside the Edit dialog, not on the card
-          h("button",{class:"btn sm ghost",onclick:()=>supplierForm(s),text:"✎ Edit"}),
-        ])
-      ]));
-    });
-    root.appendChild(grid);
+    let q="";
+    root.appendChild(h("div",{class:"toolbar"},[
+      MW.searchInput("Search supplier, city, category, GSTIN, contact, item…", v=>{q=v.toLowerCase().trim();draw();}),
+      h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"supCount"}))
+    ]));
+    const host=h("div"); root.appendChild(host);
+    /* A vendor is looked up by name, but just as often by what they supply
+       ("who sells us mica?") or by where they are — so the items they feed us
+       are part of the haystack, not just the card's own fields. */
+    function supMatch(s){
+      if(!q) return true;
+      const hay=[s.name, s.city, s.country, s.category, s.gst, s.contact, s.phone, s.email, s.terms, s.rating]
+        .concat(ENG.data.items.filter(i=>i.supplierId===s.id).map(i=>i.name+" "+i.id));
+      return hay.filter(Boolean).join(" ").toLowerCase().includes(q);
+    }
+    function draw(){
+      const list=ENG.data.suppliers.filter(supMatch);
+      const cnt=UI.$("#supCount"); if(cnt) cnt.textContent=list.length+(list.length===1?" supplier":" suppliers");
+      host.innerHTML="";
+      if(!list.length){
+        host.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"🔍"}),h("div",{text:"No supplier matches that search"})]));
+        return;
+      }
+      const grid=h("div",{class:"grid cols-2"});
+      list.forEach(s=>{
+        const items=ENG.data.items.filter(i=>i.supplierId===s.id);
+        grid.appendChild(h("div",{class:"card hover"},[
+          h("div",{class:"flex between aic"},[
+            h("div",{},[h("h3",{style:"font-size:15px",text:s.name}),h("div",{class:"muted",style:"font-size:12px",text:[s.city,s.country].filter(Boolean).join(", ")+" · "+(s.category||"General")})]),
+            h("div",{class:"avatar",style:"background:linear-gradient(135deg,var(--c"+((ENG.data.suppliers.indexOf(s)%8)+1)+"),var(--accent-600))",text:s.name.slice(0,2).toUpperCase()})
+          ]),
+          h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
+            stat("Rating","★ "+s.rating), stat("On-Time",s.onTime+"%"), stat("Terms",s.terms),
+          ]),
+          s.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+s.gst+(partyStateCode(s)?" · "+GST.stateName(partyStateCode(s)):"")}):null,
+          h("div",{style:"margin-bottom:10px"},[ h("div",{class:"flex between",style:"font-size:11px;margin-bottom:4px"},[h("span",{class:"muted",text:"On-time delivery"}),h("span",{class:"muted",text:s.onTime+"%"})]), h("div",{html:meter(s.onTime,s.onTime>92?"ok":s.onTime>85?"warn":"danger")}) ]),
+          h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
+            h("span",{class:"muted",text:items.length+" items supplied"}),
+            h("span",{class:"strong",text:ENG.money(spendMap[s.id]||0)+" / yr"})
+          ]),
+          h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
+            "👤 "+(s.contact||"—")+" · ", MW.phoneCell(s.phone),
+            ...(s.email ? [" · ", MW.emailLink(s.email,{mode:"compose"})] : []),
+          ]),
+          h("div",{class:"flex gap",style:"margin-top:12px;padding-top:10px;border-top:1px solid var(--line);justify-content:flex-end"},[
+            // delete lives inside the Edit dialog, not on the card
+            h("button",{class:"btn sm ghost",onclick:()=>supplierForm(s),text:"✎ Edit"}),
+          ])
+        ]));
+      });
+      host.appendChild(grid);
+    }
+    draw();
   }};
 
   /* ============== CUSTOMERS ============== */
@@ -995,35 +1043,60 @@
       MW.excelMenu("customers"),
       h("button",{class:"btn primary",onclick:()=>customerForm(),html:"＋ New Customer"})
     ]));
-    const grid=h("div",{class:"grid cols-2"});
-    ENG.data.customers.forEach(c=>{
-      const orders=ENG.data.salesorders.filter(s=>s.customerId===c.id);
-      const total=orders.reduce((s,o)=>s+o.value,0);
-      const open=orders.filter(o=>o.status!=="Dispatched").length;
-      grid.appendChild(h("div",{class:"card hover"},[
-        h("div",{class:"flex between aic"},[
-          h("div",{},[h("h3",{style:"font-size:15px",text:c.name}),h("div",{class:"muted",style:"font-size:12px",text:[c.city,c.segment].filter(Boolean).join(" · ")})]),
-          h("span",{html:badge(c.rating==="A"?"ok":c.rating==="B"?"warn":"mut","Grade "+c.rating)})
-        ]),
-        h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
-          stat("Orders",orders.length), stat("Open",open), stat("Since",c.since),
-        ]),
-        c.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+c.gst+(partyStateCode(c)?" · "+GST.stateName(partyStateCode(c)):"")}):null,
-        h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
-          h("span",{class:"muted",text:"Lifetime value"}), h("span",{class:"strong",text:ENG.money(total)})
-        ]),
-        h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
-          "👤 "+(c.contact||"—")+" · ", MW.phoneCell(c.phone),
-          ...(c.email ? [" · ", MW.emailLink(c.email,{mode:"compose"})] : []),
-          " · "+c.terms,
-        ]),
-        h("div",{class:"flex gap",style:"margin-top:12px;padding-top:10px;border-top:1px solid var(--line);justify-content:flex-end"},[
-          // delete lives inside the Edit dialog, not on the card
-          h("button",{class:"btn sm ghost",onclick:()=>customerForm(c),text:"✎ Edit"}),
-        ])
-      ]));
-    });
-    root.appendChild(grid);
+    let q="";
+    root.appendChild(h("div",{class:"toolbar"},[
+      MW.searchInput("Search customer, city, segment, GSTIN, contact…", v=>{q=v.toLowerCase().trim();draw();}),
+      h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"custCount"}))
+    ]));
+    const host=h("div"); root.appendChild(host);
+    /* Grade and SO number are in here too: "grade a" narrows to the key
+       accounts, and pasting an SO number finds whose order it is. */
+    function custMatch(c){
+      if(!q) return true;
+      const hay=[c.name, c.city, c.segment, c.gst, c.contact, c.phone, c.email, c.terms, c.since,
+        c.rating?"grade "+c.rating:null]
+        .concat(ENG.data.salesorders.filter(s=>s.customerId===c.id).map(s=>s.id));
+      return hay.filter(Boolean).join(" ").toLowerCase().includes(q);
+    }
+    function draw(){
+      const list=ENG.data.customers.filter(custMatch);
+      const cnt=UI.$("#custCount"); if(cnt) cnt.textContent=list.length+(list.length===1?" customer":" customers");
+      host.innerHTML="";
+      if(!list.length){
+        host.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"🔍"}),h("div",{text:"No customer matches that search"})]));
+        return;
+      }
+      const grid=h("div",{class:"grid cols-2"});
+      list.forEach(c=>{
+        const orders=ENG.data.salesorders.filter(s=>s.customerId===c.id);
+        const total=orders.reduce((s,o)=>s+o.value,0);
+        const open=orders.filter(o=>o.status!=="Dispatched").length;
+        grid.appendChild(h("div",{class:"card hover"},[
+          h("div",{class:"flex between aic"},[
+            h("div",{},[h("h3",{style:"font-size:15px",text:c.name}),h("div",{class:"muted",style:"font-size:12px",text:[c.city,c.segment].filter(Boolean).join(" · ")})]),
+            h("span",{html:badge(c.rating==="A"?"ok":c.rating==="B"?"warn":"mut","Grade "+c.rating)})
+          ]),
+          h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
+            stat("Orders",orders.length), stat("Open",open), stat("Since",c.since),
+          ]),
+          c.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+c.gst+(partyStateCode(c)?" · "+GST.stateName(partyStateCode(c)):"")}):null,
+          h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
+            h("span",{class:"muted",text:"Lifetime value"}), h("span",{class:"strong",text:ENG.money(total)})
+          ]),
+          h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
+            "👤 "+(c.contact||"—")+" · ", MW.phoneCell(c.phone),
+            ...(c.email ? [" · ", MW.emailLink(c.email,{mode:"compose"})] : []),
+            " · "+c.terms,
+          ]),
+          h("div",{class:"flex gap",style:"margin-top:12px;padding-top:10px;border-top:1px solid var(--line);justify-content:flex-end"},[
+            // delete lives inside the Edit dialog, not on the card
+            h("button",{class:"btn sm ghost",onclick:()=>customerForm(c),text:"✎ Edit"}),
+          ])
+        ]));
+      });
+      host.appendChild(grid);
+    }
+    draw();
   }};
 
   function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }

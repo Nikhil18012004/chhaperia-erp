@@ -260,9 +260,12 @@
   function tabAttendance(host, params) {
     const now = DB.helpers.today();
     let period = (params && params.period) || `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
-    let dept = "all";
+    let dept = "all", q = "";
     const bar = h("div", { class: "toolbar", style: "flex-wrap:wrap;gap:10px" }, [
       U.field ? h("div", { class: "field", style: "margin:0" }, [h("label", { text: "Month" }), h("div", {}, h("input", { class: "input", type: "month", value: period, style: "max-width:170px", onchange: (e) => { period = e.target.value; draw(); } }))]) : null,
+      // a full muster is a wall of names; searching gets one worker's row on
+      // screen without scrolling past everyone else
+      MW.searchInput("Search worker, code, designation…", (v) => { q = v.toLowerCase().trim(); draw(); }),
       MW.select([{ value: "all", label: "All Departments" }, ...DEPTS.map((d) => ({ value: d, label: cap(d) }))], (v) => { dept = v; draw(); }),
       h("button", { class: "btn", onclick: () => manualEntry(), html: "✎ Mark Attendance" }),
       h("button", { class: "btn primary", onclick: () => simulate(), html: "🔌 Simulate Biometric Punches" }),
@@ -275,7 +278,8 @@
       grid.innerHTML = "";
       const [y, m] = period.split("-").map(Number);
       const days = new Date(y, m, 0).getDate();
-      const list = workers().filter((w) => w.active !== false && (dept === "all" || w.dept === dept));
+      const list = workers().filter((w) => w.active !== false && (dept === "all" || w.dept === dept)
+        && (!q || (w.name + " " + w.id + " " + (w.designation || "") + " " + (w.dept || "") + " " + (w.deviceUid || "")).toLowerCase().includes(q)));
       const attMap = {}; attendance().forEach((a) => { attMap[a.workerId + ":" + a.date] = a; });
       const WD = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
       // ---- desktop/tablet: scrolling matrix (hidden ≤640px) ----
@@ -292,8 +296,9 @@
       // ---- phone: one card per worker, name header + scrollable day strip ----
       const mob = h("div", { class: "muster-mobile" });
       if (!list.length) {
-        tbody.appendChild(h("tr", {}, h("td", { colspan: days + 3 }, h("div", { class: "empty", style: "padding:24px", text: "No workers" }))));
-        mob.appendChild(h("div", { class: "empty", style: "padding:36px 20px", text: "No workers" }));
+        const none = q ? "No worker matches that search" : "No workers";
+        tbody.appendChild(h("tr", {}, h("td", { colspan: days + 3 }, h("div", { class: "empty", style: "padding:24px", text: none }))));
+        mob.appendChild(h("div", { class: "empty", style: "padding:36px 20px", text: none }));
       }
       list.forEach((w) => {
         const tr = h("tr");

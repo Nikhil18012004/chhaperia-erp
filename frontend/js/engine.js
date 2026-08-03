@@ -310,9 +310,14 @@
   /* ============================================================
      CRM — pipeline analytics, weighted forecast, follow-up reminders
      ============================================================ */
-  const STAGES = ["New","Contacted","Quoted","Won","Lost"];
+  /* "Sample" sits between Contacted and Quoted: a cable-tape buyer almost
+     never takes a price before running our tape on their line, so the sample
+     that goes out ahead of the quotation is its own step of the pipeline. */
+  const STAGES = ["New","Contacted","Sample","Quoted","Won","Lost"];
   // probability each open stage eventually closes (for weighted forecast)
-  const STAGE_PROB = { New:0.15, Contacted:0.35, Quoted:0.6, Won:1, Lost:0 };
+  // a lead that asked for and received a sample is warmer than one merely
+  // contacted, but colder than one already holding a price
+  const STAGE_PROB = { New:0.15, Contacted:0.35, Sample:0.45, Quoted:0.6, Won:1, Lost:0 };
 
   function leads(){ return D.leads || []; }
 

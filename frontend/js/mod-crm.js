@@ -16,11 +16,14 @@
   const STAGE_META = {
     New:       { color: "var(--c2)",  ic: "✨" },
     Contacted: { color: "var(--c4)",  ic: "📞" },
+    Sample:    { color: "var(--c7)",  ic: "📦" },
     Quoted:    { color: "var(--c5)",  ic: "📄" },
     Won:       { color: "var(--ok)",  ic: "🏆" },
     Lost:      { color: "var(--danger)", ic: "✕" },
   };
-  const ACT_TYPES = ["Call", "Email", "Meeting", "Quotation Sent", "Site Visit", "Note"];
+  const ACT_TYPES = ["Call", "Email", "Meeting", "Sample Sent", "Quotation Sent", "Site Visit", "Note"];
+  // how a sample lands once the customer has run it — drives the next move
+  const SAMPLE_VERDICTS = ["Awaiting feedback", "Approved", "Rejected", "Rework needed"];
   const SOURCES = ["Exhibition (Wire India)", "Website Enquiry", "Referral", "Cold Call", "Existing Customer", "Trade Directory"];
   const money = (n) => ENG.money(n);
   const trim = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
@@ -48,7 +51,9 @@
     root.appendChild(followUpBlock(due, overdueList, todayList));
 
     /* ============ PRIORITY 2 — headline numbers, each drills down ============ */
-    const openStages = ["New", "Contacted", "Quoted"];
+    // derived, not listed: adding a stage to ENG.STAGES must not silently drop
+    // its leads out of the open-pipeline breakdown
+    const openStages = ENG.STAGES.filter((s) => s !== "Won" && s !== "Lost");
     const winPct = stats.winRate || 0;
 
     root.appendChild(h("div", { class: "crm-grid" }, [
@@ -288,9 +293,12 @@
         ]),
         (l.stage !== "Won" && l.stage !== "Lost")
           ? h("div", { class: "flex gap" }, [
+              // one tap from the drawer to the despatch, without going via
+              // Move stage — sending a sample is the common next move here
+              !l.sample ? h("button", { class: "btn sm", onclick: () => sampleForm(l), html: "📦 Send sample" }) : null,
               h("button", { class: "btn sm", onclick: () => moveStage(l), html: "➜ Move stage" }),
               h("button", { class: "btn sm primary", onclick: () => logActivity(l), html: "＋ Log activity" }),
-            ])
+            ].filter(Boolean))
           : null,
       ]),
 
@@ -309,6 +317,8 @@
         l.customerId ? ["Linked Customer", ENG.custName(l.customerId)] : null,
         l.salesOrderId ? ["Sales Order", l.salesOrderId + " →"] : null,
       ].filter(Boolean)),
+
+      l.sample ? sampleBlock(l) : null,
 
       l.notes ? h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" },
         [h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px", text: "Notes" }),
@@ -340,7 +350,6 @@
 
   /* ---- move to next stage ---- */
   function moveStage(l) {
-    const open = ["New", "Contacted", "Quoted"];
     const body = h("div", { class: "flex wrap gap" }, ENG.STAGES.map((st) => {
       const m = STAGE_META[st] || {};
       return h("button", { class: "btn" + (st === l.stage ? " primary" : ""),
@@ -350,6 +359,9 @@
     const mo = modal({ title: "Move " + l.company, sub: "Current: " + l.stage, body });
   }
   function applyStage(l, st) {
+    // Sample is the one stage that carries a physical despatch, so the move
+    // asks what went out instead of leaving it to be remembered later
+    if (st === "Sample") { sampleForm(l); return; }
     l.stage = st;
     if (st === "Won" || st === "Lost") l.nextFollowUp = null;
     else if (!l.nextFollowUp || l.nextFollowUp < todayISO()) l.nextFollowUp = DB.helpers.daysAhead(3);
@@ -488,6 +500,100 @@
   }
 
   /* ============================================================
+     SAMPLE — the reel that goes out BEFORE any price does
+     A cable maker will not price our tape until they have run it on
+     their own line, so the sample despatch is its own pipeline stage.
+     Recording it here means the chasing call has the product, the
+     quantity, the courier and the date to hand, and the verdict that
+     comes back decides whether the lead earns a quotation.
+     ============================================================ */
+  function sampleForm(l) {
+    const s = l.sample || {};
+    const fgs = ENG.data.items.filter((i) => i.cat === "FG");
+    const already = !!l.sample;
+    const chosen = s.product || l.product || (fgs[0] && fgs[0].id);
+    const uomOf = (id) => (ENG.item(id) || {}).uom || "kg";
+
+    const body = h("div", { class: "form-grid" }, [
+      field("Sample Product *", selectHTML("s_product",
+        fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })),
+        chosen)),
+      field("Quantity", `<div class="flex aic gap"><input class="input" id="s_qty" type="number" step="0.01" min="0" value="${s.qty != null ? s.qty : 1}">`
+        + `<span class="chip" id="s_uom">${esc(uomOf(chosen))}</span></div>`),
+      field("Sent On", `<input class="input" id="s_sent" type="date" value="${s.sentDate || todayISO()}">`),
+      field("Courier / Carrier", `<input class="input" id="s_courier" value="${esc(s.courier || "")}" placeholder="e.g. Blue Dart / hand delivered">`),
+      field("Docket / AWB No.", `<input class="input" id="s_awb" value="${esc(s.awb || "")}" placeholder="Tracking reference">`),
+      field("Verdict", selectHTML("s_verdict", SAMPLE_VERDICTS.map((v) => ({ v, l: v })), s.verdict || "Awaiting feedback")),
+      field("Chase feedback on", `<input class="input" id="s_next" type="date" value="${(already && l.nextFollowUp) || DB.helpers.daysAhead(7)}">`),
+      field("Remarks", `<textarea class="input" id="s_note" placeholder="Width / thickness asked for, trial line, who is testing it…">${esc(s.note || "")}</textarea>`, "full"),
+    ]);
+
+    const mo = modal({ title: already ? "Sample Despatch" : "Send Sample", sub: l.company, body,
+      foot: [
+        h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+        h("button", { class: "btn primary", onclick: save, text: already ? "Save Sample" : "Record Sample & Move" }),
+      ] });
+
+    // the unit belongs to the product, so it follows the product picker
+    const prodSel = UI.$("#s_product");
+    if (prodSel) prodSel.onchange = () => { const u = UI.$("#s_uom"); if (u) u.textContent = uomOf(prodSel.value); };
+
+    function save() {
+      const pid = UI.$("#s_product").value;
+      const fg = ENG.item(pid) || {};
+      const sentDate = UI.$("#s_sent").value || todayISO();
+      const sample = {
+        product: pid, productName: fg.name || "", qty: +UI.$("#s_qty").value || 0,
+        uom: fg.uom || "kg", sentDate,
+        courier: UI.$("#s_courier").value.trim(), awb: UI.$("#s_awb").value.trim(),
+        verdict: UI.$("#s_verdict").value, note: UI.$("#s_note").value.trim(),
+      };
+      // only the first despatch writes a timeline entry; later edits just
+      // correct the record instead of stacking up duplicate "Sample Sent" rows
+      const first = !l.sample;
+      l.sample = sample;
+      l.stage = "Sample";
+      l.nextFollowUp = UI.$("#s_next").value || DB.helpers.daysAhead(7);
+      if (first) {
+        l.activities = l.activities || [];
+        l.activities.push({ date: sentDate, type: "Sample Sent",
+          note: [ENG.num(sample.qty) + " " + sample.uom, sample.productName].filter(Boolean).join(" — ")
+            + (sample.courier ? " · via " + sample.courier : "")
+            + (sample.awb ? " (" + sample.awb + ")" : ""),
+          by: l.owner || "Sales Desk" });
+      }
+      mo.close();
+      toast(first ? l.company + " → Sample" : "Sample details updated", { type: "ok" });
+      App.saveDelta(() => DB.leads.update(l.id, { stage: "Sample", sample,
+        nextFollowUp: l.nextFollowUp, activities: l.activities }));
+      App.go("crm");
+    }
+  }
+
+  /* the sample card inside the lead drawer — what went out and how it landed */
+  function sampleBlock(l) {
+    const s = l.sample;
+    const tone = { Approved: "ok", Rejected: "danger", "Rework needed": "warn" }[s.verdict] || "info";
+    return h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
+      h("div", { class: "flex between aic wrap gap", style: "margin-bottom:8px" }, [
+        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "📦 Sample Despatch" }),
+        h("div", { class: "flex aic gap" }, [
+          h("span", { html: badge(tone, s.verdict || "Awaiting feedback") }),
+          h("button", { class: "btn sm ghost", onclick: () => sampleForm(l), text: "✎ Update" }),
+        ]),
+      ]),
+      MW.dl([
+        ["Product", s.productName || s.product || "—"],
+        ["Quantity", s.qty ? ENG.num(s.qty) + " " + (s.uom || "kg") : "—"],
+        ["Sent On", s.sentDate || "—"],
+        ["Courier", s.courier || "—"],
+        ["Docket / AWB", s.awb || "—"],
+      ]),
+      s.note ? h("div", { style: "font-size:13px;line-height:1.5;margin-top:10px", text: s.note }) : null,
+    ]);
+  }
+
+  /* ============================================================
      CREATE / EDIT LEAD
      ============================================================ */
   function leadForm(existing) {
@@ -617,7 +723,9 @@
 
   /* weighted pipeline → how each stage contributes, with the funnel on top */
   function weightedDrill(byStage, stats) {
-    const open = ["New", "Contacted", "Quoted"];
+    // every open stage, in pipeline order — otherwise the segments shown stop
+    // adding up to the weighted total in the title
+    const open = ENG.STAGES.filter((s) => s !== "Won" && s !== "Lost");
     const funnel = h("div", { class: "crm-funnel" });
     open.forEach((st, i) => {
       const col = byStage[st] || { count: 0, value: 0, items: [] };
@@ -640,7 +748,7 @@
 
     const rows = open.map((st) => {
       const col = byStage[st] || { count: 0, value: 0 };
-      const p = ENG.STAGE_PROB ? ENG.STAGE_PROB[st] : { New: 0.15, Contacted: 0.35, Quoted: 0.6 }[st];
+      const p = ((ENG.STAGE_PROB || {})[st]) || { New: 0.15, Contacted: 0.35, Sample: 0.45, Quoted: 0.6 }[st] || 0;
       return h("div", { class: "crm-drill-row", style: "cursor:default" }, [
         h("span", { class: "d", style: "width:9px;height:9px;border-radius:50%;background:" + STAGE_META[st].color }),
         h("div", { style: "flex:1;min-width:0" }, [
@@ -855,10 +963,10 @@
       `</select>`;
   }
   function stageBadge(st) {
-    return { New: "info", Contacted: "warn", Quoted: "violet", Won: "ok", Lost: "danger" }[st] || "mut";
+    return { New: "info", Contacted: "warn", Sample: "info", Quoted: "violet", Won: "ok", Lost: "danger" }[st] || "mut";
   }
   function actIcon(t) {
-    return { Call: "📞", Email: "✉️", Meeting: "🤝", "Quotation Sent": "📄", "Site Visit": "🏭", Note: "📝" }[t] || "•";
+    return { Call: "📞", Email: "✉️", Meeting: "🤝", "Sample Sent": "📦", "Quotation Sent": "📄", "Site Visit": "🏭", Note: "📝" }[t] || "•";
   }
   /* tiny text prompt built on the modal system */
   function promptText(title, ph) {

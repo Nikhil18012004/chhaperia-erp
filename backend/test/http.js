@@ -227,6 +227,21 @@ async function run() {
   const lead = (await call("POST", "/leads", A, { company: "HTTP Test Co", value: 250000, product: fg })).d;
   ok("create lead 201", !!lead.id);
   ok("update lead stage", (await call("PATCH", "/leads/" + lead.id, A, { stage: "Quoted" })).d.stage === "Quoted");
+  /* The Sample stage sits between Contacted and Quoted — the trial reel that
+     goes out before any price does. Its despatch details ride in the lead's
+     doc JSON, so this checks the whole object survives the round-trip rather
+     than being dropped by the column-based upsert. */
+  const sampled = (await call("PATCH", "/leads/" + lead.id, A, {
+    stage: "Sample",
+    sample: { product: fg, qty: 3, uom: "KG", sentDate: "2026-08-03", courier: "Blue Dart",
+      awb: "AWB123456", verdict: "Awaiting feedback", note: "Trial reel" },
+  })).d;
+  ok("lead moves to the Sample stage", sampled.stage === "Sample");
+  ok("sample despatch details survive the round-trip",
+    sampled.sample && sampled.sample.courier === "Blue Dart" && sampled.sample.qty === 3
+    && sampled.sample.awb === "AWB123456" && sampled.sample.verdict === "Awaiting feedback");
+  ok("moving on from Sample keeps the sample record",
+    (await call("PATCH", "/leads/" + lead.id, A, { stage: "Quoted" })).d.sample.awb === "AWB123456");
   ok("delete lead 200", (await call("DELETE", "/leads/" + lead.id, A)).status === 200);
 
   /* ============================================================
