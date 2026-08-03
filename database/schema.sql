@@ -175,6 +175,26 @@ CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
 CREATE INDEX IF NOT EXISTS idx_leads_follow ON leads(next_follow_up);
 
 -- ============================================================
+--  APPOINTMENTS — the only DIARY entries the calendar stores.
+--  Everything else the calendar shows (PO ETAs, SO promised
+--  dates, work-order due dates, lead follow-ups, leave) is a
+--  date that already lives on its own record; the calendar
+--  derives those and stores nothing, so a date can never
+--  disagree with the document it belongs to.
+--  This table exists only for what has no home: the meeting,
+--  the call-back, the factory visit — a commitment made to a
+--  time rather than to an order.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS appointments (
+  id        TEXT PRIMARY KEY,            -- AP-0001
+  date      TEXT,                        -- ISO yyyy-mm-dd (promoted: read by date)
+  doc       TEXT NOT NULL                -- JSON: title,kind,time,endTime,owner,
+                                         --       leadId,customerId,supplierId,
+                                         --       location,notes,done,created
+);
+CREATE INDEX IF NOT EXISTS idx_appt_date ON appointments(date);
+
+-- ============================================================
 --  USERS — authentication & role-based access control (RBAC)
 --  roles: admin (full + user mgmt) | office (full app, no user
 --  mgmt) | supervisor (production only, money-free).

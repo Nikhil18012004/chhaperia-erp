@@ -31,6 +31,9 @@ function getState() {
   const suppliers = db.prepare("SELECT doc FROM suppliers").all().map((r) => P(r.doc));
   const customers = db.prepare("SELECT doc FROM customers").all().map((r) => P(r.doc));
   const transporters = db.prepare("SELECT doc FROM transporters").all().map((r) => P(r.doc));
+  // the date is a promoted column, so it wins over any stale copy in the doc
+  const appointments = db.prepare("SELECT id,date,doc FROM appointments").all()
+    .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, date: r.date }));
 
   // items: merge promoted columns back into the doc
   const items = db.prepare("SELECT * FROM items").all().map((r) => {
@@ -108,7 +111,7 @@ function getState() {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers, transporters,
-    movements, workorders, salesorders, purchaseorders, leads, settings,
+    movements, workorders, salesorders, purchaseorders, leads, appointments, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
     labProducts, labReports,
   };
@@ -539,6 +542,20 @@ function putTransporter(t) {
 }
 function deleteTransporter(id) { getDb().prepare("DELETE FROM transporters WHERE id=?").run(id); return { id }; }
 
+/* ---------- APPOINTMENTS (calendar diary entries) ---------- */
+function getAppointment(id) {
+  const a = getDb().prepare("SELECT id,date,doc FROM appointments WHERE id=?").get(id);
+  return a ? Object.assign({}, P(a.doc, {}), { id: a.id, date: a.date }) : null;
+}
+function putAppointment(a) {
+  const { id, date, ...rest } = a;
+  getDb().prepare(`INSERT INTO appointments(id,date,doc) VALUES(@id,@date,@doc)
+      ON CONFLICT(id) DO UPDATE SET date=excluded.date, doc=excluded.doc`)
+    .run({ id, date: date || null, doc: J(rest) });
+  return getAppointment(id);
+}
+function deleteAppointment(id) { getDb().prepare("DELETE FROM appointments WHERE id=?").run(id); return { id }; }
+
 /* ---------- LAB REPORTS (QC certificates + own product master) ---------- */
 function getLabProduct(id) {
   const r = getDb().prepare("SELECT doc FROM lab_products WHERE id=?").get(id);
@@ -733,6 +750,7 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   getSettings, categoryExists,
   getWarehouse, putWarehouse,
   getTransporter, putTransporter, deleteTransporter,
+  getAppointment, putAppointment, deleteAppointment,
   // HR
   getWorker, getWorkerByDevice, putWorker, deleteWorker,
   addPunch, punchesForDate, recentPunches,

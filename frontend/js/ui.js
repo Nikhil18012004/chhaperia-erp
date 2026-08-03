@@ -293,6 +293,9 @@
     {id:"lab-reports", icon:"🧪", label:"Lab Reports", accent:"teal", labOk:true, labWrite:true},
     {sec:"Sales & CRM"},
     {id:"crm", icon:"🎯", label:"CRM Pipeline", accent:"pink", pillKey:"openLeads"},
+    // sits under CRM because that is who books appointments, but the grid
+    // itself spans procurement, sales, production and HR
+    {id:"calendar", icon:"📅", label:"Calendar", accent:"violet", pillKey:"calToday"},
     {sec:"Trade", labOk:true},
     {id:"purchase", icon:"🛒", label:"Procurement", accent:"blue", pillKey:"openPO", labOk:true},
     {id:"sales", icon:"🧾", label:"Sales Orders", accent:"orange", pillKey:"openSO", labOk:true},

@@ -469,6 +469,38 @@ function updateWarehouse(id, patch) {
   return repo.putWarehouse(merged);
 }
 
+/* ---- Appointments (calendar diary entries) ----
+   Deliberately thin. An appointment is a commitment to a TIME, so a date is
+   the one thing it cannot be without — everything else (who it is with, where,
+   the notes) is optional and rides in the doc. The calendar's other entries are
+   derived from POs, SOs, work orders and leads and never land in this table. */
+const APPT_KINDS = ["Meeting", "Call", "Site Visit", "Sample Follow-up", "Payment Follow-up", "Reminder"];
+function createAppointment(a) {
+  a = a || {};
+  if (!a.title) throw err("An appointment needs a title", 400);
+  if (!a.date) throw err("An appointment needs a date", 400);
+  if (a.kind && !APPT_KINDS.includes(a.kind)) throw err("Unknown appointment kind " + a.kind, 400);
+  if (!a.id) a.id = nextId(repo.getState().appointments, "AP-");
+  else if (repo.getAppointment(a.id)) throw err("Appointment " + a.id + " already exists", 409);
+  a.kind = a.kind || "Meeting";
+  a.created = a.created || todayISO();
+  if (a.done == null) a.done = false;
+  return repo.putAppointment(a);
+}
+function updateAppointment(id, patch) {
+  const existing = repo.getAppointment(id);
+  if (!existing) throw err("Appointment not found", 404);
+  const merged = Object.assign({}, existing, patch || {}, { id });
+  if (!merged.title) throw err("An appointment needs a title", 400);
+  if (!merged.date) throw err("An appointment needs a date", 400);
+  if (merged.kind && !APPT_KINDS.includes(merged.kind)) throw err("Unknown appointment kind " + merged.kind, 400);
+  return repo.putAppointment(merged);
+}
+function deleteAppointment(id) {
+  if (!repo.getAppointment(id)) throw err("Appointment not found", 404);
+  return repo.deleteAppointment(id);
+}
+
 /* ---- Transporters (dispatch providers) ---- */
 function createTransporter(t) {
   t = t || {};
@@ -523,4 +555,5 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   upsertCustomer, updateCustomer, deleteCustomer,
   createSupplier, updateSupplier, deleteSupplier, updateOrg, ensureCompanies,
   deleteItem, deleteWorkOrder, nextId, updateWarehouse,
-  createTransporter, updateTransporter, deleteTransporter, ensureDispatch };
+  createTransporter, updateTransporter, deleteTransporter, ensureDispatch,
+  createAppointment, updateAppointment, deleteAppointment, APPT_KINDS };

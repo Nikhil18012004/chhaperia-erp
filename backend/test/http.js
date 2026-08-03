@@ -244,6 +244,37 @@ async function run() {
     (await call("PATCH", "/leads/" + lead.id, A, { stage: "Quoted" })).d.sample.awb === "AWB123456");
   ok("delete lead 200", (await call("DELETE", "/leads/" + lead.id, A)).status === 200);
 
+  /* ---- Calendar appointments ----
+     The ONLY thing the calendar stores. Everything else it shows (PO ETAs, SO
+     promised dates, work-order due dates, follow-ups, leave) is derived from
+     the record that owns the date, so there is nothing else here to test —
+     which is the point of that design. */
+  const ap = await call("POST", "/appointments", A, {
+    title: "Plant visit — HTTP Test Co", kind: "Site Visit", date: "2026-08-14",
+    time: "10:30", endTime: "12:00", location: "Their works", owner: "sales",
+  });
+  ok("create appointment 201", ap.status === 201 && !!ap.d.id);
+  ok("appointment keeps its date and doc fields",
+    ap.d.date === "2026-08-14" && ap.d.time === "10:30" && ap.d.kind === "Site Visit");
+  ok("a new appointment is not done yet", ap.d.done === false);
+  ok("appointment reaches the shared state",
+    (await call("GET", "/state", A)).d.appointments.some((x) => x.id === ap.d.id));
+  ok("appointment can be marked done",
+    (await call("PATCH", "/appointments/" + ap.d.id, A, { done: true })).d.done === true);
+  ok("patching one field keeps the rest",
+    (await call("PATCH", "/appointments/" + ap.d.id, A, { location: "Our works" })).d.time === "10:30");
+  // a diary entry with no date would never appear on the grid it exists for
+  ok("appointment without a date → 400",
+    (await call("POST", "/appointments", A, { title: "No date" })).status === 400);
+  ok("appointment without a title → 400",
+    (await call("POST", "/appointments", A, { date: "2026-08-14" })).status === 400);
+  ok("unknown appointment kind → 400",
+    (await call("POST", "/appointments", A, { title: "X", date: "2026-08-14", kind: "Seance" })).status === 400);
+  ok("patch unknown appointment → 404",
+    (await call("PATCH", "/appointments/AP-NOPE", A, { title: "X" })).status === 404);
+  ok("delete appointment 200", (await call("DELETE", "/appointments/" + ap.d.id, A)).status === 200);
+  ok("delete unknown appointment → 404", (await call("DELETE", "/appointments/AP-NOPE", A)).status === 404);
+
   /* ============================================================
      LAB INCHARGE — a low-trust role. The earlier "sales desk" role
      leaked the entire database because stateForUser() fell through

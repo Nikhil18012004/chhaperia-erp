@@ -181,6 +181,16 @@ router.patch("/org", requireAuth, rw, (req, res, next) => {
 router.patch("/warehouses/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(erp.updateWarehouse(req.params.id, req.body || {})); } catch (e) { next(e); }
 });
+// Appointments (calendar diary): create / update / delete
+router.post("/appointments", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(erp.createAppointment(req.body || {})); } catch (e) { next(e); }
+});
+router.patch("/appointments/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.updateAppointment(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/appointments/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(erp.deleteAppointment(req.params.id)); } catch (e) { next(e); }
+});
 // Transporters (dispatch providers): create / update / delete
 router.post("/transporters", requireAuth, rw, (req, res, next) => {
   try { res.status(201).json(erp.createTransporter(req.body || {})); } catch (e) { next(e); }

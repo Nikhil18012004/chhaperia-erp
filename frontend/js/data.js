@@ -159,6 +159,11 @@
     update(id, patch) { return http("PATCH", "/leads/" + enc(id), patch); },
     remove(id) { return http("DELETE", "/leads/" + enc(id)); },
   };
+  const appointments = {
+    create(a) { return http("POST", "/appointments", a); },
+    update(id, patch) { return http("PATCH", "/appointments/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/appointments/" + enc(id)); },
+  };
   const customers = {
     upsert(cust) { return http("POST", "/customers", cust); },
     update(id, patch) { return http("PATCH", "/customers/" + enc(id), patch); },
@@ -265,7 +270,7 @@
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
-    items, movements, purchase, sales, boms, leads, customers, suppliers, org, transporters, warehouses, hr,
+    items, movements, purchase, sales, boms, leads, appointments, customers, suppliers, org, transporters, warehouses, hr,
     labProducts, labReports,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
