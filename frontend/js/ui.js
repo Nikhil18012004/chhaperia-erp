@@ -114,6 +114,12 @@
        Operations section (keeps its stacked-field cards) and tiny tables. */
     const useCards = opts.mobileCards!==false && cols.length>=3
       && sectionOfView(curView())!=="Operations";
+    /* A table that keeps the stacked label:value card on phones (Operations,
+       and anything that opted out) packs those pairs TWO to a row — see
+       .tbl-stack in app.css. One pair per row turned a work order into a
+       screen-and-a-half of scrolling. Only worth it once there are enough
+       columns; a 2–3 column table reads better one pair per line. */
+    if(!useCards && cols.length>=4) wrap.classList.add("tbl-stack");
     let cards=null, summary=null;
     if(useCards){
       wrap.classList.add("tbl-compact");

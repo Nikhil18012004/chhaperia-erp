@@ -161,6 +161,47 @@ try {
     ok("nor is a forged one", auth.renewedToken("not.a.token", user) === null);
     ok("Date.now was restored", Date.now === realNow);
   }
+
+  section("Earned leave accrues one day per MONTH worked");
+  {
+    const hr = require("../src/services/hrService");
+    const year = String(new Date().getFullYear());
+    const W = "W-EL-TEST";
+    repo.putWorker({ id: W, name: "Earned Leave Tester", dept: "coating", dailyRate: 500, active: true });
+    // ensure an "earned" type exists to measure against
+    repo.putLeaveType({ id: "ELT", name: "Earned Leave (test)", quota: 12, accrual: "earned", paid: true });
+    const entitledFor = () => (hr.leaveBalances(W).find((b) => b.type === "ELT") || {}).entitled;
+    const present = (date) => repo.putAttendance({ workerId: W, date, status: "P" });
+
+    ok("no attendance ⇒ 0 days earned", entitledFor() === 0);
+
+    // a single month, worked many times over, is still worth exactly one day
+    ["-01-05", "-01-06", "-01-07", "-01-08", "-01-09"].forEach((d) => present(year + d));
+    ok("five days inside ONE month earn 1 day (not 5, and not 0)", entitledFor() === 1,
+      "got " + entitledFor());
+
+    // a second month adds exactly one more, however few days are worked in it
+    present(year + "-02-11");
+    ok("one day worked in a SECOND month earns the 2nd day", entitledFor() === 2,
+      "got " + entitledFor());
+
+    // half days still count the month; absences and leave do not create one
+    repo.putAttendance({ workerId: W, date: year + "-03-02", status: "HD" });
+    ok("a half day still earns its month", entitledFor() === 3, "got " + entitledFor());
+    repo.putAttendance({ workerId: W, date: year + "-04-02", status: "A" });
+    ok("an ABSENT month earns nothing", entitledFor() === 3, "got " + entitledFor());
+    // ...but working any other day of that same month does earn it
+    present(year + "-04-20");
+    ok("working later in that month still earns it", entitledFor() === 4, "got " + entitledFor());
+
+    // twelve worked months = twelve days, which is the annual figure
+    ["-05", "-06", "-07", "-08", "-09", "-10", "-11", "-12"].forEach((m) => present(year + m + "-15"));
+    ok("a full year of work earns 12 days", entitledFor() === 12, "got " + entitledFor());
+
+    // last year's attendance must not leak into this year's balance
+    present(String(+year - 1) + "-06-10");
+    ok("last year's work does not inflate this year", entitledFor() === 12, "got " + entitledFor());
+  }
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

@@ -22,24 +22,33 @@
     root.appendChild(wrap);
     if (params && params.openNew) { params.openNew = false; userForm(); }
 
-    DB.users.list().then(({ users }) => {
-      wrap.innerHTML = "";
-      // group note
-      wrap.appendChild(h("div", { class: "muted", style: "font-size:12px;margin-bottom:10px",
-        html: "Default password for a new login is what you set. Share it with the person; they use it to sign in. You can reset it any time." }));
+    load();
 
-      wrap.appendChild(table(users, [
-        { key: "name", label: "Name", render: r => `<div class="cell-main">${esc(r.name || r.username)}</div><div class="cell-sub">@${esc(r.username)}</div>` },
-        { key: "role", label: "Role", render: r => badge(ROLE_BADGE[r.role] || "mut", ROLE_LABEL[r.role] || r.role) },
-        { key: "area", label: "Work Area", render: r => r.area ? esc(AREA_LABEL[r.area] || r.area) : "<span class='muted'>—</span>" },
-        { key: "active", label: "Status", render: r => r.active ? badge("ok", "Active") : badge("mut", "Disabled") },
-        { key: "lastLogin", label: "Last Login", render: r => r.lastLogin ? esc(r.lastLogin.slice(0, 10)) : "<span class='muted'>never</span>" },
-        { key: "act", label: "", noSort: true, render: () => "<span class='muted'>⋯</span>" },
-      ], { onRow: (r) => userActions(r) }));
-    }).catch(err => {
-      wrap.innerHTML = ""; wrap.appendChild(h("div", { class: "empty", style: "padding:30px" }, [
-        h("div", { class: "big", text: "⚠" }), h("div", { text: "Could not load users: " + err.message }) ]));
-    });
+    /* the list comes from the server on every render, so it is the one thing
+       on this page that a stopped server or a dropped session can empty —
+       retry in place rather than making the user reload the whole app */
+    function load() {
+      wrap.innerHTML = "";
+      wrap.appendChild(h("div", { class: "muted", style: "padding:20px", text: "Loading users…" }));
+      DB.users.list().then(({ users }) => {
+        wrap.innerHTML = "";
+        // group note
+        wrap.appendChild(h("div", { class: "muted", style: "font-size:12px;margin-bottom:10px",
+          html: "Default password for a new login is what you set. Share it with the person; they use it to sign in. You can reset it any time." }));
+
+        wrap.appendChild(table(users, [
+          { key: "name", label: "Name", render: r => `<div class="cell-main">${esc(r.name || r.username)}</div><div class="cell-sub">@${esc(r.username)}</div>` },
+          { key: "role", label: "Role", render: r => badge(ROLE_BADGE[r.role] || "mut", ROLE_LABEL[r.role] || r.role) },
+          { key: "area", label: "Work Area", render: r => r.area ? esc(AREA_LABEL[r.area] || r.area) : "<span class='muted'>—</span>" },
+          { key: "active", label: "Status", render: r => r.active ? badge("ok", "Active") : badge("mut", "Disabled") },
+          { key: "lastLogin", label: "Last Login", render: r => r.lastLogin ? esc(r.lastLogin.slice(0, 10)) : "<span class='muted'>never</span>" },
+          { key: "act", label: "", noSort: true, render: () => "<span class='muted'>⋯</span>" },
+        ], { onRow: (r) => userActions(r) }));
+      }).catch(err => {
+        wrap.innerHTML = "";
+        wrap.appendChild(MW.loadError("the user list", err, load));
+      });
+    }
   }};
 
   /* ---- per-user actions (opens a small menu) ---- */

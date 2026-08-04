@@ -32,6 +32,29 @@
     ]);
   }
 
+  /* ----- a fetch that failed, and the way back -----
+     Most pages read from the dataset ENG holds in memory, so they keep
+     drawing even when the server has stopped. The handful that fetch on
+     every render — HR Settings, Users & Access — have nothing to draw, and
+     a one-line grey message on an otherwise empty page reads as "the page
+     went black". Say plainly what happened and offer the retry, so a
+     dropped connection or an expired session does not need a page reload. */
+  function loadError(what, err, retry){
+    const msg = (err && err.message) || String(err || "");
+    const offline = /failed to fetch|networkerror|load failed/i.test(msg);
+    const expired = /401|unauthor|session/i.test(msg);
+    return h("div",{class:"empty",style:"padding:40px 20px"},[
+      h("div",{class:"big",text: offline ? "🔌" : expired ? "🔒" : "⚠"}),
+      h("div",{style:"font-weight:700",text:"Could not load " + what}),
+      h("div",{class:"muted",style:"margin-top:6px;font-size:12.5px",
+        text: offline ? "The server is not responding — it may have stopped. Start it again, then retry."
+            : expired ? "Your session has expired. Sign in again."
+            : msg}),
+      retry ? h("div",{style:"margin-top:14px"},
+        h("button",{class:"btn",onclick:retry,html:"↻ Retry"})) : null,
+    ]);
+  }
+
   /* ----- KPI card ----- */
   function kpi({icon, label, value, delta, deltaType, spark, sparkColor, onClick}){
     const card=h("div",{class:"kpi"+(onClick?" hover":""), style:onClick?"cursor:pointer":""},[
@@ -297,5 +320,5 @@
   }
 
   global.M = M;
-  global.MW = { pageHead, readOnlyHere, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview, excelMenu };
+  global.MW = { pageHead, readOnlyHere, loadError, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview, excelMenu };
 })(window);

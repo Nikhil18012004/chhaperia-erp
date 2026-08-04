@@ -637,19 +637,24 @@
   }
 
   /* PAID LEAVE STILL PENDING — what the worker may still take this calendar
-     year. Mirrors hrService.leaveBalances: an "earned" type accrues one day
-     per 20 days actually worked, "none" grants nothing, everything else uses
-     its quota; approved leave of that type in the same year is taken off.
+     year. Mirrors hrService.leaveBalances: an "earned" type accrues ONE DAY
+     PER MONTH WORKED, "none" grants nothing, everything else uses its quota;
+     approved leave of that type in the same year is taken off.
      UNPAID types are ignored — the slip is about paid entitlement. */
   function paidLeavePending(workerId, period) {
     const year = String(period || "").slice(0, 4) || String(new Date().getFullYear());
-    const worked = (ENG.data.hrAttendance || []).filter((a) => a.workerId === workerId
-      && String(a.date || "").startsWith(year) && (a.status === "P" || a.status === "HD"))
-      .reduce((n, a) => n + (a.status === "HD" ? 0.5 : 1), 0);
+    // one day per calendar month the worker has any attendance in
+    const monthsWorked = new Set();
+    (ENG.data.hrAttendance || []).forEach((a) => {
+      if (a.workerId !== workerId) return;
+      if (!String(a.date || "").startsWith(year)) return;
+      if (a.status !== "P" && a.status !== "HD") return;
+      monthsWorked.add(String(a.date).slice(0, 7));
+    });
     const rows = [];
     leaveTypes().forEach((t) => {
       if (t.paid === false) return;
-      const entitled = t.accrual === "earned" ? Math.floor(worked / 20)
+      const entitled = t.accrual === "earned" ? monthsWorked.size
         : (t.accrual === "none" ? 0 : (+t.quota || 0));
       const taken = (ENG.data.hrLeaves || []).filter((l) => l.workerId === workerId
         && l.type === t.id && l.status === "Approved" && String(l.fromDate || "").startsWith(year))
@@ -1049,7 +1054,17 @@
   function tabSettings(host) {
     const box = h("div", {}, h("div", { class: "muted", text: "Loading configuration…" }));
     host.appendChild(box);
-    DB.hr.config.get().then((cfg) => renderSettings(box, cfg)).catch((e) => { box.innerHTML = ""; box.appendChild(h("div", { class: "muted", text: "Could not load config: " + e.message })); });
+    load();
+    /* this tab is one of the few that fetches on every render instead of
+       reading ENG's in-memory dataset, so a stopped server or an expired
+       session leaves it with nothing to draw — offer the retry in place */
+    function load() {
+      box.innerHTML = "";
+      box.appendChild(h("div", { class: "muted", text: "Loading configuration…" }));
+      DB.hr.config.get()
+        .then((cfg) => renderSettings(box, cfg))
+        .catch((e) => { box.innerHTML = ""; box.appendChild(MW.loadError("the HR configuration", e, load)); });
+    }
   }
   function renderSettings(box, cfg) {
     const d = cfg.deductions || {};
@@ -1103,7 +1118,7 @@
       table(lts, [
         { key: "id", label: "Code", render: (r) => `<span class="mono strong">${r.id}</span>`, noSort: true },
         { key: "name", label: "Name", cls: "nm", render: (r) => esc(r.name), noSort: true },
-        { key: "quota", label: "Annual Quota", num: true, render: (r) => r.accrual === "earned" ? "earned 1/20" : num(r.quota, 1) + " days", noSort: true },
+        { key: "quota", label: "Annual Quota", num: true, render: (r) => r.accrual === "earned" ? "1 day per month worked" : num(r.quota, 1) + " days", noSort: true },
         { key: "accrual", label: "Accrual", render: (r) => badge("mut", r.accrual), noSort: true },
         { key: "paid", label: "Paid", render: (r) => r.paid ? badge("ok", "Paid") : badge("mut", "Unpaid"), noSort: true },
         { key: "act", label: "", noSort: true, render: (r) => h("button", { class: "btn sm ghost", onclick: (e) => { e.stopPropagation(); delLeaveType(r); }, text: "🗑" }) },
@@ -1142,7 +1157,7 @@
       U.field("Code", `<input class="input" id="lt_id" value="${esc(t.id || "")}" ${edit ? "disabled" : ""} placeholder="e.g. EL / CL / SL">`),
       U.field("Name", `<input class="input" id="lt_name" value="${esc(t.name || "")}" placeholder="e.g. Earned Leave">`),
       U.field("Annual Quota (days)", `<input class="input" id="lt_quota" type="number" step="0.5" value="${t.quota || 0}">`),
-      U.field("Accrual", U.selectHTML("lt_accrual", [{ v: "fixed", l: "Fixed (credited yearly)" }, { v: "earned", l: "Earned (1 per 20 worked)" }, { v: "none", l: "None (0 balance)" }], t.accrual || "fixed")),
+      U.field("Accrual", U.selectHTML("lt_accrual", [{ v: "fixed", l: "Fixed (credited yearly)" }, { v: "earned", l: "Earned (1 day per month worked)" }, { v: "none", l: "None (0 balance)" }], t.accrual || "fixed")),
       U.field("Paid?", U.selectHTML("lt_paid", [{ v: "1", l: "Paid leave" }, { v: "0", l: "Unpaid" }], t.paid === false ? "0" : "1")),
     ]);
     const mo = modal({ title: edit ? "Edit Leave Type" : "New Leave Type", body,

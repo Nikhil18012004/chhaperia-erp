@@ -187,14 +187,29 @@ function deleteLeaveType(id) { return repo.deleteLeaveType(id); }
 
 function daysBetween(from, to) { return eachDate(from, to).length; }
 
+/** How many days an "earned" leave type has accrued this year: ONE DAY PER
+    MONTH WORKED. A month counts once the worker has any attendance in it, so
+    a worker who joined in June earns from June — twelve days over a full
+    year. Keep this in step with paidLeavePending() in frontend/js/mod-hr.js,
+    which shows the same figure on the payslip. */
+function earnedLeaveDays(attendance, workerId, year) {
+  const months = new Set();
+  attendance.forEach((a) => {
+    if (a.workerId !== workerId) return;
+    if (!String(a.date || "").startsWith(year)) return;
+    if (a.status !== "P" && a.status !== "HD") return;
+    months.add(String(a.date).slice(0, 7));   // YYYY-MM
+  });
+  return months.size;
+}
+
 /** Live leave balances for a worker: quota (or earned) − approved-this-year. */
 function leaveBalances(workerId) {
   const st = repo.getState();
   const year = String(new Date().getFullYear());
-  const daysWorked = st.hrAttendance.filter((a) => a.workerId === workerId && a.date.startsWith(year) && (a.status === "P" || a.status === "HD"))
-    .reduce((s, a) => s + (a.status === "HD" ? 0.5 : 1), 0);
+  const earned = earnedLeaveDays(st.hrAttendance || [], workerId, year);
   return (st.hrLeaveTypes || []).map((t) => {
-    const entitled = t.accrual === "earned" ? Math.floor(daysWorked / 20) : (t.accrual === "none" ? 0 : t.quota);
+    const entitled = t.accrual === "earned" ? earned : (t.accrual === "none" ? 0 : t.quota);
     const taken = st.hrLeaves.filter((l) => l.workerId === workerId && l.type === t.id && l.status === "Approved" && l.fromDate.startsWith(year))
       .reduce((s, l) => s + (l.days || 0), 0);
     return { type: t.id, name: t.name, entitled, taken, balance: round(entitled - taken, 1) };

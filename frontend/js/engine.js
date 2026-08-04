@@ -442,9 +442,58 @@
     return readyBatches(itemId).reduce((n,b)=>n+b.free,0);
   }
 
+  /* ============================================================
+     WEIGHT — every raw material read in kilograms.
+     The factory buys sheet goods by the metre and pastes by the
+     kilo, but thinks about all of it by weight. These turn an
+     item's own unit into kg where the item carries enough data
+     to say so, and return null where it does not — a missing
+     figure must read as "not known", never as 0 kg.
+
+       MTR   metres of web:  m × (width mm ÷ 1000) × gsm ÷ 1000
+       SQM   area:           m² × gsm ÷ 1000
+       GRAM / MG            arithmetic
+       ROLL / PLT / BOX     only via an explicit kg-per-unit on the
+                            item (kgPerUnit); nothing to derive from.
+     ============================================================ */
+  const KG_PER = { KG: 1, KGS: 1, KILOGRAM: 1, GRAM: 1e-3, GM: 1e-3, G: 1e-3, MG: 1e-6, TON: 1000, MT: 1000 };
+  const pos = (v) => { const n = +v; return isFinite(n) && n > 0 ? n : null; };
+
+  /** kg for ONE unit of this item, or null when the data does not exist yet. */
+  function kgPerUnit(it){
+    if(!it) return null;
+    const u = String(it.uom||"").trim().toUpperCase();
+    if(KG_PER[u] != null) return KG_PER[u];
+    const explicit = pos(it.kgPerUnit);      // set per item once its weight is known
+    if(explicit) return explicit;
+    const gsm = pos(it.gsm);                 // g/m²
+    if(u === "SQM") return gsm ? gsm/1000 : null;
+    if(u === "MTR" || u === "MTRS" || u === "M"){
+      const width = pos(it.width);           // mm across the web
+      return (gsm && width) ? (width/1000) * (gsm/1000) : null;
+    }
+    return null;                             // ROLL / PLT / BOX and anything unrecognised
+  }
+  /** qty of `it` expressed in kg, or null when it cannot be known. */
+  function kg(it, qty){
+    const per = kgPerUnit(it);
+    if(per == null) return null;
+    const q = +qty; if(!isFinite(q)) return null;
+    return q * per;
+  }
+  /** true when the item is already carried in kilograms (no second figure needed) */
+  function isKg(it){ return String((it&&it.uom)||"").trim().toUpperCase() === "KG"; }
+  /** " · 24 kg" to append after a quantity, or "" when kg adds nothing */
+  function kgSuffix(it, qty){
+    if(isKg(it)) return "";
+    const w = kg(it, qty);
+    return w == null ? "" : " · " + num(w, w < 10 ? 2 : 0) + " kg";
+  }
+
   const E = {
     init, rebuild,
     money, moneyFull, num, item,
+    kg, kgPerUnit, kgSuffix, isKg,
     get data(){return D;},
     stock:(id)=>STOCK[id], usage:(id)=>USAGE[id], ledger:(id)=>LEDGER[id],
     status, pendingIn, pendingOut, wipRawDemand, readyBatches, readyQty,

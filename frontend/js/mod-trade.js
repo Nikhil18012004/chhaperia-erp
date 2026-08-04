@@ -224,7 +224,7 @@
             +`<div class="cell-sub">${ENG.sup(r.it.supplierId)}</div>`,noSort:true},
           {key:"onHand",label:"On Hand",num:true,render:r=>ENG.num(r.st.onHand,1),noSort:true},
           {key:"reorder",label:"Reorder Pt",num:true,render:r=>ENG.num(r.it.reorder),noSort:true},
-          {key:"suggest",label:"Suggested",num:true,render:r=>`<span class="strong" style="color:var(--accent)">${ENG.num(r.st.suggest)} ${r.it.uom}</span>`,noSort:true},
+          {key:"suggest",label:"Suggested",num:true,render:r=>`<span class="strong" style="color:var(--accent)">${ENG.num(r.st.suggest)} ${r.it.uom}</span><span class="muted">${esc(ENG.kgSuffix(r.it,r.st.suggest))}</span>`,noSort:true},
           {key:"abc",label:"Class",render:r=>badge(r.it.abc==="A"?"danger":r.it.abc==="B"?"warn":"ok","Class "+r.it.abc),noSort:true},
         ],{empty:"All stocked"})
       ]) : h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),h("div",{text:"Everything is above reorder level — no action needed."})]);
@@ -649,9 +649,9 @@
       if(anyBatch) cols.push({key:"batch",label:"Batch No.",render:r=>r.batch?`<span class="mono">${esc(batchNo(r.batch))}</span>`:'<span class="muted">—</span>',noSort:true});
       cols.push(
         // the quantity is in the product's own unit — never assume kg
-        {key:"qty",label:"Qty",num:true,render:r=>ENG.num(r.qty)+" "+((ENG.item(r.itemId)||{}).uom||"kg"),noSort:true},
+        {key:"qty",label:"Qty",num:true,render:r=>ENG.num(r.qty)+" "+((ENG.item(r.itemId)||{}).uom||"kg")+ENG.kgSuffix(ENG.item(r.itemId),r.qty),noSort:true},
         {key:"stock",label:"In Stock",num:true,render:r=>{const h2=ENG.stock(r.itemId).onHand;const u=(ENG.item(r.itemId)||{}).uom||"kg";
-          return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(h2,1)} ${esc(u)}</span>`;},noSort:true},
+          return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(h2,1)} ${esc(u)}${esc(ENG.kgSuffix(ENG.item(r.itemId),h2))}</span>`;},noSort:true},
         {key:"rate",label:"Rate",num:true,render:r=>"₹"+ENG.num(r.rate),noSort:true},
         {key:"gst",label:"GST %",num:true,render:r=>lineGstPct(r,ENG.item(r.itemId)),noSort:true},
         {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true});
@@ -1013,7 +1013,8 @@
             h("div",{},[h("h3",{style:"font-size:15px",text:s.name}),h("div",{class:"muted",style:"font-size:12px",text:[s.city,s.country].filter(Boolean).join(", ")+" · "+(s.category||"General")})]),
             h("div",{class:"avatar",style:"background:linear-gradient(135deg,var(--c"+((ENG.data.suppliers.indexOf(s)%8)+1)+"),var(--accent-600))",text:s.name.slice(0,2).toUpperCase()})
           ]),
-          h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
+          // statgrid-3: three tiny figures — they stay side by side on a phone
+          h("div",{class:"grid cols-3 statgrid-3",style:"margin:14px 0;gap:8px"},[
             stat("Rating","★ "+s.rating), stat("On-Time",s.onTime+"%"), stat("Terms",s.terms),
           ]),
           s.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+s.gst+(partyStateCode(s)?" · "+GST.stateName(partyStateCode(s)):"")}):null,
@@ -1076,7 +1077,8 @@
             h("div",{},[h("h3",{style:"font-size:15px",text:c.name}),h("div",{class:"muted",style:"font-size:12px",text:[c.city,c.segment].filter(Boolean).join(" · ")})]),
             h("span",{html:badge(c.rating==="A"?"ok":c.rating==="B"?"warn":"mut","Grade "+c.rating)})
           ]),
-          h("div",{class:"grid cols-3",style:"margin:14px 0;gap:8px"},[
+          // statgrid-3: three tiny figures — they stay side by side on a phone
+          h("div",{class:"grid cols-3 statgrid-3",style:"margin:14px 0;gap:8px"},[
             stat("Orders",orders.length), stat("Open",open), stat("Since",c.since),
           ]),
           c.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+c.gst+(partyStateCode(c)?" · "+GST.stateName(partyStateCode(c)):"")}):null,

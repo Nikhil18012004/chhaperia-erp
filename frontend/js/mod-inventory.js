@@ -71,6 +71,9 @@
         {key:"thk",label:"Thickness",num:true,render:r=>r.it.thicknessMM!=null?`<span class="mono">${ENG.num(r.it.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:r=>r.it.thicknessMM||0},
         {key:"lastMove",label:"Last Move",render:r=>r.stock.lastMove||"—",sort:r=>r.stock.lastMove||""},
         {key:"onHand",label:"On Hand",num:true,render:r=>`<span class="strong">${ENG.num(r.st.onHand,2)}</span> <span class="muted">${r.it.uom}</span>`,sort:r=>r.st.onHand},
+        /* weight in its own column: "—" where the item has no gsm/width yet,
+           which is the truth, rather than a zero that reads as "weighs nothing" */
+        {key:"kg",label:"Weight",num:true,render:r=>{const w=ENG.kg(r.it,r.st.onHand);return w==null?`<span class="muted">—</span>`:`<span class="strong">${ENG.num(w,2)}</span> <span class="muted">kg</span>`;},sort:r=>ENG.kg(r.it,r.st.onHand)||0},
         {key:"pIn",label:"Pending In",num:true,render:r=>r.st.pIn?`<span class="badge-s s-ok">▲ ${ENG.num(r.st.pIn)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pIn},
         {key:"pOut",label:"Pending Out",num:true,render:r=>r.st.pOut?`<span class="badge-s s-warn">▼ ${ENG.num(r.st.pOut)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pOut},
         {key:"atp",label:"ATP / Net",num:true,render:r=>`<span class="mono ${r.st.atp<0?'':''}" style="color:${r.st.atp<0?'var(--danger)':'var(--text)'}">${ENG.num(r.st.atp,1)}</span>`,sort:r=>r.st.atp},
@@ -117,11 +120,13 @@
     const led=ENG.ledger(id).slice(-12).reverse();
     const ser = last30Series(id);
     const body=h("div",{},[
-      h("div",{class:"grid cols-3",style:"margin-bottom:16px"},[
-        miniStat("On Hand", ENG.num(st.onHand,2)+" "+it.uom, st.state),
-        miniStat("Pending In", ENG.num(st.pIn)+" "+it.uom, "ok"),
-        miniStat("Pending Out", ENG.num(st.pOut)+" "+it.uom, "warn"),
-        miniStat("Available (ATP)", ENG.num(st.atp,1)+" "+it.uom, st.atp<0?"danger":"info"),
+      // statgrid: these six tiles are small enough to stay two-up on a phone
+      // instead of collapsing to one per row (see app.css)
+      h("div",{class:"grid cols-3 statgrid",style:"margin-bottom:16px"},[
+        miniStat("On Hand", ENG.num(st.onHand,2)+" "+it.uom+ENG.kgSuffix(it,st.onHand), st.state),
+        miniStat("Pending In", ENG.num(st.pIn)+" "+it.uom+ENG.kgSuffix(it,st.pIn), "ok"),
+        miniStat("Pending Out", ENG.num(st.pOut)+" "+it.uom+ENG.kgSuffix(it,st.pOut), "warn"),
+        miniStat("Available (ATP)", ENG.num(st.atp,1)+" "+it.uom+ENG.kgSuffix(it,st.atp), st.atp<0?"danger":"info"),
         miniStat("Avg Cost", "₹"+ENG.num(st.avgCost,2), "mut"),
         miniStat("Stock Value", ENG.money(st.value), "mut"),
       ]),
@@ -541,6 +546,7 @@
         {key:"wh",label:"Warehouse",cls:"nm",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
         {key:"ref",label:"Reference",render:r=>`<span class="mono">${esc(r.ref||"—")}</span>`,sort:r=>r.ref},
         {key:"qty",label:"Qty",num:true,render:r=>{const it=ENG.item(r.itemId)||{};return `<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(r.qty,2)}</span> <span class="muted">${it.uom||""}</span>`;},sort:r=>r.qty},
+        {key:"kg",label:"Weight",num:true,render:r=>{const it=ENG.item(r.itemId)||{};const w=ENG.kg(it,r.qty);return w==null?`<span class="muted">—</span>`:`<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(w,2)}</span> <span class="muted">kg</span>`;},sort:r=>ENG.kg(ENG.item(r.itemId)||{},r.qty)||0},
         {key:"rate",label:"Rate",num:true,render:r=>r.rate?"₹"+ENG.num(r.rate,2):"—",sort:r=>r.rate||0},
         {key:"value",label:"Value",num:true,render:r=>r.rate?ENG.money(Math.abs(r.qty*r.rate)):"—",sort:r=>Math.abs(r.qty*(r.rate||0))},
       ],{empty:"No movements match"}));
@@ -646,7 +652,7 @@
         ]),
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Top items"}),
         h("div",{class:"barlist"}, top.length?top.map(x=>h("div",{class:"flex between",style:"font-size:12.5px;padding:4px 0"},[
-          h("span",{text:trim(x.it.name,30)}), h("span",{class:"mono muted",text:ENG.num(x.q,1)+" "+x.it.uom})
+          h("span",{text:trim(x.it.name,30)}), h("span",{class:"mono muted",text:ENG.num(x.q,1)+" "+x.it.uom+ENG.kgSuffix(x.it,x.q)})
         ])):[h("div",{class:"muted",text:"Empty"})]),
         h("div",{class:"muted",style:"font-size:11.5px;margin-top:10px;text-align:right",text:"View all materials →"})
       ]));
@@ -677,6 +683,10 @@
           {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.it.id)}</span>`,sort:r=>r.it.id},
           {key:"cat",label:"Category",render:r=>`<span class="muted">${esc(catName(r.it.cat))}</span>`,sort:r=>r.it.cat},
           {key:"qty",label:"Quantity",num:true,render:r=>`<span style="font-weight:700">${ENG.num(r.q,2)}</span> <span class="muted">${esc(r.it.uom||"")}</span>`,sort:r=>r.q},
+          /* weight gets its own column rather than being tacked onto the
+             quantity — an item whose weight is not yet known reads "—", which
+             a suffix could not say without looking like it weighed nothing */
+          {key:"kg",label:"Weight",num:true,render:r=>{const w=ENG.kg(r.it,r.q);return w==null?`<span class="muted">—</span>`:`<span style="font-weight:700">${ENG.num(w,2)}</span> <span class="muted">kg</span>`;},sort:r=>ENG.kg(r.it,r.q)||0},
           {key:"cost",label:"Avg Cost",num:true,render:r=>"₹"+ENG.num(r.cost,2),sort:r=>r.cost},
           {key:"val",label:"Value",num:true,render:r=>ENG.money(r.val),sort:r=>r.val},
           {key:"share",label:"Share",num:true,render:r=>totalVal>0?ENG.num(r.val/totalVal*100,1)+"%":"—",sort:r=>r.val},
@@ -689,7 +699,9 @@
         ]),
         tableHost
       ]);
-      const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body,
+      // wide: the Weight column takes this to 8 columns, which overflowed the
+      // default dialog and clipped Share off the right edge
+      const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body, wide:true,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
       draw();
     }
@@ -703,7 +715,10 @@
       function matsIn(whId){
         return ENG.data.items.map(it=>({it, q:(ENG.stock(it.id).byWh[whId])||0}))
           .filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q)
-          .map(x=>({v:x.it.id, l:trim(x.it.name,26)+" — "+ENG.num(x.q,2)+" "+(x.it.uom||"")}));
+          /* the label carries kg for reference; the quantity you TYPE stays in
+             the item's own unit, so nobody moves 24 of something they meant
+             1,200 of */
+          .map(x=>({v:x.it.id, l:trim(x.it.name,26)+" — "+ENG.num(x.q,2)+" "+(x.it.uom||"")+ENG.kgSuffix(x.it,x.q)}));
       }
       const body=h("div",{},[
         h("div",{class:"form-grid"},[

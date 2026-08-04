@@ -194,8 +194,8 @@
             l.spec?h("div",{class:"muted mono",style:"font-size:11px",text:l.spec}):null
           ]),
           h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
-            h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(l.need,2)+" "+(l.uom||"")})]),
-            h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(l.uom||"")})]),
+            h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(l.need,2)+" "+(l.uom||"")+ENG.kgSuffix(ENG.item(l.id),l.need)})]),
+            h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(l.uom||"")+ENG.kgSuffix(ENG.item(l.id),have)})]),
             h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(agg-have,2))})
           ])
         ]));
@@ -1253,7 +1253,7 @@
             const sel=h("select",{class:"select",style:"max-width:340px",
               onchange:e=>{ fsChoices[i]=e.target.value; drawMaterials(); }},
               usable.map(c=>h("option",{value:c.id,selected:fsChoices[i]===c.id,
-                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
+                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+ENG.kgSuffix(c.item,c.have)+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
@@ -1620,7 +1620,7 @@
             const sel=h("select",{class:"select",style:"max-width:340px",
               onchange:e=>{ matChoices[i]=e.target.value; recalc(); }},
               usable.map(c=>h("option",{value:c.id,selected:matChoices[i]===c.id,
-                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+" in store"})));
+                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+ENG.kgSuffix(c.item,c.have)+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
@@ -1838,7 +1838,8 @@ recalc(); },50);
           {key:"name",label:"Raw Material",cls:"nm",render:r=>esc(r.name)},
           {key:"per",label:"Per kg",num:true,render:r=>ENG.num(r.per,3)+" "+esc(r.uom),sort:r=>r.per},
           {key:"need",label:"Required",num:true,render:r=>"<b>"+ENG.num(r.need,2)+"</b> "+esc(r.uom),sort:r=>r.need},
-          {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1)+" "+esc(r.uom),sort:r=>r.have},
+          {key:"needKg",label:"Required (kg)",num:true,render:r=>{const w=ENG.kg(ENG.item(r.rid),r.need);return w==null?'<span class="muted">—</span>':"<b>"+ENG.num(w,2)+"</b> kg";},sort:r=>ENG.kg(ENG.item(r.rid),r.need)||0},
+          {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1)+" "+esc(r.uom)+ENG.kgSuffix(ENG.item(r.rid),r.have),sort:r=>r.have},
           {key:"short",label:"Shortfall",num:true,render:r=> r.short>0? badge("danger",ENG.num(r.short,2)+" "+r.uom): badge("ok","OK"),sort:r=>r.short},
         ],{empty:"No components"}));
       }

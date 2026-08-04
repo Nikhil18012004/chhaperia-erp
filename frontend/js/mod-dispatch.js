@@ -73,7 +73,8 @@
           h("span", { html: badge(t.rating === "A" ? "ok" : t.rating === "B" ? "warn" : "mut", "Grade " + (t.rating || "—")) }),
         ]),
         chips ? h("div", { class: "flex gap wrap", style: "margin-top:10px", html: chips }) : null,
-        h("div", { class: "grid cols-3", style: "margin:14px 0;gap:8px" }, [
+        // statgrid-3: three tiny figures — they stay side by side on a phone
+        h("div", { class: "grid cols-3 statgrid-3", style: "margin:14px 0;gap:8px" }, [
           stat("On-Time", ot + "%"), stat("Rate", t.baseRate ? "₹" + ENG.num(t.baseRate) : "—"), stat("Basis", t.rateBasis || "—"),
         ]),
         h("div", { style: "margin-bottom:10px" }, [
