@@ -202,6 +202,59 @@ try {
     present(String(+year - 1) + "-06-10");
     ok("last year's work does not inflate this year", entitledFor() === 12, "got " + entitledFor());
   }
+
+  /* ============================================================
+     Filling in where a coated roll was left, for a stage that
+     closed before the question was asked.
+
+     A blank cannot be produced through the API any more — the gate
+     on completing coating sees to that — so the job is built here
+     in the shape the old flow left behind, which is exactly the
+     shape sitting in the live database.
+     ============================================================ */
+  section("A coated roll's store can be filled in once, never rewritten");
+  {
+    const production = require("../src/services/productionService");
+    const coating = { username: "coating1", role: "supervisor", area: "coating" };
+    const st = repo.getState();
+    const fgAny = (st.items || []).find((i) => i.cat === "FG");
+    const wo = {
+      id: "WO-LEGACY-1", date: "2026-08-01", itemId: fgAny.id, qty: 10,
+      status: "In Production", progress: 50, priority: "Normal", stageIdx: 1,
+      route: [
+        { key: "rmprod", name: "RM Production", area: "coating", seq: 1, status: "Completed", posted: true },
+        { key: "slitting", name: "Slitting", area: "slitting", seq: 2, status: "Pending", posted: false },
+      ],
+    };
+    repo.putWorkOrder(wo);
+    const movesBefore = (repo.getState().movements || []).length;
+
+    ok("a store is refused if it is not a real warehouse",
+      throws(() => production.setWipStore(coating, wo.id, { wh: "WH-NOWHERE" })));
+    ok("and refused if none is named",
+      throws(() => production.setWipStore(coating, wo.id, {})));
+
+    production.setWipStore(coating, wo.id, { wh: "WH-WIP" });
+    const filled = repo.getWorkOrder(wo.id);
+    ok("the blank is filled in on the stage that made the roll",
+      filled.route[0].outWh === "WH-WIP" && filled.route[0].outWhBy === "coating1",
+      filled.route[0].outWh + " by " + filled.route[0].outWhBy);
+    ok("recording it books nothing into that store",
+      (repo.getState().movements || []).length === movesBefore,
+      movesBefore + " → " + (repo.getState().movements || []).length);
+    ok("and it cannot be rewritten afterwards",
+      throws(() => production.setWipStore(coating, wo.id, { wh: "WH-QC" })));
+    ok("the first answer still stands", repo.getWorkOrder(wo.id).route[0].outWh === "WH-WIP");
+
+    // a stage still on the machines has nothing to say yet — the gate on
+    // completing coating is where that one is captured
+    const open = Object.assign({}, wo, { id: "WO-LEGACY-2",
+      route: [{ key: "rmprod", name: "RM Production", area: "coating", seq: 1, status: "In Production" },
+        { key: "slitting", name: "Slitting", area: "slitting", seq: 2, status: "Pending" }] });
+    repo.putWorkOrder(open);
+    ok("a coating stage that has not finished is not asked yet",
+      throws(() => production.setWipStore(coating, open.id, { wh: "WH-WIP" })));
+  }
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

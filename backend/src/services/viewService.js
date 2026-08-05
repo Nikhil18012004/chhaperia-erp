@@ -193,6 +193,20 @@ function stateForSupervisor(area, username, opts) {
         route: route.map((r) => ({ key: r.key, name: r.name, area: r.area, seq: r.seq, status: r.status,
           owner: r.owner || null, line: r.line || null,
           doneBy: r.doneBy || null, doneAt: r.doneAt || null })),
+        /* WHERE THE COATED ROLL WAS PUT DOWN — the store the coating floor
+           named as it closed the stage. A LOCATION, not stock: nothing was
+           booked in anywhere, so this is the only record of where the jumbo
+           physically is, and slitting is sent to it rather than hunting.
+           Null on a job with no coating stage, and on one coated before this
+           was ever asked for. */
+        wipAt: (() => {
+          const st = route.find((r) => r.area === "coating" && r.outWh);
+          if (!st) return null;
+          return { wh: st.outWh, name: whNameOf(st.outWh), by: st.outWhBy || null, at: st.outWhAt || null };
+        })(),
+        // does this job pass through coating at all? decides whether a missing
+        // location is worth saying anything about
+        coated: route.some((r) => r.area === "coating"),
         stageIdx: idx,
         stage: { key: cur.key, name: cur.name, area: cur.area, seq: cur.seq, status: cur.status },
         myStageKey: myStage.key,

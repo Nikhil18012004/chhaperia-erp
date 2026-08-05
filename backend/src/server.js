@@ -87,6 +87,10 @@ app.use((err, req, res, next) => {
     if (err.canMake != null) out.canMake = err.canMake;
     if (err.pendingQty != null) out.pendingQty = err.pendingQty;
   }
+  /* Coating refusing to close until it says where the coated roll was put
+     down is the same shape of answer: the form should open the store picker,
+     not merely print the sentence. */
+  if (status < 500 && err.needsWipWh) out.needsWipWh = true;
   res.status(status).json(out);
 });
 

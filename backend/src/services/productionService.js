@@ -57,8 +57,9 @@ function withRoute(wo, data) {
    advance — move a work order's CURRENT stage.
    action: start | pause | complete | dispatch
    ============================================================ */
-function advance(user, woId, action) {
+function advance(user, woId, action, opts) {
   if (!user) throw err("Not authenticated", 401);
+  opts = opts || {};
   const isOffice = user.role === "admin" || user.role === "office";
   if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
   if (!ACTIONS.includes(action)) throw err("Invalid action '" + action + "'", 400);
@@ -114,6 +115,28 @@ function advance(user, woId, action) {
       const gate = LAB.coatingGate(wo, data);
       if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
     }
+    /* WHERE THE COATED ROLL IS PUT DOWN.
+       The jumbo coming off coating is not booked into stock — no stage books
+       anything in — but it is a physical roll that the slitting floor has to
+       go and find. So the supervisor closing coating names the store it is
+       carried to, and that travels with the job to the next stage's board.
+       It records a LOCATION, never a movement: no quantity enters any store.
+
+       Required, and required here rather than in the browser, so no panel and
+       no direct API call can close coating without saying where the roll went.
+       Only asked when a stage follows — nobody is waiting on a roll that the
+       coating stage is the last to touch. */
+    if (stage.area === "coating" && idx < route.length - 1) {
+      const want = String(opts.wipWh == null ? "" : opts.wipWh).trim();
+      if (!want) {
+        const e = err("Choose the store the coated roll is going to — slitting is told where to fetch it", 409);
+        e.needsWipWh = true;
+        throw e;
+      }
+      const wh = (data.warehouses || []).find((w) => w.id === want);
+      if (!wh) throw err("Unknown store '" + want + "'", 400);
+      stage.outWh = wh.id; stage.outWhBy = by; stage.outWhAt = now;
+    }
     // post this stage's stock movements (skip for legacy WOs — old flow already did)
     if (!wo.legacy && !stage.posted) {
       // only the portion actually on the floor draws material
@@ -140,6 +163,53 @@ function advance(user, woId, action) {
   wo.updatedBy = by; wo.updatedAt = now;
   repo.putWorkOrder(wo);
 
+  return summarize(wo, data);
+}
+
+/* ============================================================
+   setWipStore — say where a coated roll was put down, for a stage
+   that closed without being asked.
+
+   WRITE ONCE. A store already recorded is never changed: the note is a
+   statement of where the roll was carried as it came off the line, and
+   letting it be rewritten later would leave slitting reading a location
+   nobody can vouch for. What it DOES allow is filling in a blank — every
+   batch coated before the question was asked, which is otherwise stuck
+   telling the next floor "not recorded" for good.
+
+   Like the gate itself, this records a LOCATION and posts no movement:
+   nothing is booked into the store named.
+   ============================================================ */
+function setWipStore(user, woId, body) {
+  if (!user) throw err("Not authenticated", 401);
+  const isOffice = user.role === "admin" || user.role === "office";
+  if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
+  body = body || {};
+  const data = fullState();
+  const found = repo.getWorkOrder(woId);
+  if (!found || !found.id) throw err("Work order not found", 404);
+  const wo = withRoute(found, data);
+
+  const stage = (wo.route || []).find((r) => r.area === "coating");
+  if (!stage) throw err("This job does not pass through coating", 400);
+  // the floor that coated it is the one that knows where it went
+  if (!isOffice && user.area !== "all" && !S.areaCovers(user.area, stage.area)) {
+    throw err("Only the coating floor can say where the coated roll was left", 403);
+  }
+  if (stage.status !== "Completed") {
+    throw err("The store is chosen as coating is completed", 400);
+  }
+  if (stage.outWh) throw err("The store for this roll is already recorded as " + stage.outWh, 409);
+
+  const want = String(body.wh == null ? "" : body.wh).trim();
+  if (!want) throw err("Choose the store the coated roll was left in", 400);
+  const wh = (data.warehouses || []).find((w) => w.id === want);
+  if (!wh) throw err("Unknown store '" + want + "'", 400);
+
+  const now = new Date().toISOString();
+  stage.outWh = wh.id; stage.outWhBy = user.username; stage.outWhAt = now;
+  wo.updatedBy = user.username; wo.updatedAt = now;
+  repo.putWorkOrder(wo);
   return summarize(wo, data);
 }
 
@@ -234,10 +304,12 @@ function resumeWorkOrder(user, id, body) {
    same permissions. The loop belongs on this side of the wire. Each pass goes
    through the ordinary advance(), so not one stage rule is duplicated or
    skipped, and a stage that refuses still throws exactly as it would alone. */
-function advanceAll(user, woId) {
+function advanceAll(user, woId, opts) {
   let wo = null, lastIdx = -1;
   for (let pass = 0; pass < 12; pass++) {
-    wo = advance(user, woId, "complete");
+    // the coating stage in the run still has to say where it put the roll —
+    // driving every stage at once does not excuse the job from the gate
+    wo = advance(user, woId, "complete", opts);
     if (wo.status === "Completed" || wo.status === "Dispatched") break;
     // a route that stops moving would otherwise spin until the cap
     if (wo.stageIdx === lastIdx) break;
@@ -953,7 +1025,7 @@ function recordExcessMaterial(user, body) {
 }
 
 /* ---- legacy status-based endpoint kept working (maps to actions) ---- */
-function updateWorkOrderStatus(user, woId, status) {
+function updateWorkOrderStatus(user, woId, status, opts) {
   const map = {
     "In Production": "start", "In Progress": "start", "Released": "start",
     "Pending": "pause",
@@ -962,7 +1034,9 @@ function updateWorkOrderStatus(user, woId, status) {
   };
   const action = map[status];
   if (!action) throw err("Invalid status '" + status + "'", 400);
-  return advance(user, woId, action);
+  // the body travels on, so this older route can still answer the coating
+  // gate (wipWh) rather than being unable to close the stage at all
+  return advance(user, woId, action, opts);
 }
 
 /* The production line must belong to the area that actually STARTS the job:
@@ -1123,4 +1197,4 @@ function createAdhocProduction(user, body) {
 module.exports = { advance, advanceAll, createWorkOrder, updateWorkOrder, produceFinished, recordExcessMaterial,
   previewWorkOrder, resumeWorkOrder, maxMakeable, shortageFor,
   labSheet, recordLabReading, finishedStockLabSheet,
-  updateWorkOrderStatus, returnStock, createAdhocProduction, ACTIONS };
+  updateWorkOrderStatus, returnStock, createAdhocProduction, setWipStore, ACTIONS };

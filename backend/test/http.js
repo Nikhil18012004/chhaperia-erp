@@ -639,10 +639,50 @@ async function run() {
       (rec.d.report.paramKeys || []).sort().join(",") === "tensile,thickness",
       (rec.d.report.paramKeys || []).join(","));
 
-    const done = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "complete" });
+    /* THE ROLL COMING OFF COATING IS A PHYSICAL THING GOING SOMEWHERE.
+       It is never booked into stock, so unless coating names the store it was
+       carried to, its whereabouts exist nowhere and slitting has to hunt.
+       The reading alone is no longer enough to close the stage. */
+    const noWh = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "complete" });
+    ok("a measured batch STILL cannot close coating without naming the store",
+      noWh.status === 409 && noWh.d.needsWipWh === true, noWh.status + " " + JSON.stringify(noWh.d).slice(0, 90));
+    ok("and the stage is left exactly where it was",
+      (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].status === "In Production");
+    ok("a store that does not exist is refused",
+      (await call("POST", "/production/wo/" + woLid + "/advance", C,
+        { action: "complete", wipWh: "WH-NOWHERE" })).status === 400);
+
+    const done = await call("POST", "/production/wo/" + woLid + "/advance", C,
+      { action: "complete", wipWh: "WH-WIP" });
     ok("NOW the supervisor can finish coating", done.status === 200, done.status + " " + JSON.stringify(done.d).slice(0, 90));
-    ok("and the job moved on to slitting",
-      (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].status === "Completed");
+    const afterCoat = (await call("GET", "/state", A)).d;
+    const woCoated = afterCoat.workorders.find((w) => w.id === woLid);
+    ok("and the job moved on to slitting", woCoated.route[0].status === "Completed");
+    ok("the store is written on the stage that made the roll",
+      woCoated.route[0].outWh === "WH-WIP" && woCoated.route[0].outWhBy === "coating1",
+      woCoated.route[0].outWh + " by " + woCoated.route[0].outWhBy);
+    /* the whole point: a LOCATION, not stock. Naming the store must not book
+       a single unit of anything into it. */
+    const coatMoves = (afterCoat.movements || []).filter((m) => m.ref === woLid && (+m.qty || 0) > 0);
+    ok("naming the store books NOTHING into it", coatMoves.length === 0,
+      coatMoves.map((m) => m.itemId + "@" + m.wh + " +" + m.qty).join(", "));
+    const slitTok = (await login("slitting1", "slitting1@123")).token;
+    const slitSees = ((await call("GET", "/state", slitTok)).d.workorders || [])
+      .find((w) => w.id === woLid);
+    ok("and the slitting board is told where to fetch the roll",
+      !!slitSees && slitSees.wipAt && slitSees.wipAt.wh === "WH-WIP" && !!slitSees.wipAt.name,
+      slitSees && slitSees.wipAt ? JSON.stringify(slitSees.wipAt) : "no location on the board");
+
+    /* WRITE ONCE. The note says where the roll was carried as it came off the
+       line; rewriting it later would leave slitting reading a location nobody
+       can vouch for. What the same endpoint DOES allow is filling in a blank —
+       every batch coated before the question was asked. */
+    ok("a store already recorded cannot be rewritten",
+      (await call("POST", "/production/wo/" + woLid + "/wip-store", C, { wh: "WH-QC" })).status === 409);
+    ok("and the original store still stands",
+      (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].outWh === "WH-WIP");
+    ok("the slitting floor cannot say where coating left the roll",
+      (await call("POST", "/production/wo/" + woLid + "/wip-store", slitTok, { wh: "WH-QC" })).status === 403);
 
     /* the incharge's worklist, and the second measurement on the same batch */
     const labSt = (await call("GET", "/state", LB)).d;

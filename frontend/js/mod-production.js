@@ -199,6 +199,12 @@
   }
   /* one chip per store, for the callers that hand over a list */
   function whChips(list){ return (list||[]).filter(Boolean).map(whChip); }
+  /* the store the coating floor put the coated roll down in, recorded on the
+     stage that made it as that stage was closed. Not stock — a location. */
+  function coatedRollAt(wo){
+    const s=(wo&&wo.route||[]).find(r=>r.area==="coating"&&r.outWh);
+    return s?s.outWh:null;
+  }
 
   /* what a material DOES in the process — mirrors the backend's
      stageService.materialRole, so "what coating consumes" means the same
@@ -998,6 +1004,11 @@
             ["Pending",`<span class="strong" style="color:var(--danger)">${ENG.num(wo.pendingQty)}</span> kg awaiting material`],
           ]:[]),
           ["Line",wo.line],
+          /* The coated jumbo is never booked into a store — so the store the
+             coating floor named as it closed the stage is the only record of
+             where the roll physically is. The office reads the same fact the
+             slitting board is sent to. */
+          ...(coatedRollAt(wo)?[["Coated roll at","🏬 "+esc(whName(coatedRollAt(wo)))]]:[]),
           ["Status",badge(wo.status==="Completed"||wo.status==="Dispatched"?"ok":wo.status==="Partial"?"danger":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),

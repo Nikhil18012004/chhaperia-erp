@@ -240,7 +240,11 @@
   /* ---- production / supervisor stage actions ---- */
   const production = {
     // advance a work order's CURRENT stage: start | pause | complete | dispatch
-    advance(woId, action) { return http("POST", "/production/wo/" + woId + "/advance", { action }); },
+    // `extra` carries whatever the stage being closed has to state — today
+    // that is wipWh, the store the coating floor puts the coated roll in
+    advance(woId, action, extra) { return http("POST", "/production/wo/" + woId + "/advance", Object.assign({ action }, extra || {})); },
+    // fill in the store for a roll coated before the question was asked (write once)
+    setWipStore(woId, wh) { return http("POST", "/production/wo/" + woId + "/wip-store", { wh }); },
     // every remaining stage, in a single request
     advanceAll(woId) { return http("POST", "/production/wo/" + woId + "/advance", { action: "complete", all: true }); },
     // what raising this order would mean — shortage / pending, writes nothing

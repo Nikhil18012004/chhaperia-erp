@@ -39,8 +39,8 @@ router.post("/production/wo/:id/advance", requireAuth, requireRole("supervisor",
   const b = req.body || {};
   try {
     res.json(b.all && b.action === "complete"
-      ? production.advanceAll(req.user, req.params.id)
-      : production.advance(req.user, req.params.id, b.action));
+      ? production.advanceAll(req.user, req.params.id, b)
+      : production.advance(req.user, req.params.id, b.action, b));
   } catch (e) { next(e); }
 });
 
@@ -58,7 +58,7 @@ router.post("/production/wo/:id/lab", requireAuth, requireRole("supervisor", "ad
 
 // Back-compat: advance by target status (maps to a stage action).
 router.post("/production/wo/:id/status", requireAuth, requireRole("supervisor", "admin"), (req, res, next) => {
-  try { res.json(production.updateWorkOrderStatus(req.user, req.params.id, (req.body || {}).status)); }
+  try { res.json(production.updateWorkOrderStatus(req.user, req.params.id, (req.body || {}).status, req.body || {})); }
   catch (e) { next(e); }
 });
 
@@ -92,6 +92,14 @@ router.get("/production/finished/:itemId/lab", requireAuth, requireRole("supervi
 router.post("/production/finished", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
   try { res.status(201).json(production.produceFinished(req.user, req.body || {})); }
   catch (e) { next(e); }
+});
+
+/* Say where a coated roll was put down, for a coating stage that closed
+   before the question was asked. WRITE ONCE — a store already recorded is
+   never changed here; the gate on completing coating is where it is normally
+   captured. Records a location, posts no movement. */
+router.post("/production/wo/:id/wip-store", requireAuth, requireRole("supervisor", "admin", "office"), (req, res, next) => {
+  try { res.json(production.setWipStore(req.user, req.params.id, req.body || {})); } catch (e) { next(e); }
 });
 
 // Floor action: send material back to a store (unused issue / over-draw / FG off the line).

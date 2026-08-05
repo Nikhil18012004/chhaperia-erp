@@ -1097,6 +1097,13 @@ canvas{display:block;width:100%}
 .sup-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:11px;margin-bottom:13px}
 .sup-fact-l{font-size:10.5px;color:var(--text-mut);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
 .sup-fact-v{font-size:15px;font-weight:600;margin-top:2px;color:var(--text)}
+/* a fact the floor has not been told — stated, not left blank */
+.sup-fact-mut{color:var(--text-mut);font-weight:500;font-size:13.5px}
+/* a reading the next floor is READING, not taking: label left, value right */
+.sup-lab-read{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:9px 2px;border-bottom:1px solid var(--line);font-size:14px}
+.sup-lab-read .k{color:var(--text-dim)}
+.sup-lab-read .v{font-size:16px;font-weight:800;white-space:nowrap}
 .sup-mat{margin-bottom:13px;background:var(--panel-2);border-radius:10px;padding:4px 13px;border:1px solid var(--line)}
 .sup-mat summary{font-size:13px;font-weight:700;color:var(--text-dim);cursor:pointer;padding:9px 0}
 .sup-mat-list{padding:4px 0 11px;display:flex;flex-direction:column;gap:7px}

@@ -167,8 +167,6 @@
         "Tap a job to move it to the next stage. Once you complete a stage it hands off to the next team automatically.",
         [
           H("button", { class: "btn primary", onclick: () => this.openProduce(), html: "➕ Add to Finished Stock" }),
-          H("button", { class: "btn", onclick: () => this.openAdhoc(), html: "🏭 Production Entry" }),
-          H("button", { class: "btn", onclick: () => this.openReturn(), html: "↩ Return" }),
           H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" }),
         ]
       ));
@@ -378,6 +376,14 @@
         fact("Make", H("b", { text: fmtQty(w.qty) + " " + (p.uom || "") })),
         w.spec ? fact(w.spec.label, H("b", { style: w.spec.value == null ? "color:var(--danger)" : "", text: w.spec.value == null ? "— not set" : String(w.spec.value) })) : null,
         w.customer ? fact("Customer", w.customer) : null,
+        /* Where the coated jumbo was put down. Nothing was booked into stock —
+           this is the only record of where the roll physically is, and it is
+           what sends the slitting floor to the right place. A job coated
+           before the store was ever asked for says so rather than going
+           quietly blank. */
+        w.wipAt ? fact("Coated roll at", H("b", { text: "🏬 " + w.wipAt.name }))
+          : (coatingDone(w) ? fact("Coated roll at",
+              H("span", { class: "sup-fact-mut", text: "— not recorded" })) : null),
         // the order's own slitting width wins over any width held on the product
         w.widthMM ? fact("Width", w.widthMM + " mm")
           : (p.widthMM ? fact("Width", (Array.isArray(p.widthMM) ? p.widthMM.join("/") : p.widthMM) + " mm") : null),
@@ -425,7 +431,15 @@
       /* No banner while the reading is outstanding: the action button already
          says "Enter Lab Report", and a warning strip repeating it was noise on
          a card the floor reads at a glance. Once the reading IS in, a slim
-         confirmation stays — it is the only way back to correct a value. */
+         confirmation stays — it is the only way back to correct a value.
+
+         WHO MAY TOUCH IT: the batch is measured by the floor that coated it,
+         so only the coating side gets "Edit reading". Everyone downstream —
+         slitting, fibre-glass, packing — is READING somebody else's
+         measurement, and their button says so and opens it read-only. A
+         downstream floor correcting a coating reading would be editing a
+         record of something they did not do. */
+      const measuredHere = this.area === "coating" || this.area === "all";
       let labBox = null;
       if (lab && lab.entered && w.mine && !w.dispatched) {
         labBox = H("div", { class: "sup-lab done" }, [
@@ -434,7 +448,24 @@
             H("div", { class: "sup-lab-s",
               text: "Batch " + lab.batchNo + " · " + lab.params.length + " reading" + (lab.params.length === 1 ? "" : "s") + " recorded" }),
           ]),
-          H("button", { class: "sup-lab-btn", onclick: () => this.openLab(w), text: "✎ Edit reading" }),
+          measuredHere
+            ? H("button", { class: "sup-lab-btn", onclick: () => this.openLab(w), text: "✎ Edit reading" })
+            : H("button", { class: "sup-lab-btn", onclick: () => this.readLab(w), text: "👁 Read reading" }),
+        ]);
+      }
+
+      /* A batch coated before the store was ever asked for leaves slitting
+         reading "not recorded". The floor that coated it can still say where
+         it was left — once — so the job stops being a dead end. */
+      let wipBox = null;
+      if (measuredHere && !w.wipAt && !w.dispatched && coatingDone(w)) {
+        wipBox = H("div", { class: "sup-lab" }, [
+          H("div", { class: "sup-lab-main" }, [
+            H("div", { class: "sup-lab-t", text: "🏬 Coated roll — store not recorded" }),
+            H("div", { class: "sup-lab-s",
+              text: "This batch was coated before the store was asked for. Say where the roll was left and slitting can go straight to it." }),
+          ]),
+          H("button", { class: "sup-lab-btn", onclick: () => this.askWipStore(w, { backfill: true }), text: "Set store" }),
         ]);
       }
 
@@ -480,6 +511,11 @@
             actions.appendChild(H("button", { class: "sup-act primary", onclick: () => this.openLab(w),
               title: "Batch " + lab.batchNo + " — " + (lab.missing.length || lab.params.length) + " reading(s) to record",
               text: "🧪 Enter Lab Report" }));
+          } else if (cur.area === "coating" && (w.route || []).length - 1 > (w.stageIdx || 0)) {
+            /* Closing coating hands a physical roll to the next floor, so it
+               asks where the roll is being put down first. The server refuses
+               the stage without it, so this is the only way through. */
+            actions.appendChild(H("button", { class: "sup-act primary", onclick: () => this.askWipStore(w), text: "✓ Complete " + label }));
           } else {
             actions.appendChild(H("button", { class: "sup-act primary", onclick: (e) => this.act(w, "complete", e.currentTarget), text: "✓ Complete " + label }));
           }
@@ -490,7 +526,7 @@
       }
 
       return H("div", { class: "sup-card" + (overdue ? " overdue" : "") + (pend > 0 ? " partial" : "") },
-        [head, this.timeline(w), factsNode, mat, labBox, actions].filter(Boolean));
+        [head, this.timeline(w), factsNode, mat, labBox, wipBox, actions].filter(Boolean));
     },
 
     /* ============================================================
@@ -552,6 +588,93 @@
           H("div", { class: "sup-lab-fld", style: "margin-top:12px" }, [H("label", {}, [H("span", { text: "Remarks" })]), remarks]),
         ]),
         foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }), save],
+      });
+    },
+
+    /* ============================================================
+       WHERE THE COATED ROLL IS PUT DOWN.
+       Coating hands the next floor a physical jumbo. Nothing is booked
+       into any store — no stage books stock in — so unless the store is
+       named here, the roll's location exists nowhere and slitting has to
+       hunt for it. Asked as coating closes; the server refuses the stage
+       without it, so this cannot be walked past.
+       ============================================================ */
+    askWipStore(w, opts) {
+      const self = this;
+      // `backfill` — the stage is already closed and simply never said where
+      // the roll went (every batch coated before this was asked for). Same
+      // question, same one-time answer; it just cannot also close the stage.
+      const backfill = !!(opts && opts.backfill);
+      const whs = this.data.warehouses || [];
+      if (!whs.length) { toast("No stores are set up yet — ask the office.", { type: "warn" }); return; }
+      // the WIP floor is where a coated roll normally waits; the rest are
+      // offered because a roll does sometimes go straight to QC or a bay
+      const wip = whs.find((x) => String(x.type || "").toUpperCase() === "WIP") || whs[0];
+      const sel = MW.select(whs.map((x) => ({ value: x.id, label: x.name + (x.type ? " · " + x.type : "") })), () => {}, wip.id);
+      sel.style.width = "100%";
+      const label = backfill ? "Save store" : "✓ Complete Coating";
+      const go = H("button", { class: "btn primary", text: label });
+      go.onclick = async () => {
+        go.disabled = true; go.textContent = "…";
+        try {
+          if (backfill) await DB.production.setWipStore(w.id, sel.value);
+          else await DB.production.advance(w.id, "complete", { wipWh: sel.value });
+          mo.close();
+          const nm = (whs.find((x) => x.id === sel.value) || {}).name || sel.value;
+          toast(backfill ? "Recorded — slitting is sent to " + nm : "Coating completed — roll left at " + nm,
+            { type: "ok", title: backfill ? "Store recorded" : "Handed to slitting" });
+          await self.refresh({ quiet: true, slim: true });
+        } catch (err) {
+          toast(err.message, { type: "danger" });
+          go.disabled = false; go.textContent = label;
+        }
+      };
+      const mo = UI.modal({
+        title: backfill ? "🏬 Where was this coated roll left?" : "🧵 Where is the coated roll going?",
+        sub: w.id + " · the slitting floor is sent to this store to fetch it",
+        body: H("div", {}, [
+          H("div", { class: "sup-lab-ctx", style: "margin-bottom:14px", html:
+            "The roll is <b>not</b> added to stock — nothing is booked in anywhere. "
+            + "This only records where you have put it down, so slitting knows where to find it."
+            + (backfill ? " It can be set once and not changed afterwards, so check before saving." : "") }),
+          field(backfill ? "Store the roll was left in" : "Store the roll is carried to", sel),
+        ]),
+        foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }), go],
+      });
+    },
+
+    /* ============================================================
+       The reading, as the NEXT floor reads it. What the coating floor
+       measured on this batch, laid out and not editable — slitting is
+       checking what it has been handed, not re-measuring it.
+
+       Built from what the job already carries, so opening it costs no
+       request; and, like every other panel down here, it shows the
+       measured values with no spec limits beside them — grading stays
+       server-side (see labService).
+       ============================================================ */
+    readLab(w) {
+      const lab = (w && w.lab) || {};
+      const vals = lab.values || {};
+      const params = lab.params || [];
+      if (!params.length) { toast("No reading has been recorded for this batch.", { type: "warn" }); return; }
+      const rows = params.map((p) => H("div", { class: "sup-lab-read" }, [
+        H("span", { class: "k", text: p.label + (p.unit ? "  (" + p.unit + ")" : "") }),
+        H("b", { class: "v", text: vals[p.key] == null ? "—" : String(vals[p.key]) }),
+      ]));
+      const mo = UI.modal({
+        title: "🧪 Batch " + (lab.batchNo || w.id) + " — the coating floor's reading",
+        sub: (w.product ? w.product.name + " · " : "") + "read only",
+        body: H("div", {}, [
+          H("div", { class: "sup-lab-ctx", style: "margin-bottom:12px", html:
+            "Measured by the floor that coated this batch. You are reading it, not re-taking it — "
+            + "any correction is made by the coating supervisor." }),
+          H("div", {}, rows),
+          lab.labEntered
+            ? H("div", { class: "sup-lab-s", style: "margin-top:12px", text: "The lab incharge has added their own measurement to this certificate." })
+            : null,
+        ].filter(Boolean)),
+        foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Close" })],
       });
     },
 
@@ -686,7 +809,15 @@
        ============================================================ */
     /* ---- Return: send material back to a store -------------------------
        Unused issue, over-draw, or finished stock coming back off the line.
-       Posts a single RET movement — never a silent adjustment. */
+       Posts a single RET movement — never a silent adjustment.
+
+       NOT SURFACED ON THE FLOOR TODAY. This and openAdhoc() below were the
+       "↩ Return" and "🏭 Production Entry" buttons; both were taken off the
+       supervisor's page. The builders are kept intact so either can be put
+       back by restoring its button — nothing else calls them. Note that the
+       API behind them (POST /production/return, /production/adhoc) still
+       accepts a supervisor token: removing a button hides the action, it
+       does not withdraw the permission. */
     openReturn() {
       const self = this;
       const items = (this.data.stockItems || []).filter((i) => ["RM", "PKG", "CON", "FG"].includes(i.cat));
@@ -1068,6 +1199,12 @@
     ]);
   }
   function fmtQty(n) { n = +n || 0; return n % 1 === 0 ? n.toLocaleString("en-IN") : n.toLocaleString("en-IN", { maximumFractionDigits: 1 }); }
+  /* has this job been through coating? Only then is there a roll whose
+     whereabouts anyone can be told — and only then is a missing store a gap
+     worth printing rather than a stage that has not happened yet. */
+  function coatingDone(w) {
+    return (w.route || []).some((s) => s.area === "coating" && s.status === "Completed");
+  }
   function stat(label, val) {
     return UI.h("div", {}, [
       UI.h("div", { class: "muted", style: "font-size:11px", text: label }),
