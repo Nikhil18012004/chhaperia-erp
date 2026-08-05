@@ -1528,6 +1528,18 @@ canvas{display:block;width:100%}
   .mstrip{padding:2px 12px 9px;gap:5px}
 }
 
+/* ---- HR · Settings: a deduction's rates stay on one row ------------------
+   Three fields at a 120px floor need 380px, and a phone row is 340px, so PF
+   and ESI each broke 2 + 1 — the third rate dropped to its own line and read
+   as though it belonged to the next deduction. On a phone let the fields
+   share the row equally instead; the 120px floor still governs desktop, and
+   PT (two fields) is unaffected either way. */
+.ded-f{flex:1;min-width:120px}
+@media(max-width:640px){
+  .ded-fields{flex-wrap:nowrap;gap:8px}
+  .ded-fields>.ded-f{min-width:0}
+}
+
 /* ---- payslip, PO/SO totals and the document forms ---- */
 @media(max-width:640px){
   .pay-who{padding:9px 12px;margin-bottom:10px;gap:5px 14px}

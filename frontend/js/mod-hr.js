@@ -1130,7 +1130,7 @@
         h("label", { class: "flex aic gap", style: "cursor:pointer;margin-bottom:8px" }, [
           h("input", { type: "checkbox", id: "c_" + key + "_on", checked: on ? "checked" : null }),
           h("b", { text: label })]),
-        h("div", { class: "flex gap wrap" }, fields.map(([lb, id, val]) => h("div", { style: "flex:1;min-width:120px" }, [
+        h("div", { class: "flex gap wrap ded-fields" }, fields.map(([lb, id, val]) => h("div", { class: "ded-f" }, [
           h("label", { class: "muted", style: "font-size:11px", text: lb }),
           h("input", { class: "input", id, type: "number", step: "0.01", value: val != null ? val : 0 })]))),
       ]);
