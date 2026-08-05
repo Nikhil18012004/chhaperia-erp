@@ -11,7 +11,7 @@ const fs = require("fs");
 const express = require("express");
 const apiRoutes = require("./routes/api");
 const hrRoutes = require("./routes/hr");
-const { router: authRoutes } = require("./routes/auth");
+const { router: authRoutes, getToken } = require("./routes/auth");
 const authService = require("./services/authService");
 const erpService = require("./services/erpService");
 const hrService = require("./services/hrService");
@@ -25,9 +25,20 @@ const app = express();
 // Lab test-certificate uploads carry embedded images and keep the old 25 MB
 // allowance; everything else gets a tight 1 MB body cap (the JSON payloads
 // are small — a huge body anywhere else is an attack, not a feature).
-app.use("/api/lab", express.json({ limit: "25mb" }));
-app.use("/api/state", express.json({ limit: "25mb" }));   // full-dataset restore
-app.use("/api/chatbot/knowledge", express.json({ limit: "10mb" })); // bulk training uploads
+/* …and the generous limits are for AUTHENTICATED work only. These mounts run
+   before requireAuth, so without this gate an anonymous caller could make the
+   server buffer and JSON.parse 25 MB per request purely to be thrown out
+   afterwards. No credential at all -> fall through to the 1 MB parser and let
+   requireAuth answer 401. The credential test is auth's OWN getToken, so the
+   two can never drift apart; it only checks that one was PRESENTED, never that
+   it is valid — that stays requireAuth's job. */
+const bigBody = (limit) => {
+  const parse = express.json({ limit });
+  return (req, res, next) => (getToken(req) ? parse(req, res, next) : next());
+};
+app.use("/api/lab", bigBody("25mb"));
+app.use("/api/state", bigBody("25mb"));   // full-dataset restore
+app.use("/api/chatbot/knowledge", bigBody("10mb")); // bulk training uploads
 app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)

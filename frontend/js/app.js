@@ -101,7 +101,13 @@
       const mh=$("#modalHost"); if(mh && !mh.hidden) return true;
       const ck=$("#cmdk"); if(ck && !ck.hidden) return true;
       const ad=$("#alertDrawer"); if(ad && ad.classList.contains("open")) return true;
-      const ae=document.activeElement; if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+      /* The assistant's own input does NOT count as "the user is editing". It
+         floats over the page, edits nothing, and keeps focus the whole time the
+         panel is open — which used to hold the 15s refresh off indefinitely, so
+         the board silently stopped updating while the chat header kept saying
+         "Live". Everything else that takes focus still pauses the refresh. */
+      const ae=document.activeElement;
+      if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && !(ae.closest && ae.closest("#chatWidget"))) return true;
       return false;
     },
     startAutoRefresh(ms){

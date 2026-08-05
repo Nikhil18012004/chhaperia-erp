@@ -54,7 +54,15 @@
     root = null; user = null; open = false; tab = "chat"; log = [];
   };
 
-  function onKey(e) { if (e.key === "Escape" && open) toggle(false); }
+  /* Escape belongs to whatever is stacked ON TOP of us. A confirm dialog or the
+     command palette opens above the panel; closing those used to slam the whole
+     assistant shut as well, dumping the user out of the Train tab. */
+  function onKey(e) {
+    if (e.key !== "Escape" || !open) return;
+    const mh = document.querySelector("#modalHost"); if (mh && !mh.hidden) return;
+    const ck = document.querySelector("#cmdk"); if (ck && !ck.hidden) return;
+    toggle(false);
+  }
 
   /* ---------------- live minute refresh ---------------- */
   function startPoll() {
@@ -151,6 +159,17 @@
     if (msgs) msgs.scrollTop = msgs.scrollHeight;
   }
 
+  /* Land the reply even if the body was redrawn while it was in flight (a tab
+     switch, or close-and-reopen). The typing bubble is detached by that redraw,
+     and replaceWith() on a detached node is a silent no-op — the answer used to
+     vanish until the next redraw replayed the log, so it looked as though the
+     bot had answered a question nobody asked. */
+  function settle(typing, m) {
+    if (typing && typing.isConnected) { typing.replaceWith(bubble(m)); return; }
+    const msgs = root && root.querySelector("#chatMsgs");
+    if (msgs) { msgs.appendChild(bubble(m)); }
+  }
+
   async function send(text) {
     text = String(text || "").trim();
     if (!text || busy) return;
@@ -165,13 +184,13 @@
       const r = await DB.chat.ask(text);
       const m = { who: "bot", text: r.answer, src: r.source };
       log.push(m);
-      typing.replaceWith(bubble(m));
-      const stamp = root.querySelector("#chatLive");
+      settle(typing, m);
+      const stamp = root && root.querySelector("#chatLive");
       if (stamp && r.asOf) stamp.textContent = "Live · " + hhmm(r.asOf);
     } catch (e) {
       const m = { who: "bot", text: "⚠ " + (e.message || "Something went wrong — try again.") };
       log.push(m);
-      typing.replaceWith(bubble(m));
+      settle(typing, m);
     } finally { busy = false; scrollDown(); }
   }
 
@@ -261,28 +280,35 @@
         return { question: l.slice(0, i).trim(), answer: l.slice(i + 1).trim() };
       });
     }
-    // CSV with header
-    const rows = lines.map(csvSplit);
+    // CSV with header — parsed off the WHOLE text, not line by line
+    const rows = csvRows(text);
+    if (!rows.length) return [];
     const head = rows[0].map((c) => c.toLowerCase().trim());
     const qi = head.indexOf("question"), ai = head.indexOf("answer"), ki = head.indexOf("keywords");
     if (qi < 0 || ai < 0) throw new Error('CSV needs a header row with "question" and "answer" columns.');
     return rows.slice(1).filter((r) => r.length > Math.max(qi, ai))
       .map((r) => ({ question: r[qi], answer: r[ai], keywords: ki >= 0 ? r[ki] : "" }));
   }
-  function csvSplit(line) {
-    const out = []; let cur = "", inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
+  /* A CSV field may legally contain commas AND newlines when it is quoted — which
+     is exactly what Excel writes for a multi-step answer. Splitting the text into
+     lines first cut those answers off at the first newline, and a continuation
+     line containing a comma became its own junk entry, all under a success toast.
+     So scan the whole text once and let the quote state decide what ends a row. */
+  function csvRows(text) {
+    const rows = []; let row = [], field = "", inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
       if (inQ) {
-        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
         else if (c === '"') inQ = false;
-        else cur += c;
+        else field += c;
       } else if (c === '"') inQ = true;
-      else if (c === ",") { out.push(cur); cur = ""; }
-      else cur += c;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n") { row.push(field); field = ""; rows.push(row); row = []; }
+      else if (c !== "\r") field += c;
     }
-    out.push(cur);
-    return out.map((s) => s.trim());
+    row.push(field); rows.push(row);
+    return rows.map((r) => r.map((s) => s.trim())).filter((r) => r.some((s) => s !== ""));
   }
 
   global.CHAT = CHAT;

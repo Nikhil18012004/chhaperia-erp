@@ -593,6 +593,16 @@ function putChatKnowledge(k) {
     .run(k.id, J(k));
   return k;
 }
+/* All-or-nothing bulk write. A training upload is one file to the user, so a bad
+   row halfway down must not leave the first half committed — that made a retry
+   duplicate every entry it had already saved. */
+function putChatKnowledgeBulk(list) {
+  const db = getDb();
+  const st = db.prepare("INSERT INTO chatbot_knowledge(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc");
+  const tx = db.transaction((rows) => { rows.forEach((k) => st.run(k.id, J(k))); });
+  tx(list || []);
+  return list || [];
+}
 function deleteChatKnowledge(id) { getDb().prepare("DELETE FROM chatbot_knowledge WHERE id=?").run(id); return { id }; }
 
 function getSettings() {
@@ -777,4 +787,4 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   getLabProduct, putLabProduct, deleteLabProduct, labProductsEmpty,
   getLabReport, putLabReport, deleteLabReport,
   // Chatbot knowledge base
-  listChatKnowledge, getChatKnowledge, putChatKnowledge, deleteChatKnowledge };
+  listChatKnowledge, getChatKnowledge, putChatKnowledge, putChatKnowledgeBulk, deleteChatKnowledge };

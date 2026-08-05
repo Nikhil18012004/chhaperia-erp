@@ -39,15 +39,27 @@ function tokens(s) {
 function kbScore(qTokens, qRaw, entry) {
   const eq = tokens(entry.question);
   const kw = (entry.keywords || []).flatMap((k) => tokens(k));
-  if (!qTokens.length || (!eq.length && !kw.length)) return 0;
+  const a = qRaw.toLowerCase().trim(), b = String(entry.question || "").toLowerCase().trim();
+
+  /* A question made only of stopwords ("who are we") tokenises to nothing, so it
+     could never be scored — not even when retyped word for word. An exact match
+     still counts; anything looser stays 0, or a two-letter ask would match it. */
+  if (!qTokens.length) return a && b && a === b ? 1 : 0;
+  if (!eq.length && !kw.length) return 0;
+
   let hits = 0;
   qTokens.forEach((t) => {
     if (eq.includes(t)) hits += 1;
     else if (kw.includes(t)) hits += 2;
   });
   let score = hits / qTokens.length;
-  const a = qRaw.toLowerCase().trim(), b = String(entry.question || "").toLowerCase().trim();
-  if (a && b && (a.includes(b) || b.includes(a))) score += 0.5;
+  /* Near-verbatim bonus. It needs a length guard: a one-word trained entry like
+     "stock" is contained in every stock question, and the bonus alone would push
+     that canned answer past the 0.8 cut-off ahead of the live lookup. */
+  if (a && b) {
+    if (a === b) score += 0.5;
+    else if ((a.includes(b) || b.includes(a)) && eq.length >= 3) score += 0.5;
+  }
   return score;
 }
 
@@ -98,6 +110,13 @@ function onHand(st) {
   return out;
 }
 
+/* Does this role's view carry stock at all? Distinct from "carries none": an
+   office login on a freshly wiped dataset has movements:[] and was being told
+   stock "isn't available for your login" — about data it fully owns. */
+function stockVisible(st) {
+  return Array.isArray(st.movements) || !!st.warehouseStock;
+}
+
 /* WOs come in two shapes: raw (officer/lab) and the supervisor's mapped view */
 function woProduct(wo, itemById) {
   if (wo.product && wo.product.name) return wo.product.name;
@@ -119,14 +138,30 @@ function intentAnswers(user, q, st) {
   const qT = tokens(q);
   const items = stateItems(st);
   const itemById = Object.fromEntries(items.map((i) => [i.id, i]));
-  const has = (...words) => words.some((w) => ql.includes(w));
+  /* Match whole words, not bare substrings. A plain includes() found "lab" inside
+     "available" and "test" inside "latest", so "is mica tape available" answered
+     with lab statistics and never reached the stock intent that owns the word.
+     The trigger must START a word; only a plural may follow, so "customer" still
+     matches "customers" and "batch" matches "batches", while "label" and
+     "labour" no longer count as "lab". */
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const has = (...words) => words.some((w) => {
+    const t = String(w).trim();
+    if (!t) return false;
+    return new RegExp("(?:^|[^a-z0-9])" + esc(t) + "(?:e?s)?(?:[^a-z0-9]|$)", "i").test(ql);
+  });
   const notForRole = (what) => `${what} isn't available for your login — ask the office team.`;
 
   /* -- a specific work order by id -- */
   const woId = /\b(wo[- ]?\d+)\b/i.exec(q);
   if (woId) {
     const id = woId[1].toUpperCase().replace(/\s+/, "-").replace("WO", "WO-").replace("WO--", "WO-");
-    const wo = (st.workorders || []).find((w) => String(w.id).toUpperCase() === id);
+    /* Real ids are zero-padded to four ("WO-0012"), so a strict string compare
+       failed every natural way of typing it — "WO 12", "wo12", even the help
+       text's own "WO-012". Compare the number, not the padding. */
+    const woNum = (s) => { const m = /^\s*wo[-\s]?0*(\d+)\s*$/i.exec(String(s || "")); return m ? m[1] : null; };
+    const want = woNum(id);
+    const wo = (st.workorders || []).find((w) => want != null && woNum(w.id) === want);
     if (!wo) return `I can't see a work order "${id}" from your login.`;
     const stg = woStage(wo);
     const lines = [
@@ -173,8 +208,12 @@ function intentAnswers(user, q, st) {
     return lines.join("\n");
   }
 
-  /* -- sales orders / revenue -- */
-  if (has("sales order", "sales", "so ", "revenue", "order value", "customer order", "dispatched")) {
+  /* -- sales orders / revenue --
+     "so" is not a trigger: it is an ordinary English word, and "we are low on
+     mica so what should I order" was being answered with a sales-order listing.
+     A quoted id ("SO-14", "so 14") still gets you here. */
+  const soRef = /\bso[-\s]?\d+\b/i.test(q);
+  if (soRef || has("sales order", "sales", "revenue", "order value", "customer order", "dispatched")) {
     if (!Array.isArray(st.salesorders)) return notForRole("Sales orders");
     const sos = st.salesorders;
     const open = sos.filter((s) => s.status !== "Dispatched");
@@ -193,8 +232,9 @@ function intentAnswers(user, q, st) {
     return lines.join("\n");
   }
 
-  /* -- purchase orders -- */
-  if (has("purchase order", "purchase", "po ", "incoming material", "supplier order")) {
+  /* -- purchase orders --  ("po " matched any word ending in -po: "tempo") -- */
+  const poRef = /\bpo[-\s]?\d+\b/i.test(q);
+  if (poRef || has("purchase order", "purchase", "incoming material", "supplier order")) {
     if (!Array.isArray(st.purchaseorders)) return notForRole("Purchase orders");
     const pos = st.purchaseorders;
     const pending = pos.filter((p) => (p.lines || []).some((l) => (+l.recd || 0) < (+l.qty || 0)));
@@ -208,7 +248,14 @@ function intentAnswers(user, q, st) {
   }
 
   /* -- lab / QC -- */
-  if (has("lab", "test", "qc", "quality", "batch", "certificate", "measurement")) {
+  if (has("lab", "laboratory", "test", "qc", "quality", "batch", "certificate", "measurement")) {
+    /* A supervisor's view carries neither key. Treating "redacted" as "empty"
+       told the coating floor "No jobs are waiting on a lab measurement ✓" while
+       batches genuinely owed one — a fabricated all-clear to the exact role
+       running the QC gate. Absent data must report absent. */
+    if (!Array.isArray(st.labPending) && !Array.isArray(st.labReports)) {
+      return notForRole("Lab and QC status");
+    }
     const pend = st.labPending || [];
     const reps = st.labReports || [];
     const lines = [];
@@ -291,8 +338,8 @@ function intentAnswers(user, q, st) {
   if (has("stock", "on hand", "inventory", "how much", "how many", "available", "balance", "quantity", "qty")) {
     const found = matchItems(qT.filter((t) => !["stock","inventory","hand","available","balance","quantity","qty","much","many","left"].includes(t)), items);
     if (found.length) {
+      if (!stockVisible(st)) return notForRole("Live stock quantities");
       const oh = onHand(st);
-      if (!Object.keys(oh).length) return notForRole("Live stock quantities");
       return found.slice(0, 3).map((i) => {
         const o = oh[i.id] || { qty: 0, byWh: {} };
         const whs = Object.entries(o.byWh).filter(([, q]) => Math.abs(q) > 0.001)
@@ -301,9 +348,10 @@ function intentAnswers(user, q, st) {
       }).join("\n");
     }
     if (has("stock", "inventory")) {
+      if (!stockVisible(st)) return notForRole("Live stock quantities");
       const oh = onHand(st);
-      if (!Object.keys(oh).length) return notForRole("Live stock quantities");
       const total = items.filter((i) => (oh[i.id] || {}).qty > 0.001).length;
+      if (!total) return "Nothing is in stock right now — no item carries a balance.";
       return `${total} item(s) currently in stock. Ask about one by name, e.g. "stock of mica tape".`;
     }
   }
@@ -396,11 +444,17 @@ function addKnowledge(user, body) {
   if (raw.length > 2000) throw err("Upload at most 2000 entries per request.");
   const existing = repo.listChatKnowledge();
   const added = [];
-  raw.forEach((e) => {
+  /* Validate the WHOLE upload before a single row is written. This used to save
+     as it went, so a blank answer on row 1500 left 1499 rows committed under an
+     error message that never said so — and the corrected re-upload added them
+     all a second time under fresh ids. Build first, then write in one go. */
+  raw.forEach((e, i) => {
     const question = String((e && e.question) || "").trim();
     const answer = String((e && e.answer) || "").trim();
-    if (!question || !answer) throw err("Every entry needs a question and an answer.");
-    const k = {
+    if (!question || !answer) {
+      throw err(`Every entry needs a question and an answer — entry ${i + 1} of ${raw.length} is missing ${!question ? "a question" : "an answer"}. Nothing was saved.`);
+    }
+    added.push({
       id: nextId(existing.concat(added), "KB-"),
       question: question.slice(0, 500),
       answer: answer.slice(0, 4000),
@@ -408,10 +462,9 @@ function addKnowledge(user, body) {
       tags: normKeywords(e.tags),
       addedBy: (user && user.username) || "?",
       addedAt: new Date().toISOString(),
-    };
-    repo.putChatKnowledge(k);
-    added.push(k);
+    });
   });
+  repo.putChatKnowledgeBulk(added);
   return { added: added.length, entries: added };
 }
 

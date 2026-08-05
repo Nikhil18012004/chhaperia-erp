@@ -460,6 +460,12 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 
 /* toasts */
 .toast-stack{position:fixed;bottom:22px;right:22px;z-index:400;display:flex;flex-direction:column;gap:10px}
+/* The assistant owns the same bottom-right corner. A toast is opaque and sits at
+   z400 over the fab (z245), so every "Saved" notice used to bury the button for
+   ~3.5s and swallow the click meant to open it. Lift the stack above the fab,
+   and move it right out of the way while the panel itself is open. */
+body:has(#chatWidget) .toast-stack{bottom:88px}
+body:has(#chatPanel:not([hidden])) .toast-stack{right:auto;left:22px;bottom:22px}
 .toast{display:flex;align-items:center;gap:12px;min-width:280px;max-width:380px;padding:13px 15px;border-radius:13px;
   background:var(--panel);border:1px solid var(--line-strong);box-shadow:var(--shadow-pop),var(--inset-top);
   animation:slidein .3s var(--spring);border-left:4px solid var(--accent)}
@@ -640,6 +646,10 @@ canvas{display:block;width:100%}
   .form-grid .field > label{flex:1 0 auto}
 
   .toast-stack{left:10px;right:10px;bottom:calc(84px + env(safe-area-inset-bottom))}
+  /* full-width here, so a toast covers the fab outright — clear it, and drop to
+     the top of the screen while the panel is open (there is no room beside it) */
+  body:has(#chatWidget) .toast-stack{bottom:calc(146px + env(safe-area-inset-bottom, 0px))}
+  body:has(#chatPanel:not([hidden])) .toast-stack{top:calc(66px + env(safe-area-inset-top, 0px));bottom:auto;left:10px;right:10px}
   .toast{min-width:0;max-width:none;width:100%}
 
   .login-screen{padding:14px}
