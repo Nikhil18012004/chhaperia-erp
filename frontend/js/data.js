@@ -279,10 +279,23 @@
     remove(woId) { return http("DELETE", "/production/wo/" + enc(woId)); },
   };
 
+  /* ---- Chatbot: ask over live role-filtered data + train the KB ---- */
+  const chat = {
+    ask(q) { return http("POST", "/chatbot/ask", { q }); },
+    snapshot() { return http("GET", "/chatbot/snapshot"); },
+    knowledge: {
+      list() { return http("GET", "/chatbot/knowledge"); },
+      // one entry or a bulk array — the training-upload door
+      add(entries) { return http("POST", "/chatbot/knowledge", Array.isArray(entries) ? { entries } : entries); },
+      update(id, patch) { return http("PUT", "/chatbot/knowledge/" + enc(id), patch); },
+      remove(id) { return http("DELETE", "/chatbot/knowledge/" + enc(id)); },
+    },
+  };
+
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
     items, movements, purchase, sales, boms, leads, appointments, customers, suppliers, org, transporters, warehouses, hr,
-    labProducts, labReports,
+    labProducts, labReports, chat,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);

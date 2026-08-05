@@ -580,6 +580,21 @@ function putLabReport(rep) {
 }
 function deleteLabReport(id) { getDb().prepare("DELETE FROM lab_reports WHERE id=?").run(id); return { id }; }
 
+/* ---- Chatbot knowledge base (trainable Q&A, doc-only rows) ---- */
+function listChatKnowledge() {
+  return getDb().prepare("SELECT doc FROM chatbot_knowledge ORDER BY id").all().map((r) => P(r.doc));
+}
+function getChatKnowledge(id) {
+  const r = getDb().prepare("SELECT doc FROM chatbot_knowledge WHERE id=?").get(id);
+  return r ? P(r.doc) : null;
+}
+function putChatKnowledge(k) {
+  getDb().prepare("INSERT INTO chatbot_knowledge(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
+    .run(k.id, J(k));
+  return k;
+}
+function deleteChatKnowledge(id) { getDb().prepare("DELETE FROM chatbot_knowledge WHERE id=?").run(id); return { id }; }
+
 function getSettings() {
   const db = getDb();
   return P(db.prepare("SELECT doc FROM settings WHERE id=1").pluck().get(), {});
@@ -760,4 +775,6 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   getPayrun, putPayrun, putPayslip, payslipsForRun, deletePayrun, hrIsEmpty,
   // Lab reports
   getLabProduct, putLabProduct, deleteLabProduct, labProductsEmpty,
-  getLabReport, putLabReport, deleteLabReport };
+  getLabReport, putLabReport, deleteLabReport,
+  // Chatbot knowledge base
+  listChatKnowledge, getChatKnowledge, putChatKnowledge, deleteChatKnowledge };

@@ -29,6 +29,10 @@
       /* No password change is forced on sign-in. The form is still there and
          can be opened deliberately (⌘K → "Change Password"). */
 
+      // floating assistant — every role, mounted on body so neither the view
+      // wipe nor the supervisor's separate shell can destroy it
+      try{ if(global.CHAT) CHAT.mount(me); }catch(e){ console.error("chat mount:", e); }
+
       // 3) supervisors get the dedicated panel (rendered inside the shell)
       if(me.role === "supervisor"){
         $("#login").hidden = true;
@@ -126,6 +130,7 @@
 
     /* ---- LOGIN GATE ---- */
     showLogin(message){
+      try{ if(global.CHAT) CHAT.unmount(); }catch(e){}
       this.hideSplash();
       $("#app").hidden = true;
       const login = $("#login"); login.hidden = false;
@@ -147,6 +152,8 @@
           if(!r || !r.token) throw new Error("Login failed");
           this.user = r.user;
           location.hash = "";
+          // the assistant mounts for every role, on fresh sign-in too
+          try{ if(global.CHAT) CHAT.mount(r.user); }catch(e){ console.error("chat mount:", e); }
           // route by role
           if(r.user.role === "supervisor"){
             login.hidden = true;

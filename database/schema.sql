@@ -342,3 +342,15 @@ CREATE TABLE IF NOT EXISTS lab_reports (
                                        --       testedBy,remarks,createdAt
 );
 
+
+-- ============================================================
+--  CHATBOT — trainable knowledge base.
+--  One row per trained Q&A pair, uploaded by admin/office.
+--  Deliberately OUTSIDE saveState()'s wipe list, so training
+--  survives both PUT /api/state restores and POST /api/reset.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chatbot_knowledge (
+  id        TEXT PRIMARY KEY,          -- KB-0001
+  doc       TEXT NOT NULL              -- JSON: question,answer,keywords[],tags[],
+                                       --       addedBy,addedAt
+);

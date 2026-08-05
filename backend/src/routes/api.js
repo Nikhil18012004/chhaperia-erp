@@ -14,6 +14,7 @@ const erp = require("../services/erpService");
 const view = require("../services/viewService");
 const production = require("../services/productionService");
 const lab = require("../services/labService");
+const chatbot = require("../services/chatbotService");
 const { requireAuth, requireRole } = require("./auth");
 
 const router = express.Router();
@@ -276,6 +277,32 @@ router.delete("/production/wo/:id", requireAuth, rw, (req, res, next) => {
 });
 router.patch("/production/wo/:id", requireAuth, requireRole("admin", "office"), (req, res, next) => {
   try { res.json(production.updateWorkOrder(req.user, req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+
+/* ============================================================
+   CHATBOT — every role may ASK (answers are drawn from that
+   role's own filtered view, so redaction is inherited); only
+   admin/office may TRAIN the knowledge base.
+   ============================================================ */
+router.post("/chatbot/ask", requireAuth, (req, res, next) => {
+  try { res.json(chatbot.ask(req.user, (req.body || {}).q)); } catch (e) { next(e); }
+});
+// compact live stats for the widget's minute refresh
+router.get("/chatbot/snapshot", requireAuth, (req, res, next) => {
+  try { res.json(chatbot.snapshot(req.user)); } catch (e) { next(e); }
+});
+router.get("/chatbot/knowledge", requireAuth, rw, (req, res, next) => {
+  try { res.json(chatbot.listKnowledge()); } catch (e) { next(e); }
+});
+// single {question,answer,…} or bulk {entries:[…]} — the training upload door
+router.post("/chatbot/knowledge", requireAuth, rw, (req, res, next) => {
+  try { res.status(201).json(chatbot.addKnowledge(req.user, req.body || {})); } catch (e) { next(e); }
+});
+router.put("/chatbot/knowledge/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(chatbot.updateKnowledge(req.params.id, req.body || {})); } catch (e) { next(e); }
+});
+router.delete("/chatbot/knowledge/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(chatbot.deleteKnowledge(req.params.id)); } catch (e) { next(e); }
 });
 
 // Only admin/office can write the full dataset.

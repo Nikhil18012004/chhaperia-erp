@@ -1530,6 +1530,58 @@ async function run() {
       wipBefore2 + " -> " + wipAfter2);
   }
 
+  section("Chatbot — asks are role-scoped, training is admin/office only");
+  {
+    // every role may ask; the answer is drawn from THAT role's filtered view
+    const a1 = await call("POST", "/chatbot/ask", A, { q: "how many customers do we have" });
+    ok("admin ask answers with a customer count", a1.status === 200 && /Customers: \d+/.test(a1.d.answer), JSON.stringify(a1.d).slice(0, 80));
+    ok("ask without a question → 400", (await call("POST", "/chatbot/ask", A, { q: "" })).status === 400);
+    ok("ask without auth → 401", (await call("POST", "/chatbot/ask", null, { q: "hi" })).status === 401);
+
+    const lowA = await call("POST", "/chatbot/ask", A, { q: "what is low on stock?" });
+    ok("admin low-stock ask answers", lowA.status === 200 && typeof lowA.d.answer === "string");
+
+    // supervisor: no money ever — sales/revenue must answer "not available", never a ₹ figure
+    const sAsk = await call("POST", "/chatbot/ask", C, { q: "what is our total sales revenue" });
+    ok("supervisor revenue ask leaks no money", sAsk.status === 200 && !/₹/.test(sAsk.d.answer) && /isn't available/.test(sAsk.d.answer), sAsk.d.answer);
+    const sJobs = await call("POST", "/chatbot/ask", C, { q: "show my production jobs" });
+    ok("supervisor production ask works", sJobs.status === 200 && typeof sJobs.d.answer === "string" && !/₹/.test(sJobs.d.answer));
+
+    // snapshot (the widget's minute refresh) works per-role
+    const snapA = await call("GET", "/chatbot/snapshot", A);
+    ok("admin snapshot has facts", snapA.status === 200 && Array.isArray(snapA.d.facts) && snapA.d.facts.length > 0);
+    const snapC = await call("GET", "/chatbot/snapshot", C);
+    ok("supervisor snapshot works + money-free", snapC.status === 200 && !/price|cost|value/i.test(JSON.stringify(snapC.d)));
+
+    // training: admin/office only
+    ok("supervisor CANNOT train (403)", (await call("POST", "/chatbot/knowledge", C, { question: "x", answer: "y" })).status === 403);
+    ok("supervisor CANNOT list training (403)", (await call("GET", "/chatbot/knowledge", C)).status === 403);
+    const kb1 = await call("POST", "/chatbot/knowledge", A, { question: "What are the factory working hours?", answer: "9am to 6pm, Monday to Saturday.", keywords: "timing, shift" });
+    ok("admin trains a Q&A (201)", kb1.status === 201 && kb1.d.added === 1 && kb1.d.entries[0].id.startsWith("KB-"), JSON.stringify(kb1.d).slice(0, 80));
+    const bulk = await call("POST", "/chatbot/knowledge", O, { entries: [
+      { question: "Who do I call for maintenance?", answer: "The plant maintenance desk.", keywords: ["repair"] },
+      { question: "What is the leave policy?", answer: "Apply through HR a day in advance." },
+    ] });
+    ok("office bulk-trains 2 entries (201)", bulk.status === 201 && bulk.d.added === 2);
+    ok("training rejects a blank answer (400)", (await call("POST", "/chatbot/knowledge", A, { question: "q only" })).status === 400);
+
+    // a trained answer wins for a near-verbatim ask — from ANY role
+    const t1 = await call("POST", "/chatbot/ask", C, { q: "what are the factory working hours?" });
+    ok("trained answer served to supervisor", t1.status === 200 && t1.d.source === "kb" && /9am to 6pm/.test(t1.d.answer), JSON.stringify(t1.d).slice(0, 80));
+    const t2 = await call("POST", "/chatbot/ask", A, { q: "factory timing?" });
+    ok("keyword match finds the trained answer", t2.status === 200 && /9am to 6pm/.test(t2.d.answer), JSON.stringify(t2.d).slice(0, 80));
+
+    // list / update / delete round-trip
+    const klist = await call("GET", "/chatbot/knowledge", A);
+    ok("admin lists 3 trained entries", klist.status === 200 && klist.d.length === 3);
+    const kid = kb1.d.entries[0].id;
+    const upd = await call("PUT", "/chatbot/knowledge/" + kid, A, { answer: "9am to 6pm, Mon–Sat (lunch 1–1:30)." });
+    ok("update rewrites the answer", upd.status === 200 && /lunch/.test(upd.d.answer));
+    for (const e of klist.d) await call("DELETE", "/chatbot/knowledge/" + e.id, A);
+    ok("delete empties the KB", (await call("GET", "/chatbot/knowledge", A)).d.length === 0);
+    ok("delete unknown entry → 404", (await call("DELETE", "/chatbot/knowledge/KB-9999", A)).status === 404);
+  }
+
   section("Validation rejects bad input");
   ok("SO with empty lines → 400", (await call("POST", "/sales-orders", A, { customerId: cust, lines: [] })).status === 400);
   ok("delete unknown SO → 404", (await call("DELETE", "/sales-orders/SO-NOPE", A)).status === 404);

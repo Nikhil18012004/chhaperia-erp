@@ -27,6 +27,7 @@ const app = express();
 // are small — a huge body anywhere else is an attack, not a feature).
 app.use("/api/lab", express.json({ limit: "25mb" }));
 app.use("/api/state", express.json({ limit: "25mb" }));   // full-dataset restore
+app.use("/api/chatbot/knowledge", express.json({ limit: "10mb" })); // bulk training uploads
 app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)
