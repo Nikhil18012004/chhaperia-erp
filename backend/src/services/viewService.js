@@ -81,6 +81,9 @@ function stateForSupervisor(area, username, opts) {
   const d = fullState();
   const itemById = Object.fromEntries(d.items.map((i) => [i.id, i]));
   const custById = Object.fromEntries((d.customers || []).map((c) => [c.id, c]));
+  // the one label for a store, used by the job sheets and the stock feeds below
+  const whNameById = Object.fromEntries((d.warehouses || []).map((w) => [w.id, w.name]));
+  const whNameOf = (id) => whNameById[id] || id || "";
   // slitting team does packing → they may see the customer name (for labels) but NO money
   const showCustomer = area === "slitting" || area === "all";
 
@@ -109,14 +112,41 @@ function stateForSupervisor(area, username, opts) {
     return area === "all" || route.some(isMyStage);
   }
 
+  /* ---- WHERE the floor picks each material up ----------------------------
+     A job draws from three different places — the store that took the
+     delivery, the WIP floor, the finished bay — and the supervisor was told
+     WHAT to draw but never WHERE from, so every job began with a walk round
+     the stores. Each line now names its store.
+
+     Two sources, in order: the ISSUE actually posted against this work order
+     is a fact and wins; a material not yet issued (a pending balance) falls
+     back to stageService.issuingWarehouse — the very rule the issue will use
+     when it is posted, so the answer cannot contradict itself later. */
+  const woIssuedFrom = {};   // woId -> { itemId -> [whId] }
+  (d.movements || []).forEach((m) => {
+    if (!m.ref || !m.wh || (+m.qty || 0) >= 0) return;
+    const by = woIssuedFrom[m.ref] || (woIssuedFrom[m.ref] = {});
+    const seen = by[m.itemId] || (by[m.itemId] = []);
+    if (!seen.includes(m.wh)) seen.push(m.wh);
+  });
+
   // materials THIS area needs for the WO's current stage (quantities only, no cost)
   function stageMaterials(wo, stage) {
     const plan = S.computeStagePlan(wo.itemId, wo.qty, d, wo.materialChoices, wo.plan);
     if (!plan || !plan[stage.key]) return [];
-    return plan[stage.key].consume.map(([rid, q]) => ({
-      id: rid, name: (itemById[rid] || {}).name || rid,
-      uom: (itemById[rid] || {}).uom || "", required: q,
-    }));
+    const issued = woIssuedFrom[wo.id] || {};
+    return plan[stage.key].consume.map(([rid, q]) => {
+      const stores = (issued[rid] && issued[rid].length)
+        ? issued[rid]
+        : [S.issuingWarehouse(rid, itemById, d.movements)].filter(Boolean);
+      return {
+        id: rid, name: (itemById[rid] || {}).name || rid,
+        uom: (itemById[rid] || {}).uom || "", required: q,
+        // the store to fetch it from — id for the client, name to print
+        wh: stores[0] || null,
+        whName: stores.map((w) => whNameOf(w)).join(" · ") || null,
+      };
+    });
   }
 
   const myWOs = (d.workorders || [])
@@ -254,7 +284,6 @@ function stateForSupervisor(area, username, opts) {
 
   // on-hand per (item, warehouse), from movements — quantities only, never costs
   const RAW = new Set(["RM", "PKG", "CON"]);
-  const whName = Object.fromEntries((d.warehouses || []).map((w) => [w.id, w.name]));
   const onHand = {}; // itemId -> { whId -> qty }
   (d.movements || []).forEach((m) => {
     const it = itemById[m.itemId];
@@ -268,7 +297,7 @@ function stateForSupervisor(area, username, opts) {
   Object.keys(onHand).forEach((iid) => {
     if (!RAW.has((itemById[iid] || {}).cat)) return;
     const rows = Object.keys(onHand[iid])
-      .map((wh) => ({ wh, name: whName[wh] || wh, qty: Math.round(onHand[iid][wh] * 100) / 100 }))
+      .map((wh) => ({ wh, name: whNameOf(wh), qty: Math.round(onHand[iid][wh] * 100) / 100 }))
       .filter((r) => r.qty > 0.0001)
       .sort((a, b) => b.qty - a.qty);
     if (rows.length) materialStock[iid] = rows;

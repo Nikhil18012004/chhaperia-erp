@@ -503,21 +503,29 @@ function computeStagePlan(fgId, qty, data, choices, netting) {
 let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
 
+/* ---- which store a material leaves from ---------------------------------
+   Raw materials are issued FROM THE WAREHOUSE THAT HOLDS THEM (whichever
+   store they were received into) — issuing everything against one warehouse
+   hid the deduction from the store's warehouse view.
+
+   This is the ONE rule: the issue posts against it, and the job sheets that
+   tell the office and the floor where to fetch a material read it too, so
+   what a work order says is exactly what the stock ledger will do. */
+function issuingWarehouse(rid, itemsById, movements) {
+  if (!rid) return null;
+  const it = (itemsById || {})[rid] || {};
+  if (it.cat === "WIP" || /^WIP-/.test(String(rid))) return "WH-WIP";
+  const byWh = {};
+  (movements || []).forEach((m) => { if (m.itemId === rid && m.wh) byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0); });
+  let best = null;
+  Object.keys(byWh).forEach((wh) => { if (best == null || byWh[wh] > byWh[best]) best = wh; });
+  return best || "WH-PNY";
+}
+
 function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements) {
   const st = plan[stageKey];
   if (!st) return [];
-  /* Raw materials are issued FROM THE WAREHOUSE THAT HOLDS THEM (whichever
-     store they were received into) — issuing everything against one warehouse
-     hid the deduction from the store's warehouse view. */
-  const whFor = (rid) => {
-    const it = itemsById[rid] || {};
-    if (it.cat === "WIP" || /^WIP-/.test(rid)) return "WH-WIP";
-    const byWh = {};
-    (movements || []).forEach((m) => { if (m.itemId === rid) byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0); });
-    let best = null;
-    Object.entries(byWh).forEach(([wh, q]) => { if (best == null || q > byWh[best]) best = wh; });
-    return best || "WH-PNY";
-  };
+  const whFor = (rid) => issuingWarehouse(rid, itemsById, movements);
   const moves = [];
   st.consume.forEach(([rid, q]) => {
     if (!q) return;
@@ -698,7 +706,7 @@ module.exports = {
   LINES_BY_AREA, startArea, lineForProduct, OWNERS, productOwner, materialCheck, routeStagesFor,
   materialRole, areaCovers,
   planForRequirement, plannedStages, finishedStockFor, wipStockFor, drawFrom,
-  computeStagePlan, stageMovements,
+  computeStagePlan, stageMovements, issuingWarehouse,
   freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,
   stageForArea, currentStage, ensureStageModel,
 };

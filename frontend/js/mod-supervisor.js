@@ -397,14 +397,21 @@
         factsNode = H("div", { class: "sup-facts-row" }, [facts, xbtn]);
       }
 
-      // materials for THIS area's stage (only meaningful while it's their turn)
+      /* Materials for THIS area's stage (only meaningful while it's their turn).
+         Each line names the STORE it comes out of — the server works that out
+         from the issue posted against this job, falling back to the store the
+         issue will use — so the floor is not sent hunting round the stores for
+         a material the ledger already knows the location of. */
       let mat = null;
       if (w.mine && w.materials && w.materials.length) {
         mat = H("details", { class: "sup-mat" }, [
           H("summary", { text: "🧱 Materials for " + ((STAGE_META[cur.key] || {}).label || "this stage") + " (" + w.materials.length + ")" }),
           H("div", { class: "sup-mat-list" }, w.materials.map((m) =>
             H("div", { class: "sup-mat-row" }, [
-              H("span", { text: m.name || m.id }),
+              H("div", { class: "sup-mat-nm" }, [
+                H("span", { text: m.name || m.id }),
+                m.whName ? H("span", { class: "sup-mat-wh", text: "🏬 " + m.whName }) : null,
+              ].filter(Boolean)),
               H("b", { text: fmtQty(m.required) + " " + (m.uom || "") }),
             ]))),
         ]);

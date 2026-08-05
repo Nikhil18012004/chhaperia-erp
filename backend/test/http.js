@@ -1193,6 +1193,27 @@ async function run() {
   ok("a job still at RM production is visible to slitting but not theirs to act on",
     !!slitRow && slitRow.mine === false, slitRow ? "mine=" + slitRow.mine : "not listed");
 
+  /* The floor is told WHERE to fetch each material, not only what and how much.
+     A job draws from three different places (the store that took the delivery,
+     the WIP floor, the finished bay) and without the location every job began
+     with a walk round the stores. */
+  const coatState = (await call("GET", "/state", C)).d;
+  const myJob = (coatState.workorders || []).find((w) => w.id === woMake.d.id);
+  const myMats = (myJob && myJob.materials) || [];
+  ok("the floor's job sheet lists the materials for its stage", myMats.length > 0,
+    myMats.length + " materials");
+  ok("and every one of them names the store it is fetched from",
+    myMats.length > 0 && myMats.every((m) => !!m.wh && !!m.whName),
+    myMats.map((m) => m.id + "@" + (m.wh || "—")).join(", "));
+  const issuedFor = ((await call("GET", "/state", A)).d.movements || [])
+    .filter((m) => m.ref === woMake.d.id && (+m.qty || 0) < 0);
+  ok("the store named is the one the issue actually posted against",
+    myMats.every((m) => { const mv = issuedFor.find((x) => x.itemId === m.id); return !mv || mv.wh === m.wh; }),
+    myMats.map((m) => { const mv = issuedFor.find((x) => x.itemId === m.id);
+      return m.id + " sheet=" + m.wh + " issue=" + (mv ? mv.wh : "not issued"); }).join(" · "));
+  ok("a supervisor is still sent no cost with the location",
+    myMats.every((m) => m.rate === undefined && m.cost === undefined && m.value === undefined));
+
   await call("PUT", "/boms/" + fg, A, { yield: 90, lines: [[rm, 0.7]] });   // restore
 
   section("Production never books stock in — coating, slitting or packing");
