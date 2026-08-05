@@ -280,7 +280,21 @@
           h("span",{class:"muted",style:"font-size:12px",text:"Import this sheet as:"}), sel ]));
         let diff;
         try{ diff=CSVIO.buildDiff(curKey, rows); }
-        catch(err){ host.appendChild(h("div",{class:"muted",text:"Cannot map this file to "+CSVIO.ENTITIES[curKey].label+"."})); return; }
+        catch(err){
+          /* Say WHY. This used to report "cannot map" for any failure, which sent a
+             real crash in here looking like a bad spreadsheet. A header mismatch is
+             the file's fault; anything else is ours, so print it. */
+          const headerIssue=/header|column|match|map/i.test(err&&err.message||"");
+          host.appendChild(h("div",{class:"muted",text:headerIssue
+            ? "Cannot map this file to "+CSVIO.ENTITIES[curKey].label+" — "+err.message
+            : "Cannot map this file to "+CSVIO.ENTITIES[curKey].label+"."}));
+          if(!headerIssue){
+            console.error("Import preview failed:",err);
+            host.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin-top:6px",
+              text:"The file was read, but the preview failed: "+(err&&err.message||err)+". This is a fault in the app, not your sheet — please report it."}));
+          }
+          return;
+        }
         host.appendChild(h("div",{class:"flex gap wrap",style:"margin-bottom:14px"},[
           statPill("＋ "+diff.add.length+" new","var(--ok)"),
           statPill("~ "+diff.update.length+" updated","var(--info)"),
@@ -290,10 +304,13 @@
 
         const changed=diff.add.map(x=>({kind:"New",o:x.after})).concat(diff.update.map(x=>({kind:"Updated",o:x.after})));
         const cols0=CSVIO.ENTITIES[curKey].cols.slice(0,6);
-        const rows=changed.slice(0,120).map(c=>{ const o={_k:c.kind}; cols0.forEach(col=>o[col.k]=previewVal(c.o,col)); return o; });
+        /* NOT `rows` — that name belongs to the sheet being imported, read above by
+           buildDiff. Shadowing it here put that read in the temporal dead zone, so
+           every import threw and the catch reported "Cannot map this file". */
+        const preview=changed.slice(0,120).map(c=>{ const o={_k:c.kind}; cols0.forEach(col=>o[col.k]=previewVal(c.o,col)); return o; });
         const tcols=[{key:"_k",label:"Change",noSort:true,render:r=>badge(r._k==="New"?"ok":"info",r._k)}].concat(
           cols0.map(col=>({key:col.k,label:col.label||col.k,noSort:true,render:r=>esc(String(r[col.k]==null?"":r[col.k])).slice(0,44)})));
-        host.appendChild(table(rows,tcols,{empty:"No new or changed rows in this file"}));
+        host.appendChild(table(preview,tcols,{empty:"No new or changed rows in this file"}));
         if(changed.length>120) host.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-top:8px",text:"Showing first 120 of "+changed.length+" changed rows — all will be applied."}));
 
         const applyBtn=UI.$("#csvApplyBtn"); const total=diff.add.length+diff.update.length;
