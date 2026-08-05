@@ -521,20 +521,10 @@ function deleteTransporter(id) {
   if (!repo.getTransporter(id)) throw err("Transporter not found", 404);
   return repo.deleteTransporter(id);
 }
-/** Seed a few demo transport agencies on first run (populate-if-empty). */
+/** No-op. The demo transport agencies were removed on request (2026-08-05);
+ *  the dispatch directory now starts empty and is filled by the user only. */
 function ensureDispatch() {
-  const st = repo.getState();
-  if ((st.transporters || []).length > 0) return { changed: false, count: st.transporters.length };
-  const demo = [
-    { name: "Sri Balaji Roadways", contact: "Ravi Shetty", phone: "98450 12345", email: "ops@sribalaji.in", city: "Bengaluru", state: "Karnataka", gstin: "29ABCFS1234K1Z5", vehicleTypes: ["Truck (32ft)", "Trailer"], routes: "Bengaluru · Chennai · Hyderabad", rateBasis: "Per trip", baseRate: 18000, onTime: 94, rating: "A", owner: "Dispatch Desk", terms: "30 days", active: true, notes: "Preferred for HT cable dispatches to South." },
-    { name: "Doddaballapur Cargo Movers", contact: "Manjunath R", phone: "99001 23456", email: "book@dblcargo.com", city: "Doddaballapur", state: "Karnataka", gstin: "29AAGCD7788L1Z2", vehicleTypes: ["LCV", "Tempo"], routes: "Local · Bengaluru metro", rateBasis: "Per km", baseRate: 42, onTime: 88, rating: "B", owner: "Plant Store", terms: "15 days", active: true, notes: "Fast local & last-mile." },
-    { name: "Bharat Express Logistics", contact: "Sanjay Gupta", phone: "98111 45678", email: "sanjay@bharatexp.in", city: "Bengaluru", state: "Karnataka", gstin: "29AAACB9012M1Z8", vehicleTypes: ["Container (20ft)", "Container (40ft)"], routes: "PAN-India · Mumbai · Delhi · Kolkata", rateBasis: "Per ton", baseRate: 2600, onTime: 91, rating: "A", owner: "Dispatch Desk", terms: "45 days", active: true, notes: "Containerised, good for exports via port." },
-    { name: "Krishna Freight Carriers", contact: "Lokesh N", phone: "94488 77661", email: "krishnafreight@gmail.com", city: "Tumakuru", state: "Karnataka", gstin: "29ABLFK3344N1Z0", vehicleTypes: ["Truck (20ft)", "LCV"], routes: "Karnataka · Kerala", rateBasis: "Per trip", baseRate: 12500, onTime: 79, rating: "C", owner: "Plant Store", terms: "Advance", active: true, notes: "Backup carrier; confirm availability." },
-    { name: "SafeWheels Transport Co.", contact: "Imran Khan", phone: "90080 55221", email: "dispatch@safewheels.co.in", city: "Hosur", state: "Tamil Nadu", gstin: "33AABCS6677P1Z4", vehicleTypes: ["Trailer", "Truck (32ft)"], routes: "Hosur · Chennai · Coimbatore", rateBasis: "Per trip", baseRate: 16500, onTime: 96, rating: "A", owner: "Dispatch Desk", terms: "30 days", active: true, notes: "Excellent on-time record; insured." },
-  ];
-  let n = 0;
-  demo.forEach((d, i) => { d.id = "TR-" + String(i + 1).padStart(3, "0"); repo.putTransporter(d); n++; });
-  return { changed: true, count: n };
+  return { changed: false, count: (repo.getState().transporters || []).length };
 }
 
 /* ---- Deletes for item / work order ---- */

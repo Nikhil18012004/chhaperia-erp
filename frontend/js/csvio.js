@@ -47,7 +47,9 @@
       if (raw === "" && col.path) { put(null); return; }
       const n = raw === "" ? 0 : Number(raw); put(isNaN(n) ? 0 : n); return;
     }
-    if (col.type === "bool") { put(/^(true|1|yes|y)$/i.test(raw)); return; }
+    // a Status column is filled in by hand as often as it is exported, so accept
+    // the words people actually type. Anchored, so INACTIVE never reads as ACTIVE.
+    if (col.type === "bool") { put(/^(true|1|yes|y|active|on)$/i.test(raw)); return; }
     if (col.type === "list") { put(raw === "" ? [] : raw.split("|").map((x) => (x !== "" && !isNaN(+x) ? +x : x))); return; }
     if (col.type === "json") { try { put(raw === "" ? null : JSON.parse(raw)); } catch { /* keep old */ } return; }
     put(raw);
@@ -57,6 +59,16 @@
              files);  label = the full name shown in the sheet, worded the same
      way as the section's own form. Imports accept either spelling. */
   const C = (k, label, type, path) => ({ k, label: label || k, type: type || "str", path: path || null });
+
+  /* A hand-filled sheet writes "-" (or "N/A") in a cell it has nothing for.
+     Those are blanks, not values — otherwise every empty column imports the
+     literal dash, and a dash in the id column would key every such row the
+     same. Read through this everywhere a data cell is taken from a row. */
+  const PLACEHOLDER = /^(?:[-–—]+|n\/a|n\.a\.?)$/i;
+  function cellAt(row, i) {
+    const s = String(row && row[i] == null ? "" : row[i]).trim();
+    return PLACEHOLDER.test(s) ? "" : s;
+  }
 
   /* header cell -> column matching: case/spacing/punctuation-insensitive, so
      "Supplier Name *", "supplier name" and "name" all find the same column */
@@ -359,8 +371,8 @@
       const row = parsed[r];
       // read the row's columns first — a composite id is built from them
       const draft = {};
-      ent.cols.forEach((c) => { if (c.k in colIndex) setVal(draft, c, (row[colIndex[c.k]] == null ? "" : row[colIndex[c.k]])); });
-      let id = idIdx >= 0 ? String(row[idIdx] == null ? "" : row[idIdx]).trim() : "";
+      ent.cols.forEach((c) => { if (c.k in colIndex) setVal(draft, c, cellAt(row, colIndex[c.k])); });
+      let id = idIdx >= 0 ? cellAt(row, idIdx) : "";
       if (!id && ent.makeId) id = ent.makeId(draft) || "";
       if (!id && ent.autoId) id = nextAutoId();
       if (!id) {
@@ -371,11 +383,11 @@
       const after = prev ? JSON.parse(JSON.stringify(prev)) : {};
       ent.cols.forEach((c) => {
         if (!(c.k in colIndex)) return;
-        const raw = row[colIndex[c.k]] == null ? "" : row[colIndex[c.k]];
+        const raw = cellAt(row, colIndex[c.k]);
         // On an UPDATE an empty cell means "leave this value alone". The import
         // template carries every column, so a half-filled row must never wipe
         // the fields the user didn't type into.
-        if (prev && String(raw).trim() === "") return;
+        if (prev && raw === "") return;
         setVal(after, c, raw);
       });
       after[ent.idKey] = id;                     // blank / generated / composite
