@@ -1536,8 +1536,15 @@ canvas{display:block;width:100%}
    PT (two fields) is unaffected either way. */
 .ded-f{flex:1;min-width:120px}
 @media(max-width:640px){
-  .ded-fields{flex-wrap:nowrap;gap:8px}
-  .ded-fields>.ded-f{min-width:0}
+  /* A grid, not a flex row. Each field is display:contents, so every TITLE
+     lands in the first track and every BOX in the second — and a title that
+     runs to two lines ("Wage Cap ₹/mo" does once the phone's text size is
+     turned up) grows the title track for all three instead of dropping its
+     own box a line below its neighbours. The titles sit at the foot of their
+     track so each stays against the box it names. */
+  .ded-fields{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);
+    grid-template-rows:auto auto;gap:0 8px;align-items:end}
+  .ded-fields>.ded-f{display:contents}
 }
 
 /* ---- payslip, PO/SO totals and the document forms ---- */
