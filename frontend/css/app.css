@@ -1547,6 +1547,24 @@ canvas{display:block;width:100%}
   .ded-fields>.ded-f{display:contents}
 }
 
+/* ---- a job sheet's material rows on a phone ------------------------------
+   The layer row runs name · code · spec · store · quantity, which no phone
+   fits on one line. Left to wrap it broke wherever a word ran out of room, so
+   the quantity landed in a different place on every row and stopped reading
+   as a column. Below 640px a row that names a store puts the quantity top
+   right and stacks the rest under the name. Only rows carrying a store are
+   laid out this way — the BOM view, which shows none, keeps the plain
+   wrapping row it has always had, at every width. */
+.lp-qty{margin-left:auto}
+@media(max-width:640px){
+  .lp-row-wh{display:grid;grid-template-columns:1fr auto;gap:1px 8px;align-items:baseline}
+  .lp-row-wh>*{grid-column:1}
+  .lp-row-wh>.lp-qty{grid-column:2;grid-row:1;margin-left:0}
+  /* likewise for a stock draw: the roll's name owns the first line, its
+     quantity and store the second, rather than breaking mid-way */
+  .wo-src>.wo-src-nm{flex:1 1 100%}
+}
+
 /* ---- payslip, PO/SO totals and the document forms ---- */
 @media(max-width:640px){
   .pay-who{padding:9px 12px;margin-bottom:10px;gap:5px 14px}

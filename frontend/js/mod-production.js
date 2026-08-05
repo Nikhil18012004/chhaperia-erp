@@ -154,6 +154,52 @@
     if(l.rmThk) bits.push(trimNum(l.rmThk)+" mm"); if(l.rmGsm) bits.push(trimNum(l.rmGsm)+" g/m²");
     return bits.join(" · "); }
 
+  /* ---- WHICH STORE A LINE COMES OUT OF -------------------------------------
+     A job draws three different things and they do not all live in the same
+     place: the raw materials sit in whichever store took the delivery, the
+     half-made rolls sit on the production floor, and the finished rolls sit in
+     the finished bay. The planner was never told which, and once the order was
+     raised the job sheet did not say either — the store only appeared later,
+     on the stock ledger. Both now state it.
+
+     issuingWh mirrors stageService.stageMovements' whFor on the server exactly,
+     so what the New Work Order form predicts is what the issue actually posts:
+     anything half-made leaves WH-WIP, everything else leaves whichever store
+     holds the most of it, falling back to the main stores. */
+  function whName(id){ return ((ENG.data.warehouses||[]).find(w=>w.id===id)||{}).name || id || ""; }
+  function issuingWh(rid){
+    if(!rid) return null;
+    const it=ENG.item(rid)||{};
+    if(it.cat==="WIP"||/^WIP-/.test(String(rid))) return "WH-WIP";
+    const byWh=(ENG.stock(rid)||{}).byWh||{};
+    let best=null;
+    Object.keys(byWh).forEach(wh=>{ if(best==null||byWh[wh]>byWh[best]) best=wh; });
+    return best||"WH-PNY";
+  }
+  /* Where a RAISED order actually drew each item from. The store written on the
+     issue posted against the work order is a fact, not a forecast, and it can
+     differ from issuingWh once stock has moved since — so a raised order reads
+     its movements and only falls back to the prediction for a pending balance
+     that has not been issued yet. A resumed order issues again when the balance
+     is released and can take the second lot out of a different store, so every
+     distinct store is kept rather than only the first. */
+  function drawnWhFor(woId){
+    const by={};
+    (ENG.data.movements||[]).forEach(m=>{
+      if(m.ref!==woId || !m.wh || (+m.qty||0)>=0) return;
+      const seen=by[m.itemId]=by[m.itemId]||[];
+      if(!seen.includes(m.wh)) seen.push(m.wh);
+    });
+    return by;
+  }
+  /* the one label for a store, so every place that names one reads alike */
+  function whChip(whId){
+    if(!whId) return null;
+    return h("span",{class:"muted",style:"font-size:11px;white-space:nowrap",text:"🏬 "+whName(whId)});
+  }
+  /* one chip per store, for the callers that hand over a list */
+  function whChips(list){ return (list||[]).filter(Boolean).map(whChip); }
+
   /* what a material DOES in the process — mirrors the backend's
      stageService.materialRole, so "what coating consumes" means the same
      thing on screen as it does when the stock is actually issued */
@@ -168,9 +214,10 @@
      New Work Order and both Add-to-Finished-Stock forms render the same
      thing: a layer heading where the product has layers, then one row per
      material carrying its live need / in-store / short figures.
-     `groups` is [{ label, lines:[{ name, code, spec, need, have, uom, agg }] }]
+     `groups` is [{ label, lines:[{ name, code, spec, need, have, uom, agg, wh }] }]
      — `agg` is the need across ALL layers when a material appears in more
-     than one, since the store is shared between them. */
+     than one, since the store is shared between them, and `wh` is the store
+     the line is issued from, shown only where the caller knows it. */
   function materialsList(host, groups, opts){
     opts=opts||{};
     groups=(groups||[]).filter(g=>g&&(g.lines||[]).length);
@@ -191,7 +238,10 @@
               h("span",{style:"font-weight:600",text:l.name}),
               l.code?h("span",{class:"muted mono",style:"font-size:11px",text:l.code}):null
             ]),
-            l.spec?h("div",{class:"muted mono",style:"font-size:11px",text:l.spec}):null
+            l.spec?h("div",{class:"muted mono",style:"font-size:11px",text:l.spec}):null,
+            // which store this one is issued from — omitted where the caller
+            // has no store to name, so the other forms render as before
+            l.wh?whChip(l.wh):null
           ]),
           h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
             h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(l.need,2)+" "+(l.uom||"")+ENG.kgSuffix(ENG.item(l.id),l.need)})]),
@@ -209,7 +259,10 @@
      show what THIS run consumes instead of the BOM's per-batch figures;
      `opts.choices` resolves ranged lines to the material actually picked;
      `opts.always` keeps the panel for a single-layer product, which the BOM
-     view suppresses (there is no layer story) but a work order still needs. */
+     view suppresses (there is no layer story) but a work order still needs;
+     `opts.whOf(line)` returns the stores a material leaves — a list, since a
+     resumed order can draw the same material out of two — which a raised work
+     order wants on the job sheet and the BOM view has no use for. */
   /* ---- typing into a box that redraws the form around it -------------------
      The "take from stock" quantities re-run the whole calculation on every
      keystroke, which rebuilds the panel and destroys the input being typed
@@ -312,11 +365,13 @@
       g.lines.forEach(l=>{
         const q=opts.qtyOf?opts.qtyOf(l):l.qty;
         const unit=(l.id&&(ENG.item(l.id)||{}).uom)||l.unit||"";
-        box.appendChild(h("div",{class:"flex aic",style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:12.5px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
+        const whs=opts.whOf?whChips(opts.whOf(l)):[];
+        box.appendChild(h("div",{class:"flex aic wrap lp-row"+(whs.length?" lp-row-wh":""),style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:12.5px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
           h("span",{style:"font-weight:600",text:matLineName(l)}),
           matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null,
           matLineSpec(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:matLineSpec(l)}):null,
-          h("span",{class:"mono",style:"margin-left:auto;font-size:11.5px;flex:0 0 auto;font-weight:700",
+          ...whs,
+          h("span",{class:"mono lp-qty",style:"font-size:11.5px;flex:0 0 auto;font-weight:700",
             text:ENG.num(q,2)+" "+unit})
         ]));
       });
@@ -882,8 +937,7 @@
 
       /* One list, in the layer build-up the floor already reads — the recipe
          with the quantity THIS run consumes, rather than the BOM's per-batch
-         figures. Nothing else: the store position belongs on the stock pages,
-         not on every job sheet. */
+         figures, and each line naming the store it leaves. */
       const uomIt=(it||{}).uom||"kg";
       const fgQty=+(net&&net.fgQty)||0, wipQty=+(net&&net.wipQty)||0;
       const took=[];
@@ -892,11 +946,47 @@
       const note = took.length
         ? "For the "+ENG.num(makeQty,2)+" "+uomIt+" being made — "+took.join(" and ")+" needs no raw material."
         : "For the "+ENG.num(makeQty,2)+" "+uomIt+" this order produces.";
+      /* Where this order took its stock from. The issues posted against the
+         work order are the record, so those are read first; a line that has
+         not been issued yet (a pending balance) falls back to the store the
+         planner would draw it from. */
+      const drawn = drawnWhFor(wo.id);
+      const whOfId = id => !id ? [] : ((drawn[id] && drawn[id].length) ? drawn[id] : [issuingWh(id)]);
       const matHost = bom
         ? (layerPanel(it, bom.lines, { choices: wo.materialChoices || {}, qtyOf: needOf,
+            whOf: l => whOfId(l.id),
             note, always: true, title: "Materials for this order" })
            || h("div",{class:"muted",style:"font-size:12px",text:"No materials on this recipe"}))
         : h("div",{class:"muted",style:"font-size:12px",text:"No BOM for this product"});
+
+      /* ---- THE STOCK THIS ORDER TOOK OFF THE SHELF -------------------------
+         The finished and half-made rolls the planner netted the order against
+         were only ever a sentence here; which roll, how much of it, and which
+         store it came out of was visible while raising the order and then lost.
+         The floor is being sent to fetch it, so the job sheet says so. */
+      const drawRow=(icon,label,dest,qty,sources)=>{
+        const list=(sources||[]).filter(s=>(+s.qty||0)>0.001);
+        return h("div",{style:"padding:7px 0;border-bottom:1px solid var(--line)"},[
+          h("div",{class:"flex between aic",style:"gap:12px;font-size:12.5px"},[
+            h("span",{text:icon+" "+label}),
+            h("span",{class:"mono",style:"font-weight:700;flex:0 0 auto",text:ENG.num(qty,2)+" "+uomIt}),
+          ]),
+          h("div",{class:"muted",style:"font-size:11px;margin-top:1px",text:dest}),
+          ...list.map(s=>h("div",{class:"flex aic wrap wo-src",style:"gap:8px;margin-top:3px;font-size:11.5px"},[
+            h("span",{class:"wo-src-nm",text:s.name||s.id}),
+            h("span",{class:"mono muted",text:ENG.num(s.qty,2)+" "+uomIt}),
+            ...whChips(whOfId(s.id)),
+          ])),
+        ]);
+      };
+      const stockPanel = (fgQty>0.001 || wipQty>0.001)
+        ? h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"},[
+            h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:2px",
+              text:"⇥ Taken from stock for this order"}),
+            fgQty>0.001? drawRow("📦","Finished stock","Goes straight to packing — no production",fgQty,net&&net.fgSources):null,
+            wipQty>0.001? drawRow("🧵","Half-made stock","Joins the run at slitting — skips coating",wipQty,net&&net.wipSources):null,
+          ].filter(Boolean))
+        : null;
       // ---- Details pane ----
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
@@ -922,7 +1012,7 @@
           ["Status",badge(wo.status==="Completed"||wo.status==="Dispatched"?"ok":wo.status==="Partial"?"danger":"info",wo.status)],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
-        h("div",{style:"margin-top:14px"},matHost),
+        h("div",{style:"margin-top:14px"},[stockPanel,matHost].filter(Boolean)),
       ].filter(Boolean));
       // ---- Time Status pane (per-stage timing of the production route) ----
       const timePane=stageTimeStatus(wo); timePane.hidden=true;
@@ -1481,6 +1571,9 @@
           .map(i=>({id:i.id,name:i.name||i.id,have:onHandOf(i.id)}))
           .filter(r=>r.have>0);
         plan.fgAvailable=fgRows.reduce((n,r)=>n+r.have,0);
+        // every roll that COULD be drawn, kept so the panel can name the stores
+        // the offer sits in even before the planner has taken any of it
+        plan.fgRows=fgRows;
         // a typed amount wins; otherwise take as much as the shelf allows
         const fgDraw=drawFrom(fgRows, fgWanted==null? Math.min(plan.fgAvailable,qty)
           : cap(fgWanted, plan.fgAvailable, qty));
@@ -1495,6 +1588,7 @@
           .map(i=>({id:i.id,name:i.name||i.id,have:onHandOf(i.id)}))
           .filter(r=>r.have>0);
         plan.wipAvailable=wipRows.reduce((n,r)=>n+r.have,0);
+        plan.wipRows=wipRows;
         if(hasCoating && afterFg>0){
           const wipDraw=drawFrom(wipRows, wipWanted==null? Math.min(plan.wipAvailable,afterFg)
             : cap(wipWanted, plan.wipAvailable, afterFg));
@@ -1524,11 +1618,15 @@
       function netPanel(plan, uom){
         const avFg=plan.fgAvailable||0, avWip=plan.wipAvailable||0;
         if(!(avFg>0 || avWip>0)) return null;
-        const row=(id,icon,label,typed,drawn,max,dest,src,onInput)=>{
+        const row=(id,icon,label,typed,drawn,max,dest,src,rows,onInput)=>{
           // what is actually drawn can differ from what was typed (capped at
           // the shelf, or at what is still outstanding) — say so rather than
           // overwriting the box
           const differs=typed!=null && Math.abs((+typed||0)-drawn)>0.005;
+          /* the store this offer sits in — read off everything that COULD be
+             drawn, not only what has been taken so far, so the line names a
+             place even while the quantity is still zero */
+          const stores=[...new Set((rows||[]).map(r=>issuingWh(r.id)).filter(Boolean))];
           return h("div",{class:"flex between aic",
               style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
             h("div",{style:"min-width:0"},[
@@ -1537,6 +1635,8 @@
                 text:(src&&src.length? src.map(s=>s.name+" · "+ENG.num(s.qty,2)).join(" · ")+"  ·  " : "")
                   +ENG.num(max,2)+" "+(uom||"")+" available"
                   +(differs? "  ·  taking "+ENG.num(drawn,2) : "")}),
+              stores.length? h("div",{class:"flex aic wrap",style:"gap:6px;margin-top:2px"},
+                stores.map(whChip)) : null,
             ]),
             h("div",{class:"flex aic",style:"gap:8px;flex:0 0 auto"},[
               h("input",{class:"input",id:id,type:"text",inputmode:"decimal",autocomplete:"off",
@@ -1549,9 +1649,9 @@
         return h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},[
           h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
             text:"Take from stock — the rest is made from raw materials"}),
-          avFg>0? row("net_fg","📦","Finished stock",fgWanted,plan.fgQty,avFg,"→ packing",plan.fgSources,
+          avFg>0? row("net_fg","📦","Finished stock",fgWanted,plan.fgQty,avFg,"→ packing",plan.fgSources,plan.fgRows,
             v=>{ const c=numish(v); fgWanted=c===""?null:c; recalc(); }):null,
-          (avWip>0&&plan.hasCoating)? row("net_wip","🧵","Half-made stock",wipWanted,plan.wipQty,avWip,"→ slitting",plan.wipSources,
+          (avWip>0&&plan.hasCoating)? row("net_wip","🧵","Half-made stock",wipWanted,plan.wipQty,avWip,"→ slitting",plan.wipSources,plan.wipRows,
             v=>{ const c=numish(v); wipWanted=c===""?null:c; recalc(); }):null,
           h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
             h("span",{text:"To manufacture from raw materials"}),
@@ -1651,6 +1751,9 @@
               need: perOf(l)*makeQty/bom.yield,
               have: rid?(ENG.stock(rid).onHand||0):0,
               agg: rid?needBy[rid]:undefined,
+              // the store this material will be issued from, by the same rule
+              // the server uses when it posts the issue
+              wh: rid?issuingWh(rid):null,
               uom: r.uom||l.unit||"" };
           }),
         })));
