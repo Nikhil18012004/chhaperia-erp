@@ -255,6 +255,158 @@ try {
     ok("a coating stage that has not finished is not asked yet",
       throws(() => production.setWipStore(coating, open.id, { wh: "WH-WIP" })));
   }
+
+  section("Full-state save round-trips every collection (the Excel import path)");
+  {
+    /* Dispatch, Lab and HR import their sheets through a full-state save. A
+       collection saveState forgets is dropped without a word — the import says
+       "59 rows saved", the reload brings back none of them and the section
+       looks empty. Round-trip one row of each and demand it survives. */
+    const st = repo.getState();
+    st.transporters = (st.transporters || []).concat(
+      [{ id: "TR-SMOKE", name: "Smoke Carrier", city: "Bengaluru", rating: "B", active: false }]);
+    st.labProducts = (st.labProducts || []).concat([{ id: "LP-SMOKE", code: "SMOKE", name: "Smoke Lab Product" }]);
+    st.labReports = (st.labReports || []).concat(
+      [{ id: "LR-SMOKE", productId: "LP-SMOKE", refNo: "B-1", values: { tensile: 42 } }]);
+    st.appointments = (st.appointments || []).concat([{ id: "AP-SMOKE", date: "2026-08-06", title: "Smoke meeting" }]);
+    st.hrWorkers = (st.hrWorkers || []).concat(
+      [{ id: "EMP-SMOKE", name: "Smoke Worker", dept: "Coating", payType: "daily", dailyRate: 700, active: false }]);
+    st.hrAttendance = (st.hrAttendance || []).concat(
+      [{ id: "EMP-SMOKE:2026-08-06", workerId: "EMP-SMOKE", date: "2026-08-06", status: "P", hours: 8 }]);
+    erp.saveState(st);
+
+    const back = repo.getState();
+    const tr = (back.transporters || []).find((t) => t.id === "TR-SMOKE");
+    ok("an imported transporter survives a full-state save", !!tr);
+    // the dispatch sheet is full of INACTIVE rows; false must come back as false
+    ok("and its Inactive status comes back verbatim", !!tr && tr.active === false, tr && String(tr.active));
+    ok("and its other columns come back", !!tr && tr.city === "Bengaluru" && tr.rating === "B");
+    ok("an imported lab product survives", (back.labProducts || []).some((p) => p.id === "LP-SMOKE"));
+    const lr = (back.labReports || []).find((r) => r.id === "LR-SMOKE");
+    ok("an imported lab report survives with its measurements", !!lr && lr.values && lr.values.tensile === 42);
+    ok("a calendar appointment survives", (back.appointments || []).some((a) => a.id === "AP-SMOKE"));
+    const wk = (back.hrWorkers || []).find((w) => w.id === "EMP-SMOKE");
+    ok("an imported worker survives", !!wk && wk.dailyRate === 700);
+    ok("an imported attendance row survives", (back.hrAttendance || []).some((a) => a.id === "EMP-SMOKE:2026-08-06"));
+
+    // NEGATIVE 1: dropping a row from the payload must really delete it —
+    // otherwise "save" is a merge and a deletion would silently come back.
+    const pruned = repo.getState();
+    pruned.transporters = pruned.transporters.filter((t) => t.id !== "TR-SMOKE");
+    erp.saveState(pruned);
+    ok("removing a transporter from the payload deletes it",
+      !repo.getState().transporters.some((t) => t.id === "TR-SMOKE"));
+
+    // NEGATIVE 2: a payload that never mentions the collection must leave it
+    // alone. buildSeed() carries no transporters/lab/HR keys, so an unguarded
+    // wipe would make every reset and boot-time migration erase them.
+    repo.putTransporter({ id: "TR-KEEP", name: "Survives a seed-shaped save", active: true });
+    const lean = repo.getState();
+    delete lean.transporters;
+    delete lean.labProducts;
+    delete lean.hrWorkers;
+    erp.saveState(lean);
+    const afterLean = repo.getState();
+    ok("a payload with no transporters key leaves the table untouched",
+      afterLean.transporters.some((t) => t.id === "TR-KEEP"), "n=" + afterLean.transporters.length);
+    ok("same for lab products and workers",
+      Array.isArray(afterLean.labProducts) && Array.isArray(afterLean.hrWorkers));
+  }
+
+  section("Every Import/Export section round-trips its own sheet");
+  {
+    /* Runs the REAL frontend import engine (csvio.js, loaded here with a window
+       shim the same way erpService already borrows bomcalc.js) over a sheet in
+       each section's own template format, then saves it the way the Import
+       button does. Guards the whole promise: what the sheet says is what the
+       section shows after a reload. Only the XLSX helpers in csvio.js need a
+       browser, and rows-as-arrays is exactly what they would have produced. */
+    global.window = global;
+    require("../../frontend/js/csvio.js");
+
+    const base = repo.getState();
+    const anItem = base.items.find((i) => i.cat === "RM") || base.items[0];
+    const anFg = base.items.find((i) => i.cat === "FG") || base.items[0];
+    const noBom = (base.items.find((i) => i.cat === "FG" && !base.boms[i.id]) || {}).id;
+    const aWh = (base.warehouses[0] || {}).id || "WH-PNY";
+    const aWorker = (base.hrWorkers || [])[0] || { id: "EMP-0001" };
+
+    const OVERRIDE = {
+      items: { id: "RM-RT", cat: "RM", uom: "KG" },
+      movements: { id: "MV-RT", itemId: anItem.id, wh: aWh, type: "GRN", date: "2026-08-06" },
+      workorders: { id: "WO-RT", itemId: anFg.id, date: "2026-08-06" },
+      salesorders: { id: "SO-RT", customerId: base.customers[0].id, date: "2026-08-06",
+        lines: JSON.stringify([{ itemId: anFg.id, qty: 5, rate: 100 }]) },
+      purchaseorders: { id: "PO-RT", supplierId: base.suppliers[0].id, date: "2026-08-06",
+        lines: JSON.stringify([{ itemId: anItem.id, qty: 5, rate: 100, recd: 0 }]) },
+      customers: { id: "CUS-RT" }, suppliers: { id: "SUP-RT" },
+      boms: { itemId: noBom || anFg.id, lines: JSON.stringify([{ itemId: anItem.id, qty: 2 }]) },
+      leads: { id: "LD-RT", product: anFg.id },
+      labreports: { id: "LR-RT", productId: ((base.labProducts || [])[0] || {}).id || "LP-001" },
+      labproducts: { id: "LP-RT", code: "RT" },
+      transporters: { id: "TR-RT" },
+      hrworkers: { id: "EMP-RT", payType: "daily" },
+      hrattendance: { id: aWorker.id + ":2026-08-06", workerId: aWorker.id, date: "2026-08-06", status: "P" },
+    };
+    const cellFor = (key, c) => {
+      const o = OVERRIDE[key] || {};
+      if (c.k in o) return String(o[c.k]);
+      if (c.type === "num") return "7";
+      if (c.type === "bool") return "ACTIVE";   // the word people actually type
+      if (c.type === "list") return "Alpha|Beta";
+      if (c.type === "json") return "";
+      if (/date|since|joined|due|eta|promised|created|expectedClose|nextFollowUp/i.test(c.k)) return "2026-08-06";
+      return "RT " + c.k;
+    };
+    const recordsOf = (state, ent) => (ent.kind === "map"
+      ? Object.keys(state[ent.path] || {}).map((id) => Object.assign({ itemId: id }, state[ent.path][id]))
+      : state[ent.path] || []);
+
+    Object.keys(CSVIO.ENTITIES).forEach((key) => {
+      const ent = CSVIO.ENTITIES[key];
+      global.ENG = { data: repo.getState() };
+      const header = ent.cols.map((c) => c.label);
+      const row = ent.cols.map((c) => cellFor(key, c));
+
+      ok(key + ": the template header is recognised", CSVIO.detect(header) === key, "got " + CSVIO.detect(header));
+
+      let diff;
+      try { diff = CSVIO.buildDiff(key, [header, row]); }
+      catch (e) { ok(key + ": the sheet can be read", false, e.message); return; }
+      // an id that already exists is an update — both mean "the user gave us this row"
+      const landed = diff.add.concat(diff.update);
+      ok(key + ": the row is queued to write", landed.length === 1 && !diff.errors.length,
+        "add=" + diff.add.length + " upd=" + diff.update.length + " err=" + JSON.stringify(diff.errors));
+      if (!landed.length) return;
+
+      const id = landed[0].id;
+      CSVIO.apply(diff);
+      try { erp.saveState(ENG.data); }
+      catch (e) { ok(key + ": the save is accepted", false, e.message); return; }
+
+      const got = recordsOf(repo.getState(), ent).find((r) => String(r[ent.idKey]) === String(id));
+      ok(key + ": the row is still there after a reload", !!got, ent.idKey + "=" + id);
+      if (!got) return;
+
+      /* Only the columns the section's own template ships (ent.form) are the
+         user's to set. Everything else — a work order's status and progress,
+         ABC class — is calculated by the app, so the server rewriting those is
+         the design, not lost data. */
+      const formKeys = new Set(ent.form || ent.cols.map((c) => c.k));
+      const lost = [];
+      ent.cols.forEach((c) => {
+        if (c.k === ent.idKey || !formKeys.has(c.k)) return;
+        const want = cellFor(key, c);
+        const v = c.path ? c.path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), got) : got[c.k];
+        if (c.type === "num") { if (Number(v) !== Number(want)) lost.push(c.k); return; }
+        if (c.type === "bool") { if (v !== true) lost.push(c.k + "=" + v); return; }
+        if (c.type === "list") { if (!Array.isArray(v) || v.join("|") !== want) lost.push(c.k); return; }
+        if (c.type === "json") { if (want && v == null) lost.push(c.k); return; }
+        if (String(v == null ? "" : v) !== want) lost.push(c.k + "=" + JSON.stringify(v));
+      });
+      ok(key + ": every column the user filled in came back verbatim", lost.length === 0, lost.join(", "));
+    });
+  }
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

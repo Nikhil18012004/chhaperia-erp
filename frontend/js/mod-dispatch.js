@@ -33,14 +33,20 @@
       kpi({ icon: "🏅", label: "A-Rated", value: ENG.num(active.filter((t) => t.rating === "A").length) }),
     ]));
 
-    // toolbar
+    // toolbar — kept as named handles so "Show all providers" can put them back
+    const qInput = MW.searchInput("Search name, city, contact, route…", (v) => { filter.q = v.toLowerCase(); draw(); });
+    const statusSel = MW.select([{ value: "active", label: "Active" }, { value: "all", label: "All Statuses" }, { value: "inactive", label: "Inactive" }], (v) => { filter.status = v; draw(); });
+    const ratingSel = MW.select([{ value: "all", label: "All Ratings" }, ...RATINGS.map((r) => ({ value: r, label: "Grade " + r }))], (v) => { filter.rating = v; draw(); });
+    const vehicleSel = MW.select([{ value: "all", label: "All Vehicles" }, ...VEHICLE_TYPES.map((v) => ({ value: v, label: v }))], (v) => { filter.vehicle = v; draw(); });
     root.appendChild(h("div", { class: "toolbar" }, [
-      MW.searchInput("Search name, city, contact, route…", (v) => { filter.q = v.toLowerCase(); draw(); }),
-      MW.select([{ value: "active", label: "Active" }, { value: "all", label: "All Statuses" }, { value: "inactive", label: "Inactive" }], (v) => { filter.status = v; draw(); }),
-      MW.select([{ value: "all", label: "All Ratings" }, ...RATINGS.map((r) => ({ value: r, label: "Grade " + r }))], (v) => { filter.rating = v; draw(); }),
-      MW.select([{ value: "all", label: "All Vehicles" }, ...VEHICLE_TYPES.map((v) => ({ value: v, label: v }))], (v) => { filter.vehicle = v; draw(); }),
+      qInput, statusSel, ratingSel, vehicleSel,
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "trCount" })),
     ]));
+    function showAll() {
+      filter = { q: "", rating: "all", vehicle: "all", status: "all" };
+      qInput.value = ""; statusSel.value = "all"; ratingSel.value = "all"; vehicleSel.value = "all";
+      draw();
+    }
     const host = h("div"); root.appendChild(host);
 
     function rows() {
@@ -56,7 +62,27 @@
     function draw() {
       const data = rows(); const c = UI.$("#trCount"); if (c) c.textContent = data.length + " providers";
       host.innerHTML = "";
-      if (!data.length) { host.appendChild(h("div", { class: "empty", style: "margin-top:24px" }, [h("div", { class: "big", text: "🚚" }), h("div", { style: "font-weight:700", text: "No transport providers" }), h("div", { class: "muted", style: "margin-top:6px", text: "Add your first carrier with ＋ New Transporter." })])); return; }
+      if (!data.length) {
+        /* An empty grid has two very different causes and they need different
+           advice. Most rows in a filled-in dispatch sheet come in as Inactive,
+           so the default Active filter can hide a directory that is anything but
+           empty — telling that user "no transport providers, add your first one"
+           sends them off to re-import data that is already in. */
+        const total = trs().length;
+        host.appendChild(h("div", { class: "empty", style: "margin-top:24px" }, total ? [
+          h("div", { class: "big", text: "🔍" }),
+          h("div", { style: "font-weight:700", text: ENG.num(total) + " provider" + (total === 1 ? "" : "s") + " on file, none matching these filters" }),
+          h("div", { class: "muted", style: "margin-top:6px", text: filter.status === "active"
+            ? "Carriers imported from a spreadsheet arrive Inactive unless the Status column says ACTIVE — switch Status to “All Statuses” to see them."
+            : "Clear or widen a filter to see them." }),
+          h("button", { class: "btn", style: "margin-top:12px", onclick: showAll, text: "Show all providers" }),
+        ] : [
+          h("div", { class: "big", text: "🚚" }),
+          h("div", { style: "font-weight:700", text: "No transport providers" }),
+          h("div", { class: "muted", style: "margin-top:6px", text: "Add your first carrier with ＋ New Transporter." }),
+        ]));
+        return;
+      }
       const grid = h("div", { class: "grid cols-2" });
       data.forEach((t) => grid.appendChild(card(t)));
       host.appendChild(grid);

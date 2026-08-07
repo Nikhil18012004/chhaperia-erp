@@ -225,6 +225,87 @@ function saveState(data) {
         value: value || 0, owner: owner || null, created: created || null,
         next_follow_up: nextFollowUp || null, customer_id: customerId || null, doc: J(rest) });
     });
+
+    /* ---- the collections getState() also hands out ----
+       Dispatch, Lab, HR and the Calendar are part of the state document, so a
+       full-state save has to write them back. It used to stop at leads: every
+       row an Excel import added to those sections was accepted, reported as
+       saved, and then silently dropped on the way to disk.
+
+       Guarded on the key being present, because a payload that never mentions a
+       collection is not the same as one that empties it: buildSeed() carries no
+       transporters / lab / HR / appointments keys, so reset() and the boot-time
+       migrations must leave those tables standing rather than wipe them.
+       (chatbot_knowledge stays out of here on purpose — it is not part of the
+       state document at all, so trained answers survive a restore.) */
+    const replace = (key, table, write) => {
+      if (!Array.isArray(d[key])) return;
+      db.prepare(`DELETE FROM ${table}`).run();
+      d[key].forEach(write);
+    };
+
+    const tr = db.prepare("INSERT INTO transporters(id,doc) VALUES(?,?)");
+    replace("transporters", "transporters", (t) => tr.run(t.id, J(t)));
+
+    const lp = db.prepare("INSERT INTO lab_products(id,doc) VALUES(?,?)");
+    replace("labProducts", "lab_products", (p) => lp.run(p.id, J(p)));
+
+    const lrp = db.prepare("INSERT INTO lab_reports(id,doc) VALUES(?,?)");
+    replace("labReports", "lab_reports", (r) => lrp.run(r.id, J(r)));
+
+    const ap = db.prepare("INSERT INTO appointments(id,date,doc) VALUES(@id,@date,@doc)");
+    replace("appointments", "appointments", (a) => {
+      const { id, date, ...rest } = a;
+      ap.run({ id, date: date || null, doc: J(rest) });
+    });
+
+    const hw = db.prepare(`INSERT INTO hr_workers
+      (id,name,dept,designation,pay_type,daily_rate,monthly_ctc,device_uid,active,joined,doc)
+      VALUES(@id,@name,@dept,@designation,@pay_type,@daily_rate,@monthly_ctc,@device_uid,@active,@joined,@doc)`);
+    replace("hrWorkers", "hr_workers", (w) => {
+      const { id, name, dept, designation, payType, dailyRate, monthlyCtc, deviceUid, active, joined, ...rest } = w;
+      hw.run({ id, name: name || "", dept: dept || null, designation: designation || null,
+        pay_type: payType || "daily", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
+        device_uid: deviceUid || null, active: active === false ? 0 : 1, joined: joined || null, doc: J(rest) });
+    });
+
+    const ha = db.prepare(`INSERT INTO hr_attendance
+      (id,worker_id,date,status,in_time,out_time,hours,ot_hours,note,source)
+      VALUES(@id,@worker_id,@date,@status,@in_time,@out_time,@hours,@ot_hours,@note,@source)`);
+    replace("hrAttendance", "hr_attendance", (a) => {
+      ha.run({ id: a.id || a.workerId + ":" + a.date, worker_id: a.workerId, date: a.date,
+        status: a.status || null, in_time: a.inTime || null, out_time: a.outTime || null,
+        hours: a.hours || 0, ot_hours: a.otHours || 0, note: a.note || null, source: a.source || "device" });
+    });
+
+    const hlt = db.prepare(`INSERT INTO hr_leave_types(id,name,quota,accrual,paid,color)
+      VALUES(@id,@name,@quota,@accrual,@paid,@color)`);
+    replace("hrLeaveTypes", "hr_leave_types", (t) => {
+      hlt.run({ id: t.id, name: t.name || t.id, quota: t.quota || 0,
+        accrual: t.accrual || "fixed", paid: t.paid === false ? 0 : 1, color: t.color || null });
+    });
+
+    const hl = db.prepare(`INSERT INTO hr_leaves
+      (id,worker_id,type,from_date,to_date,days,status,reason,applied_on,decided_by)
+      VALUES(@id,@worker_id,@type,@from_date,@to_date,@days,@status,@reason,@applied_on,@decided_by)`);
+    replace("hrLeaves", "hr_leaves", (l) => {
+      hl.run({ id: l.id, worker_id: l.workerId, type: l.type, from_date: l.fromDate, to_date: l.toDate,
+        days: l.days || 0, status: l.status || "Pending", reason: l.reason || null,
+        applied_on: l.appliedOn || null, decided_by: l.decidedBy || null });
+    });
+
+    const hpr = db.prepare(`INSERT INTO hr_payruns(id,period,status,generated_at,doc)
+      VALUES(@id,@period,@status,@generated_at,@doc)`);
+    replace("hrPayruns", "hr_payruns", (pr) => {
+      const { id, period, status, generatedAt, ...rest } = pr;
+      hpr.run({ id, period, status: status || "Draft", generated_at: generatedAt || null, doc: J(rest) });
+    });
+
+    const hps = db.prepare("INSERT INTO hr_payslips(id,payrun_id,worker_id,doc) VALUES(@id,@payrun_id,@worker_id,@doc)");
+    replace("hrPayslips", "hr_payslips", (ps) => {
+      const { id, payrunId, workerId, ...rest } = ps;
+      hps.run({ id, payrun_id: payrunId, worker_id: workerId, doc: J(rest) });
+    });
   });
   tx(data);
   return getState();
