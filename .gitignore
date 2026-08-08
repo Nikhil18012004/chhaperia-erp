@@ -50,3 +50,4 @@ data/demo-manifest.json
 # Env
 .env
 .env.local
+data/bartender/
