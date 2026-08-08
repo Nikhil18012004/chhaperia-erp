@@ -1,23 +1,28 @@
 /* ============================================================
-   CHHAPERIA ERP — cross-verified INR exchange rates
-   Business negotiations depend on these numbers, so no single
-   source is ever trusted alone:
+   CHHAPERIA ERP — INR exchange rates, shown as Google shows them
+   The office compares the dashboard against a Google search, so
+   for the main pairs the published rate IS the Google Finance
+   quote. Every other source stays on as the cross-check:
+     • Google Finance — the displayed rate (main pairs)
      • Yahoo Finance  — live market mid quotes (XXXINR=X)
      • frankfurter.dev — ECB daily reference rate
      • fawazahmed0 currency-api — daily aggregate
      • open.er-api.com — daily (tie-breaker; known to drift)
-   A currency's published rate is the MEDIAN of all sources — the
-   daily references plus the live market tick — so no single feed
-   can drag it to its own edge. A live tick that disagrees with the
-   daily consensus by >2.5% is dropped as stale and the daily median
-   stands. Rates are INR per 1 unit of the foreign currency.
-   Cached for 60 s.
+   A Google quote that disagrees with the daily consensus by >2.5%
+   is a bad parse, not a market move — it is dropped and the
+   median of the remaining sources stands, which is also what every
+   currency without a Google page gets. Rates are INR per 1 unit
+   of the foreign currency. Payload cached 60 s; the Google pages
+   are ~1 MB each so their quotes are held for 5 min.
    ============================================================ */
 "use strict";
 
 const CACHE_MS = 60 * 1000;
+const GOOGLE_MS = 5 * 60 * 1000;
 const LIVE_SET = ["USD", "EUR", "GBP", "AED", "JPY", "CNY", "SGD", "AUD", "CAD", "CHF", "SAR", "HKD"];
 const UA = { "User-Agent": "Mozilla/5.0 (ChhaperiaERP fx)" };
+// Google serves the full page only to something that looks like a browser
+const UA_BROWSER = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36" };
 
 let cache = null;          // { at, payload }
 let inflight = null;       // dedupe concurrent refreshes
@@ -39,6 +44,32 @@ async function yahooLive(ccy) {
   const p = meta && meta.regularMarketPrice;
   if (!p || !isFinite(p) || p <= 0) throw new Error("no live price for " + ccy);
   return { rate: p, asOf: (meta.regularMarketTime || 0) * 1000 };
+}
+
+/* Google's own number for one pair, parsed off the Google Finance quote page.
+   The page embeds the pair's history as [[y,m,d,hh,mm,...],[price,...]] points;
+   the FINAL point is the figure Google itself displays. Quotes are cached for
+   5 minutes so a dashboard refresh doesn't re-download a megabyte per pair. */
+const gCache = new Map();   // ccy -> { at, rate, asOf }
+async function googleQuote(ccy) {
+  const hit = gCache.get(ccy);
+  if (hit && Date.now() - hit.at < GOOGLE_MS) return { rate: hit.rate, asOf: hit.asOf };
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 8000);
+  let html;
+  try {
+    const res = await fetch(`https://www.google.com/finance/quote/${ccy}-INR`, { headers: UA_BROWSER, signal: ac.signal });
+    if (!res.ok) throw new Error("HTTP " + res.status + " from google finance " + ccy);
+    html = await res.text();
+  } finally { clearTimeout(t); }
+  const re = /\[\[(\d{4}),(\d{1,2}),(\d{1,2}),(\d{1,2}),(\d{1,2}),null,null,\[\]\],\[([0-9.]+),/g;
+  let m, last = null;
+  while ((m = re.exec(html))) last = m;
+  const rate = last ? +last[6] : NaN;
+  if (!(rate > 0)) throw new Error("no google quote for " + ccy);
+  const asOf = new Date(+last[1], +last[2] - 1, +last[3], +last[4], +last[5]).getTime();
+  gCache.set(ccy, { at: Date.now(), rate, asOf });
+  return { rate, asOf };
 }
 
 /* daily tables — all normalised to INR per 1 unit, keys UPPERCASE */
@@ -69,10 +100,13 @@ function median(nums) {
 }
 
 async function buildRates() {
-  const [frank, fawaz, er, ...live] = await Promise.allSettled([
+  const [frank, fawaz, er, ...rest] = await Promise.allSettled([
     frankfurter(), fawazahmed(), erapi(),
     ...LIVE_SET.map((c) => yahooLive(c)),
+    ...LIVE_SET.map((c) => googleQuote(c)),
   ]);
+  const live = rest.slice(0, LIVE_SET.length);
+  const goog = rest.slice(LIVE_SET.length);
 
   const daily = [frank, fawaz, er].filter((r) => r.status === "fulfilled").map((r) => r.value);
   const dailyNames = ["frankfurter(ECB)", "fawazahmed", "er-api"].filter((_, i) => [frank, fawaz, er][i].status === "fulfilled");
@@ -113,9 +147,29 @@ async function buildRates() {
     meta[c] = { src: "consensus", sources: pool.length, live: true, asOf };
   });
 
+  /* Google override — the dashboard promises Google's own number, so where
+     the Google Finance quote came through (and the cross-check above doesn't
+     call it a bad parse) it replaces the consensus as the published rate. */
+  let googleCount = 0;
+  LIVE_SET.forEach((c, i) => {
+    const g = goog[i];
+    if (g.status !== "fulfilled") return;
+    const { rate, asOf } = g.value;
+    const dailyVals = daily.map((t) => t[c]).filter((v) => v > 0);
+    const bench = dailyVals.length ? median(dailyVals) : null;
+    if (bench && Math.abs(rate / bench - 1) > 0.025) {
+      meta[c] = Object.assign(meta[c] || {}, { googleRejected: rate });
+      return;
+    }
+    rates[c] = rate;
+    meta[c] = { src: "google", asOf, checkedAgainst: dailyVals.length };
+    googleCount++;
+  });
+
   return {
     base: "INR",                 // rates = INR per 1 unit of the listed currency
     rates, meta,
+    googleCount,
     liveCount: Object.keys(meta).filter((c) => meta[c].src === "consensus" && meta[c].live).length,
     dailySources: dailyNames,
     fetchedAt: Date.now(),

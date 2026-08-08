@@ -574,8 +574,9 @@
         const j=await res.json();
         if(!j.rates||!j.rates.USD) throw new Error("bad response");
         fxPrev=fxRates; fxRates=j.rates; fxFetchedAt=j.fetchedAt||Date.now();
-        fxInfo=(j.liveCount?"✓ live market rate ("+j.liveCount+" pairs)":"daily reference rate")+
-          " · verified vs "+(j.dailySources||[]).length+" sources"+(j.stale?" · STALE":"");
+        fxInfo=(j.googleCount?"✓ Google rate ("+j.googleCount+" pairs)"
+            :j.liveCount?"✓ live market rate ("+j.liveCount+" pairs)":"daily reference rate")+
+          " · cross-checked vs "+(j.dailySources||[]).length+" sources"+(j.stale?" · STALE":"");
         paint();
       }catch(e){
         if(fxRates){ paint(); stamp.textContent+=" · refresh failed, showing last rates"; }
