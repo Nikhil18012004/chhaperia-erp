@@ -1340,7 +1340,7 @@
     if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
     const logo=location.origin+"/assets/logo-invoice.png";
     const mark=location.origin+"/assets/mark.png";
-    // a ruled blank the store writes on, so an unknown field never reads as "none"
+    // an unknown field prints as clear space the store writes on by hand
     const BLANK='<span class="wr"></span>';
     const cell=(v)=>v?esc(v):BLANK;
 
@@ -1400,8 +1400,8 @@
   table.fields th{width:47%}
   table.fields td{font-weight:700}
   td.st{font-weight:400;line-height:1.5;white-space:nowrap}
-  /* an empty field prints as a rule to write on, never as a dash */
-  .wr{display:block;height:11px;border-bottom:1px dotted #9a9a9a}
+  /* the spacer keeps an empty row at full height without printing anything */
+  .wr{display:block;height:11px}
 </style></head>
 <body><div class="sheet">${cards}</div>
 <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
