@@ -1598,6 +1598,82 @@ async function run() {
     const snapC = await call("GET", "/chatbot/snapshot", C);
     ok("supervisor snapshot works + money-free", snapC.status === 200 && !/price|cost|value/i.test(JSON.stringify(snapC.d)));
 
+    /* --- the wider free intents: SO/PO detail, BOM, HR, calendar, CRM,
+           movements, overdue — every one via the role-filtered view, every
+           redacted section answering "not available", never a made-up fact --- */
+    {
+      const stA = (await call("GET", "/state", A)).d;
+      const tokens2 = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+      // a specific sales order answers in detail, with its customer
+      const anySo = (stA.salesorders || [])[0];
+      if (anySo) {
+        const n = String(+(/(\d+)\s*$/.exec(anySo.id) || [])[1]);
+        const soD = await call("POST", "/chatbot/ask", A, { q: "status of so " + n });
+        ok("a sales order id answers in detail", soD.status === 200 && soD.d.answer.indexOf(anySo.id) === 0, (soD.d.answer || "").slice(0, 70));
+        const cust = (stA.customers || []).find((c) => c.id === anySo.customerId);
+        ok("…naming the customer", !cust || soD.d.answer.includes(cust.name), (soD.d.answer || "").slice(0, 70));
+      } else ok("a sales order id answers in detail", true, "skipped — no sales orders");
+
+      // a specific purchase order answers in detail; the supervisor is refused
+      const anyPo = (stA.purchaseorders || [])[0];
+      if (anyPo) {
+        const n = String(+(/(\d+)\s*$/.exec(anyPo.id) || [])[1]);
+        const poD = await call("POST", "/chatbot/ask", A, { q: "po " + n + " status" });
+        ok("a purchase order id answers in detail", poD.status === 200 && poD.d.answer.indexOf(anyPo.id) === 0, (poD.d.answer || "").slice(0, 70));
+        ok("…with ordered vs received per line", /ordered [\d.,]+, received/.test(poD.d.answer), (poD.d.answer || "").slice(0, 120));
+        const poC = await call("POST", "/chatbot/ask", C, { q: "po " + n + " status" });
+        ok("supervisor asking a PO id is refused, not shown", poC.status === 200 && /isn't available/.test(poC.d.answer), (poC.d.answer || "").slice(0, 70));
+      } else ok("a purchase order id answers in detail", true, "skipped — no purchase orders");
+
+      // BOM: an FG with a recipe answers its lines; "for N" scales it
+      const bomFg = (stA.items || []).find((i) => i.cat === "FG" && stA.boms && stA.boms[i.id] && (stA.boms[i.id].lines || []).length);
+      if (bomFg) {
+        const bomA = await call("POST", "/chatbot/ask", A, { q: "bom of " + bomFg.name });
+        ok("BOM of a product lists its recipe", bomA.status === 200 && /recipe per/.test(bomA.d.answer) && /–/.test(bomA.d.answer), (bomA.d.answer || "").slice(0, 90));
+        // a size in the NAME must not scale the recipe — only an explicit "for N"
+        ok("…and no silent scaling from digits in the name", !/materials for/.test(bomA.d.answer), (bomA.d.answer || "").slice(0, 60));
+      } else ok("BOM of a product lists its recipe", true, "skipped — no FG with a BOM");
+
+      // HR — the office is answered; the floor is refused, never a fake register
+      const absA = await call("POST", "/chatbot/ask", A, { q: "who is absent today" });
+      ok("office attendance ask answers or says 'not recorded yet'",
+        absA.status === 200 && /Attendance for|No attendance has been recorded/.test(absA.d.answer), (absA.d.answer || "").slice(0, 80));
+      const absC = await call("POST", "/chatbot/ask", C, { q: "who is absent today" });
+      ok("supervisor attendance ask is refused — no fabricated register",
+        absC.status === 200 && /isn't available/.test(absC.d.answer) && !/Attendance for|No attendance/.test(absC.d.answer), (absC.d.answer || "").slice(0, 80));
+      const lvA = await call("POST", "/chatbot/ask", A, { q: "pending leave requests" });
+      ok("office leave ask answers", lvA.status === 200 && /leave request/i.test(lvA.d.answer), (lvA.d.answer || "").slice(0, 80));
+
+      // calendar + CRM: office answered, floor refused
+      const apA = await call("POST", "/chatbot/ask", A, { q: "appointments this week" });
+      ok("office calendar ask answers", apA.status === 200 && /appointment/i.test(apA.d.answer), (apA.d.answer || "").slice(0, 80));
+      const apC = await call("POST", "/chatbot/ask", C, { q: "appointments today" });
+      ok("supervisor calendar ask is refused", apC.status === 200 && /isn't available/.test(apC.d.answer), (apC.d.answer || "").slice(0, 80));
+      const ldA = await call("POST", "/chatbot/ask", A, { q: "open leads" });
+      ok("office CRM ask answers", ldA.status === 200 && /Leads: \d+|No leads in the CRM/.test(ldA.d.answer), (ldA.d.answer || "").slice(0, 80));
+      // "lead time" is purchasing English, not the CRM — must NOT read as leads
+      const ldTime = await call("POST", "/chatbot/ask", A, { q: "lead time for mica tape" });
+      ok("'lead time' does not read as CRM leads", ldTime.status === 200 && !/Leads: \d+/.test(ldTime.d.answer), (ldTime.d.answer || "").slice(0, 80));
+
+      // movements: today's GRNs/issues, or an honest "none recorded"
+      const mvA = await call("POST", "/chatbot/ask", A, { q: "what came in today" });
+      ok("office movements ask answers", mvA.status === 200 && /stock movement/i.test(mvA.d.answer), (mvA.d.answer || "").slice(0, 80));
+
+      // overdue: answers before the production intent can swallow "work orders"
+      const odA = await call("POST", "/chatbot/ask", A, { q: "overdue work orders" });
+      ok("overdue ask answers with due dates, not the generic job list",
+        odA.status === 200 && /past their due date|due within 7 days|past ETA|Nothing visible to your login is overdue/.test(odA.d.answer), (odA.d.answer || "").slice(0, 90));
+
+      // the item-card fallback: an item question that fits no intent still answers
+      const anyItem = (stA.items || []).find((i) => tokens2(i.name).length >= 2) || (stA.items || [])[0];
+      if (anyItem) {
+        const card = await call("POST", "/chatbot/ask", A, { q: "tell me about " + anyItem.name });
+        ok("an item question with no intent gets the item card, not help",
+          card.status === 200 && /• Category:/.test(card.d.answer) && !/Try:/.test(card.d.answer), (card.d.answer || "").slice(0, 90));
+      }
+    }
+
     // training: admin/office only
     ok("supervisor CANNOT train (403)", (await call("POST", "/chatbot/knowledge", C, { question: "x", answer: "y" })).status === 403);
     ok("supervisor CANNOT list training (403)", (await call("GET", "/chatbot/knowledge", C)).status === 403);

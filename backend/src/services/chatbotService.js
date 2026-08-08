@@ -15,6 +15,7 @@
 "use strict";
 const repo = require("../db/repository");
 const view = require("./viewService");
+const BC = require("../../../frontend/js/bomcalc");
 
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
 
@@ -81,6 +82,7 @@ function matchItems(qTokens, items) {
 const fmtQ = (n) => (Math.round((+n || 0) * 100) / 100).toLocaleString("en-IN");
 const fmtM = (n) => "₹" + (Math.round(+n || 0)).toLocaleString("en-IN");
 const todayISO = () => { const x = new Date(); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
+const shiftISO = (days) => { const x = new Date(Date.now() + days * 864e5); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
 
 function stateItems(st) { return st.items || st.stockItems || []; }
 
@@ -152,17 +154,17 @@ function intentAnswers(user, q, st) {
   });
   const notForRole = (what) => `${what} isn't available for your login — ask the office team.`;
 
-  /* -- a specific work order by id -- */
-  const woId = /\b(wo[- ]?\d+)\b/i.exec(q);
-  if (woId) {
-    const id = woId[1].toUpperCase().replace(/\s+/, "-").replace("WO", "WO-").replace("WO--", "WO-");
-    /* Real ids are zero-padded to four ("WO-0012"), so a strict string compare
-       failed every natural way of typing it — "WO 12", "wo12", even the help
-       text's own "WO-012". Compare the number, not the padding. */
+  /* -- a specific work order by id --
+     Real ids are zero-padded to four ("WO-0012"), so a strict string compare
+     failed every natural way of typing it — "WO 12", "wo12", even the help
+     text's own "WO-012". Compare the number, not the padding. "work order 12"
+     spelt out counts too. */
+  const woRef = /\b(?:wo|work\s?orders?)[-\s#]?0*(\d+)\b/i.exec(q);
+  if (woRef) {
+    const want = woRef[1];
     const woNum = (s) => { const m = /^\s*wo[-\s]?0*(\d+)\s*$/i.exec(String(s || "")); return m ? m[1] : null; };
-    const want = woNum(id);
-    const wo = (st.workorders || []).find((w) => want != null && woNum(w.id) === want);
-    if (!wo) return `I can't see a work order "${id}" from your login.`;
+    const wo = (st.workorders || []).find((w) => woNum(w.id) === want);
+    if (!wo) return `I can't see a work order "WO-${want}" from your login.`;
     const stg = woStage(wo);
     const lines = [
       `${wo.id} — ${woProduct(wo, itemById)}`,
@@ -173,6 +175,52 @@ function intentAnswers(user, q, st) {
     ].filter(Boolean);
     (wo.route || []).forEach((r) => lines.push(`   – ${r.name}: ${r.status || "Pending"}${r.doneAt ? " ✓ " + String(r.doneAt).slice(0, 10) : ""}`));
     return lines.join("\n");
+  }
+
+  /* -- a specific sales order by id ("SO-14", "sales order 14") --
+     Only an id WITH digits lands here; the bare English word "so" stays out. */
+  const soRef = /\b(?:so|sales\s?orders?)[-\s#]?0*(\d+)\b/i.exec(q);
+  if (soRef) {
+    if (!Array.isArray(st.salesorders)) return notForRole("Sales orders");
+    const soNum = (s) => { const m = /^\s*so[-\s]?0*(\d+)\s*$/i.exec(String(s || "")); return m ? m[1] : null; };
+    const so = st.salesorders.find((s) => soNum(s.id) === soRef[1]);
+    if (!so) return `I can't see a sales order "SO-${soRef[1]}" from your login.`;
+    const cust = (st.customers || []).find((c) => c.id === so.customerId);
+    const out = [
+      `${so.id}${cust ? " — " + cust.name : ""}`,
+      `• Status: ${so.status || "Open"}`,
+      so.date ? `• Ordered: ${so.date}` : null,
+      so.promised || so.due ? `• Promised: ${so.promised || so.due}` : null,
+      so.value != null ? `• Value: ${fmtM(so.value)}` : null,
+    ].filter(Boolean);
+    (so.lines || []).forEach((l) => {
+      const it = itemById[l.itemId] || {};
+      out.push(`   – ${it.name || l.itemId} · ${fmtQ(l.qty)} ${it.uom || ""}${l.rate != null ? " @ ₹" + fmtQ(l.rate) : ""}`);
+    });
+    return out.join("\n");
+  }
+
+  /* -- a specific purchase order by id ("PO-7", "purchase order 7") -- */
+  const poRef = /\b(?:po|purchase\s?orders?)[-\s#]?0*(\d+)\b/i.exec(q);
+  if (poRef) {
+    if (!Array.isArray(st.purchaseorders)) return notForRole("Purchase orders");
+    const poNum = (s) => { const m = /^\s*po[-\s]?0*(\d+)\s*$/i.exec(String(s || "")); return m ? m[1] : null; };
+    const po = st.purchaseorders.find((p) => poNum(p.id) === poRef[1]);
+    if (!po) return `I can't see a purchase order "PO-${poRef[1]}" from your login.`;
+    const sup = (st.suppliers || []).find((s) => s.id === po.supplierId);
+    const out = [
+      `${po.id}${sup ? " — " + sup.name : ""}`,
+      `• Status: ${po.status || "Open"}`,
+      po.date ? `• Ordered: ${po.date}` : null,
+      po.eta ? `• ETA: ${po.eta}` : null,
+      po.value != null ? `• Value: ${fmtM(po.value)}` : null,
+    ].filter(Boolean);
+    (po.lines || []).forEach((l) => {
+      const it = itemById[l.itemId] || {};
+      const pend = (+l.qty || 0) - (+l.recd || 0);
+      out.push(`   – ${it.name || l.itemId} · ordered ${fmtQ(l.qty)}, received ${fmtQ(l.recd || 0)}${pend > 0.001 ? ", PENDING " + fmtQ(pend) : " ✓"}`);
+    });
+    return out.join("\n");
   }
 
   /* -- low stock / reorder -- */
@@ -189,6 +237,207 @@ function intentAnswers(user, q, st) {
       .concat(low.slice(0, 10).map((x) => `• ${x.i.name} — ${fmtQ(x.qty)} ${x.i.uom || ""} on hand (reorder at ${fmtQ(x.i.reorder)})`))
       .concat(low.length > 10 ? [`…and ${low.length - 10} more. See Inventory for the full list.`] : [])
       .join("\n");
+  }
+
+  /* -- BOM / recipe of a product --
+     Two shapes: officer/lab carry the raw `boms` map; the supervisor view
+     ships `finishedProducts` with the same recipe already expanded per unit.
+     Use whichever this role's view carries, so the floor gets recipe answers
+     too — quantities only, exactly what their view already shows. */
+  if (has("bom", "recipe", "formula", "goes into", "made of", "made from", "materials for", "material required", "materials required", "materials needed")) {
+    const recipeFor = (it) => {
+      const bom = st.boms && st.boms[it.id];
+      if (bom && (bom.lines || []).length) {
+        const Y = bom.yield || 1;
+        try {
+          return BC.toLegacy(bom, BC.metaFromItem(it)).map(([rid, per]) => {
+            const m = itemById[rid] || {};
+            return { name: m.name || rid, uom: m.uom || "", perUnit: per / Y };
+          });
+        } catch { /* legacy shape below */ }
+        return bom.lines.map((l) => {
+          const rid = Array.isArray(l) ? l[0] : l.itemId;
+          const m = itemById[rid] || {};
+          return { name: m.name || rid, uom: m.uom || "", perUnit: (Array.isArray(l) ? +l[1] : +l.qty) || 0 };
+        });
+      }
+      const fp = (st.finishedProducts || []).find((p) => p.id === it.id);
+      return fp && (fp.recipe || []).length ? fp.recipe : null;
+    };
+    const rest = qT.filter((t) => !["bom","boms","recipe","formula","material","materials","required","needed","goes","into","made","make","making"].includes(t));
+    const found = matchItems(rest, items).map((it) => ({ it, recipe: recipeFor(it) })).filter((x) => x.recipe);
+    if (found.length) {
+      /* "materials for 500 kg of X" scales the per-unit recipe. The number must
+         follow for/make/produce — a bare number would read the "25" out of a
+         product named "Tape 25mm" and silently scale the whole answer by 25. */
+      const qm = /\b(?:for|make|making|produce)\s+(\d+(?:\.\d+)?)/i.exec(q);
+      const mult = qm && +qm[1] > 0 ? +qm[1] : 1;
+      return found.slice(0, 2).map(({ it, recipe }) => {
+        const head = mult !== 1
+          ? `${it.name} — materials for ${fmtQ(mult)} ${it.uom || "unit"}:`
+          : `${it.name} — recipe per ${it.uom || "unit"}:`;
+        return [head].concat(recipe.map((r) => `   – ${r.name}: ${fmtQ((r.perUnit || 0) * mult)} ${r.uom || ""}`)).join("\n");
+      }).join("\n\n");
+    }
+    const n = st.boms ? Object.keys(st.boms).filter((k) => ((st.boms[k] || {}).lines || []).length).length
+      : (st.finishedProducts || []).filter((p) => (p.recipe || []).length).length;
+    if (!n && !st.boms && !Array.isArray(st.finishedProducts)) return notForRole("BOM / recipe data");
+    return `${n} product(s) have a recipe on file. Ask about one by name, e.g. "BOM of <product name>".`;
+  }
+
+  /* -- overdue / due-soon (before the production intent, which would
+        otherwise swallow "overdue work orders" via the words "work order") -- */
+  if (has("overdue", "delayed", "behind schedule", "due today", "due tomorrow", "due this week", "due soon", "running late")) {
+    const today = todayISO();
+    const wos = (st.workorders || []).filter(woOpen);
+    const lines = [];
+    const late = wos.filter((w) => w.due && w.due < today);
+    const soon = wos.filter((w) => w.due && w.due >= today && w.due <= shiftISO(7));
+    if (late.length) {
+      lines.push(`${late.length} open work order(s) past their due date:`);
+      late.slice(0, 8).forEach((w) => lines.push(`   – ${w.id} ${woProduct(w, itemById)} · due ${w.due}`));
+    }
+    if (soon.length) {
+      lines.push(`${soon.length} due within 7 days:`);
+      soon.slice(0, 8).forEach((w) => lines.push(`   – ${w.id} ${woProduct(w, itemById)} · due ${w.due}`));
+    }
+    if (Array.isArray(st.purchaseorders)) {
+      const latePo = st.purchaseorders.filter((p) => p.eta && p.eta < today && (p.lines || []).some((l) => (+l.recd || 0) < (+l.qty || 0)));
+      if (latePo.length) {
+        lines.push(`${latePo.length} purchase order(s) past ETA with material still pending:`);
+        latePo.slice(0, 5).forEach((p) => lines.push(`   – ${p.id} · ETA ${p.eta}`));
+      }
+    }
+    if (!lines.length) return "Nothing visible to your login is overdue, and nothing is due in the next 7 days. ✓";
+    return lines.join("\n");
+  }
+
+  /* -- HR: attendance, leave, payroll, workers (office/admin views only) -- */
+  if (has("attendance", "absent", "absentee", "on leave", "leave request", "leave application", "pending leave", "leaves pending",
+          "worker", "employee", "staff", "manpower", "headcount", "payroll", "payrun", "payslip", "salary", "salaries", "wage")) {
+    if (!Array.isArray(st.hrWorkers)) return notForRole("HR data");
+    const byId = Object.fromEntries(st.hrWorkers.map((w) => [w.id, w]));
+    const today = todayISO();
+
+    if (has("on leave", "leave request", "leave application", "pending leave", "leaves pending")) {
+      const leaves = st.hrLeaves || [];
+      if (has("on leave")) {
+        const now = leaves.filter((l) => String(l.status || "").toLowerCase() === "approved" && l.fromDate <= today && (l.toDate || l.fromDate) >= today);
+        if (now.length) {
+          return [`${now.length} worker(s) on approved leave today:`]
+            .concat(now.slice(0, 10).map((l) => `• ${(byId[l.workerId] || {}).name || l.workerId} — ${l.type || "leave"} until ${l.toDate || l.fromDate}`)).join("\n");
+        }
+      }
+      const pend = leaves.filter((l) => String(l.status || "Pending").toLowerCase() === "pending");
+      if (!pend.length) return "No leave requests are pending, and nobody is on approved leave today. ✓";
+      return [`${pend.length} leave request(s) pending approval:`]
+        .concat(pend.slice(0, 8).map((l) => `• ${(byId[l.workerId] || {}).name || l.workerId} — ${l.type || "leave"} · ${l.fromDate}${l.toDate && l.toDate !== l.fromDate ? " → " + l.toDate : ""}${l.days ? " · " + fmtQ(l.days) + " day(s)" : ""}`))
+        .join("\n");
+    }
+
+    if (has("attendance", "absent", "absentee")) {
+      /* An empty day must say "not recorded yet" — an unmarked register is not
+         a full house, the same absent-≠-all-clear rule the lab intent learned. */
+      const rows = (st.hrAttendance || []).filter((a) => a.date === today);
+      if (!rows.length) return `No attendance has been recorded for today (${today}) yet.`;
+      const byStatus = {};
+      rows.forEach((a) => { const s = String(a.status || "?"); byStatus[s] = (byStatus[s] || 0) + 1; });
+      const lines = [`Attendance for ${today} — ${rows.length} recorded:`,
+        "• " + Object.keys(byStatus).map((s) => `${s}: ${byStatus[s]}`).join(" · ")];
+      const absent = rows.filter((a) => /^a/i.test(String(a.status || "")));
+      if (absent.length) {
+        lines.push("Absent:");
+        absent.slice(0, 10).forEach((a) => lines.push(`   – ${(byId[a.workerId] || {}).name || a.workerId}`));
+      }
+      return lines.join("\n");
+    }
+
+    if (has("payroll", "payrun", "payslip", "salary", "salaries", "wage")) {
+      const rest = qT.filter((t) => !["payroll","payrun","payslip","salary","salaries","wage","wages"].includes(t));
+      if (rest.length) {
+        const hits = st.hrWorkers.filter((w) => { const n = tokens(w.name); return rest.some((t) => n.some((x) => x === t || x.startsWith(t))); });
+        if (hits.length && hits.length <= 3) {
+          return hits.map((w) => [`${w.name}`, w.dept ? `• Dept: ${w.dept}` : null,
+            w.designation ? `• Designation: ${w.designation}` : null,
+            w.payType === "monthly" ? `• Monthly CTC: ${fmtM(w.monthlyCtc)}` : `• Daily rate: ${fmtM(w.dailyRate)}`,
+          ].filter(Boolean).join("\n")).join("\n\n");
+        }
+      }
+      const runs = st.hrPayruns || [];
+      if (!runs.length) return "No pay runs have been generated yet.";
+      const last = runs[runs.length - 1];
+      return `Pay runs on file: ${runs.length}. Latest: ${last.period || last.id} · ${last.status || "Draft"}.`;
+    }
+
+    // generic workers: a name lookup, else the headcount with a dept breakdown
+    const rest = qT.filter((t) => !["worker","workers","employee","employees","staff","manpower","headcount","many","active"].includes(t));
+    if (rest.length) {
+      const hits = st.hrWorkers.filter((w) => { const n = tokens(w.name).concat(tokens(w.dept)); return rest.some((t) => n.some((x) => x === t || x.startsWith(t))); });
+      if (hits.length && hits.length <= 3) {
+        return hits.map((w) => [`${w.name}`, w.dept ? `• Dept: ${w.dept}` : null,
+          w.designation ? `• Designation: ${w.designation}` : null,
+          `• ${w.active === false ? "Inactive" : "Active"}${w.joined ? " · joined " + w.joined : ""}`,
+        ].filter(Boolean).join("\n")).join("\n\n");
+      }
+    }
+    const active = st.hrWorkers.filter((w) => w.active !== false);
+    const byDept = {};
+    active.forEach((w) => { const dp = w.dept || "—"; byDept[dp] = (byDept[dp] || 0) + 1; });
+    return [`Workers: ${st.hrWorkers.length} on file, ${active.length} active.`]
+      .concat(Object.keys(byDept).map((dp) => `• ${dp}: ${byDept[dp]}`)).join("\n");
+  }
+
+  /* -- calendar / appointments -- */
+  if (has("appointment", "meeting", "calendar", "agenda")) {
+    if (!Array.isArray(st.appointments)) return notForRole("The calendar");
+    const today = todayISO();
+    let scope = "coming up", rows;
+    if (has("today")) { scope = "today"; rows = st.appointments.filter((a) => a.date === today); }
+    else if (has("tomorrow")) { scope = "tomorrow"; const t = shiftISO(1); rows = st.appointments.filter((a) => a.date === t); }
+    else if (has("week")) { scope = "this week"; const end = shiftISO(7); rows = st.appointments.filter((a) => a.date >= today && a.date <= end); }
+    else rows = st.appointments.filter((a) => a.date >= today);
+    rows = rows.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    if (!rows.length) return `No appointments ${scope}. (${st.appointments.length} on the calendar in total.)`;
+    return [`${rows.length} appointment(s) ${scope}:`]
+      .concat(rows.slice(0, 8).map((a) => `• ${a.date}${a.time ? " " + a.time : ""} — ${a.title || a.name || a.subject || "(untitled)"}${a.with ? " · " + a.with : ""}`))
+      .join("\n");
+  }
+
+  /* -- CRM leads / follow-ups --
+     "leads" plural-only on purpose: the singular would swallow "lead time". */
+  if (has("leads", "crm", "pipeline", "follow up", "followup", "enquiry", "enquiries", "inquiry", "prospect")) {
+    if (!Array.isArray(st.leads)) return notForRole("CRM leads");
+    if (!st.leads.length) return "No leads in the CRM yet.";
+    const today = todayISO();
+    const byStage = {};
+    st.leads.forEach((l) => { const s = l.stage || "—"; byStage[s] = (byStage[s] || 0) + 1; });
+    const lines = [`Leads: ${st.leads.length} in the pipeline.`,
+      "• " + Object.keys(byStage).map((s) => `${s}: ${byStage[s]}`).join(" · ")];
+    const due = st.leads.filter((l) => l.nextFollowUp && l.nextFollowUp <= today && !/won|lost|closed/i.test(l.stage || ""));
+    if (due.length) {
+      lines.push(`${due.length} follow-up(s) due:`);
+      due.slice(0, 8).forEach((l) => lines.push(`   – ${l.company || l.contact || l.id} · ${l.nextFollowUp}${l.owner ? " · " + l.owner : ""}`));
+    }
+    return lines.join("\n");
+  }
+
+  /* -- stock movements (GRNs in, issues out) for a day -- */
+  if (has("grn", "receipt", "came in", "inward", "outward", "issued", "stock movement", "movement")) {
+    if (!Array.isArray(st.movements)) return notForRole("Stock movement history");
+    const yday = has("yesterday");
+    const day = yday ? shiftISO(-1) : todayISO();
+    const rows = st.movements.filter((m) => String(m.date || "").startsWith(day));
+    if (!rows.length) return `No stock movements recorded ${yday ? "yesterday" : "today"} (${day}).`;
+    const byType = {};
+    rows.forEach((m) => { const t = m.type || "?"; byType[t] = (byType[t] || 0) + 1; });
+    const lines = [`${rows.length} stock movement(s) on ${day}:`,
+      "• " + Object.keys(byType).map((t) => `${t}: ${byType[t]}`).join(" · ")];
+    rows.slice(0, 8).forEach((m) => {
+      const it = itemById[m.itemId] || {};
+      lines.push(`   – ${m.type || "?"} · ${it.name || m.itemId} · ${fmtQ(m.qty)} ${it.uom || ""}${m.ref ? " · " + m.ref : ""}`);
+    });
+    if (rows.length > 8) lines.push(`   …and ${rows.length - 8} more.`);
+    return lines.join("\n");
   }
 
   /* -- production summary (today / overall) -- */
@@ -211,9 +460,8 @@ function intentAnswers(user, q, st) {
   /* -- sales orders / revenue --
      "so" is not a trigger: it is an ordinary English word, and "we are low on
      mica so what should I order" was being answered with a sales-order listing.
-     A quoted id ("SO-14", "so 14") still gets you here. */
-  const soRef = /\bso[-\s]?\d+\b/i.test(q);
-  if (soRef || has("sales order", "sales", "revenue", "order value", "customer order", "dispatched")) {
+     A quoted id ("SO-14", "so 14") is answered in detail further up. */
+  if (has("sales order", "sales", "revenue", "order value", "customer order", "dispatched")) {
     if (!Array.isArray(st.salesorders)) return notForRole("Sales orders");
     const sos = st.salesorders;
     const open = sos.filter((s) => s.status !== "Dispatched");
@@ -232,9 +480,9 @@ function intentAnswers(user, q, st) {
     return lines.join("\n");
   }
 
-  /* -- purchase orders --  ("po " matched any word ending in -po: "tempo") -- */
-  const poRef = /\bpo[-\s]?\d+\b/i.test(q);
-  if (poRef || has("purchase order", "purchase", "incoming material", "supplier order")) {
+  /* -- purchase orders --  ("po " matched any word ending in -po: "tempo").
+     A quoted id ("PO-7") is answered in detail further up. */
+  if (has("purchase order", "purchase", "incoming material", "supplier order")) {
     if (!Array.isArray(st.purchaseorders)) return notForRole("Purchase orders");
     const pos = st.purchaseorders;
     const pending = pos.filter((p) => (p.lines || []).some((l) => (+l.recd || 0) < (+l.qty || 0)));
@@ -363,17 +611,54 @@ function intentAnswers(user, q, st) {
       .concat(st.warehouses.map((w) => `• ${w.name}${w.city ? " · " + w.city : ""}`)).join("\n");
   }
 
-  return null; // no intent matched — caller falls back to KB / help
+  return null; // no intent matched — caller falls back to KB / item card / help
+}
+
+/* Last-resort lookup: no intent fired and no trained answer scored — but if
+   the question is clearly ABOUT an item ("tell me about mica tape"), an item
+   card beats the help text. Deliberately strict (two token hits, or the whole
+   name covered) so a single loose word can't hijack the fallback. Runs AFTER
+   the KB pass in ask(), so it can never shadow a trained answer. */
+function itemCardAnswer(q, st) {
+  const qT = tokens(q);
+  const items = stateItems(st);
+  if (!qT.length || !items.length) return null;
+  const scored = [];
+  items.forEach((it) => {
+    const name = tokens(it.name);
+    const idTok = String(it.id || "").toLowerCase();
+    let s = 0;
+    qT.forEach((t) => { if (t === idTok || name.some((n) => n === t || n.startsWith(t) || t.startsWith(n))) s++; });
+    if (s) scored.push({ it, s, cover: s / Math.max(name.length, 1) });
+  });
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.s - a.s || b.cover - a.cover);
+  if (scored[0].s < 2 && scored[0].cover < 1) return null;
+  const oh = stockVisible(st) ? onHand(st) : null;
+  return scored.filter((x) => x.s === scored[0].s).slice(0, 3).map(({ it }) => [
+    `${it.name} (${it.id})`,
+    it.cat ? `• Category: ${it.cat}` : null,
+    it.uom ? `• Unit: ${it.uom}` : null,
+    it.hsn ? `• HSN: ${it.hsn}` : null,
+    it.cost != null ? `• Cost: ${fmtM(it.cost)} / ${it.uom || "unit"}` : null,
+    it.price != null ? `• Price: ${fmtM(it.price)} / ${it.uom || "unit"}` : null,
+    oh ? `• On hand: ${fmtQ((oh[it.id] || {}).qty || 0)} ${it.uom || ""}` : null,
+    (+it.reorder || 0) > 0 ? `• Reorder level: ${fmtQ(it.reorder)}` : null,
+    st.boms && st.boms[it.id] ? "• Has a recipe (BOM) on file — ask \"BOM of " + it.name + "\"" : null,
+  ].filter(Boolean).join("\n")).join("\n\n");
 }
 
 const HELP = [
   "I answer from the live ERP data — every answer is fetched fresh the moment you ask. Try:",
-  "• \"stock of <item name>\"",
+  "• \"stock of <item name>\" / \"tell me about <item>\"",
   "• \"low stock\" / \"what needs reordering\"",
-  "• \"production today\" / \"WO-012 status\"",
-  "• \"open sales orders\" / \"purchase orders pending\"",
-  "• \"customer <name>\" / \"supplier <name>\"",
+  "• \"production today\" / \"WO-012 status\" / \"overdue work orders\"",
+  "• \"SO-14 status\" / \"PO-7 status\" / \"purchase orders pending\"",
+  "• \"BOM of <product>\" / \"materials for 500 kg of <product>\"",
+  "• \"customer <name>\" / \"supplier <name>\" / \"transporters\"",
   "• \"pending lab tests\"",
+  "• \"who is absent today\" / \"pending leave requests\" (office)",
+  "• \"appointments this week\" / \"open leads\" / \"what came in today\" (office)",
   "The office team can also train me with company Q&A under the ⚙ Train tab.",
 ].join("\n");
 
@@ -399,6 +684,10 @@ function ask(user, q) {
   if (live) return { answer: live, source: "erp", asOf: new Date().toISOString() };
 
   if (best && bestScore >= 0.45) return { answer: best.answer, source: "kb", kbId: best.id, asOf: new Date().toISOString() };
+
+  // clearly about an item, just not phrased as a stock/price question
+  const card = itemCardAnswer(q, st);
+  if (card) return { answer: card, source: "erp", asOf: new Date().toISOString() };
 
   if (/help|what can you|hi$|hello|hey/i.test(q)) return { answer: HELP, source: "help", asOf: new Date().toISOString() };
   return {
