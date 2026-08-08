@@ -193,11 +193,16 @@
       ]);
       const anyRecd=po.lines.some(l=>(l.recd||0)>0);
       const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
-        h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"})];
+        h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"}),
+        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Stickers"})];
       if(!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
       if(po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
     }
+
+    // One raw-material identification sticker per ordered line, on the
+    // company's own template. See printStickers() for what gets filled in.
+    function stickersPO(po){ printStickers(po); }
 
     async function deletePO(po){
       const grn=ENG.data.movements.filter(m=>m.ref===po.id);
@@ -1244,6 +1249,106 @@
   function printDoc(kind, o){
     const html = kind==="po" ? domesticHtml(o, true)
                : (o.invoiceType==="export" ? exportHtml(o) : domesticHtml(o));
+    const w=window.open("","_blank");
+    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+    w.document.write(html); w.document.close();
+  }
+
+  /* ============================================================
+     RAW-MATERIAL IDENTIFICATION STICKERS — one per ordered line,
+     laid out four to an A4 sheet on the company's own template.
+
+     Only what the purchase order actually knows is printed:
+     product, grade, quantity and — for sheet goods — thickness
+     and GSM, plus the receipt date and GRN number once the goods
+     have been received against this PO. Everything the order
+     cannot know (supplier invoice number, inspector, test status)
+     prints as a ruled blank for the store to complete by hand,
+     because a sticker that guesses is worse than one left open.
+     ============================================================ */
+  function printStickers(po){
+    const lines=(po&&po.lines)||[];
+    if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
+    const logo=location.origin+"/assets/logo-invoice.png";
+    const mark=location.origin+"/assets/mark.png";
+    // a ruled blank the store writes on, so an unknown field never reads as "none"
+    const BLANK='<span class="wr"></span>';
+
+    const cards=lines.map((l)=>{
+      const it=ENG.item(l.itemId)||{};
+      /* The goods receipt posted against this PO is where the lot identity and
+         the date on the drum come from; before receiving, both stay blank. */
+      const grn=(ENG.data.movements||[]).filter(m=>m.ref===po.id&&m.type==="GRN"&&m.itemId===l.itemId)
+        .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")))[0];
+      /* The receipt posts one movement per line, id'd "<grn no>-<item id>".
+         The sticker wants the GRN number itself — the item is already the
+         whole label — and the full form wraps to two lines in the box. */
+      const grnNo=grn&&grn.id?String(grn.id).replace("-"+l.itemId,""):"";
+      const sheet=isSheetGoods(it);
+      const qty=(+l.recd>0)?+l.recd:+l.qty;
+      const uom=l.uom||it.uom||"";
+      const rows=[
+        ["GRADE/TYPE", esc(it.grade||it.typeCode||l.itemId||"")||BLANK],
+        ["DATE OF RECEIPT", grn&&grn.date?fmtD(grn.date):BLANK],
+        ["GRN/LOT NO", grnNo?esc(grnNo):BLANK],
+        // the supplier's own invoice arrives with the goods, never with the order
+        ["INVOICE NO", BLANK],
+        ["QTY &amp; UOM", qty>0?`${ENG.num(qty,2)} ${esc(uom)}`:BLANK],
+        ["THICKNESS (if fabric)", sheet&&it.thicknessMM!=null?`${BOMCALC.thk3(it.thicknessMM)} mm`:BLANK],
+        ["GSM (if fabric)", sheet&&it.gsm?`${ENG.num(it.gsm,0)} g/m²`:BLANK],
+        ["INSPECTED BY", BLANK],
+      ].map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join("");
+      return `<div class="stk">
+        <img class="wm" src="${mark}" alt="">
+        <div class="stk-in">
+          <div class="lg"><img src="${logo}" alt="Chhaperia"></div>
+          <div class="ttl">RAW MATERIAL</div>
+          <div class="prod">PRODUCT: <b>${esc(it.name||it.material||l.itemId||"")}</b></div>
+          <table class="fields"><tbody>${rows}
+            <tr><th>STATUS</th><td class="st">
+              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>
+              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] APPROVED</div>
+              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] REJECTED</div>
+            </td></tr>
+          </tbody></table>
+        </div>
+      </div>`;
+    }).join("");
+
+    const html=`<!doctype html><html><head><meta charset="utf-8">
+<title>Raw Material Stickers — ${esc(po.id)}</title>
+<style>
+  /* A4, four stickers to a sheet. Declare the size or the browser falls back
+     to its own default (US Letter), which clips the fourth sticker. */
+  @page{size:A4;margin:6mm}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:12px/1.4 "Times New Roman",Georgia,serif;color:#000;background:#fff}
+  .sheet{display:grid;grid-template-columns:repeat(2,1fr);gap:4mm}
+  .stk{position:relative;height:139mm;overflow:hidden;background:#fff;
+    /* a faint cut guide — visible enough to trim by, faint enough to ignore */
+    border:1px dashed #cfcfcf;break-inside:avoid;page-break-inside:avoid}
+  .stk-in{position:relative;z-index:1;height:100%;padding:7mm 6mm 5mm;display:flex;flex-direction:column}
+  /* the mark sits behind the fields exactly as it does on the printed template */
+  .wm{position:absolute;z-index:0;left:50%;top:56%;transform:translate(-50%,-50%);
+    width:64%;opacity:.14;pointer-events:none}
+  .lg{text-align:center;margin-bottom:5mm}
+  .lg img{height:13mm;object-fit:contain}
+  .ttl{text-align:center;font-size:17px;font-weight:700;letter-spacing:.3px;margin-bottom:5mm}
+  .prod{font-size:14px;font-weight:700;margin:0 0 7mm}
+  .prod b{font-weight:700}
+  table.fields{width:100%;border-collapse:collapse;table-layout:fixed}
+  table.fields th,table.fields td{border:1px solid #000;padding:2.1mm 2mm;font-size:11.5px;
+    font-weight:400;text-align:left;vertical-align:middle;word-wrap:break-word;overflow-wrap:anywhere}
+  table.fields th{width:47%}
+  table.fields td{font-weight:700}
+  td.st{font-weight:400;line-height:1.5;white-space:nowrap}
+  /* an empty field prints as a rule to write on, never as a dash */
+  .wr{display:block;height:11px;border-bottom:1px dotted #9a9a9a}
+</style></head>
+<body><div class="sheet">${cards}</div>
+<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
+</body></html>`;
+
     const w=window.open("","_blank");
     if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
     w.document.write(html); w.document.close();
