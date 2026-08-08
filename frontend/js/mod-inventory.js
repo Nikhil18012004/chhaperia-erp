@@ -223,8 +223,13 @@
     return id;
   }
 
-  /* ----- FEATURE 1: add stock to inventory against a PO number ----- */
-  function receiveStockForm(){
+  /* ----- FEATURE 1: add stock to inventory against a PO number -----
+     Posting a receipt also issues a numbered Goods Receipt Note on the
+     server, so the form captures what that document records: the
+     supplier's invoice, the vehicle, and any quantity turned away.
+     Only the ACCEPTED quantity (received − rejected) goes to stock —
+     a rejected lot goes back on the truck, so its line stays owed. */
+  function receiveStockForm(preselectPoId){
     const openPOs=ENG.data.purchaseorders.filter(p=>p.status!=="Received");
     if(!openPOs.length){
       modal({title:"Receive via PO", sub:"Goods receipt",
@@ -234,18 +239,26 @@
         foot:[h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;App.go("purchase");},text:"Go to Procurement"})]});
       return;
     }
+    const startPo=openPOs.find(p=>p.id===preselectPoId)||openPOs[0];
     const body=h("div",{},[
       h("div",{class:"form-grid"},[
         field("Scan / Barcode",`<input class="input" id="r_scan" placeholder="Scan a received item to jump to its line">`,"full"),
-        field("Purchase Order", selectHTML("r_po", openPOs.map(p=>({v:p.id, l:p.id+" — "+trim(ENG.sup(p.supplierId),24)})), openPOs[0].id)),
+        field("Purchase Order", selectHTML("r_po", openPOs.map(p=>({v:p.id, l:p.id+" — "+trim(ENG.sup(p.supplierId),24)})), startPo.id)),
         field("Receive into Warehouse", selectHTML("r_wh", ENG.data.warehouses.map(w=>({v:w.id,l:w.name})), "WH-PNY")),
+        field("Supplier Invoice / Challan No",`<input class="input" id="r_inv" placeholder="as printed on the supplier's document">`),
+        field("Invoice Date",`<input class="input" id="r_invd" type="date">`),
+        field("Vehicle No",`<input class="input" id="r_veh" placeholder="e.g. KA-51-AE-4471">`),
+        field("LR / Docket No",`<input class="input" id="r_lr" placeholder="optional">`),
       ]),
-      h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines to receive (edit qty as needed)"}),
-      h("div",{id:"r_lines"})
+      h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines to receive (edit qty; rejected goes back to the supplier)"}),
+      h("div",{id:"r_lines"}),
+      h("div",{class:"form-grid",style:"margin-top:10px"},[
+        field("Remarks / QC note",`<textarea class="input" id="r_rem" rows="2" placeholder="e.g. reason a quantity was rejected — quoted on the debit note"></textarea>`,"full"),
+      ]),
     ]);
-    const mo=modal({title:"Receive Stock against PO", sub:"Posts a goods receipt (GRN) straight to stock", wide:true, body,
+    const mo=modal({title:"Receive Stock against PO", sub:"Posts stock and issues a numbered goods receipt note", wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-        h("button",{class:"btn primary",onclick:save,text:"Receive Goods"})]});
+        h("button",{class:"btn primary",onclick:save,text:"Post GRN & Update Stock"})]});
     const poSel=UI.$("#r_po");
     // scanning a received item jumps to its line on the current PO
     attachScan(UI.$("#r_scan"), (found)=>{
@@ -257,6 +270,12 @@
     function renderLines(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const host=UI.$("#r_lines"); host.innerHTML="";
+      host.appendChild(h("div",{class:"flex gap muted",style:"align-items:center;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px"},[
+        h("div",{style:"flex:2",text:"Item"}),
+        h("div",{style:"flex:1",text:"Receive"}),
+        h("div",{style:"flex:1",text:"Rejected"}),
+        h("div",{style:"flex:1",text:"Rate"}),
+      ]));
       po.lines.forEach((l,idx)=>{
         const pend=+(l.qty-(l.recd||0)).toFixed(3), it=ENG.item(l.itemId)||{};
         host.appendChild(h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"+(pend<=0?";opacity:.5":"")},[
@@ -265,6 +284,7 @@
             h("div",{class:"cell-sub",text:l.itemId+" · ordered "+ENG.num(l.qty)+", pending "+ENG.num(pend)}),
           ]),
           h("input",{class:"input",id:"r_qty_"+idx,type:"number",step:"0.001",style:"flex:1",value:pend>0?pend:0}),
+          h("input",{class:"input",id:"r_rej_"+idx,type:"number",step:"0.001",min:"0",style:"flex:1",value:0}),
           h("div",{class:"muted",style:"flex:1;font-size:12px",text:"@ ₹"+ENG.num(l.rate,2)+" / "+(it.uom||"")})
         ]));
       });
@@ -273,23 +293,38 @@
     function save(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const wh=UI.$("#r_wh").value, date=DB.helpers.iso(DB.helpers.today());
-      const recvLines=[]; let posted=0;
+      const recvLines=[]; let touched=0;
       po.lines.forEach((l,idx)=>{
         const el=UI.$("#r_qty_"+idx); let rq=+((el&&el.value)||0);
+        const re=UI.$("#r_rej_"+idx); let rej=+((re&&re.value)||0);
         const pend=l.qty-(l.recd||0);
         if(rq>pend) rq=pend;
+        if(rej<0) rej=0; if(rej>rq) rej=rq;
         if(rq>0){
-          recvLines.push({i:idx, qty:rq});
-          ENG.data.movements.push({id:genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
-            qty:rq, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by:(App.user&&App.user.username)||"user"});
-          l.recd=+((l.recd||0)+rq).toFixed(3); posted++;
+          recvLines.push({i:idx, qty:rq, rejected:rej});
+          const acc=+(rq-rej).toFixed(3);
+          if(acc>0){
+            ENG.data.movements.push({id:genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
+              qty:acc, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by:(App.user&&App.user.username)||"user"});
+            l.recd=+((l.recd||0)+acc).toFixed(3);
+          }
+          touched++;
         }
       });
-      if(!posted){ toast("Enter a quantity to receive on at least one line",{type:"warn"}); return; }
+      if(!touched){ toast("Enter a quantity to receive on at least one line",{type:"warn"}); return; }
       po.status = po.lines.every(l=>(l.recd||0) >= l.qty-0.0001) ? "Received" : "Partially Received";
+      const head={ wh, date, lines:recvLines,
+        invNo:UI.$("#r_inv").value.trim(), invDate:UI.$("#r_invd").value,
+        vehicle:UI.$("#r_veh").value.trim(), lrNo:UI.$("#r_lr").value.trim(),
+        remarks:UI.$("#r_rem").value.trim() };
       mo.close();
-      toast(`${po.id} — goods received, stock updated`,{type:"ok",title:"GRN posted"});
-      App.saveDelta(()=>DB.purchase.receive(po.id,{wh, date, lines:recvLines}));
+      App.saveDelta(async()=>{
+        const r=await DB.purchase.receive(po.id, head);
+        if(r&&r.grn){
+          (ENG.data.grns=ENG.data.grns||[]).push(r.grn);
+          toast(`${r.grn.id} issued — reprint it any time from ${po.id}`,{type:"ok",title:"GRN posted"});
+        }
+      });
     }
   }
 
@@ -957,7 +992,7 @@
     return it.grade? nm+" — "+it.grade : nm; }
 
   // expose for other modules
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, receiveStockForm});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

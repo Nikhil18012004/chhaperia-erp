@@ -107,13 +107,17 @@ function getState() {
   const labProducts = db.prepare("SELECT doc FROM lab_products").all().map((r) => P(r.doc));
   const labReports = db.prepare("SELECT doc FROM lab_reports").all().map((r) => P(r.doc));
 
+  // ---- Goods receipt notes (numbered receipt documents) ----
+  const grns = db.prepare("SELECT id,doc FROM grns ORDER BY id ASC").all()
+    .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id }));
+
   return {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers, transporters,
     movements, workorders, salesorders, purchaseorders, leads, appointments, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
-    labProducts, labReports,
+    labProducts, labReports, grns,
   };
 }
 
@@ -252,6 +256,9 @@ function saveState(data) {
 
     const lrp = db.prepare("INSERT INTO lab_reports(id,doc) VALUES(?,?)");
     replace("labReports", "lab_reports", (r) => lrp.run(r.id, J(r)));
+
+    const gr = db.prepare("INSERT INTO grns(id,doc) VALUES(?,?)");
+    replace("grns", "grns", (g) => { const { id, ...rest } = g; gr.run(id, J(rest)); });
 
     const ap = db.prepare("INSERT INTO appointments(id,date,doc) VALUES(@id,@date,@doc)");
     replace("appointments", "appointments", (a) => {
@@ -429,15 +436,31 @@ function putPurchaseOrder(p) {
 }
 
 /** Delete one purchase order and reverse any stock movements posted against
-    it (GRN receipts), all in one transaction. */
+    it (GRN receipts), all in one transaction. Its goods receipt notes are
+    CANCELLED, not deleted — a numbered document must never silently vanish. */
 function deletePurchaseOrder(id) {
   const db = getDb();
   const tx = db.transaction((pid) => {
     db.prepare("DELETE FROM movements WHERE ref=?").run(pid);
+    db.prepare("UPDATE grns SET doc=json_set(doc,'$.status','Cancelled') WHERE json_extract(doc,'$.poId')=?").run(pid);
     db.prepare("DELETE FROM purchase_orders WHERE id=?").run(pid);
   });
   tx(id);
   return { id };
+}
+
+/* ---------- GOODS RECEIPT NOTES (granular) ---------- */
+function getGrns() {
+  const db = getDb();
+  return db.prepare("SELECT id,doc FROM grns ORDER BY id ASC").all()
+    .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id }));
+}
+function putGrn(g) {
+  const db = getDb();
+  const { id, ...rest } = g;
+  db.prepare(`INSERT INTO grns(id,doc) VALUES(@id,@doc)
+      ON CONFLICT(id) DO UPDATE SET doc=excluded.doc`).run({ id, doc: J(rest) });
+  return g;
 }
 
 /* ---------- SALES ORDERS (granular) ---------- */
@@ -847,7 +870,7 @@ function hrIsEmpty() { return getDb().prepare("SELECT COUNT(*) AS c FROM hr_work
 
 module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
-  deletePurchaseOrder, getSalesOrder, putSalesOrder, deleteSalesOrder,
+  deletePurchaseOrder, getGrns, putGrn, getSalesOrder, putSalesOrder, deleteSalesOrder,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
   getCustomer, putCustomer, deleteCustomer,
   getSupplier, putSupplier, deleteSupplier,

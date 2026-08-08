@@ -344,6 +344,23 @@ CREATE TABLE IF NOT EXISTS lab_reports (
 
 
 -- ============================================================
+--  GOODS RECEIPT NOTES — one numbered document per receipt event.
+--  Issued by the server inside the PO-receive transaction, so both
+--  receiving screens share one fiscal-year series. The lines are
+--  FROZEN at receipt (a GRN reprints as issued, never recomputed);
+--  deleting the PO cancels the note instead of erasing it — a
+--  numbered document must never silently vanish.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS grns (
+  id        TEXT PRIMARY KEY,          -- GRN/26-27/0001
+  doc       TEXT NOT NULL              -- JSON: date,poId,supplierId,company,wh,invNo,invDate,
+                                       --       vehicle,lrNo,remarks,by,status(Posted|Cancelled),
+                                       --       lines[{itemId,name,uom,ordered,qty,rejected,
+                                       --              accepted,rate,stockQty}]
+);
+
+
+-- ============================================================
 --  CHATBOT — trainable knowledge base.
 --  One row per trained Q&A pair, uploaded by admin/office.
 --  Deliberately OUTSIDE saveState()'s wipe list, so training

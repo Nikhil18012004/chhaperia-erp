@@ -194,6 +194,67 @@ async function run() {
     await call("DELETE", "/sales-orders/" + soD.id, A);
   }
 
+  section("Goods receipt notes — every receipt issues a numbered document");
+  {
+    const poG = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
+    const rec1 = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 60, rejected: 10 }],
+        invNo: "SM/1287/26-27", invDate: "2026-08-05", vehicle: "KA-51-AE-4471", remarks: "two spools damp" });
+    const g1 = rec1.d.grn;
+    ok("a receipt returns a GRN in the fiscal-year series", rec1.status === 200
+      && g1 && /^GRN\/\d\d-\d\d\/\d{4}$/.test(g1.id), JSON.stringify(g1 || rec1.d).slice(0, 120));
+    ok("the GRN carries the supplier document + vehicle", g1 && g1.invNo === "SM/1287/26-27"
+      && g1.vehicle === "KA-51-AE-4471" && g1.remarks === "two spools damp");
+    ok("its line freezes received / rejected / accepted", g1 && g1.lines.length === 1
+      && g1.lines[0].qty === 60 && g1.lines[0].rejected === 10 && g1.lines[0].accepted === 50,
+      JSON.stringify(g1 && g1.lines));
+    const st1 = (await call("GET", "/state", A)).d;
+    const mv1 = (st1.movements || []).filter((m) => m.ref === poG.id);
+    ok("only the ACCEPTED quantity posts to stock", mv1.length === 1 && Math.abs(mv1[0].qty - 50) < 0.001,
+      JSON.stringify(mv1.map((m) => m.qty)));
+    const poB1 = (st1.purchaseorders || []).find((p) => p.id === poG.id);
+    ok("the rejected quantity stays owed on the order", Math.abs(poB1.lines[0].recd - 50) < 0.001
+      && poB1.status === "Partially Received", poB1.lines[0].recd + " " + poB1.status);
+    ok("the GRN is part of the state document", (st1.grns || []).some((g) => g.id === g1.id));
+
+    // a second receipt on the same series takes the NEXT number
+    const rec2 = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 20 }] });
+    const g2 = rec2.d.grn;
+    const seq = (id) => +String(id || "").split("/").pop();
+    ok("a second receipt increments the series", g2 && seq(g2.id) === seq(g1.id) + 1,
+      (g1 && g1.id) + " → " + (g2 && g2.id));
+
+    // a delivery turned away in full is still a receipt EVENT: the note is
+    // issued (the debit note quotes it) but nothing lands in stock
+    const rec3 = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 30, rejected: 30 }], remarks: "whole lot damp" });
+    ok("a fully-rejected delivery still gets its GRN", rec3.status === 200 && rec3.d.grn
+      && rec3.d.grn.lines[0].accepted === 0 && rec3.d.posted === 0, JSON.stringify(rec3.d).slice(0, 110));
+    const st3 = (await call("GET", "/state", A)).d;
+    ok("and posts NOTHING to stock", (st3.movements || []).filter((m) => m.ref === poG.id).length === 2);
+    ok("and advances the order not one unit",
+      Math.abs((st3.purchaseorders.find((p) => p.id === poG.id)).lines[0].recd - 70) < 0.001);
+
+    // rejected can never exceed received, and a supervisor cannot receive at all
+    const recX = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 10, rejected: 99 }] });
+    ok("rejected is clamped to the received quantity", recX.status === 200
+      && recX.d.grn.lines[0].rejected === 10 && recX.d.grn.lines[0].accepted === 0,
+      JSON.stringify(recX.d.grn && recX.d.grn.lines));
+    ok("supervisor cannot post a receipt (403)", (await call("POST",
+      "/purchase-orders/" + poG.id + "/receive", C, { lines: [{ i: 0, qty: 1 }] })).status === 403);
+
+    // deleting the PO reverses its stock but CANCELS the notes, never erases
+    await call("DELETE", "/purchase-orders/" + poG.id, A);
+    const st4 = (await call("GET", "/state", A)).d;
+    ok("delete PO reverses its stock movements", (st4.movements || []).filter((m) => m.ref === poG.id).length === 0);
+    const gAfter = (st4.grns || []).find((g) => g.id === g1.id);
+    ok("its GRNs survive, marked Cancelled", !!gAfter && gAfter.status === "Cancelled",
+      JSON.stringify(gAfter || {}).slice(0, 90));
+  }
+
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
 
   // Warehouse master-data edit (rename) — admin/office only

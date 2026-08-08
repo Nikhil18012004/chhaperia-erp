@@ -147,24 +147,13 @@
     // later re-render (saveDelta) doesn't reopen the form.
     if(params&&params.openNew){ params.openNew=false; poForm(); }
 
-    /* Receive all pending lines through the granular server endpoint (same
-       path as Inventory → Receive via PO), so the receipt logic + GRN posting
-       lives in one place on the server instead of being hand-built client-side
-       and clobbered via a full-state save. */
-    async function receivePO(po){
-      if(!await confirm(`Receive all pending items on ${po.id}? Goods will be posted to stock (GRN) at PO rates.`,{title:"Goods Receipt"})) return;
-      const wh="WH-PNY", date=DB.helpers.iso(DB.helpers.today());
-      const by=(App.user&&App.user.username)||"user";
-      const recvLines=[];
-      po.lines.forEach((l,i)=>{ const pend=+(l.qty-(l.recd||0)).toFixed(3); if(pend>0){
-        recvLines.push({i, qty:pend});
-        ENG.data.movements.push({id:U.genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh, type:"GRN",
-          qty:pend, rate:l.rate, ref:po.id, note:"Goods receipt vs PO", supplierId:po.supplierId, by});
-        l.recd=+((l.recd||0)+pend).toFixed(3); }});
-      if(!recvLines.length){ toast("Nothing pending to receive",{type:"warn"}); return; }
-      po.status = po.lines.every(l=>(l.recd||0)>=l.qty-0.0001) ? "Received" : "Partially Received";
-      toast(`${po.id} received — stock updated`,{type:"ok",title:"GRN posted"});
-      App.saveDelta(()=>DB.purchase.receive(po.id,{wh, date, lines:recvLines}));
+    /* Receiving goes through the shared goods-receipt form (the Inventory
+       module owns it): per-line accepted/rejected, the supplier's invoice and
+       vehicle — everything the numbered GRN the server issues has to record.
+       One form, one endpoint, whichever screen the receipt starts from. */
+    function receivePO(po){
+      UI.$("#modalHost").hidden=true;
+      window._erpUtil.receiveStockForm(po.id);
     }
 
     function poDetail(po){
@@ -172,6 +161,7 @@
       const gstPairs = interState
         ? [["IGST",ENG.money(calc.igst)]]
         : [["CGST",ENG.money(calc.cgst)],["SGST",ENG.money(calc.sgst)]];
+      const poGrns=(ENG.data.grns||[]).filter(g=>g.poId===po.id);
       const body=h("div",{},[
         MW.dl([["Supplier",ENG.sup(po.supplierId)],["Billing Entity",companyByKey(po.company).name],
           ["Status",badge(po.status==="Received"?"ok":"info",po.status)],["Ordered",po.date],["ETA",po.eta]]
@@ -190,6 +180,19 @@
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Tax Summary"}),
         MW.dl([["Taxable",ENG.money(calc.taxable)]].concat(gstPairs).concat([
           ["Freight",ENG.money(calc.freight)],["Grand Total",ENG.money(calc.grandTotal)]])),
+        h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Goods Receipts"}),
+        poGrns.length?table(poGrns,[
+          {key:"id",label:"GRN No",render:g=>`<b>${esc(g.id)}</b>`+(g.status==="Cancelled"?' <span class="badge-s s-warn">Cancelled</span>':""),noSort:true},
+          {key:"date",label:"Date",render:g=>esc(g.date||"—"),noSort:true},
+          {key:"inv",label:"Supplier Inv.",render:g=>esc(g.invNo||"—"),noSort:true},
+          {key:"acc",label:"Accepted",num:true,render:g=>ENG.num((g.lines||[]).reduce((s,x)=>s+(+x.accepted||0),0),2),noSort:true},
+          {key:"rej",label:"Rejected",num:true,render:g=>{const r=(g.lines||[]).reduce((s,x)=>s+(+x.rejected||0),0);
+            return r>0?`<span class="badge-s s-warn">${ENG.num(r,2)}</span>`:'<span class="muted">—</span>';},noSort:true},
+          {key:"val",label:"Value",num:true,render:g=>ENG.money((g.lines||[]).reduce((s,x)=>s+(+x.accepted||0)*(+x.rate||0),0)),noSort:true},
+          {key:"by",label:"By",render:g=>esc(g.by||"—"),noSort:true},
+          {key:"act",label:"",render:g=>h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();printGrn(g);},html:PRINT_IC+" GRN"}),noSort:true},
+        ],{empty:"No goods receipt notes"}):
+        h("div",{class:"muted",style:"font-size:12.5px",text:"No goods receipt notes yet — press Receive Goods to post one."}),
       ]);
       const anyRecd=po.lines.some(l=>(l.recd||0)>0);
       const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
@@ -1281,10 +1284,13 @@
          the date on the drum come from; before receiving, both stay blank. */
       const grn=(ENG.data.movements||[]).filter(m=>m.ref===po.id&&m.type==="GRN"&&m.itemId===l.itemId)
         .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")))[0];
-      /* The receipt posts one movement per line, id'd "<grn no>-<item id>".
-         The sticker wants the GRN number itself — the item is already the
-         whole label — and the full form wraps to two lines in the box. */
-      const grnNo=grn&&grn.id?String(grn.id).replace("-"+l.itemId,""):"";
+      /* The issued goods receipt note is the lot's identity. Receipts posted
+         before GRN documents existed have no note, so those fall back to the
+         movement id (stripped of its "-<item id>" tail) rather than go blank. */
+      const gdoc=(ENG.data.grns||[]).filter(g=>g.poId===po.id&&g.status!=="Cancelled"
+        &&(g.lines||[]).some(x=>x.itemId===l.itemId&&x.accepted>0))
+        .sort((a,b)=>String(b.id).localeCompare(String(a.id)))[0];
+      const grnNo=gdoc?gdoc.id:(grn&&grn.id?String(grn.id).replace("-"+l.itemId,""):"");
       const sheet=isSheetGoods(it);
       const qty=(+l.recd>0)?+l.recd:+l.qty;
       const uom=l.uom||it.uom||"";
@@ -1407,6 +1413,155 @@
 <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
 </body></html>`;
 
+    const w=window.open("","_blank");
+    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+    w.document.write(html); w.document.close();
+  }
+
+  /* ============================================================
+     GOODS RECEIPT NOTE — the numbered receipt document, printed
+     from the frozen GRN record the server issued (never recomputed
+     from live stock, so a reprint always matches the original).
+     Same press as the PO print: header band, info grid, party
+     blocks, dark item table, signature strip.
+     ============================================================ */
+  function printGrn(g){
+    const co=companyByKey(g.company);
+    const p=ENG.data.suppliers.find(s=>s.id===g.supplierId)||{name:g.supplierId||"—"};
+    const pCode=partyStateCode(p);
+    const whName=(ENG.data.warehouses.find(w=>w.id===g.wh)||{}).name||g.wh||"—";
+    const logo=location.origin+"/assets/logo-invoice.png";
+    const cancelled=g.status==="Cancelled";
+    const lines=g.lines||[];
+    const recdVal=lines.reduce((s,x)=>s+(+x.qty||0)*(+x.rate||0),0);
+    const rejVal=lines.reduce((s,x)=>s+(+x.rejected||0)*(+x.rate||0),0);
+    const accVal=recdVal-rejVal;
+    const anyRej=lines.some(x=>(+x.rejected||0)>0);
+
+    const infoPairs=[
+      ["GRN No.",g.id],["GRN Date",fmtD(g.date)],["Warehouse",whName],
+      ["Against PO",g.poId||"—"],["PO Date",fmtD(g.poDate)],["Received By",g.by||"—"],
+      ["Supplier Inv. No.",g.invNo||"—"],["Invoice Date",fmtD(g.invDate)],["Vehicle No.",g.vehicle||"—"],
+    ].concat(g.lrNo?[["LR / Docket No.",g.lrNo],["",""],["",""]]:[]);
+    const infoCells=infoPairs.map(([k,vv])=>k?`<div class="ip"><span>${k}</span><b>${esc(String(vv))}</b></div>`:'<div class="ip"></div>').join("");
+
+    const rows=lines.map((x,i)=>`<tr><td class="c">${i+1}</td>`+
+      `<td>${esc(x.name||x.itemId)}<div class="sub">${esc(x.itemId)}</div></td>`+
+      `<td class="c">${esc(x.hsn||"—")}</td><td class="c">${esc(x.uom||"—")}</td>`+
+      `<td class="r">${ENG.num(x.ordered,2)}</td><td class="r">${ENG.num(x.qty,2)}</td>`+
+      `<td class="r">${ENG.num(x.accepted,2)}</td>`+
+      `<td class="r">${(+x.rejected||0)>0?`<span class="rej">${ENG.num(x.rejected,2)}</span>`:"—"}</td>`+
+      `<td class="r">${IN(x.rate)}</td><td class="r">${IN((+x.accepted||0)*(+x.rate||0))}</td></tr>`).join("");
+    let filler="";
+    for(let i=0;i<2;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(10)}</tr>`;
+
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Goods Receipt Note ${esc(g.id)}</title>
+<style>
+  @page{size:A4;margin:8mm}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:12px/1.38 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
+  .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:96px}
+  .logo-side{flex:1.05;display:flex;align-items:center;padding:5px 0 5px 16px}
+  .logo-side img{width:100%;max-height:92px;object-fit:contain;object-position:left center}
+  .co-block{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
+    padding:12px 20px 10px 58px;text-align:right;font-size:10.5px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
+  .conm{font-size:14.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
+  .co-ids{margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600;font-size:10.5px}
+  .co-ids span{color:#F58024;font-weight:800}
+  .rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -20px 12px}
+  .title-row{display:flex;justify-content:space-between;align-items:center;margin:0 0 10px}
+  .title{font-size:20px;font-weight:800;letter-spacing:4px;color:#26282b;border-left:6px solid #F06820;padding-left:12px}
+  .copy{font-size:9px;font-weight:700;letter-spacing:1px;color:#888;border:1px solid #ccc;border-radius:4px;padding:3px 9px;text-transform:uppercase}
+  .info{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:8px}
+  .ip{display:flex;justify-content:space-between;gap:8px;font-size:11px;min-height:15px}
+  .ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}
+  .parties{display:flex;gap:12px;margin:18px 0 8px}
+  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:7px 12px;font-size:11.5px;line-height:1.45}
+  .plbl{display:inline-block;background:#F06820;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:2.5px 10px;border-radius:3px;margin:-18px 0 5px;box-shadow:0 1px 0 rgba(0,0,0,.15)}
+  .pnm{font-weight:800;font-size:13px}.paddr{color:#333;white-space:pre-line}
+  table.items{width:100%;border-collapse:collapse;margin-bottom:8px}
+  table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:5.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}
+  table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:11.5px;vertical-align:top}
+  table.items tbody tr:nth-child(even) td{background:#f6f7f8}
+  tr.fill td{height:15px;background:#fff !important}
+  td.r,th.r{text-align:right} td.c,th.c{text-align:center}
+  td .sub{font-size:9.5px;color:#777}
+  .rej{color:#b02a2a;font-weight:700}
+  .bottom{display:flex;gap:12px;align-items:flex-start;margin-bottom:8px}
+  .rem{flex:1.4;border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:5px 12px;font-size:11px;line-height:1.45}
+  .lbl{font-size:9px;font-weight:800;letter-spacing:1px;color:#F06820;text-transform:uppercase}
+  .br{flex:1;display:flex;flex-direction:column;gap:6px}
+  table.tot{width:100%;border-collapse:collapse}
+  table.tot td{border:1px solid #d8dbde;padding:5px 12px;font-size:12px}
+  table.tot td:first-child{color:#555}
+  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}
+  .words{border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:5px 12px;font-size:11px;line-height:1.45}
+  .words b{display:block;margin-top:2px;font-size:11.5px}
+  .sign{display:flex;gap:12px;margin-top:26px}
+  .sig{flex:1;border-top:1.5px solid #555;padding-top:5px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.5px;color:#333;text-transform:uppercase}
+  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
+  .strip b{color:#F58024}
+  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
+  .cancel{position:fixed;top:40%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);
+    font-size:64px;font-weight:900;letter-spacing:8px;color:rgba(176,42,42,.18);
+    border:6px solid rgba(176,42,42,.18);border-radius:12px;padding:6px 30px;pointer-events:none}
+  @media print{body{padding:0 6mm 0}.band{margin:0 -6mm}.rule{margin:0 -6mm 12px}.note{display:none}}
+</style></head><body>
+  ${cancelled?'<div class="cancel">CANCELLED</div>':""}
+  <div class="band">
+    <div class="logo-side"><img src="${logo}" alt="${esc(co.name)}"></div>
+    <div class="co-block">
+      <div class="conm">${esc(co.name)}</div>
+      <div>${esc(co.address||"")}</div>
+      <div>${esc([co.phone,co.email,co.website].filter(Boolean).join("  ·  "))}</div>
+      <div class="co-ids"><span>GSTIN</span> ${esc(co.gstin||"—")}${co.pan?`&nbsp; <span>PAN</span> ${esc(co.pan)}`:""}</div>
+    </div>
+  </div>
+  <div class="rule"></div>
+  <div class="title-row"><span class="title">GOODS RECEIPT NOTE</span><span class="copy">Store Copy</span></div>
+  <div class="info">${infoCells}</div>
+  <div class="parties">
+    <div class="party"><div class="plbl">SUPPLIER / VENDOR</div>
+      <div class="pnm">${esc(p.name||"")}</div>
+      ${p.address||p.city?`<div class="paddr">${esc(p.address||[p.city,p.country].filter(Boolean).join(", "))}</div>`:""}
+      ${p.gst?`<div>GSTIN : <b>${esc(p.gst)}</b></div>`:""}
+      ${pCode?`<div>State : ${esc(GST.stateName(pCode))} (Code ${pCode})</div>`:""}
+    </div>
+    <div class="party"><div class="plbl">RECEIVED AT</div>
+      <div class="pnm">${esc(co.name)}</div>
+      <div class="paddr">${esc(co.address||"")}</div>
+      <div>GSTIN : <b>${esc(co.gstin||"—")}</b></div>
+      <div>Store : ${esc(whName)}</div>
+    </div>
+  </div>
+  <table class="items"><thead><tr>
+    <th class="c">Sl.</th><th>Item Description</th><th class="c">HSN</th><th class="c">Unit</th>
+    <th class="r">Ordered</th><th class="r">Received</th><th class="r">Accepted</th><th class="r">Rejected</th>
+    <th class="r">Rate (₹)</th><th class="r">Amount (₹)</th>
+  </tr></thead><tbody>${rows}${filler}</tbody></table>
+  <div class="bottom">
+    <div class="rem"><span class="lbl">REMARKS / QC</span>
+      ${g.remarks?`<div>${esc(g.remarks)}</div>`:'<div class="sub" style="color:#777">—</div>'}
+      <div>Accepted quantities are posted to stock at PO rates${anyRej?"; rejected material returns to the supplier and is quoted on the debit note":""}.</div>
+    </div>
+    <div class="br">
+      <table class="tot"><tbody>
+        <tr><td>Received Value</td><td class="r">${IN(recdVal)}</td></tr>
+        ${anyRej?`<tr><td>Rejected Value</td><td class="r">− ${IN(rejVal)}</td></tr>`:""}
+        <tr class="g"><td>ACCEPTED VALUE (₹)</td><td class="r">${IN(accVal)}</td></tr>
+      </tbody></table>
+      <div class="words"><span class="lbl">AMOUNT IN WORDS</span><b>${esc(GST.amountInWords(accVal))}</b></div>
+    </div>
+  </div>
+  <div class="sign">
+    <div class="sig">Prepared By (Store)</div>
+    <div class="sig">Inspected By (QC / Lab)</div>
+    <div class="sig">For <b>${esc(co.name)}</b> — Authorised Signatory</div>
+  </div>
+  <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>This is a computer generated goods receipt note · ${esc(g.id)}</b></div>
+  <div class="note">Use your browser's "Save as PDF" to download</div>
+  <script>window.onload=function(){window.print();}<\/script>
+</body></html>`;
     const w=window.open("","_blank");
     if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
     w.document.write(html); w.document.close();

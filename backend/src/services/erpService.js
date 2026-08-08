@@ -76,7 +76,7 @@ function ensureCrm() {
 function saveState(data) {
   if (!data || typeof data !== "object") throw err("Invalid dataset", 400);
   const arrays = ["items", "movements", "warehouses", "categories", "suppliers",
-    "customers", "purchaseorders", "salesorders", "workorders", "leads"];
+    "customers", "purchaseorders", "salesorders", "workorders", "leads", "grns"];
   for (const k of arrays) {
     if (data[k] != null && !Array.isArray(data[k])) throw err(`Invalid dataset: ${k} must be an array`, 400);
   }
@@ -164,9 +164,30 @@ function addMovement(m) {
   return { ok: true, id: m.id };
 }
 
-/** Receive goods against a PO: post GRN movements + update the PO row.
-    body: { wh, date?, lines:[{i:lineIndex, qty}] }; `user` is the actor
-    (from the auth token) so the receipt is attributed to a real person. */
+/* GRN numbers run in an April–March fiscal-year series: GRN/26-27/0001.
+   Issued here, inside the receive path, so both receiving screens share one
+   sequence and two browsers can never mint the same number. */
+function nextGrnNo(dateISO) {
+  const [y, m] = String(dateISO).split("-").map(Number);
+  const startYY = (m >= 4 ? y : y - 1) % 100;
+  const fy = String(startYY).padStart(2, "0") + "-" + String((startYY + 1) % 100).padStart(2, "0");
+  let max = 0;
+  repo.getGrns().forEach((g) => {
+    const match = new RegExp("^GRN/" + fy + "/(\\d+)$").exec(String(g.id || ""));
+    if (match) max = Math.max(max, +match[1]);
+  });
+  return "GRN/" + fy + "/" + String(max + 1).padStart(4, "0");
+}
+const strOr = (v, n) => (v == null ? "" : String(v).slice(0, n || 80));
+
+/** Receive goods against a PO: post GRN movements, update the PO row and
+    issue a numbered goods receipt note.
+    body: { wh, date?, lines:[{i:lineIndex, qty, rejected?}],
+            invNo?, invDate?, vehicle?, lrNo?, remarks? };
+    `user` is the actor (from the auth token) so the receipt is attributed
+    to a real person. Only the ACCEPTED quantity (received − rejected) posts
+    to stock and advances the order — a rejected lot goes back on the truck,
+    so the line stays owed; the rejection lives on the GRN for the debit note. */
 function receivePurchaseOrder(poId, body, user) {
   body = body || {};
   const po = repo.getPurchaseOrder(poId);
@@ -175,45 +196,63 @@ function receivePurchaseOrder(poId, body, user) {
   const date = body.date || todayISO();
   const by = (user && user.username) || body.by || "user";
   const moves = [];
-  (body.lines || []).forEach(({ i, qty }) => {
+  const grnLines = [];
+  (body.lines || []).forEach(({ i, qty, rejected }) => {
     const l = po.lines[i];
     if (!l) return;
     let rq = +qty || 0;
     const pend = l.qty - (l.recd || 0);
     if (rq > pend) rq = pend;
-    if (rq > 0) {
+    if (rq <= 0) return;
+    let rej = +rejected || 0;
+    if (rej < 0) rej = 0;
+    if (rej > rq) rej = rq;
+    const acc = +(rq - rej).toFixed(3);
+    const item = repo.getItem(l.itemId) || {};
+    const from = l.uom || item.uom;
+    let stockQty = acc;
+    let note = "Goods receipt vs PO";
+    if (acc > 0) {
       /* A roll may be ordered by length and invoiced by weight, or the other
          way round. Stock is only ever held in the material's OWN unit, so the
          received quantity is restated into it here — through the roll's fixed
          width and its GSM, which makes the figure exact rather than a guess.
          The PO line keeps its own unit; only the stock movement is converted. */
-        const item = repo.getItem(l.itemId) || {};
-        const from = l.uom || item.uom;
-        let stockQty = rq;
-        let note = "Goods receipt vs PO";
-        if (BC.normUnit(from) !== BC.normUnit(item.uom)) {
-          const conv = BC.convertQty(rq, from, item.uom, item);
-          if (conv == null) {
-            throw err("Cannot receive " + rq + " " + from + " of " + (item.name || l.itemId)
-              + " — it is stocked in " + (item.uom || "?")
-              + " and the two cannot be reconciled. Set the material's width and GSM, or order in "
-              + (item.uom || "its stocking unit") + ".", 400);
-          }
-          stockQty = Math.round(conv * 1000) / 1000;
-          note = "Goods receipt vs PO — " + rq + " " + BC.normUnit(from)
-            + " received as " + stockQty + " " + BC.normUnit(item.uom);
+      if (BC.normUnit(from) !== BC.normUnit(item.uom)) {
+        const conv = BC.convertQty(acc, from, item.uom, item);
+        if (conv == null) {
+          throw err("Cannot receive " + acc + " " + from + " of " + (item.name || l.itemId)
+            + " — it is stocked in " + (item.uom || "?")
+            + " and the two cannot be reconciled. Set the material's width and GSM, or order in "
+            + (item.uom || "its stocking unit") + ".", 400);
         }
+        stockQty = Math.round(conv * 1000) / 1000;
+        note = "Goods receipt vs PO — " + acc + " " + BC.normUnit(from)
+          + " received as " + stockQty + " " + BC.normUnit(item.uom);
+      }
       moves.push({ id: mvId(), date, itemId: l.itemId, wh,
         type: "GRN", qty: stockQty, rate: l.rate || 0, ref: po.id, note,
         supplierId: po.supplierId, by });
-      l.recd = +((l.recd || 0) + rq).toFixed(3);   // progress is in the ORDER's unit
+      l.recd = +((l.recd || 0) + acc).toFixed(3);   // progress is in the ORDER's unit
     }
+    grnLines.push({ itemId: l.itemId, name: item.name || l.itemId,
+      uom: BC.normUnit(from) || item.uom || "", hsn: l.hsn || item.hsn || "",
+      ordered: l.qty, qty: rq, rejected: rej, accepted: acc,
+      rate: l.rate || 0, stockQty: acc > 0 ? stockQty : 0 });
   });
-  if (!moves.length) throw err("No quantity to receive", 400);
-  repo.addMovements(moves);
+  if (!grnLines.length) throw err("No quantity to receive", 400);
+  const grn = {
+    id: nextGrnNo(date), date, poId: po.id, poDate: po.date || "",
+    supplierId: po.supplierId, company: po.company || "", wh, by, status: "Posted",
+    invNo: strOr(body.invNo), invDate: strOr(body.invDate, 20),
+    vehicle: strOr(body.vehicle, 20), lrNo: strOr(body.lrNo, 40),
+    remarks: strOr(body.remarks, 500), lines: grnLines,
+  };
+  if (moves.length) repo.addMovements(moves);
+  repo.putGrn(grn);
   po.status = po.lines.every((l) => (l.recd || 0) >= l.qty - 0.0001) ? "Received" : "Partially Received";
   repo.putPurchaseOrder(po);
-  return { ok: true, posted: moves.length, po: { id: po.id, status: po.status, lines: po.lines } };
+  return { ok: true, posted: moves.length, grn, po: { id: po.id, status: po.status, lines: po.lines } };
 }
 
 /* collision-free sequential id from the highest numeric suffix in use. */
