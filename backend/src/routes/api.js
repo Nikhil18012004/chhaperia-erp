@@ -15,12 +15,19 @@ const view = require("../services/viewService");
 const production = require("../services/productionService");
 const lab = require("../services/labService");
 const chatbot = require("../services/chatbotService");
+const bartender = require("../services/bartenderService");
 const { requireAuth, requireRole } = require("./auth");
 
 const router = express.Router();
 
 router.get("/health", (req, res) => {
   res.json({ ok: true, service: "chhaperia-erp-api", time: new Date().toISOString() });
+});
+
+// Raw-material sticker hand-off: writes the rows to the fixed csv the .btw
+// template reads and starts BarTender on this machine (see bartenderService).
+router.post("/bartender/stickers", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json(bartender.stickers(req.body || {})); } catch (e) { next(e); }
 });
 
 // Role-scoped read: admin/office get the full dataset, supervisors get their view.

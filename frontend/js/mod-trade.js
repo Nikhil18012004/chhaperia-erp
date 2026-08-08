@@ -194,15 +194,19 @@
       const anyRecd=po.lines.some(l=>(l.recd||0)>0);
       const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
         h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"}),
-        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Stickers"})];
+        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Stickers"}),
+        h("button",{class:"btn",title:"Download sticker rows as CSV for the BarTender label template",
+          onclick:()=>bartenderPO(po),text:"⤓ BarTender"})];
       if(!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
       if(po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
     }
 
     // One raw-material identification sticker per ordered line, on the
-    // company's own template. See printStickers() for what gets filled in.
+    // company's own template. See printStickers() for what gets filled in;
+    // the BarTender file carries the same rows for label-printer runs.
     function stickersPO(po){ printStickers(po); }
+    function bartenderPO(po){ sendToBartender(po); }
 
     async function deletePO(po){
       const grn=ENG.data.movements.filter(m=>m.ref===po.id);
@@ -1266,15 +1270,12 @@
      prints as a ruled blank for the store to complete by hand,
      because a sticker that guesses is worse than one left open.
      ============================================================ */
-  function printStickers(po){
-    const lines=(po&&po.lines)||[];
-    if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
-    const logo=location.origin+"/assets/logo-invoice.png";
-    const mark=location.origin+"/assets/mark.png";
-    // a ruled blank the store writes on, so an unknown field never reads as "none"
-    const BLANK='<span class="wr"></span>';
-
-    const cards=lines.map((l)=>{
+  /* One record per ordered line — only what the PO and its goods receipt
+     actually know; every unknown stays "" so it renders as a blank to fill.
+     Shared by the printed sticker sheet and the BarTender export, so the
+     label a machine prints can never disagree with the one printed here. */
+  function stickerData(po){
+    return ((po&&po.lines)||[]).map((l)=>{
       const it=ENG.item(l.itemId)||{};
       /* The goods receipt posted against this PO is where the lot identity and
          the date on the drum come from; before receiving, both stay blank. */
@@ -1287,15 +1288,72 @@
       const sheet=isSheetGoods(it);
       const qty=(+l.recd>0)?+l.recd:+l.qty;
       const uom=l.uom||it.uom||"";
+      return {
+        product: it.name||it.material||l.itemId||"",
+        grade: it.grade||it.typeCode||l.itemId||"",
+        dateOfReceipt: grn&&grn.date?fmtD(grn.date):"",
+        grnNo,
+        qtyUom: qty>0?`${ENG.num(qty,2)} ${uom}`.trim():"",
+        thickness: sheet&&it.thicknessMM!=null?`${BOMCALC.thk3(it.thicknessMM)} mm`:"",
+        gsm: sheet&&it.gsm?`${ENG.num(it.gsm,0)} g/m²`:"",
+      };
+    });
+  }
+
+  /* The BarTender bridge: the same sticker rows as a CSV the .btw label
+     template binds to as its data source. Columns mirror the template's
+     fields; INVOICE NO / INSPECTED BY / STATUS ship empty so the operator
+     completes them in BarTender's data-entry form at print time. */
+  function stickerCsv(po){
+    const rows=stickerData(po);
+    if(!rows.length) return null;
+    const q=(v)=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
+    // UTF-8 BOM, so Excel and BarTender read g/m² correctly
+    return "﻿"+[
+      ["PONo","Product","GradeType","DateOfReceipt","GRNLotNo","InvoiceNo","QtyAndUom","Thickness","GSM","InspectedBy","Status"].map(q).join(","),
+      ...rows.map(r=>[po.id,r.product,r.grade,r.dateOfReceipt,r.grnNo,"",r.qtyUom,r.thickness,r.gsm,"",""].map(q).join(",")),
+    ].join("\r\n");
+  }
+
+  /* Pressing ⤓ BarTender asks the SERVER to write the rows and start the
+     BarTender app on its machine — the browser cannot start desktop programs.
+     When the app is not installed there, the operator still gets the file:
+     it downloads locally instead, with the server's explanation. */
+  async function sendToBartender(po){
+    const csv=stickerCsv(po);
+    if(!csv){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
+    try{
+      const r=await DB.bartender.stickers(po.id,csv);
+      if(r.launched&&r.templateFound){ toast(r.message,{type:"ok",title:"BarTender"}); return; }
+      if(r.launched){ toast(r.message,{title:"BarTender — one-time setup"}); return; }
+      U.downloadCSV(`${po.id}-stickers.csv`,csv);
+      toast(r.message+" The file was also downloaded here.",{type:"warn",title:"BarTender not started"});
+    }catch(e){
+      U.downloadCSV(`${po.id}-stickers.csv`,csv);
+      toast((e.message||"The server could not hand off to BarTender.")+" The sticker file was downloaded instead.",
+        {type:"warn",title:"BarTender"});
+    }
+  }
+
+  function printStickers(po){
+    const lines=stickerData(po);
+    if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
+    const logo=location.origin+"/assets/logo-invoice.png";
+    const mark=location.origin+"/assets/mark.png";
+    // a ruled blank the store writes on, so an unknown field never reads as "none"
+    const BLANK='<span class="wr"></span>';
+    const cell=(v)=>v?esc(v):BLANK;
+
+    const cards=lines.map((r)=>{
       const rows=[
-        ["GRADE/TYPE", esc(it.grade||it.typeCode||l.itemId||"")||BLANK],
-        ["DATE OF RECEIPT", grn&&grn.date?fmtD(grn.date):BLANK],
-        ["GRN/LOT NO", grnNo?esc(grnNo):BLANK],
+        ["GRADE/TYPE", cell(r.grade)],
+        ["DATE OF RECEIPT", cell(r.dateOfReceipt)],
+        ["GRN/LOT NO", cell(r.grnNo)],
         // the supplier's own invoice arrives with the goods, never with the order
         ["INVOICE NO", BLANK],
-        ["QTY &amp; UOM", qty>0?`${ENG.num(qty,2)} ${esc(uom)}`:BLANK],
-        ["THICKNESS (if fabric)", sheet&&it.thicknessMM!=null?`${BOMCALC.thk3(it.thicknessMM)} mm`:BLANK],
-        ["GSM (if fabric)", sheet&&it.gsm?`${ENG.num(it.gsm,0)} g/m²`:BLANK],
+        ["QTY &amp; UOM", cell(r.qtyUom)],
+        ["THICKNESS (if fabric)", cell(r.thickness)],
+        ["GSM (if fabric)", cell(r.gsm)],
         ["INSPECTED BY", BLANK],
       ].map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join("");
       return `<div class="stk">
@@ -1303,7 +1361,7 @@
         <div class="stk-in">
           <div class="lg"><img src="${logo}" alt="Chhaperia"></div>
           <div class="ttl">RAW MATERIAL</div>
-          <div class="prod">PRODUCT: <b>${esc(it.name||it.material||l.itemId||"")}</b></div>
+          <div class="prod">PRODUCT: <b>${esc(r.product)}</b></div>
           <table class="fields"><tbody>${rows}
             <tr><th>STATUS</th><td class="st">
               <div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>

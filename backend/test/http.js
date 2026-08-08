@@ -17,6 +17,7 @@ const TMP = path.join(os.tmpdir(), "chh-http-" + process.pid + "-" + Date.now() 
 process.env.CHHAPERIA_DB_FILE = TMP;
 process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
 process.env.PORT = "0"; // ask the OS for a free port
+process.env.CHHAPERIA_BARTENDER_NOLAUNCH = "1"; // never pop the label app open mid-test
 
 const { server } = require("../src/server");
 const { closeDb } = require("../src/db/connection");
@@ -1765,6 +1766,23 @@ async function run() {
         anon.status + " " + JSON.stringify(anon.d).slice(0, 80));
     }
     ok("the KB is left empty for a re-run", (await call("GET", "/chatbot/knowledge", A)).d.length === 0);
+  }
+
+  section("BarTender sticker hand-off");
+  {
+    const csv = '"PONo","Product"\r\n"PO-BT-1","MICA TAPE"';
+    const bt = await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv });
+    ok("admin hand-off answers ok", bt.status === 200 && bt.d.ok === true, JSON.stringify(bt.d).slice(0, 110));
+    ok("…reporting each step honestly", typeof bt.d.exeFound === "boolean" && typeof bt.d.launched === "boolean"
+      && /stickers\.csv$/.test(bt.d.csvPath) && !!bt.d.message, JSON.stringify(bt.d).slice(0, 110));
+    ok("the rows landed at the fixed path the .btw binds to",
+      fs.existsSync(bt.d.csvPath) && fs.readFileSync(bt.d.csvPath, "utf8") === csv);
+    ok("a second PO overwrites the same file", (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-2", csv: '"PONo"\r\n"PO-BT-2"' })).d.csvPath === bt.d.csvPath
+      && /PO-BT-2/.test(fs.readFileSync(bt.d.csvPath, "utf8")));
+    ok("supervisor is refused (403)", (await call("POST", "/bartender/stickers", C, { poId: "PO-BT-1", csv })).status === 403);
+    ok("anonymous is refused (401)", (await call("POST", "/bartender/stickers", null, { poId: "PO-BT-1", csv })).status === 401);
+    ok("a path-traversal PO id is rejected (400)", (await call("POST", "/bartender/stickers", A, { poId: "../evil", csv })).status === 400);
+    ok("empty rows are rejected (400)", (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv: "   " })).status === 400);
   }
 
   section("Validation rejects bad input");

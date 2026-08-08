@@ -292,10 +292,14 @@
     },
   };
 
+  /* ---- BarTender hand-off: the server writes the sticker rows and starts
+     the label app on its own machine (see backend bartenderService) ---- */
+  const bartender = { stickers: (poId, csv) => http("POST", "/bartender/stickers", { poId, csv }) };
+
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
     items, movements, purchase, sales, boms, leads, appointments, customers, suppliers, org, transporters, warehouses, hr,
-    labProducts, labReports, chat,
+    labProducts, labReports, chat, bartender,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);
