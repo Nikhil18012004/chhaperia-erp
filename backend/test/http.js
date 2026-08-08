@@ -1844,6 +1844,36 @@ async function run() {
     ok("anonymous is refused (401)", (await call("POST", "/bartender/stickers", null, { poId: "PO-BT-1", csv })).status === 401);
     ok("a path-traversal PO id is rejected (400)", (await call("POST", "/bartender/stickers", A, { poId: "../evil", csv })).status === 400);
     ok("empty rows are rejected (400)", (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv: "   " })).status === 400);
+
+    /* The exe hunt must see a MODERN install: BarTender 2019+ lives at
+       Seagull\BarTender <year>\BarTender Suite\bartend.exe — three levels —
+       and the old two-level scan reported a healthy install as missing.
+       The scan roots are injectable via env, so a fake install proves it. */
+    const btRoot = path.join(os.tmpdir(), "chh-btscan-" + process.pid);
+    const deepDir = path.join(btRoot, "Seagull", "BarTender 2022", "BarTender Suite");
+    const fakeExe = path.join(deepDir, "bartend.exe");
+    fs.mkdirSync(deepDir, { recursive: true });
+    fs.writeFileSync(fakeExe, "MZ");
+    process.env.CHHAPERIA_BARTENDER_SCAN = btRoot;
+    const deep = (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv })).d;
+    ok("a three-level 2019+ install layout IS found", deep.exeFound === true && deep.exePath === fakeExe,
+      JSON.stringify({ exeFound: deep.exeFound, exePath: deep.exePath }));
+    ok("…and the test server still never launches it", deep.launched === false && /suppressed/.test(deep.message),
+      deep.message);
+    // uninstall: the cached hit must revalidate, not answer from memory
+    fs.rmSync(btRoot, { recursive: true, force: true });
+    const gone = (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv })).d;
+    ok("a removed install is not reported from the cache", gone.exePath !== fakeExe,
+      JSON.stringify({ exePath: gone.exePath }));
+    delete process.env.CHHAPERIA_BARTENDER_SCAN;
+
+    // with a designed .btw on disk the association route becomes available;
+    // the response reports the template so the client knows the label exists
+    const btwPath = path.join(path.dirname(bt.d.csvPath), "test-label.btw");
+    fs.writeFileSync(btwPath, "btw");
+    const withTpl = (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv })).d;
+    ok("a saved .btw template is detected", withTpl.templateFound === true, JSON.stringify(withTpl).slice(0, 110));
+    fs.rmSync(btwPath, { force: true });
   }
 
   section("Validation rejects bad input");
