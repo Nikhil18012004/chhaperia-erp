@@ -1876,6 +1876,23 @@ async function run() {
     fs.rmSync(btwPath, { force: true });
   }
 
+  section("Sticker print settings (size + fields, shared via /settings)");
+  {
+    const set1 = (await call("PATCH", "/settings", A, { sticker: { w: 100, h: 150, fields: { supplier: true, gsm: false } } })).d;
+    ok("sticker config is accepted", set1.sticker && set1.sticker.w === 100 && set1.sticker.h === 150, JSON.stringify(set1.sticker));
+    ok("an unticked field survives the round trip", set1.sticker.fields.gsm === false && set1.sticker.fields.supplier === true,
+      JSON.stringify(set1.sticker.fields));
+    ok("unmentioned fields default ON", set1.sticker.fields.grade === true && set1.sticker.fields.status === true);
+    const set2 = (await call("PATCH", "/settings", A, { sticker: { w: 9999, h: 3 } })).d;
+    ok("label size is clamped to printable bounds", set2.sticker.w === 300 && set2.sticker.h === 25, JSON.stringify(set2.sticker));
+    ok("sticker config is part of the state document",
+      ((await call("GET", "/state", A)).d.settings.sticker || {}).w === 300);
+    ok("office can save the sticker config too", (await call("PATCH", "/settings", O, { sticker: { w: 120, h: 80 } })).d.sticker.w === 120);
+    ok("junk field keys never reach the settings document",
+      (await call("PATCH", "/settings", A, { sticker: { w: 100, fields: { hack: true } } })).d.sticker.fields.hack === undefined);
+    ok("supervisor cannot touch settings (403)", (await call("PATCH", "/settings", C, { sticker: { w: 50 } })).status === 403);
+  }
+
   section("Validation rejects bad input");
   ok("SO with empty lines → 400", (await call("POST", "/sales-orders", A, { customerId: cust, lines: [] })).status === 400);
   ok("delete unknown SO → 404", (await call("DELETE", "/sales-orders/SO-NOPE", A)).status === 404);

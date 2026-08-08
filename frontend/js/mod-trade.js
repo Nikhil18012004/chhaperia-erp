@@ -205,10 +205,38 @@
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
     }
 
-    // One raw-material identification sticker per ordered line, on the
-    // company's own template. See printStickers() for what gets filled in;
-    // the BarTender file carries the same rows for label-printer runs.
-    function stickersPO(po){ printStickers(po); }
+    /* One raw-material identification sticker per ordered line, on the
+       company's own template. The dialog picks the format — A4 sheet (4-up)
+       or one-per-label roll printing sized to the operator's label stock —
+       and remembers the size + field choices in settings for every browser.
+       The BarTender file carries the same rows for label-printer runs. */
+    function stickersPO(po){
+      const cfg=stickerCfg();
+      const cbs=STICKER_FIELDS.map(([k,l])=>
+        `<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:3px 0;break-inside:avoid">`+
+        `<input type="checkbox" id="stk_f_${k}"${cfg.fields[k]?" checked":""}> ${esc(l)}</label>`).join("");
+      const body=h("div",{},[
+        h("div",{class:"form-grid"},[
+          U.field("Label Width (mm)",`<input class="input" id="stk_w" type="number" min="25" max="300" step="1" value="${cfg.w}">`),
+          U.field("Label Height (mm)",`<input class="input" id="stk_h" type="number" min="25" max="300" step="1" value="${cfg.h}">`),
+        ]),
+        h("h3",{style:"margin:14px 0 6px;font-size:13px",text:"Fields on the sticker"}),
+        h("div",{style:"columns:2;column-gap:24px",html:cbs}),
+        h("div",{class:"muted",style:"margin-top:10px;font-size:12px",
+          text:"The size applies to roll labels. The ticked fields shape the A4 sheet, the roll labels AND the BarTender file, so every format prints the same sticker. Choices are saved for everyone."}),
+      ]);
+      const readCfg=()=>{
+        const clamp=(v,d)=>{v=+v; return isNaN(v)||v<=0?d:Math.min(300,Math.max(25,v));};
+        const out={w:clamp(UI.$("#stk_w").value,100), h:clamp(UI.$("#stk_h").value,150), fields:{}};
+        STICKER_FIELDS.forEach(([k])=>{ const el=UI.$("#stk_f_"+k); out.fields[k]=!!(el&&el.checked); });
+        return out;
+      };
+      const persist=(c)=>{ ENG.data.settings=Object.assign({},ENG.data.settings,{sticker:c}); DB.saveSettings({sticker:c}); };
+      const mo=modal({title:"Print Stickers", sub:po.id+" — "+ENG.sup(po.supplierId), body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn",onclick:()=>{const c=readCfg();persist(c);mo.close();printStickers(po,c);},text:"🖨 A4 Sheet (4-up)"}),
+          h("button",{class:"btn primary",onclick:()=>{const c=readCfg();persist(c);mo.close();printRollStickers(po,c);},text:"🖨 Roll Labels"})]});
+    }
     function bartenderPO(po){ sendToBartender(po); }
 
     async function deletePO(po){
@@ -1296,6 +1324,7 @@
       const uom=l.uom||it.uom||"";
       return {
         product: it.name||it.material||l.itemId||"",
+        supplier: ENG.sup(po.supplierId)||"",
         grade: it.grade||it.typeCode||l.itemId||"",
         dateOfReceipt: grn&&grn.date?fmtD(grn.date):"",
         grnNo,
@@ -1306,6 +1335,21 @@
     });
   }
 
+  /* ---- Sticker printing is CONFIGURABLE (saved in settings, shared by every
+     browser): the roll-label size in mm and which fields print. A field left
+     unticked disappears from the A4 sheet, the roll label and the BarTender
+     CSV alike, so no format can quietly disagree with another. ---- */
+  const STICKER_FIELDS=[
+    ["supplier","Supplier"],["grade","Grade / Type"],["dateOfReceipt","Date of Receipt"],
+    ["grnNo","GRN / Lot No"],["invoiceNo","Invoice No (blank to fill in)"],["qty","Qty & UOM"],
+    ["thickness","Thickness (fabric)"],["gsm","GSM (fabric)"],
+    ["inspectedBy","Inspected By (blank to fill in)"],["status","Status tick-boxes"]];
+  function stickerCfg(){
+    const s=(ENG.data.settings&&ENG.data.settings.sticker)||{};
+    const fields={}; STICKER_FIELDS.forEach(([k])=>{ fields[k]=!s.fields||s.fields[k]!==false; });
+    return { w:+s.w>0?+s.w:100, h:+s.h>0?+s.h:150, fields };
+  }
+
   /* The BarTender bridge: the same sticker rows as a CSV the .btw label
      template binds to as its data source. Columns mirror the template's
      fields; INVOICE NO / INSPECTED BY / STATUS ship empty so the operator
@@ -1313,11 +1357,13 @@
   function stickerCsv(po){
     const rows=stickerData(po);
     if(!rows.length) return null;
+    const f=stickerCfg().fields;
     const q=(v)=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
     // UTF-8 BOM, so Excel and BarTender read g/m² correctly
     return "﻿"+[
-      ["PONo","Product","GradeType","DateOfReceipt","GRNLotNo","InvoiceNo","QtyAndUom","Thickness","GSM","InspectedBy","Status"].map(q).join(","),
-      ...rows.map(r=>[po.id,r.product,r.grade,r.dateOfReceipt,r.grnNo,"",r.qtyUom,r.thickness,r.gsm,"",""].map(q).join(",")),
+      ["PONo","Product","SupplierName","GradeType","DateOfReceipt","GRNLotNo","InvoiceNo","QtyAndUom","Thickness","GSM","InspectedBy","Status"].map(q).join(","),
+      ...rows.map(r=>[po.id,r.product,f.supplier?r.supplier:"",f.grade?r.grade:"",f.dateOfReceipt?r.dateOfReceipt:"",
+        f.grnNo?r.grnNo:"","",f.qty?r.qtyUom:"",f.thickness?r.thickness:"",f.gsm?r.gsm:"","",""].map(q).join(",")),
     ].join("\r\n");
   }
 
@@ -1341,9 +1387,33 @@
     }
   }
 
-  function printStickers(po){
+  /* One sticker's field rows, driven by the saved field choices — shared by
+     the A4 sheet and the roll label so the two can never disagree. The
+     supplier's own invoice arrives with the goods, never with the order, so
+     INVOICE NO (like INSPECTED BY) always prints as clear space to fill in. */
+  function stickerRowsHtml(r,f,cell,BLANK){
+    return [
+      f.supplier?["SUPPLIER", cell(r.supplier)]:null,
+      f.grade?["GRADE/TYPE", cell(r.grade)]:null,
+      f.dateOfReceipt?["DATE OF RECEIPT", cell(r.dateOfReceipt)]:null,
+      f.grnNo?["GRN/LOT NO", cell(r.grnNo)]:null,
+      f.invoiceNo?["INVOICE NO", BLANK]:null,
+      f.qty?["QTY &amp; UOM", cell(r.qtyUom)]:null,
+      f.thickness?["THICKNESS (if fabric)", cell(r.thickness)]:null,
+      f.gsm?["GSM (if fabric)", cell(r.gsm)]:null,
+      f.inspectedBy?["INSPECTED BY", BLANK]:null,
+    ].filter(Boolean).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join("");
+  }
+  const STICKER_STATUS_HTML=`<tr><th>STATUS</th><td class="st">
+              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>
+              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] APPROVED</div>
+              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] REJECTED</div>
+            </td></tr>`;
+
+  function printStickers(po,cfg){
     const lines=stickerData(po);
     if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
+    const f=(cfg||stickerCfg()).fields;
     const logo=location.origin+"/assets/logo-invoice.png";
     const mark=location.origin+"/assets/mark.png";
     // an unknown field prints as clear space the store writes on by hand
@@ -1351,17 +1421,7 @@
     const cell=(v)=>v?esc(v):BLANK;
 
     const cards=lines.map((r)=>{
-      const rows=[
-        ["GRADE/TYPE", cell(r.grade)],
-        ["DATE OF RECEIPT", cell(r.dateOfReceipt)],
-        ["GRN/LOT NO", cell(r.grnNo)],
-        // the supplier's own invoice arrives with the goods, never with the order
-        ["INVOICE NO", BLANK],
-        ["QTY &amp; UOM", cell(r.qtyUom)],
-        ["THICKNESS (if fabric)", cell(r.thickness)],
-        ["GSM (if fabric)", cell(r.gsm)],
-        ["INSPECTED BY", BLANK],
-      ].map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join("");
+      const rows=stickerRowsHtml(r,f,cell,BLANK);
       return `<div class="stk">
         <img class="wm" src="${mark}" alt="">
         <div class="stk-in">
@@ -1369,11 +1429,7 @@
           <div class="ttl">RAW MATERIAL</div>
           <div class="prod">PRODUCT: <b>${esc(r.product)}</b></div>
           <table class="fields"><tbody>${rows}
-            <tr><th>STATUS</th><td class="st">
-              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>
-              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] APPROVED</div>
-              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] REJECTED</div>
-            </td></tr>
+            ${f.status?STICKER_STATUS_HTML:""}
           </tbody></table>
         </div>
       </div>`;
@@ -1395,13 +1451,15 @@
   /* the mark sits behind the fields exactly as it does on the printed template */
   .wm{position:absolute;z-index:0;left:50%;top:56%;transform:translate(-50%,-50%);
     width:64%;opacity:.14;pointer-events:none}
-  .lg{text-align:center;margin-bottom:5mm}
+  .lg{text-align:center;margin-bottom:3.5mm}
   .lg img{height:13mm;object-fit:contain}
-  .ttl{text-align:center;font-size:17px;font-weight:700;letter-spacing:.3px;margin-bottom:5mm}
-  .prod{font-size:14px;font-weight:700;margin:0 0 7mm}
+  .ttl{text-align:center;font-size:17px;font-weight:700;letter-spacing:.3px;margin-bottom:3.5mm}
+  .prod{font-size:14px;font-weight:700;margin:0 0 5mm}
   .prod b{font-weight:700}
   table.fields{width:100%;border-collapse:collapse;table-layout:fixed}
-  table.fields th,table.fields td{border:1px solid #000;padding:2.1mm 2mm;font-size:11.5px;
+  /* padding sized so ALL TEN rows (supplier included) + the status boxes
+     fit inside the card's fixed 139mm — the height four-up cutting needs */
+  table.fields th,table.fields td{border:1px solid #000;padding:1.6mm 2mm;font-size:11.5px;
     font-weight:400;text-align:left;vertical-align:middle;word-wrap:break-word;overflow-wrap:anywhere}
   table.fields th{width:47%}
   table.fields td{font-weight:700}
@@ -1410,6 +1468,68 @@
   .wr{display:block;height:11px}
 </style></head>
 <body><div class="sheet">${cards}</div>
+<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
+</body></html>`;
+
+    const w=window.open("","_blank");
+    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+    w.document.write(html); w.document.close();
+  }
+
+  /* Roll labels: ONE sticker per page, the page being the label itself —
+     so any printer with the label stock loaded prints them directly and
+     BarTender is not needed. The 100×150 mm sticker is the reference
+     design; type scales with the smaller of the two ratios so a 50×75
+     label keeps the same composition instead of clipping it. */
+  function printRollStickers(po,cfg){
+    const lines=stickerData(po);
+    if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
+    const f=cfg.fields;
+    const logo=location.origin+"/assets/logo-invoice.png";
+    const mark=location.origin+"/assets/mark.png";
+    const BLANK='<span class="wr"></span>';
+    const cell=(v)=>v?esc(v):BLANK;
+    const k=Math.max(.5,Math.min(2.5,Math.min(cfg.w/100,cfg.h/150)));
+    const px=(n)=>(n*k).toFixed(1)+"px";
+
+    const labels=lines.map((r)=>`<div class="stk">
+        <img class="wm" src="${mark}" alt="">
+        <div class="stk-in">
+          <div class="lg"><img src="${logo}" alt="Chhaperia"></div>
+          <div class="ttl">RAW MATERIAL</div>
+          <div class="prod">PRODUCT: <b>${esc(r.product)}</b></div>
+          <table class="fields"><tbody>${stickerRowsHtml(r,f,cell,BLANK)}
+            ${f.status?STICKER_STATUS_HTML:""}
+          </tbody></table>
+        </div>
+      </div>`).join("");
+
+    const html=`<!doctype html><html><head><meta charset="utf-8">
+<title>Roll Stickers ${esc(cfg.w)}×${esc(cfg.h)} mm — ${esc(po.id)}</title>
+<style>
+  @page{size:${cfg.w}mm ${cfg.h}mm;margin:0}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:${px(12)}/1.4 "Times New Roman",Georgia,serif;color:#000;background:#fff}
+  .stk{position:relative;width:${cfg.w}mm;height:${cfg.h}mm;overflow:hidden;background:#fff;
+    page-break-after:always;break-after:page}
+  .stk-in{position:relative;z-index:1;height:100%;padding:4.5% 4.5% 3.5%;display:flex;flex-direction:column}
+  .wm{position:absolute;z-index:0;left:50%;top:56%;transform:translate(-50%,-50%);
+    width:64%;opacity:.14;pointer-events:none}
+  .lg{text-align:center;margin-bottom:3.5%}
+  .lg img{height:${px(46)};max-width:88%;object-fit:contain}
+  .ttl{text-align:center;font-size:${px(17)};font-weight:700;letter-spacing:.3px;margin-bottom:3.5%}
+  .prod{font-size:${px(14)};font-weight:700;margin:0 0 4.5%}
+  .prod b{font-weight:700}
+  table.fields{width:100%;border-collapse:collapse;table-layout:fixed}
+  table.fields th,table.fields td{border:${Math.max(1,Math.round(k))}px solid #000;padding:${px(5.5)} ${px(5)};
+    font-size:${px(11.5)};font-weight:400;text-align:left;vertical-align:middle;word-wrap:break-word;overflow-wrap:anywhere}
+  table.fields th{width:47%}
+  table.fields td{font-weight:700}
+  td.st{font-weight:400;line-height:1.5;white-space:nowrap}
+  /* the spacer keeps an empty row at full height without printing anything */
+  .wr{display:block;height:${px(11)}}
+</style></head>
+<body>${labels}
 <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
 </body></html>`;
 

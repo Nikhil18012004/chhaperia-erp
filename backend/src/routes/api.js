@@ -317,8 +317,10 @@ router.put("/state", requireAuth, requireRole("admin", "office"), (req, res, nex
   try { res.json(erp.saveState(req.body)); } catch (e) { next(e); }
 });
 
-// System settings (theme/accent/config) are admin only.
-router.patch("/settings", requireAuth, requireRole("admin"), (req, res, next) => {
+// System settings (theme/accent/sticker config). Office may write them too —
+// it already holds PUT /state, which carries the settings document wholesale,
+// so this is no wider than what the role can do anyway.
+router.patch("/settings", requireAuth, requireRole("admin", "office"), (req, res, next) => {
   try { res.json(erp.updateSettings(req.body)); } catch (e) { next(e); }
 });
 

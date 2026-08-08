@@ -102,6 +102,18 @@ function updateSettings(doc) {
   if (doc.accent != null) clean.accent = String(doc.accent).slice(0, 20);
   if ("autoAccent" in doc) clean.autoAccent = !!doc.autoAccent;
   if ("lowStockOnly" in doc) clean.lowStockOnly = !!doc.lowStockOnly;
+  /* Sticker printing config: roll-label size (mm, bounded to what a label
+     printer can hold) + which fields print. Whitelisted key by key so a bad
+     client can't stuff arbitrary JSON into the shared settings document. */
+  if (doc.sticker != null && typeof doc.sticker === "object" && !Array.isArray(doc.sticker)) {
+    const s = doc.sticker;
+    const mm = (v, d) => { v = +v; return isNaN(v) || v <= 0 ? d : Math.min(300, Math.max(25, v)); };
+    const fields = {};
+    ["supplier", "grade", "dateOfReceipt", "grnNo", "invoiceNo", "qty",
+      "thickness", "gsm", "inspectedBy", "status"]
+      .forEach((k) => { fields[k] = !s.fields || s.fields[k] !== false; });
+    clean.sticker = { w: mm(s.w, 100), h: mm(s.h, 150), fields };
+  }
   return repo.updateSettings(clean);
 }
 
