@@ -197,45 +197,488 @@
       const anyRecd=po.lines.some(l=>(l.recd||0)>0);
       const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
         h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"}),
-        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Stickers"}),
-        h("button",{class:"btn",title:"Download sticker rows as CSV for the BarTender label template",
+        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Labels"}),
+        h("button",{class:"btn",title:"Download the label rows as CSV for the BarTender label template",
           onclick:()=>bartenderPO(po),text:"⤓ BarTender"})];
       if(!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
       if(po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
     }
 
-    /* One raw-material identification sticker per ordered line, on the
-       company's own template. The dialog picks the format — A4 sheet (4-up)
-       or one-per-label roll printing sized to the operator's label stock —
-       and remembers the size + field choices in settings for every browser.
-       The BarTender file carries the same rows for label-printer runs. */
+    /* ---- Why a placeholder, not a guess: these fields are genuinely absent
+       from a purchase order, so the box explains what to type instead of
+       inventing a value. ---- */
+    const STICKER_HINTS={
+      invoiceNo:"arrives with the goods — type it in",
+      inspectedBy:"type the inspector's name",
+      dateOfReceipt:"fills in once the goods are received",
+      grnNo:"fills in once the goods are received",
+    };
+    /* Values that belong to the whole order rather than to one line, so
+       "copy to all" can move them without overwriting each label's identity. */
+    const STICKER_SHARED=["supplier","dateOfReceipt","invoiceNo","inspectedBy"];
+    const PX_MM=96/25.4;                   // CSS millimetre, for preview scaling
+
+    /* One raw-material identification label per ordered line, on the company's
+       own template. A three-step dialog: tick and edit the fields, lay the
+       labels out on any sheet size, then approve the preview and print. The
+       layout is remembered in settings for every browser; the BarTender file
+       carries the same rows for label-printer runs. */
     function stickersPO(po){
       const cfg=stickerCfg();
-      const cbs=STICKER_FIELDS.map(([k,l])=>
-        `<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:3px 0;break-inside:avoid">`+
-        `<input type="checkbox" id="stk_f_${k}"${cfg.fields[k]?" checked":""}> ${esc(l)}</label>`).join("");
-      const body=h("div",{},[
-        h("div",{class:"form-grid"},[
-          U.field("Label Width (mm)",`<input class="input" id="stk_w" type="number" min="25" max="300" step="1" value="${cfg.w}">`),
-          U.field("Label Height (mm)",`<input class="input" id="stk_h" type="number" min="25" max="300" step="1" value="${cfg.h}">`),
-        ]),
-        h("h3",{style:"margin:14px 0 6px;font-size:13px",text:"Fields on the sticker"}),
-        h("div",{style:"columns:2;column-gap:24px",html:cbs}),
-        h("div",{class:"muted",style:"margin-top:10px;font-size:12px",
-          text:"The size applies to roll labels. The ticked fields shape the A4 sheet, the roll labels AND the BarTender file, so every format prints the same sticker. Choices are saved for everyone."}),
-      ]);
-      const readCfg=()=>{
-        const clamp=(v,d)=>{v=+v; return isNaN(v)||v<=0?d:Math.min(300,Math.max(25,v));};
-        const out={w:clamp(UI.$("#stk_w").value,100), h:clamp(UI.$("#stk_h").value,150), fields:{}};
-        STICKER_FIELDS.forEach(([k])=>{ const el=UI.$("#stk_f_"+k); out.fields[k]=!!(el&&el.checked); });
-        return out;
+      const vals=stickerValues(po,cfg);
+      if(!vals.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
+      const STEPS=["Fields & Data","Layout","Preview & Print"];
+      let step=0, cur=0, pvPage=0;
+
+      const rail=h("div",{class:"wz-rail"});
+      const pane=h("div",{class:"wz-pane"});
+      const mo=modal({title:"Print Labels", sub:po.id+" — "+ENG.sup(po.supplierId),
+        xwide:true, body:h("div",{},[rail,pane]), foot:[h("span")]});
+      const foot=mo.el.querySelector(".modal-foot");
+
+      /* Saved for everyone, exactly like the old field ticks were. A role that
+         may not write settings still gets to print — the label just is not
+         remembered, which is better than blocking the print. */
+      const persist=()=>{
+        ENG.data.settings=Object.assign({},ENG.data.settings,{sticker:cfg});
+        try{ const p=DB.saveSettings({sticker:cfg}); if(p&&p.catch) p.catch(()=>{}); }catch(e){}
       };
-      const persist=(c)=>{ ENG.data.settings=Object.assign({},ENG.data.settings,{sticker:c}); DB.saveSettings({sticker:c}); };
-      const mo=modal({title:"Print Stickers", sub:po.id+" — "+ENG.sup(po.supplierId), body,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-          h("button",{class:"btn",onclick:()=>{const c=readCfg();persist(c);mo.close();printStickers(po,c);},text:"🖨 A4 Sheet (4-up)"}),
-          h("button",{class:"btn primary",onclick:()=>{const c=readCfg();persist(c);mo.close();printRollStickers(po,c);},text:"🖨 Roll Labels"})]});
+
+      /* ---- unit-aware number entry: the config is always millimetres, the
+         boxes show whatever unit the operator picked ---- */
+      const toU=(mm)=>cfg.unit==="cm"?+(mm/10).toFixed(2):+(+mm).toFixed(1);
+      const frU=(v)=>{ v=+v; return isNaN(v)?0:(cfg.unit==="cm"?v*10:v); };
+      const stp=()=>cfg.unit==="cm"?"0.05":"0.5";
+      const fmm=(n)=>(Math.round(n*10)/10).toFixed(1);
+      const fld=(label,el,hint)=>h("div",{class:"field"},
+        [h("label",{text:label}),el,hint?h("div",{class:"hint",text:hint}):null]);
+      const grid=(n,kids)=>h("div",{style:`display:grid;grid-template-columns:repeat(${n},1fr);gap:12px`},kids);
+
+      /* Every box that holds label text is multi-line: Enter starts a new line
+         and the box grows to show it, because a value like an address or a
+         two-line remark has to be typed as it will print. */
+      function ta(value,onInput,placeholder,max){
+        const el=h("textarea",{class:"wz-ta",rows:"1",placeholder:placeholder||"",
+          maxlength:String(max||400)});
+        el.value=value==null?"":String(value);
+        const grow=()=>{ el.style.height="auto";
+          el.style.height=Math.min(260,Math.max(36,el.scrollHeight+2))+"px"; };
+        el.addEventListener("input",()=>{ onInput(el.value); grow(); });
+        requestAnimationFrame(grow);
+        return el;
+      }
+      /* cfg.fields mirrors cfg.order — the BarTender CSV still reads one flag
+         per field, so the two must never drift apart. */
+      const syncFields=()=>{ const all=fieldDefs(cfg); cfg.fields={};
+        all.forEach(f=>{ cfg.fields[f.k]=cfg.order.indexOf(f.k)>=0; }); };
+
+      function go(i){
+        if(i>step) persist();
+        if(i>1&&!stickerGeom(cfg).fits){
+          toast("The labels do not fit the sheet — fix the sizes before previewing",{type:"warn"});
+          step=1; render(); return;
+        }
+        step=Math.max(0,Math.min(2,i)); render();
+      }
+
+      function render(){
+        rail.innerHTML="";
+        STEPS.forEach((t,i)=>rail.appendChild(h("button",{
+          class:"wz-step"+(i===step?" on":"")+(i<step?" done":""), onclick:()=>go(i)},
+          [h("span",{class:"n",text:i<step?"✓":String(i+1)}),h("span",{text:t})])));
+        pane.innerHTML="";
+        [stepFields,stepLayout,stepPreview][step]();
+        foot.innerHTML="";
+        foot.appendChild(h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}));
+        foot.appendChild(h("div",{style:"flex:1"}));
+        if(step>0) foot.appendChild(h("button",{class:"btn",onclick:()=>go(step-1),text:"← Back"}));
+        if(step<2) foot.appendChild(h("button",{class:"btn primary",onclick:()=>go(step+1),
+          text:(step===0?"Layout":"Preview")+" →"}));
+        /* The dialog deliberately STAYS OPEN across a print: closing it dropped
+           the operator back at the purchase-order list, losing the place they
+           were at just to run one sheet. */
+        else foot.appendChild(h("button",{class:"btn primary",
+          onclick:()=>{ persist(); printLabels(po,cfg,vals); },text:"🖨 Print Labels"}));
+      }
+
+      /* ============ STEP 1 — what the label says ============
+         Every tick carries the value beside it, fetched from the order and
+         editable, so the operator corrects a label here instead of by hand
+         after it is printed. */
+      function stepFields(){
+        if(vals.length>1){
+          pane.appendChild(h("div",{class:"wz-nav",style:"margin-bottom:16px;flex-wrap:wrap"},[
+            h("button",{class:"btn sm",title:"Previous label",
+              onclick:()=>{cur=(cur-1+vals.length)%vals.length;render();},text:"◀"}),
+            h("span",{style:"color:var(--text)",text:`Label ${cur+1} of ${vals.length}`}),
+            h("span",{class:"muted",style:"font-weight:600",text:"— "+(vals[cur].product||"(no product)")}),
+            h("button",{class:"btn sm",title:"Next label",
+              onclick:()=>{cur=(cur+1)%vals.length;render();},text:"▶"}),
+            h("button",{class:"btn sm ghost",style:"margin-left:auto",
+              title:"Copy supplier, date, invoice no and inspector onto every label — the per-line product, grade and quantity stay as they are",
+              onclick:()=>{
+                STICKER_SHARED.forEach(k=>vals.forEach((v,i)=>{ if(i!==cur) v[k]=vals[cur][k]; }));
+                toast(`Supplier, date, invoice no and inspector copied to all ${vals.length} labels`,{type:"ok"});
+              },text:"⇊ Copy shared values to all"}),
+          ]));
+        }
+        /* ---- heading ---- */
+        pane.appendChild(h("div",{class:"wz-sec",text:"Heading"}));
+        pane.appendChild(fld("Title across the top",
+          ta(cfg.title,v=>{cfg.title=v;},"e.g. RAW MATERIAL — leave empty for no title",120),
+          "The type scale adjusts to however long this runs, so the title, the product line and the fields keep their proportions."));
+
+        /* ---- the field catalogue: nothing prints until it is added ---- */
+        pane.appendChild(h("div",{class:"wz-sec",text:"Fields on the label"}));
+        const search=h("input",{class:"input",type:"search",placeholder:"Search fields to add…"});
+        const createBtn=h("button",{class:"btn sm",text:"✚ Create field"});
+        pane.appendChild(h("div",{class:"wz-pickbar"},[search,createBtn]));
+
+        /* "Create" opens inline rather than as a second dialog stacked on this
+           one — a modal over a modal is a trap to escape from. */
+        const nameIn=h("input",{class:"input",type:"text",placeholder:"Name of the new field",maxlength:"44"});
+        const createRow=h("div",{class:"wz-createrow",hidden:"hidden"});
+        const doCreate=()=>{
+          const label=nameIn.value.trim();
+          if(!label){ nameIn.focus(); return; }
+          const all=fieldDefs(cfg);
+          if(all.some(f=>f.label.toLowerCase()===label.toLowerCase())){
+            toast("A field called “"+label+"” already exists",{type:"warn"}); return; }
+          const clean=label.replace(/[^A-Za-z0-9]/g,"").slice(0,18)||"Field";
+          let k="cx"+clean, n=2;
+          while(all.some(f=>f.k===k)) k="cx"+clean.slice(0,17)+(n++);
+          cfg.custom=(cfg.custom||[]).concat([{k,label,cap:label.toUpperCase(),
+            csv:k,row:true,custom:true}]);
+          cfg.order.push(k); syncFields();
+          vals.forEach(v=>{ if(v[k]==null) v[k]=""; });   // the new field starts empty on every label
+          nameIn.value=""; createRow.hidden=true;
+          paint(); toast("“"+label+"” added to the label",{type:"ok"});
+        };
+        nameIn.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); doCreate(); } });
+        createRow.appendChild(nameIn);
+        createRow.appendChild(h("button",{class:"btn sm primary",onclick:doCreate,text:"Add to list"}));
+        createRow.appendChild(h("button",{class:"btn sm ghost",text:"Cancel",
+          onclick:()=>{ createRow.hidden=true; nameIn.value=""; }}));
+        createBtn.addEventListener("click",()=>{ createRow.hidden=!createRow.hidden;
+          if(!createRow.hidden) nameIn.focus(); });
+        pane.appendChild(createRow);
+
+        const availBox=h("div",{class:"wz-avail"});
+        const addedBox=h("div",{});
+        pane.appendChild(availBox);
+        pane.appendChild(h("div",{class:"wz-sec",text:"On the label — in print order"}));
+        pane.appendChild(addedBox);
+
+        /* Redraws only the two lists, so the search box keeps its text and
+           its focus while the operator is still typing in it. */
+        function paint(){
+          const q=search.value.trim().toLowerCase();
+          const all=fieldDefs(cfg);
+          const free=all.filter(f=>cfg.order.indexOf(f.k)<0
+            &&(!q||f.label.toLowerCase().indexOf(q)>=0));
+          availBox.innerHTML="";
+          if(!free.length){
+            availBox.appendChild(h("div",{class:"muted",style:"font-size:12px;padding:8px 2px",
+              text:q?"No field matches “"+search.value.trim()+"” — use Create field to add it.":
+                     "Every field is already on the label."}));
+          } else free.forEach(f=>{
+            availBox.appendChild(h("div",{class:"wz-av"},[
+              h("span",{text:f.label}),
+              f.custom?h("span",{class:"badge-s s-info",style:"margin-left:6px",text:"custom"}):null,
+              h("button",{class:"wz-plus",title:"Add "+f.label+" to the label",text:"+",
+                onclick:()=>{ cfg.order.push(f.k); syncFields(); paint(); }}),
+            ]));
+          });
+
+          addedBox.innerHTML="";
+          if(!cfg.order.length){
+            addedBox.appendChild(h("div",{class:"muted",style:"font-size:12px;padding:10px 2px",
+              text:"Nothing on the label yet — add fields from the list above."}));
+          }
+          addedDefs(cfg).forEach((f,i)=>{
+            const row=h("div",{class:"wz-fld"});
+            row.appendChild(h("div",{class:"wz-fldname"},[
+              h("span",{text:f.label}),
+              f.custom?h("span",{class:"badge-s s-info",text:"custom"}):null]));
+            if(f.boxes){
+              row.appendChild(h("div",{class:"muted",style:"font-size:12px",
+                text:"Prints three empty boxes: UNDER TEST · APPROVED · REJECTED"}));
+            }else{
+              row.appendChild(ta(vals[cur][f.k],v=>{ vals[cur][f.k]=v; },
+                STICKER_HINTS[f.k]||"— prints blank —"));
+            }
+            row.appendChild(h("div",{class:"wz-fldact"},[
+              h("button",{class:"wz-mini",title:"Move up",disabled:i===0?"disabled":null,text:"↑",
+                onclick:()=>{ const o=cfg.order; [o[i-1],o[i]]=[o[i],o[i-1]]; paint(); }}),
+              h("button",{class:"wz-mini",title:"Move down",
+                disabled:i===cfg.order.length-1?"disabled":null,text:"↓",
+                onclick:()=>{ const o=cfg.order; [o[i+1],o[i]]=[o[i],o[i+1]]; paint(); }}),
+              h("button",{class:"wz-mini danger",title:"Remove from the label",text:"✕",
+                onclick:()=>{ cfg.order.splice(i,1); syncFields(); paint(); }}),
+            ]));
+            addedBox.appendChild(row);
+          });
+        }
+        search.addEventListener("input",paint);
+        paint();
+
+        /* ---- how the added fields are set out ---- */
+        pane.appendChild(h("div",{class:"wz-sec",text:"How the content is set out"}));
+        const modeBox=h("div",{class:"wz-modes"});
+        [["table","Table content","Every field in a ruled table — captions in one column, values in the other."],
+         ["plain","Non-table content","The same two columns and the same alignment, with no table lines drawn."]]
+          .forEach(([v,label,note])=>{
+            const cb=h("input",{type:"checkbox"}); cb.checked=cfg.layout===v;
+            /* Two boxes, one answer — ticking either sets the mode and clears
+               the other, so the label can never be asked to be both. */
+            cb.addEventListener("change",()=>{ cfg.layout=v; paintModes(); });
+            modeBox.appendChild(h("label",{class:"wz-mode"+(cfg.layout===v?" on":"")},
+              [cb,h("div",{},[h("div",{class:"t",text:label}),h("div",{class:"n",text:note})])]));
+          });
+        function paintModes(){
+          [...modeBox.querySelectorAll(".wz-mode")].forEach((el,i)=>{
+            const on=cfg.layout===(i===0?"table":"plain");
+            el.classList.toggle("on",on); el.querySelector("input").checked=on;
+          });
+        }
+        pane.appendChild(modeBox);
+
+        /* ---- the free paragraph ---- */
+        pane.appendChild(h("div",{class:"wz-sec",text:"Custom text"}));
+        pane.appendChild(fld("Paragraph printed under the fields",
+          ta(cfg.para,v=>{cfg.para=v;},
+            "Any note, instruction or handling text — as many lines as you like. Leave empty to print none.",1200),
+          "Set smaller than the fields so it reads as a note. It counts towards the fit, so a long paragraph shrinks the rest."));
+
+        pane.appendChild(h("div",{class:"muted",style:"margin-top:18px;font-size:12px;line-height:1.65",
+          html:"The field list, the title, the paragraph and the layout are saved for everyone, and shape the printed label <b>and</b> the BarTender file. Edited <b>values</b> apply to this print run only — they are never written back to the purchase order."}));
+      }
+
+      /* ============ STEP 2 — how they sit on the sheet ============ */
+      function stepLayout(){
+        const diag=h("div",{class:"wz-diag"});
+        const dims=h("div",{class:"wz-dim"});
+        const alert=h("div",{});
+        const lwEl=h("input",{class:"input",id:"stk_lw",type:"number",step:stp(),min:"5"});
+        const lhEl=h("input",{class:"input",id:"stk_lh",type:"number",step:stp(),min:"5"});
+
+        /* Only the readouts redraw as the operator types — re-rendering the
+           whole step would take the focus out of the box mid-keystroke. */
+        function refresh(){
+          const g=stickerGeom(cfg);
+          if(cfg.autoSize){ lwEl.value=toU(g.labelW); lhEl.value=toU(g.labelH); }
+          lwEl.disabled=lhEl.disabled=cfg.autoSize;
+          diag.innerHTML=""; diag.appendChild(diagram(g)); diag.appendChild(dims);
+          const total=vals.length*Math.max(1,cfg.copies||1);
+          const sheets=Math.max(1,Math.ceil(total/g.perPage));
+          dims.innerHTML=`Sheet <b>${fmm(g.pgW)} × ${fmm(g.pgH)} mm</b><br>`+
+            `Label <b>${fmm(g.labelW)} × ${fmm(g.labelH)} mm</b><br>`+
+            `${cfg.cols} × ${cfg.rows} = <b>${g.perPage}</b> per sheet · `+
+            `${total} label${total>1?"s":""} on <b>${sheets}</b> sheet${sheets>1?"s":""}`;
+          alert.innerHTML=""; alert.appendChild(alertFor(g));
+        }
+        /* A dimension box bound to one config key. min/max are millimetres, so
+           the bounds hold whichever unit is on screen. */
+        function numIn(key,min,max,isInt){
+          const el=h("input",{class:"input",type:"number",min:String(isInt?min:toU(min)),
+            step:isInt?"1":stp(), value:String(isInt?cfg[key]:toU(cfg[key]))});
+          el.addEventListener("input",()=>{
+            if(el.value==="") return;                       // mid-typing, not yet a number
+            const raw=isInt?Math.round(+el.value||0):frU(el.value);
+            cfg[key]=Math.min(max,Math.max(min,isNaN(raw)?min:raw));
+            refresh();
+          });
+          el.addEventListener("blur",()=>{ el.value=String(isInt?cfg[key]:toU(cfg[key])); });
+          return el;
+        }
+        lwEl.addEventListener("input",()=>{ if(lwEl.value==="")return;
+          cfg.labelW=Math.min(1000,Math.max(5,frU(lwEl.value))); refresh(); });
+        lhEl.addEventListener("input",()=>{ if(lhEl.value==="")return;
+          cfg.labelH=Math.min(1000,Math.max(5,frU(lhEl.value))); refresh(); });
+
+        const u=cfg.unit;
+        const left=h("div",{});
+
+        /* -- layout size -- */
+        left.appendChild(h("div",{class:"wz-sec",text:"Layout size"}));
+        const pageSel=h("select",{class:"select"},PAGE_SIZES.map(p=>h("option",{value:p.v},p.l)));
+        pageSel.value=cfg.page;
+        pageSel.addEventListener("change",()=>{ cfg.page=pageSel.value; render(); });
+        const orient=h("div",{class:"seg"},[
+          h("button",{class:cfg.landscape?"":"on",onclick:()=>{cfg.landscape=false;render();},text:"Portrait"}),
+          h("button",{class:cfg.landscape?"on":"",onclick:()=>{cfg.landscape=true;render();},text:"Landscape"})]);
+        const units=h("div",{class:"seg"},[
+          h("button",{class:u==="mm"?"on":"",onclick:()=>{cfg.unit="mm";render();},text:"mm"}),
+          h("button",{class:u==="cm"?"on":"",onclick:()=>{cfg.unit="cm";render();},text:"cm"})]);
+        left.appendChild(grid(3,[fld("Sheet size",pageSel),fld("Orientation",orient),fld("Units",units)]));
+        if(cfg.page==="custom")
+          left.appendChild(h("div",{style:"margin-top:12px"},grid(2,[
+            fld(`Sheet width (${u})`,numIn("pageW",20,1000)),
+            fld(`Sheet height (${u})`,numIn("pageH",20,1000))])));
+
+        /* -- margins -- */
+        left.appendChild(h("div",{class:"wz-sec",text:"Margins"}));
+        left.appendChild(grid(4,[
+          fld(`Top (${u})`,numIn("mTop",0,200)),      fld(`Bottom (${u})`,numIn("mBottom",0,200)),
+          fld(`Left (${u})`,numIn("mLeft",0,200)),    fld(`Right (${u})`,numIn("mRight",0,200))]));
+
+        /* -- grid -- */
+        left.appendChild(h("div",{class:"wz-sec",text:"Labels per sheet"}));
+        left.appendChild(grid(2,[
+          fld("Rows",numIn("rows",1,50,true)), fld("Columns",numIn("cols",1,20,true))]));
+
+        /* -- label size -- */
+        const auto=h("input",{type:"checkbox"}); auto.checked=cfg.autoSize;
+        auto.addEventListener("change",()=>{ cfg.autoSize=auto.checked;
+          if(!cfg.autoSize){ const g=stickerGeom(cfg); cfg.labelW=g.labelW; cfg.labelH=g.labelH; }
+          refresh(); });
+        left.appendChild(h("div",{class:"wz-sec",style:"display:flex;align-items:center;gap:14px"},[
+          h("span",{text:"Label size"}),
+          h("label",{class:"wz-auto"},[auto,h("span",{text:"Auto-fit to the layout"})])]));
+        left.appendChild(grid(2,[fld(`Width (${u})`,lwEl),fld(`Height (${u})`,lhEl)]));
+
+        /* -- gaps -- */
+        left.appendChild(h("div",{class:"wz-sec",text:"Gap between labels"}));
+        left.appendChild(grid(2,[
+          fld(`Horizontal (${u})`,numIn("gapX",0,100)),fld(`Vertical (${u})`,numIn("gapY",0,100))]));
+
+        left.appendChild(alert);
+        pane.appendChild(h("div",{class:"wz-cols"},[left,diag]));
+        refresh();
+      }
+
+      /* The sheet drawn to scale, every label in its real place. Labels that
+         run off the sheet are drawn red AND outside the paper edge, so an
+         overflow is visible rather than merely described. */
+      function diagram(g){
+        const s=Math.min(252/g.pgW,336/g.pgH);
+        const page=h("div",{class:"wz-page",
+          style:`width:${(g.pgW*s).toFixed(1)}px;height:${(g.pgH*s).toFixed(1)}px`});
+        const max=Math.min(cfg.rows*cfg.cols,400);
+        for(let i=0;i<max;i++){
+          const r=Math.floor(i/cfg.cols), c=i%cfg.cols;
+          const x=cfg.mLeft+c*(g.labelW+cfg.gapX), y=cfg.mTop+r*(g.labelH+cfg.gapY);
+          const bad=(x+g.labelW>g.pgW-cfg.mRight+0.15)||(y+g.labelH>g.pgH-cfg.mBottom+0.15);
+          page.appendChild(h("div",{class:"wz-lab"+(bad?" bad":""),
+            style:`left:${(x*s).toFixed(1)}px;top:${(y*s).toFixed(1)}px;`+
+              `width:${Math.max(1,g.labelW*s).toFixed(1)}px;height:${Math.max(1,g.labelH*s).toFixed(1)}px`}));
+        }
+        return page;
+      }
+
+      function alertFor(g){
+        if(g.fits) return h("div",{class:"wz-alert ok"},[h("span",{class:"ic",text:"✓"}),
+          h("div",{html:`<b>The layout fits.</b> ${g.perPage} label${g.perPage>1?"s":""} of `+
+            `${fmm(g.labelW)} × ${fmm(g.labelH)} mm sit inside the margins with `+
+            `${fmm(g.innerW-g.needW)} mm across and ${fmm(g.innerH-g.needH)} mm down to spare.`})]);
+        const why=[];
+        if(!g.fitsW) why.push(`<b>${fmm(g.overW)} mm too wide</b>`);
+        if(!g.fitsH) why.push(`<b>${fmm(g.overH)} mm too tall</b>`);
+        const tiny=(g.labelW<5||g.labelH<5)
+          ? " The margins and gaps leave no room for a label at all." : "";
+        return h("div",{class:"wz-alert"},[h("span",{class:"ic",text:"⚠"}),
+          h("div",{html:`<b>These labels do not fit the sheet.</b> ${cfg.cols} × ${cfg.rows} labels of `+
+            `${fmm(g.labelW)} × ${fmm(g.labelH)} mm need ${fmm(g.needW)} × ${fmm(g.needH)} mm, but only `+
+            `${fmm(g.innerW)} × ${fmm(g.innerH)} mm is left inside the margins — ${why.join(" and ")}.${tiny}`+
+            ` Reduce the label size, the rows and columns, the gaps or the margins — or tick Auto-fit.`})]);
+      }
+
+      /* ============ STEP 3 — the label, the sheet, the printer ============
+         Both panes render the SAME document the printer gets, so what is
+         approved here is what comes out of the tray. */
+      function stepPreview(){
+        const g=stickerGeom(cfg), m=labelMetrics(cfg,g,vals);
+        // sheet count lives in paintSheet(), which owns the pager
+
+        const frame=(html,wMM,hMM,boxW,boxH)=>{
+          const s=Math.min(boxW/(wMM*PX_MM),boxH/(hMM*PX_MM));
+          return h("div",{class:"wz-frame",
+            style:`width:${(wMM*PX_MM*s).toFixed(1)}px;height:${(hMM*PX_MM*s).toFixed(1)}px`},
+            h("iframe",{srcdoc:html,scrolling:"no","aria-hidden":"true",
+              style:`width:${wMM}mm;height:${hMM}mm;transform:scale(${s.toFixed(4)});transform-origin:top left`}));
+        };
+
+        /* -- left: one label, as designed -- */
+        const one=h("div",{class:"wz-pv"},[h("h4",{text:"Label design"})]);
+        one.appendChild(frame(labelOneHtml(cfg,vals[Math.min(cur,vals.length-1)],vals),
+          g.labelW,g.labelH,440,420));
+        if(vals.length>1) one.appendChild(h("div",{class:"wz-nav"},[
+          h("button",{class:"btn sm",onclick:()=>{cur=(cur-1+vals.length)%vals.length;render();},text:"◀"}),
+          h("span",{text:`Label ${cur+1} of ${vals.length}`}),
+          h("button",{class:"btn sm",onclick:()=>{cur=(cur+1)%vals.length;render();},text:"▶"})]));
+        one.appendChild(h("div",{class:"wz-dim",html:
+          `<b>${fmm(g.labelW)} × ${fmm(g.labelH)} mm</b><br>`+
+          (m.big?"Wordmark on top + watermark behind — at least "+STICKER_BIG_W+" mm wide and "
+                 +STICKER_BIG_H+" mm tall"
+               :"Watermark only — under "+STICKER_BIG_W+" mm wide or "+STICKER_BIG_H
+                 +" mm tall, too small for the wordmark")+
+          (m.k<.55?`<br><span style="color:var(--warn)">Type is scaled to ${Math.round(m.k*100)}% — `+
+            `untick a field or use a bigger label for larger print.</span>`:"")}));
+
+        /* -- right: the sheet as it will print --
+           Repainted on its own rather than through render(), so changing the
+           copy count updates the sheet and its pager without taking the focus
+           out of the box the operator is still typing in. */
+        const sheet=h("div",{class:"wz-pv"},[h("h4",{text:"Sheet layout"})]);
+        const sheetSlot=h("div"), sheetNav=h("div",{class:"wz-nav"});
+        sheet.appendChild(sheetSlot); sheet.appendChild(sheetNav);
+        function paintSheet(){
+          const sh=Math.max(1,Math.ceil(vals.length*Math.max(1,cfg.copies||1)/g.perPage));
+          pvPage=Math.min(Math.max(0,pvPage),sh-1);
+          sheetSlot.innerHTML="";
+          sheetSlot.appendChild(frame(labelSheetHtml(po,cfg,vals,{onlyPage:pvPage}),
+            g.pgW,g.pgH,440,420));
+          sheetNav.innerHTML="";
+          sheetNav.appendChild(h("button",{class:"btn sm",disabled:sh<2?"disabled":null,
+            onclick:()=>{pvPage=(pvPage-1+sh)%sh;paintSheet();},text:"◀"}));
+          sheetNav.appendChild(h("span",{text:`Sheet ${pvPage+1} of ${sh}`}));
+          sheetNav.appendChild(h("button",{class:"btn sm",disabled:sh<2?"disabled":null,
+            onclick:()=>{pvPage=(pvPage+1)%sh;paintSheet();},text:"▶"}));
+        }
+        paintSheet();
+        sheet.appendChild(h("div",{class:"wz-dim",html:
+          `<b>${(PAGE_SIZES.find(p=>p.v===cfg.page)||{}).l||"Custom"}</b>`+
+          (cfg.landscape?" · landscape":"")+`<br>${fmm(g.pgW)} × ${fmm(g.pgH)} mm · `+
+          `${g.perPage} per sheet`}));
+
+        pane.appendChild(h("div",{class:"wz-split"},[one,sheet]));
+
+        /* How many of each label to run off in one go. Copies of the same
+           label stay adjacent, so the two stickers for one drum come off the
+           sheet side by side rather than a sheet apart. */
+        const copyIn=h("input",{class:"input",type:"number",min:"1",max:"500",step:"1",
+          value:String(cfg.copies||1),style:"max-width:130px"});
+        const tally=h("div",{class:"wz-tally"});
+        const retally=()=>{
+          const n=Math.max(1,Math.min(500,Math.round(+copyIn.value||1)));
+          const t=vals.length*n, sh=Math.max(1,Math.ceil(t/g.perPage));
+          tally.innerHTML=`<b>${vals.length}</b> label${vals.length>1?"s":""} × <b>${n}</b> `+
+            `cop${n>1?"ies":"y"} = <b>${t}</b> to print, on <b>${sh}</b> sheet${sh>1?"s":""} `+
+            `of ${g.perPage} per sheet.`;
+        };
+        let copyTmr=null;
+        copyIn.addEventListener("input",()=>{
+          if(copyIn.value==="") { retally(); return; }
+          cfg.copies=Math.max(1,Math.min(500,Math.round(+copyIn.value||1)));
+          retally();
+          // redraw the sheet a beat later, so the pager can never claim
+          // one sheet while the tally underneath says two
+          clearTimeout(copyTmr); copyTmr=setTimeout(paintSheet,320);
+        });
+        copyIn.addEventListener("blur",()=>{ copyIn.value=String(cfg.copies||1);
+          clearTimeout(copyTmr); paintSheet(); });
+        retally();
+        pane.appendChild(h("div",{class:"wz-copies"},[
+          h("div",{class:"field",style:"flex:0 0 auto"},
+            [h("label",{text:"No. of labels (copies of each)"}),copyIn]),
+          tally]));
+
+        pane.appendChild(h("div",{class:"muted",style:"margin-top:14px;font-size:12px;line-height:1.65",
+          html:"<b>Print Labels</b> opens the sheet in a new tab and raises your printer dialog — pick the label printer or the tray there. Set the printer's paper size to match the sheet above and its scaling to 100% (never “fit to page”), or the millimetres will not come out true. This dialog stays open behind it, so you come back exactly where you left off."}));
+      }
+
+      render();
     }
     function bartenderPO(po){ sendToBartender(po); }
 
@@ -1290,8 +1733,8 @@
   }
 
   /* ============================================================
-     RAW-MATERIAL IDENTIFICATION STICKERS — one per ordered line,
-     laid out four to an A4 sheet on the company's own template.
+     RAW-MATERIAL IDENTIFICATION LABELS — one per ordered line,
+     laid out on any sheet the operator defines in the print dialog.
 
      Only what the purchase order actually knows is printed:
      product, grade, quantity and — for sheet goods — thickness
@@ -1303,7 +1746,7 @@
      ============================================================ */
   /* One record per ordered line — only what the PO and its goods receipt
      actually know; every unknown stays "" so it renders as a blank to fill.
-     Shared by the printed sticker sheet and the BarTender export, so the
+     Shared by the printed label sheet and the BarTender export, so the
      label a machine prints can never disagree with the one printed here. */
   function stickerData(po){
     return ((po&&po.lines)||[]).map((l)=>{
@@ -1335,35 +1778,371 @@
     });
   }
 
-  /* ---- Sticker printing is CONFIGURABLE (saved in settings, shared by every
-     browser): the roll-label size in mm and which fields print. A field left
-     unticked disappears from the A4 sheet, the roll label and the BarTender
-     CSV alike, so no format can quietly disagree with another. ---- */
+  /* ---- ONE list drives everything a label can carry: the tick-list in the
+     dialog, the editable value box beside each tick, the printed row and the
+     BarTender CSV column. TO ADD A FIELD: add an entry here AND add the same
+     key to the whitelist in backend/src/services/erpService.js →
+     updateSettings(), or the choice will not survive a save. Nothing else.
+       k     settings key + CSV value source (src overrides the source)
+       cap   the caption printed on the label
+       row   renders as a table row · head = the headline · boxes = tick-boxes
+     A field left unticked disappears from the label AND the CSV alike, so no
+     format can quietly disagree with another. ---- */
   const STICKER_FIELDS=[
-    ["supplier","Supplier"],["grade","Grade / Type"],["dateOfReceipt","Date of Receipt"],
-    ["grnNo","GRN / Lot No"],["invoiceNo","Invoice No (blank to fill in)"],["qty","Qty & UOM"],
-    ["thickness","Thickness (fabric)"],["gsm","GSM (fabric)"],
-    ["inspectedBy","Inspected By (blank to fill in)"],["status","Status tick-boxes"]];
-  function stickerCfg(){
-    const s=(ENG.data.settings&&ENG.data.settings.sticker)||{};
-    const fields={}; STICKER_FIELDS.forEach(([k])=>{ fields[k]=!s.fields||s.fields[k]!==false; });
-    return { w:+s.w>0?+s.w:100, h:+s.h>0?+s.h:150, fields };
+    {k:"product",      label:"Product",            cap:"PRODUCT",               csv:"Product",       head:true},
+    {k:"supplier",     label:"Supplier",           cap:"SUPPLIER",              csv:"SupplierName",  row:true},
+    {k:"grade",        label:"Grade / Type",       cap:"GRADE/TYPE",            csv:"GradeType",     row:true},
+    {k:"dateOfReceipt",label:"Date of Receipt",    cap:"DATE OF RECEIPT",       csv:"DateOfReceipt", row:true},
+    {k:"grnNo",        label:"GRN / Lot No",       cap:"GRN/LOT NO",            csv:"GRNLotNo",      row:true},
+    {k:"invoiceNo",    label:"Invoice No",         cap:"INVOICE NO",            csv:"InvoiceNo",     row:true},
+    {k:"qty",          label:"Qty & UOM",          cap:"QTY & UOM",             csv:"QtyAndUom",     row:true, src:"qtyUom"},
+    {k:"thickness",    label:"Thickness (fabric)", cap:"THICKNESS (if fabric)", csv:"Thickness",     row:true},
+    {k:"gsm",          label:"GSM (fabric)",       cap:"GSM (if fabric)",       csv:"GSM",           row:true},
+    {k:"inspectedBy",  label:"Inspected By",       cap:"INSPECTED BY",          csv:"InspectedBy",   row:true},
+    {k:"status",       label:"Status tick-boxes",  cap:"STATUS",                csv:"Status",        boxes:true},
+  ];
+
+  /* Sheet sizes the layout step offers — the standard papers plus a custom
+     size. There is deliberately NO preset label here: the label is whatever
+     the operator's own sheet, margins and grid leave, or whatever size they
+     type. Feeding a label roll just means entering the roll as a custom
+     sheet and using a single row and column. */
+  const PAGE_SIZES=[
+    {v:"A3",    l:"A3 — 297 × 420 mm",     w:297,   h:420},
+    {v:"A4",    l:"A4 — 210 × 297 mm",     w:210,   h:297},
+    {v:"A5",    l:"A5 — 148 × 210 mm",     w:148,   h:210},
+    {v:"A6",    l:"A6 — 105 × 148 mm",     w:105,   h:148},
+    {v:"Letter",l:"Letter — 216 × 279 mm", w:215.9, h:279.4},
+    {v:"Legal", l:"Legal — 216 × 356 mm",  w:215.9, h:355.6},
+    {v:"custom",l:"Custom size…",          w:0,     h:0},
+  ];
+
+  /* The whole print definition — fields, page, margins, grid, label size and
+     gaps — saved in settings so every browser prints the same label. Legacy
+     configs stored only the roll size as w/h; those still open correctly. */
+  /* Fields the operator invented in the dialog, stored beside the built-ins so
+     a label can carry anything this list never thought of. Kept to a sane
+     count and a strict key shape — the key becomes a settings key and a CSV
+     column name, so it cannot be arbitrary text. */
+  function customFields(s){
+    return (Array.isArray(s&&s.custom)?s.custom:[]).slice(0,40)
+      .map(c=>({ k:String((c&&c.k)||""), label:String((c&&c.label)||"").slice(0,44) }))
+      .filter(c=>/^cx[A-Za-z0-9]{1,20}$/.test(c.k)&&c.label)
+      .map(c=>({ k:c.k, label:c.label, cap:c.label.toUpperCase(), csv:c.k, row:true, custom:true }));
+  }
+  /* Every field the picker can offer = the built-ins plus the invented ones. */
+  function fieldDefs(cfg){ return STICKER_FIELDS.concat((cfg&&cfg.custom)||[]); }
+  /* The fields actually ADDED to the label, in the order they print. */
+  function addedDefs(cfg){
+    const all=fieldDefs(cfg);
+    return (cfg.order||[]).map(k=>all.find(f=>f.k===k)).filter(Boolean);
   }
 
-  /* The BarTender bridge: the same sticker rows as a CSV the .btw label
-     template binds to as its data source. Columns mirror the template's
-     fields; INVOICE NO / INSPECTED BY / STATUS ship empty so the operator
-     completes them in BarTender's data-entry form at print time. */
-  function stickerCsv(po){
-    const rows=stickerData(po);
+  function stickerCfg(){
+    const s=(ENG.data.settings&&ENG.data.settings.sticker)||{};
+    const custom=customFields(s);
+    const all=STICKER_FIELDS.concat(custom);
+    /* `order` is the source of truth for what prints, and in what sequence.
+       A config saved before the picker existed has none, so it falls back to
+       whatever the old tick-map had on — the previous all-on behaviour. */
+    let order=Array.isArray(s.order)?s.order.map(String).filter(k=>all.some(f=>f.k===k)):null;
+    if(!order||!order.length) order=all.filter(f=>!s.fields||s.fields[f.k]!==false).map(f=>f.k);
+    order=order.filter((k,i)=>order.indexOf(k)===i);
+    // kept in step with `order` so the BarTender CSV still reads one flag per field
+    const fields={}; all.forEach(f=>{ fields[f.k]=order.indexOf(f.k)>=0; });
+    /* dim() accepts 0 — a zero margin or gap is a real choice, unlike a zero
+       page or label size, which pick() rejects in favour of the default. */
+    const dim=(v,d,lo,hi)=>{ v=+v; return isNaN(v)?d:Math.min(hi,Math.max(lo,v)); };
+    const pick=(v,d,lo,hi)=>{ v=+v; return isNaN(v)||v<=0?d:Math.min(hi,Math.max(lo,v)); };
+    const int=(v,d,lo,hi)=>{ v=Math.round(+v); return isNaN(v)?d:Math.min(hi,Math.max(lo,v)); };
+    const txt=(v,d,max)=>{ v=(v==null?d:String(v)); return v.slice(0,max); };
+    return {
+      fields, order, custom,
+      /* The heading is no longer welded to "RAW MATERIAL" — it is text like
+         any other, and the type scale accounts for however long it runs. */
+      title: txt(s.title,"RAW MATERIAL",120),
+      para:  txt(s.para,"",1200),           // free paragraph printed under the fields
+      layout: s.layout==="plain"?"plain":"table",
+      copies: int(s.copies,1,1,500),
+      page: PAGE_SIZES.some(p=>p.v===s.page)?s.page:"A4",
+      pageW: pick(s.pageW,210,20,1000), pageH: pick(s.pageH,297,20,1000),
+      landscape: !!s.landscape,
+      unit: s.unit==="cm"?"cm":"mm",
+      mTop: dim(s.mTop,10,0,200),  mBottom: dim(s.mBottom,10,0,200),
+      mLeft: dim(s.mLeft,8,0,200), mRight: dim(s.mRight,8,0,200),
+      rows: int(s.rows,2,1,50),    cols: int(s.cols,2,1,20),
+      /* No preset label size: 0 means "never set", and the layout decides.
+         The legacy roll w/h is deliberately NOT read across — it would put
+         a 100 × 150 default back on labels nobody asked for. */
+      autoSize: s.autoSize!==false,
+      labelW: dim(s.labelW,0,0,1000), labelH: dim(s.labelH,0,0,1000),
+      gapX: dim(s.gapX,3,0,100),   gapY: dim(s.gapY,3,0,100),
+    };
+  }
+
+  /* Page in mm after the orientation swap. */
+  function pageMM(cfg){
+    const p=PAGE_SIZES.find(x=>x.v===cfg.page)||PAGE_SIZES[1];
+    const w=p.v==="custom"?cfg.pageW:p.w, hh=p.v==="custom"?cfg.pageH:p.h;
+    return cfg.landscape?{w:hh,h:w}:{w:w,h:hh};
+  }
+
+  /* Everything the layout step, the diagram and the printer need to agree on.
+     With auto-size on, the label is whatever is left once the margins and the
+     gaps are taken out of the page — so it always fits by construction; with
+     it off the operator's own size is used and `fits` reports the truth. */
+  function stickerGeom(cfg){
+    const pg=pageMM(cfg);
+    const innerW=pg.w-cfg.mLeft-cfg.mRight, innerH=pg.h-cfg.mTop-cfg.mBottom;
+    let lw=cfg.labelW, lh=cfg.labelH;
+    /* An unset size (0) falls back to the layout too, so a config that has
+       never had a label size typed into it still has one to print. */
+    if(cfg.autoSize||!(lw>0)||!(lh>0)){
+      lw=(innerW-(cfg.cols-1)*cfg.gapX)/cfg.cols;
+      lh=(innerH-(cfg.rows-1)*cfg.gapY)/cfg.rows;
+    }
+    lw=Math.round(lw*10)/10; lh=Math.round(lh*10)/10;
+    const needW=cfg.cols*lw+(cfg.cols-1)*cfg.gapX, needH=cfg.rows*lh+(cfg.rows-1)*cfg.gapY;
+    const EPS=0.15;                       // a rounded 0.1mm must not read as overflow
+    return { pgW:pg.w, pgH:pg.h, innerW, innerH, labelW:lw, labelH:lh, needW, needH,
+      overW:needW-innerW, overH:needH-innerH,
+      fitsW: lw>=5 && needW<=innerW+EPS, fitsH: lh>=5 && needH<=innerH+EPS,
+      fits: lw>=5 && lh>=5 && needW<=innerW+EPS && needH<=innerH+EPS,
+      perPage: Math.max(1,cfg.rows*cfg.cols) };
+  }
+
+  /* ---- How one label is composed at the chosen size -------------------
+     THE LOGO RULE, exactly as specified: a label at least 100 mm wide AND at
+     least 50 mm tall carries the full Chhaperia wordmark across the top. Below
+     either of those, the wordmark is dropped. The centred mark stays in both
+     cases as a watermark at 10% visibility — that never changes, only the
+     wordmark comes and goes.
+
+     Type then scales to whatever room is left: the 100 × 150 mm label is the
+     reference design (k = 1) and k shrinks until the ticked rows fit the
+     label's height, so untick a field and everything else prints bigger. */
+  const STICKER_BIG_W=100, STICKER_BIG_H=50;
+  function labelMetrics(cfg,geom,list){
+    const lw=geom.labelW, lh=geom.labelH;
+    const big=lw>=STICKER_BIG_W&&lh>=STICKER_BIG_H;
+    const added=addedDefs(cfg);
+    const rows=added.filter(x=>x.row);
+    const head=added.some(x=>x.head), status=added.some(x=>x.boxes);
+    const plain=cfg.layout==="plain";
+    const padY=Math.max(1.2,lh*.035), padX=Math.max(1.2,lw*.045);
+    const avail=lh-2*padY, inner=Math.max(lw-2*padX,1);
+
+    /* The longest text that will actually print, across EVERY label in the
+       run — one label's long product name must not overflow a size chosen
+       from a shorter one, since all of them share the one stylesheet. */
+    const all=(list&&list.length)?list:[{}];
+
+    /* Lines a string occupies at a given width — counting BOTH the newlines
+       the operator typed (every value box is multi-line now) and the wraps a
+       long line makes on its own. Times New Roman averages about 0.48 em per
+       character, which is close enough to choose a type size by. */
+    const linesOf=(t,wMM,fontMM)=>String(t==null?"":t).split("\n")
+      .reduce((n,seg)=>n+Math.max(1,Math.ceil(seg.length*fontMM*.48/Math.max(wMM,.1))),0);
+    const worst=(pick,wMM,fontMM)=>all.reduce((n,v)=>Math.max(n,linesOf(pick(v),wMM,fontMM)),1);
+
+    /* How tall the composition stands at scale k. Assuming one line per row is
+       what used to push the status boxes off a small label and let
+       overflow:hidden quietly cut them away. */
+    function needAt(k){
+      const font=3*k, cellPad=plain?1.4*k:3.8*k;
+      const capW=inner*.47-cellPad, valW=inner*.53-cellPad;
+      const rowExtra=plain?(1.6*k):(3*k+0.3*k);           // padding (+ border in table mode)
+      let hgt=(big?16.2*k:0);
+      if(cfg.title) hgt+=linesOf(cfg.title,inner,4.6*k)*4.6*k*1.35+3.2*k;
+      if(head) hgt+=worst(v=>"PRODUCT: "+(v.product||""),inner,3.8*k)*3.8*k*1.35+4.2*k;
+      rows.forEach(x=>{
+        hgt+=Math.max(linesOf(x.cap,capW,font),worst(v=>v[x.k],valW,font))*font*1.35+rowExtra;
+      });
+      if(status) hgt+=3*font*1.45+rowExtra;
+      if(cfg.para) hgt+=linesOf(cfg.para,inner,2.7*k)*2.7*k*1.35+3*k;
+      return hgt;
+    }
+    /* The largest scale that still fits. needAt() only steps upward with k, so
+       a bisection lands on it; the width cap keeps long type off the edges.
+       It aims at 94% of the height rather than 100%: the estimate carries a
+       few percent of error, and erring high CLIPS the label — overflow is
+       hidden, so a status box simply disappears. Erring low costs nothing,
+       because the table then flex-grows into whatever slack is left. */
+    const fitH=avail*.94;
+    let k=Math.min(2.5,Math.max(lw/STICKER_BIG_W,.18));
+    if(needAt(k)>fitH){
+      let lo=.12, hi=k;
+      for(let i=0;i<26;i++){ const mid=(lo+hi)/2; if(needAt(mid)<=fitH) lo=mid; else hi=mid; }
+      k=Math.max(.12,lo);
+    }
+    return {big,rows,head,status,plain,padY,padX,k};
+  }
+
+  const STICKER_STATUS_PLAIN=`<div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>`
+    +`<div>[&nbsp;&nbsp;&nbsp;&nbsp;] APPROVED</div>`
+    +`<div>[&nbsp;&nbsp;&nbsp;&nbsp;] REJECTED</div>`;
+  const STICKER_STATUS_TR=`<tr><th>STATUS</th><td class="st">${STICKER_STATUS_PLAIN}</td></tr>`;
+
+  /* Sizes are in mm, not px: a millimetre means the same thing to the printer
+     as it does on screen, so the preview and the sheet cannot drift apart. */
+  function labelCss(geom,m){
+    const u=(n)=>(n*m.k).toFixed(2)+"mm";
+    return `
+  .lb{position:relative;width:${geom.labelW}mm;height:${geom.labelH}mm;overflow:hidden;background:#fff;
+    font:${u(3.2)}/1.35 "Times New Roman",Georgia,serif;color:#000}
+  .lb .wm{position:absolute;z-index:0;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:62%;opacity:.10;pointer-events:none}
+  .lb .in{position:relative;z-index:1;height:100%;box-sizing:border-box;
+    padding:${m.padY.toFixed(2)}mm ${m.padX.toFixed(2)}mm;display:flex;flex-direction:column}
+  .lb .lg{text-align:center;margin-bottom:${u(3.2)}}
+  .lb .lg img{height:${u(13)};max-width:92%;object-fit:contain}
+  .lb .ttl{text-align:center;font-size:${u(4.6)};font-weight:700;letter-spacing:.02em;margin-bottom:${u(3.2)}}
+  .lb .prod{font-size:${u(3.8)};font-weight:700;margin:0 0 ${u(4.2)};white-space:pre-wrap}
+  /* flex:1 hands the field block whatever height the header did not use, and
+     the rows share it out — so the fields fill the label instead of stranding
+     a band of blank paper under the last row. */
+  .lb table{width:100%;border-collapse:collapse;table-layout:fixed;flex:1 1 auto}
+  .lb th,.lb td{border:${Math.max(.15,.25*m.k).toFixed(2)}mm solid #000;padding:${u(1.5)} ${u(1.9)};
+    font-size:${u(3.0)};font-weight:400;text-align:left;vertical-align:middle;
+    overflow-wrap:anywhere;white-space:pre-wrap}
+  .lb th{width:47%}
+  .lb td{font-weight:700}
+  .lb td.st{font-weight:400;line-height:1.45;white-space:nowrap}
+  /* Non-table layout: the SAME two columns and the same alignment, with the
+     rules simply not drawn. */
+  .lb .pl{flex:1 1 auto;display:flex;flex-direction:column;justify-content:space-between}
+  .lb .pr{display:flex;align-items:baseline;gap:${u(1.4)};padding:${u(.8)} 0}
+  .lb .pk{width:47%;flex:0 0 47%;font-size:${u(3.0)};font-weight:400}
+  .lb .pv{flex:1 1 auto;font-size:${u(3.0)};font-weight:700;
+    overflow-wrap:anywhere;white-space:pre-wrap}
+  .lb .pv.st{font-weight:400;line-height:1.45;white-space:nowrap}
+  /* the free paragraph, set smaller than the fields so it reads as a note */
+  .lb .para{margin-top:${u(3)};font-size:${u(2.7)};line-height:1.35;
+    white-space:pre-wrap;overflow-wrap:anywhere;flex:0 0 auto}
+  /* an unknown field prints as clear space the store writes on by hand */
+  .lb .wr{display:block;height:${u(3.0)}}`;
+  }
+
+  function labelHtml(v,cfg,m){
+    /* logo-full is the dark-background lockup — its lettering is pure white and
+       would print invisibly here, so the label uses the print-safe twin with
+       that same artwork darkened. */
+    const logo=location.origin+"/assets/logo-full-print.png";
+    const mark=location.origin+"/assets/mark.png";
+    const BLANK='<span class="wr"></span>';
+    const cell=(x)=>x?esc(x):BLANK;
+    const body=m.plain
+      ? `<div class="pl">${m.rows.map(x=>
+          `<div class="pr"><span class="pk">${esc(x.cap)}</span><span class="pv">${cell(v[x.k])}</span></div>`).join("")}${
+          m.status?`<div class="pr"><span class="pk">STATUS</span><span class="pv st">${STICKER_STATUS_PLAIN}</span></div>`:""}</div>`
+      : `<table><tbody>${m.rows.map(x=>
+          `<tr><th>${esc(x.cap)}</th><td>${cell(v[x.k])}</td></tr>`).join("")}${
+          m.status?STICKER_STATUS_TR:""}</tbody></table>`;
+    return `<div class="lb"><img class="wm" src="${mark}" alt="">
+      <div class="in">
+        ${m.big?`<div class="lg"><img src="${logo}" alt="Chhaperia"></div>`:""}
+        ${cfg.title?`<div class="ttl">${esc(cfg.title)}</div>`:""}
+        ${m.head?`<div class="prod">PRODUCT: <b>${cell(v.product)}</b></div>`:""}
+        ${body}
+        ${cfg.para?`<div class="para">${esc(cfg.para)}</div>`:""}
+      </div></div>`;
+  }
+
+  /* THE one document behind both the preview and the printer, so what the
+     operator approves in step 3 is byte-for-byte what comes out of the tray.
+     opts.print  adds the auto-print script (the browser's printer dialog)
+     opts.onlyPage renders a single page — the preview pane's pager */
+  /* Each label repeated `copies` times, kept together so the two stickers for
+     one drum come off the sheet side by side rather than a sheet apart. */
+  function expandCopies(cfg,list){
+    const n=Math.max(1,Math.min(500,+cfg.copies||1));
+    if(n===1) return list.slice();
+    const out=[];
+    list.forEach(v=>{ for(let i=0;i<n;i++) out.push(v); });
+    return out;
+  }
+
+  function labelSheetHtml(po,cfg,rawList,opts){
+    opts=opts||{};
+    const list=expandCopies(cfg,rawList);
+    const geom=stickerGeom(cfg), m=labelMetrics(cfg,geom,list);
+    const chunks=[];
+    for(let i=0;i<list.length;i+=geom.perPage) chunks.push(list.slice(i,i+geom.perPage));
+    if(!chunks.length) chunks.push([]);
+    const use=opts.onlyPage!=null?[chunks[Math.min(opts.onlyPage,chunks.length-1)]||[]]:chunks;
+    const pages=use.map(c=>`<div class="pg">${c.map(v=>labelHtml(v,cfg,m)).join("")}</div>`).join("");
+    return `<!doctype html><html><head><meta charset="utf-8">
+<title>Raw Material Labels — ${esc(po.id)}</title>
+<style>
+  /* Declare the sheet size or the browser falls back to its own default
+     (US Letter), which clips the last column off every page. */
+  @page{size:${geom.pgW}mm ${geom.pgH}mm;margin:0}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html,body{background:#fff}
+  .pg{width:${geom.pgW}mm;height:${geom.pgH}mm;overflow:hidden;background:#fff;
+    padding:${cfg.mTop}mm ${cfg.mRight}mm ${cfg.mBottom}mm ${cfg.mLeft}mm;
+    display:grid;grid-template-columns:repeat(${cfg.cols},${geom.labelW}mm);
+    grid-auto-rows:${geom.labelH}mm;column-gap:${cfg.gapX}mm;row-gap:${cfg.gapY}mm;
+    align-content:start;justify-content:start;
+    page-break-after:always;break-after:page}
+  .pg:last-child{page-break-after:auto;break-after:auto}
+  ${labelCss(geom,m)}
+</style></head>
+<body>${pages}${opts.print?`
+<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>`:""}
+</body></html>`;
+  }
+
+  /* One label on its own, for the design half of the preview. The whole run
+     is still passed in, so this previews at the SAME scale the sheet prints
+     at rather than at one sized to this label's own text. */
+  function labelOneHtml(cfg,v,list){
+    const geom=stickerGeom(cfg), m=labelMetrics(cfg,geom,list||[v]);
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html,body{background:#fff}
+  ${labelCss(geom,m)}
+</style></head><body>${labelHtml(v,cfg,m)}</body></html>`;
+  }
+
+  function printLabels(po,cfg,list){
+    const w=window.open("","_blank");
+    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+    w.document.write(labelSheetHtml(po,cfg,list,{print:true})); w.document.close();
+  }
+
+  /* One editable value bag per ordered line, keyed the way STICKER_FIELDS is.
+     What the PO knows arrives filled in; what it cannot know (the supplier's
+     own invoice number, the inspector) arrives empty for the operator to type
+     in the dialog — those used to print as a blank nobody could fill here. */
+  function stickerValues(po,cfg){
+    const defs=cfg?fieldDefs(cfg):STICKER_FIELDS;
+    return stickerData(po).map(r=>{
+      const v={};
+      // an invented field has no source on the order, so it starts empty
+      defs.forEach(f=>{ if(!f.boxes) v[f.k]=r[f.src||f.k]||""; });
+      return v;
+    });
+  }
+
+  /* The BarTender bridge: the same label rows as a CSV the .btw template
+     binds to as its data source. Columns come off STICKER_FIELDS, so adding a
+     field adds its column here too; an unticked field ships empty rather than
+     vanishing, so an existing .btw keeps finding every column it expects. */
+  function stickerCsv(po,list){
+    const rows=list||stickerValues(po);
     if(!rows.length) return null;
-    const f=stickerCfg().fields;
+    const cfg=stickerCfg(), f=cfg.fields;
+    /* Built-in columns always ship, in their fixed order, so an existing .btw
+       keeps finding every column it was designed against; invented fields are
+       appended after them. An unticked field ships empty rather than vanishing. */
+    const cols=STICKER_FIELDS.concat(cfg.custom||[]);
     const q=(v)=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
     // UTF-8 BOM, so Excel and BarTender read g/m² correctly
     return "﻿"+[
-      ["PONo","Product","SupplierName","GradeType","DateOfReceipt","GRNLotNo","InvoiceNo","QtyAndUom","Thickness","GSM","InspectedBy","Status"].map(q).join(","),
-      ...rows.map(r=>[po.id,r.product,f.supplier?r.supplier:"",f.grade?r.grade:"",f.dateOfReceipt?r.dateOfReceipt:"",
-        f.grnNo?r.grnNo:"","",f.qty?r.qtyUom:"",f.thickness?r.thickness:"",f.gsm?r.gsm:"","",""].map(q).join(",")),
+      ["PONo"].concat(cols.map(x=>x.csv)).map(q).join(","),
+      ...rows.map(v=>[po.id].concat(cols.map(x=>
+        (x.boxes||!f[x.k])?"":(v[x.k]||""))).map(q).join(",")),
     ].join("\r\n");
   }
 
@@ -1382,160 +2161,9 @@
       toast(r.message+" The file was also downloaded here.",{type:"warn",title:"BarTender not started"});
     }catch(e){
       U.downloadCSV(`${po.id}-stickers.csv`,csv);
-      toast((e.message||"The server could not hand off to BarTender.")+" The sticker file was downloaded instead.",
+      toast((e.message||"The server could not hand off to BarTender.")+" The label file was downloaded instead.",
         {type:"warn",title:"BarTender"});
     }
-  }
-
-  /* One sticker's field rows, driven by the saved field choices — shared by
-     the A4 sheet and the roll label so the two can never disagree. The
-     supplier's own invoice arrives with the goods, never with the order, so
-     INVOICE NO (like INSPECTED BY) always prints as clear space to fill in. */
-  function stickerRowsHtml(r,f,cell,BLANK){
-    return [
-      f.supplier?["SUPPLIER", cell(r.supplier)]:null,
-      f.grade?["GRADE/TYPE", cell(r.grade)]:null,
-      f.dateOfReceipt?["DATE OF RECEIPT", cell(r.dateOfReceipt)]:null,
-      f.grnNo?["GRN/LOT NO", cell(r.grnNo)]:null,
-      f.invoiceNo?["INVOICE NO", BLANK]:null,
-      f.qty?["QTY &amp; UOM", cell(r.qtyUom)]:null,
-      f.thickness?["THICKNESS (if fabric)", cell(r.thickness)]:null,
-      f.gsm?["GSM (if fabric)", cell(r.gsm)]:null,
-      f.inspectedBy?["INSPECTED BY", BLANK]:null,
-    ].filter(Boolean).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join("");
-  }
-  const STICKER_STATUS_HTML=`<tr><th>STATUS</th><td class="st">
-              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>
-              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] APPROVED</div>
-              <div>[&nbsp;&nbsp;&nbsp;&nbsp;] REJECTED</div>
-            </td></tr>`;
-
-  function printStickers(po,cfg){
-    const lines=stickerData(po);
-    if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
-    const f=(cfg||stickerCfg()).fields;
-    const logo=location.origin+"/assets/logo-invoice.png";
-    const mark=location.origin+"/assets/mark.png";
-    // an unknown field prints as clear space the store writes on by hand
-    const BLANK='<span class="wr"></span>';
-    const cell=(v)=>v?esc(v):BLANK;
-
-    const cards=lines.map((r)=>{
-      const rows=stickerRowsHtml(r,f,cell,BLANK);
-      return `<div class="stk">
-        <img class="wm" src="${mark}" alt="">
-        <div class="stk-in">
-          <div class="lg"><img src="${logo}" alt="Chhaperia"></div>
-          <div class="ttl">RAW MATERIAL</div>
-          <div class="prod">PRODUCT: <b>${esc(r.product)}</b></div>
-          <table class="fields"><tbody>${rows}
-            ${f.status?STICKER_STATUS_HTML:""}
-          </tbody></table>
-        </div>
-      </div>`;
-    }).join("");
-
-    const html=`<!doctype html><html><head><meta charset="utf-8">
-<title>Raw Material Stickers — ${esc(po.id)}</title>
-<style>
-  /* A4, four stickers to a sheet. Declare the size or the browser falls back
-     to its own default (US Letter), which clips the fourth sticker. */
-  @page{size:A4;margin:6mm}
-  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body{font:12px/1.4 "Times New Roman",Georgia,serif;color:#000;background:#fff}
-  .sheet{display:grid;grid-template-columns:repeat(2,1fr);gap:4mm}
-  .stk{position:relative;height:139mm;overflow:hidden;background:#fff;
-    /* a faint cut guide — visible enough to trim by, faint enough to ignore */
-    border:1px dashed #cfcfcf;break-inside:avoid;page-break-inside:avoid}
-  .stk-in{position:relative;z-index:1;height:100%;padding:7mm 6mm 5mm;display:flex;flex-direction:column}
-  /* the mark sits behind the fields exactly as it does on the printed template */
-  .wm{position:absolute;z-index:0;left:50%;top:56%;transform:translate(-50%,-50%);
-    width:64%;opacity:.14;pointer-events:none}
-  .lg{text-align:center;margin-bottom:3.5mm}
-  .lg img{height:13mm;object-fit:contain}
-  .ttl{text-align:center;font-size:17px;font-weight:700;letter-spacing:.3px;margin-bottom:3.5mm}
-  .prod{font-size:14px;font-weight:700;margin:0 0 5mm}
-  .prod b{font-weight:700}
-  table.fields{width:100%;border-collapse:collapse;table-layout:fixed}
-  /* padding sized so ALL TEN rows (supplier included) + the status boxes
-     fit inside the card's fixed 139mm — the height four-up cutting needs */
-  table.fields th,table.fields td{border:1px solid #000;padding:1.6mm 2mm;font-size:11.5px;
-    font-weight:400;text-align:left;vertical-align:middle;word-wrap:break-word;overflow-wrap:anywhere}
-  table.fields th{width:47%}
-  table.fields td{font-weight:700}
-  td.st{font-weight:400;line-height:1.5;white-space:nowrap}
-  /* the spacer keeps an empty row at full height without printing anything */
-  .wr{display:block;height:11px}
-</style></head>
-<body><div class="sheet">${cards}</div>
-<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
-</body></html>`;
-
-    const w=window.open("","_blank");
-    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-    w.document.write(html); w.document.close();
-  }
-
-  /* Roll labels: ONE sticker per page, the page being the label itself —
-     so any printer with the label stock loaded prints them directly and
-     BarTender is not needed. The 100×150 mm sticker is the reference
-     design; type scales with the smaller of the two ratios so a 50×75
-     label keeps the same composition instead of clipping it. */
-  function printRollStickers(po,cfg){
-    const lines=stickerData(po);
-    if(!lines.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
-    const f=cfg.fields;
-    const logo=location.origin+"/assets/logo-invoice.png";
-    const mark=location.origin+"/assets/mark.png";
-    const BLANK='<span class="wr"></span>';
-    const cell=(v)=>v?esc(v):BLANK;
-    const k=Math.max(.5,Math.min(2.5,Math.min(cfg.w/100,cfg.h/150)));
-    const px=(n)=>(n*k).toFixed(1)+"px";
-
-    const labels=lines.map((r)=>`<div class="stk">
-        <img class="wm" src="${mark}" alt="">
-        <div class="stk-in">
-          <div class="lg"><img src="${logo}" alt="Chhaperia"></div>
-          <div class="ttl">RAW MATERIAL</div>
-          <div class="prod">PRODUCT: <b>${esc(r.product)}</b></div>
-          <table class="fields"><tbody>${stickerRowsHtml(r,f,cell,BLANK)}
-            ${f.status?STICKER_STATUS_HTML:""}
-          </tbody></table>
-        </div>
-      </div>`).join("");
-
-    const html=`<!doctype html><html><head><meta charset="utf-8">
-<title>Roll Stickers ${esc(cfg.w)}×${esc(cfg.h)} mm — ${esc(po.id)}</title>
-<style>
-  @page{size:${cfg.w}mm ${cfg.h}mm;margin:0}
-  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body{font:${px(12)}/1.4 "Times New Roman",Georgia,serif;color:#000;background:#fff}
-  .stk{position:relative;width:${cfg.w}mm;height:${cfg.h}mm;overflow:hidden;background:#fff;
-    page-break-after:always;break-after:page}
-  .stk-in{position:relative;z-index:1;height:100%;padding:4.5% 4.5% 3.5%;display:flex;flex-direction:column}
-  .wm{position:absolute;z-index:0;left:50%;top:56%;transform:translate(-50%,-50%);
-    width:64%;opacity:.14;pointer-events:none}
-  .lg{text-align:center;margin-bottom:3.5%}
-  .lg img{height:${px(46)};max-width:88%;object-fit:contain}
-  .ttl{text-align:center;font-size:${px(17)};font-weight:700;letter-spacing:.3px;margin-bottom:3.5%}
-  .prod{font-size:${px(14)};font-weight:700;margin:0 0 4.5%}
-  .prod b{font-weight:700}
-  table.fields{width:100%;border-collapse:collapse;table-layout:fixed}
-  table.fields th,table.fields td{border:${Math.max(1,Math.round(k))}px solid #000;padding:${px(5.5)} ${px(5)};
-    font-size:${px(11.5)};font-weight:400;text-align:left;vertical-align:middle;word-wrap:break-word;overflow-wrap:anywhere}
-  table.fields th{width:47%}
-  table.fields td{font-weight:700}
-  td.st{font-weight:400;line-height:1.5;white-space:nowrap}
-  /* the spacer keeps an empty row at full height without printing anything */
-  .wr{display:block;height:${px(11)}}
-</style></head>
-<body>${labels}
-<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
-</body></html>`;
-
-    const w=window.open("","_blank");
-    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-    w.document.write(html); w.document.close();
   }
 
   /* ============================================================

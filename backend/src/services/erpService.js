@@ -94,6 +94,12 @@ function saveState(data) {
 
 /** Patch the UI settings document — whitelist known keys, coerce types, and
     MERGE over the stored settings so internal flags (e.g. _stageModel) survive. */
+/* Kept beside updateSettings so the two lists that must agree with the
+   frontend's STICKER_FIELDS / PAGE_SIZES are visible in one place. */
+const STICKER_FIELD_KEYS = ["product", "supplier", "grade", "dateOfReceipt", "grnNo",
+  "invoiceNo", "qty", "thickness", "gsm", "inspectedBy", "status"];
+const STICKER_PAGES = ["A3", "A4", "A5", "A6", "Letter", "Legal", "custom"];
+
 function updateSettings(doc) {
   doc = doc || {};
   if (typeof doc !== "object" || Array.isArray(doc)) throw err("Settings must be an object", 400);
@@ -102,17 +108,54 @@ function updateSettings(doc) {
   if (doc.accent != null) clean.accent = String(doc.accent).slice(0, 20);
   if ("autoAccent" in doc) clean.autoAccent = !!doc.autoAccent;
   if ("lowStockOnly" in doc) clean.lowStockOnly = !!doc.lowStockOnly;
-  /* Sticker printing config: roll-label size (mm, bounded to what a label
-     printer can hold) + which fields print. Whitelisted key by key so a bad
-     client can't stuff arbitrary JSON into the shared settings document. */
+  /* Label printing config: the whole print definition — which fields print,
+     the sheet, its margins, the grid, the label size and the gaps. Whitelisted
+     key by key so a bad client can't stuff arbitrary JSON into the shared
+     settings document. ADDING A LABEL FIELD means adding its key to
+     STICKER_FIELD_KEYS below AND to STICKER_FIELDS in frontend/js/mod-trade.js;
+     a key missing here is silently dropped on save. w/h are the pre-layout
+     roll size, still accepted so an older saved config keeps working. */
   if (doc.sticker != null && typeof doc.sticker === "object" && !Array.isArray(doc.sticker)) {
     const s = doc.sticker;
     const mm = (v, d) => { v = +v; return isNaN(v) || v <= 0 ? d : Math.min(300, Math.max(25, v)); };
+    // a margin or gap of 0 is a real choice, so dim() accepts it; pick() won't
+    const dim = (v, d, lo, hi) => { v = +v; return isNaN(v) ? d : Math.min(hi, Math.max(lo, v)); };
+    const pick = (v, d, lo, hi) => { v = +v; return isNaN(v) || v <= 0 ? d : Math.min(hi, Math.max(lo, v)); };
+    const int = (v, d, lo, hi) => { v = Math.round(+v); return isNaN(v) ? d : Math.min(hi, Math.max(lo, v)); };
+    /* Fields the operator invented in the dialog. The key becomes a settings
+       key AND a CSV column name, so it is held to a strict shape rather than
+       trusted; anything else is dropped. */
+    const custom = (Array.isArray(s.custom) ? s.custom : []).slice(0, 40)
+      .map((c) => ({ k: String((c && c.k) || ""), label: String((c && c.label) || "").slice(0, 44) }))
+      .filter((c) => /^cx[A-Za-z0-9]{1,20}$/.test(c.k) && c.label);
+    const keys = STICKER_FIELD_KEYS.concat(custom.map((c) => c.k));
     const fields = {};
-    ["supplier", "grade", "dateOfReceipt", "grnNo", "invoiceNo", "qty",
-      "thickness", "gsm", "inspectedBy", "status"]
-      .forEach((k) => { fields[k] = !s.fields || s.fields[k] !== false; });
-    clean.sticker = { w: mm(s.w, 100), h: mm(s.h, 150), fields };
+    keys.forEach((k) => { fields[k] = !s.fields || s.fields[k] !== false; });
+    /* `order` is what actually prints, and in what sequence — unknown keys and
+       repeats are stripped so a bad client can't grow it without bound. */
+    const order = (Array.isArray(s.order) ? s.order : []).map(String)
+      .filter((k, i, a) => keys.indexOf(k) >= 0 && a.indexOf(k) === i);
+    const txt = (v, d, max) => (v == null ? d : String(v)).slice(0, max);
+    clean.sticker = {
+      w: mm(s.w, 100), h: mm(s.h, 150), fields, custom,
+      // an empty order means "never picked" — the client falls back to the ticks
+      order: order.length ? order : undefined,
+      title: txt(s.title, "RAW MATERIAL", 120),
+      para: txt(s.para, "", 1200),
+      layout: s.layout === "plain" ? "plain" : "table",
+      copies: int(s.copies, 1, 1, 500),
+      page: STICKER_PAGES.includes(s.page) ? s.page : "A4",
+      pageW: pick(s.pageW, 210, 20, 1000), pageH: pick(s.pageH, 297, 20, 1000),
+      landscape: !!s.landscape,
+      unit: s.unit === "cm" ? "cm" : "mm",
+      mTop: dim(s.mTop, 10, 0, 200), mBottom: dim(s.mBottom, 10, 0, 200),
+      mLeft: dim(s.mLeft, 8, 0, 200), mRight: dim(s.mRight, 8, 0, 200),
+      rows: int(s.rows, 2, 1, 50), cols: int(s.cols, 2, 1, 20),
+      autoSize: s.autoSize !== false,
+      // 0 = no label size has ever been set; the layout decides it instead
+      labelW: dim(s.labelW, 0, 0, 1000), labelH: dim(s.labelH, 0, 0, 1000),
+      gapX: dim(s.gapX, 3, 0, 100), gapY: dim(s.gapY, 3, 0, 100),
+    };
   }
   return repo.updateSettings(clean);
 }

@@ -359,8 +359,25 @@
 
     /* re-render the CURRENT module so newly added/removed data shows
        instantly — no manual page refresh needed after a save. */
+    /* Re-render the current module WITHOUT moving the operator.
+       go() rebuilds #view from scratch, which drops the scroll position back
+       to the top — so a background poll, or a save made while a dialog was
+       open (printing labels, filing a lab report), used to yank the page back
+       to where it started. Anything that refreshes in place restores the
+       scroll, so you stay exactly where you were. A deliberate navigation
+       still starts at the top, because that is a different page. */
     refreshView(){
-      if(this.current && M[this.current]) this.go(this.current, this.params);
+      if(!(this.current && M[this.current])) return;
+      const view=$("#view");
+      const top=view?view.scrollTop:0;
+      const prev=view?view.style.scrollBehavior:"";
+      if(view) view.style.scrollBehavior="auto";   // smooth scrolling would animate the restore
+      this.go(this.current, this.params);
+      if(!view) return;
+      const put=()=>{ if(view.scrollTop!==top) view.scrollTop=top; };
+      put();
+      // again after layout settles, so late content (charts, images) can't shift it
+      requestAnimationFrame(()=>{ put(); view.style.scrollBehavior=prev; });
     },
 
     /* ---- theme/accent ---- */
