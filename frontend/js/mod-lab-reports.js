@@ -116,6 +116,11 @@
       ]));
     }
 
+    /* Incoming-material testing is NOT shown here. It lives in Procurement,
+       against the goods receipt that brought the material in — that is where the
+       delivery, the supplier and the receipt document already are, and a second
+       worklist on this page only split the same job across two screens. This
+       page is the finished-goods certificates and nothing else. */
     if (VIEW === "reports") renderReports(root, labOnly); else renderProducts(root);
 
     if (params && params.openNew) { params.openNew = false; if (!labOnly && VIEW === "products") productForm(); }

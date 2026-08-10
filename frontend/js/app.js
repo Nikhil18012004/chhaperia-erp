@@ -449,7 +449,12 @@
             if(a.kind==="stock") this.go("inventory");
             else if(a.kind==="po") this.go("purchase");
             else if(a.kind==="so") this.go("sales");
-            else if(a.kind==="lead") this.go("crm"); }},[
+            else if(a.kind==="lead") this.go("crm");
+            /* A failed lot needs a decision, not a page: land on Procurement and
+               open the queue itself, so the ruling is one click from the alert. */
+            else if(a.kind==="qcDecision"){ this.go("purchase");
+              const q=(window._erpUtil||{}).qcDecisionQueue;
+              if(q) setTimeout(q,60); } }},[
             h("div",{class:"alert-ic",style:st,text:a.ic}),
             h("div",{style:"flex:1;min-width:0"},[ h("div",{class:"t",text:a.title}), h("div",{class:"d",text:a.desc}) ])
           ]));

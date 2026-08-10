@@ -17,6 +17,7 @@ const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const LAB = require("./labService");
+const GT = require("./grnTestService");
 const { getLineForItem } = require("./routing");
 const BC = require("../../../frontend/js/bomcalc");
 
@@ -143,7 +144,7 @@ function advance(user, woId, action, opts) {
       const runQ = wo.runQty != null ? wo.runQty : wo.qty;
       const plan = S.computeStagePlan(wo.itemId, runQ, data, wo.materialChoices, wo.plan);
       if (plan && plan[stage.key]) {
-        const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements);
+        const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements, GT.heldWarehouseIds(data));
         if (moves.length) repo.addMovements(moves);
       }
       stage.posted = true;
@@ -265,7 +266,7 @@ function resumeWorkOrder(user, id, body) {
   if (stagePlan) {
     (wo.route || []).forEach((r) => {
       if (!stagePlan[r.key]) return;
-      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements)
+      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements, GT.heldWarehouseIds(data))
         .forEach((m) => moves.push(m));
     });
   }
@@ -408,8 +409,7 @@ function assertMaterialsAvailable(data, item, qty, materialChoices) {
   const bom = (data.boms || {})[item.id];
   if (!bom) return;
   if (S.productOwner(item.id, data)) return;        // made in-house → route, don't block
-  const onHand = {};
-  (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
+  const onHand = onHandMap(data);                   // quarantined lots excluded
   const need = {};
   BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}).forEach(([rid, per]) => {
     need[rid] = (need[rid] || 0) + (per * qty) / (bom.yield || 1);
@@ -457,9 +457,26 @@ function perUnitNeed(data, item, materialChoices) {
   return per;
 }
 
+/* ---- QUARANTINED STOCK IS NOT AVAILABLE STOCK ----------------------------
+   A lot that failed its incoming test and had the rejection approved is
+   transferred into the quarantine store (grnTestService.decideTest). It is
+   still on the books — it has not been written off, and somebody has to
+   decide whether it goes back to the supplier — but production must not be
+   able to draw it. Every availability figure therefore skips those stores:
+   what a job can be made from, what the store is short of, and which store an
+   issue is posted against. Held stock that still counted as available would
+   let a work order be raised on material nobody is allowed to touch, and then
+   fail at the machine. */
+function heldWhSet(data) {
+  return new Set(GT.heldWarehouseIds(data));
+}
 function onHandMap(data) {
+  const held = heldWhSet(data);
   const onHand = {};
-  (data.movements || []).forEach((mv) => { onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0); });
+  (data.movements || []).forEach((mv) => {
+    if (mv.wh && held.has(mv.wh)) return;
+    onHand[mv.itemId] = (onHand[mv.itemId] || 0) + (+mv.qty || 0);
+  });
   return onHand;
 }
 
@@ -744,7 +761,7 @@ function createWorkOrder(user, body) {
   if (stagePlan) {
     (wo.route || []).forEach((r) => {
       if (!stagePlan[r.key]) return;
-      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements)
+      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements, GT.heldWarehouseIds(data))
         .forEach((m) => moves.push(m));
     });
   }
@@ -1196,5 +1213,8 @@ function createAdhocProduction(user, body) {
 
 module.exports = { advance, advanceAll, createWorkOrder, updateWorkOrder, produceFinished, recordExcessMaterial,
   previewWorkOrder, resumeWorkOrder, maxMakeable, shortageFor,
+  // exported so the quarantine rule can be asserted directly: stock sitting in
+  // a held store must not appear in what a job may be made from
+  onHandMap,
   labSheet, recordLabReading, finishedStockLabSheet,
   updateWorkOrderStatus, returnStock, createAdhocProduction, setWipStore, ACTIONS };

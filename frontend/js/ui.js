@@ -302,8 +302,13 @@
     // sits under CRM because that is who books appointments, but the grid
     // itself spans procurement, sales, production and HR
     {id:"calendar", icon:"📅", label:"Calendar", accent:"violet", pillKey:"calToday"},
-    {sec:"Trade"},
-    {id:"purchase", icon:"🛒", label:"Procurement", accent:"blue", pillKey:"openPO"},
+    /* Procurement is open to the lab incharge (labOk) but NOT writable by them
+       (no labWrite): they go there to test what a goods receipt brought in, so
+       they read the orders and the receipts and file readings — they never
+       raise, edit or receive an order. The GRN test button is the one action
+       exempted from the read-only rule, in mod-trade. */
+    {sec:"Trade", labOk:true},
+    {id:"purchase", icon:"🛒", label:"Procurement", accent:"blue", pillKey:"openPO", labOk:true},
     {id:"sales", icon:"🧾", label:"Sales Orders", accent:"orange", pillKey:"openSO"},
     {id:"suppliers", icon:"🏭", label:"Suppliers", accent:"violet"},
     {id:"customers", icon:"🤝", label:"Customers", accent:"pink"},

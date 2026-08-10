@@ -16,6 +16,7 @@ const authService = require("./services/authService");
 const erpService = require("./services/erpService");
 const hrService = require("./services/hrService");
 const labService = require("./services/labService");
+const grnTestService = require("./services/grnTestService");
 const { closeDb } = require("./db/connection");
 
 const PORT = process.env.PORT || 4000;
@@ -139,6 +140,13 @@ const server = app.listen(PORT, () => {
   // seed the lab-reports product master (finished-goods list) on first run
   try { const lp = labService.ensureLab(); if (lp.changed) console.log("  ├─ Lab      : seeded " + lp.products + " lab products"); }
   catch (e) { console.error("[lab seed]", e.message); }
+
+  /* Give every purchasable material a real incoming-test parameter list, worked
+     out from what the material is (grnTestService.classify). Non-destructive —
+     a material somebody has already configured is skipped — so it can run on
+     every boot and simply covers anything newly added. */
+  try { const qc = grnTestService.ensureItemQc(); if (qc.changed) console.log("  ├─ Incoming : QC parameters set on " + qc.changed + " of " + qc.items + " materials"); }
+  catch (e) { console.error("[incoming qc seed]", e.message); }
 
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);

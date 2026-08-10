@@ -511,21 +511,31 @@ function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (
    This is the ONE rule: the issue posts against it, and the job sheets that
    tell the office and the floor where to fetch a material read it too, so
    what a work order says is exactly what the stock ledger will do. */
-function issuingWarehouse(rid, itemsById, movements) {
+/* `held` names the stores an issue may NOT be posted against — today the
+   quarantine store, holding lots that failed their incoming test and had the
+   rejection approved (grnTestService.decideTest). Such a lot is still on the
+   books but is not available to production, so it must never be picked as the
+   store to draw from: without this the biggest pile of a material could be the
+   quarantined one, and the job would be issued straight out of it. */
+function issuingWarehouse(rid, itemsById, movements, held) {
   if (!rid) return null;
   const it = (itemsById || {})[rid] || {};
   if (it.cat === "WIP" || /^WIP-/.test(String(rid))) return "WH-WIP";
+  const block = held instanceof Set ? held : new Set(held || []);
   const byWh = {};
-  (movements || []).forEach((m) => { if (m.itemId === rid && m.wh) byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0); });
+  (movements || []).forEach((m) => {
+    if (m.itemId !== rid || !m.wh || block.has(m.wh)) return;
+    byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0);
+  });
   let best = null;
   Object.keys(byWh).forEach((wh) => { if (best == null || byWh[wh] > byWh[best]) best = wh; });
   return best || "WH-PNY";
 }
 
-function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements) {
+function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements, held) {
   const st = plan[stageKey];
   if (!st) return [];
-  const whFor = (rid) => issuingWarehouse(rid, itemsById, movements);
+  const whFor = (rid) => issuingWarehouse(rid, itemsById, movements, held);
   const moves = [];
   st.consume.forEach(([rid, q]) => {
     if (!q) return;

@@ -160,12 +160,113 @@
     const mayEdit=!App.canWrite||App.canWrite("inventory");
     const mayLedger=!App.canAccess||App.canAccess("ledger");
     const mayBuy=!App.canAccess||App.canAccess("purchase");
+    /* WHICH readings a material needs is the lab incharge's trade as much as
+       admin's, so both reach this editor. The LIMITS inside it are admin's
+       alone — whoever takes a reading must not be able to move the yardstick it
+       is graded against (the server enforces the same split). */
+    const mayQc=(App.isAdmin&&App.isAdmin()||App.isLab&&App.isLab())&&it.cat!=="WIP";
     modal({title:it.name, sub:it.id+" · "+catName(it.cat), wide:true, body,
       foot:[
         mayLedger?h("button",{class:"btn",onclick:()=>{App.go("ledger",{item:id});UI.$("#modalHost").hidden=true;},text:"📒 Full Ledger"}):null,
         (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${ENG.num(st.suggest)} ${it.uom})`}):null,
+        mayQc?h("button",{class:"btn",title:"Which parameters this material is tested on when it is received, and their pass/fail limits",
+          onclick:()=>qcForm(it),text:"🧪 QC Parameters"}):null,
         mayEdit?h("button",{class:"btn ghost",onclick:()=>itemForm(it),text:"✎ Edit"}):null
       ].filter(Boolean)});
+  }
+
+  /* ----- incoming-test parameters + limits (admin) -----
+     The other half of GRN testing (see backend grnTestService): this decides
+     WHICH readings the lab incharge is asked for when this material is
+     received, and what counts as a pass. Two rules the form has to make plain:
+     a parameter with no limits is recorded but never graded (so the report
+     reads "Pending", not a false pass), and a material nobody has configured
+     falls back to the parameters the item master already records rather than to
+     an invented list. */
+  async function qcForm(it, after){
+    let cat;
+    try{ cat=(await DB.grnTests.catalogue()).params||[]; }
+    catch(e){ toast(e.message||"Could not load the parameter catalogue",{type:"danger"}); return; }
+    const spec=(it.qcSpec&&typeof it.qcSpec==="object")?it.qcSpec:{};
+    const chosen=new Set(Array.isArray(it.qcParams)&&it.qcParams.length?it.qcParams:[]);
+    const usingDefaults=!chosen.size;
+    /* The limits column is admin's. For the lab incharge it is not merely
+       disabled — the numbers were never sent to their browser (viewService
+       strips qcSpec), so there is nothing to show and nothing to leak. They see
+       whether a limit EXISTS, which is all they need to know the reading will
+       be graded. */
+    const mayLimits=!!(App.isAdmin&&App.isAdmin());
+    const rows=cat.map(p=>{
+      const on=usingDefaults?false:chosen.has(p.key);
+      const sp=spec[p.key]||{};
+      const numeric=p.type!=="text";
+      const limited=!!(it.qcSpecSet&&numeric);   // non-admin: "a limit is set", no value
+      return h("div",{class:"qc-prow"},[
+        h("label",{class:"qc-pchk"},[
+          h("input",{type:"checkbox",id:"qp_"+p.key,checked:on?"checked":null,
+            onchange:e=>{const d=UI.$("#qlim_"+p.key); if(d) d.style.opacity=e.target.checked?"1":".4";}}),
+          h("span",{class:"qc-plbl",text:p.label+(p.unit?" ("+p.unit+")":"")}),
+        ]),
+        h("div",{class:"qc-plim",id:"qlim_"+p.key,style:"opacity:"+(on?"1":".4")},
+          !numeric?[h("span",{class:"muted",style:"font-size:11.5px",text:"recorded, not graded"})]
+          :mayLimits?[
+            h("input",{class:"input",id:"qmin_"+p.key,type:"number",step:"any",placeholder:"min",
+              value:sp.min!=null?String(sp.min):""}),
+            h("span",{class:"qc-pdash",text:"–"}),
+            h("input",{class:"input",id:"qmax_"+p.key,type:"number",step:"any",placeholder:"max",
+              value:sp.max!=null?String(sp.max):""}),
+          ]:[h("span",{class:"muted",style:"font-size:11.5px",
+              text:limited?"graded against a set limit":"limits set by admin"})]),
+      ]);
+    });
+    const body=h("div",{},[
+      h("div",{class:"qc-note",style:"font-size:12px;margin-bottom:14px",
+        text:usingDefaults
+          ? "This material has no parameter list yet, so a receipt is checked on whatever the item master records (thickness / GSM / width) plus a visual check. Tick the parameters you want asked for and it becomes explicit."
+          : mayLimits
+            ? "The ticked parameters are what the lab incharge is asked for when this material is received. Leave a limit blank to record the reading without grading it."
+            : "The ticked parameters are what you will be asked to measure when this material is received. You can change that list; the pass/fail limits stay with the admin, so a reading cannot be graded against a limit the person measuring it chose."}),
+      h("div",{class:"qc-plist"},rows),
+    ]);
+    const mo=modal({title:"🧪 QC Parameters", sub:it.name+" · "+it.id, wide:true, body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn primary",id:"qcpSave",onclick:save,text:"Save Parameters"})]});
+    async function save(){
+      const params=[], spOut={};
+      cat.forEach(p=>{
+        if(!UI.$("#qp_"+p.key).checked) return;
+        params.push(p.key);
+        if(p.type==="text"||!mayLimits) return;   // no limit inputs rendered
+        const mn=UI.$("#qmin_"+p.key).value, mx=UI.$("#qmax_"+p.key).value;
+        if(mn===""&&mx==="") return;
+        if(mn!==""&&mx!==""&&+mn>+mx){ spOut.__bad=p.label; return; }
+        spOut[p.key]={};
+        if(mn!=="") spOut[p.key].min=+mn;
+        if(mx!=="") spOut[p.key].max=+mx;
+      });
+      if(spOut.__bad){ toast("Minimum cannot exceed maximum for "+spOut.__bad,{type:"warn"}); return; }
+      if(!params.length){ toast("Tick at least one parameter, or cancel to keep the derived defaults",{type:"warn"}); return; }
+      const btn=UI.$("#qcpSave"); btn.disabled=true; btn.textContent="Saving…";
+      try{
+        const r=await DB.grnTests.setItemQc(it.id,params,spOut);
+        mo.close();
+        /* Say when reports were re-graded. Changing a limit silently re-scores
+           lots that were already signed off, and that is exactly the kind of
+           change nobody should discover by accident. */
+        toast(r.regraded
+          ? "Parameters saved — "+r.regraded+" existing test report"+(r.regraded===1?"":"s")+" re-graded against the new limits"
+          : "Parameters saved for "+it.name,{type:"ok",title:"QC parameters"});
+        /* The caller may need the NEW list before it redraws — the test form
+           reopens itself so the added parameter appears as a field to fill in —
+           so the fresh state is pulled before handing back. */
+        if(after){ try{ await DB.loadAsync(); }catch{} }
+        await App.refreshView();
+        if(after) after();
+      }catch(e){
+        toast(e.message||"Could not save the parameters",{type:"danger"});
+        btn.disabled=false; btn.textContent="Save Parameters";
+      }
+    }
   }
 
   /* ----- item create/edit form ----- */
@@ -258,7 +359,7 @@
     ]);
     const mo=modal({title:"Receive Stock against PO", sub:"Posts stock and issues a numbered goods receipt note", wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-        h("button",{class:"btn primary",onclick:save,text:"Post GRN & Update Stock"})]});
+        h("button",{class:"btn primary",onclick:save,text:"Add to Stock"})]});
     const poSel=UI.$("#r_po");
     // scanning a received item jumps to its line on the current PO
     attachScan(UI.$("#r_scan"), (found)=>{
@@ -992,7 +1093,11 @@
     return it.grade? nm+" — "+it.grade : nm; }
 
   // expose for other modules
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, receiveStockForm});
+  /* qcForm is shared because the parameter list is edited from TWO places: the
+     material master here, and the test report itself — the lab incharge notices
+     a missing parameter while standing at the delivery, not while browsing
+     Stock Items. One editor, both entry points. */
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, receiveStockForm, qcForm});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

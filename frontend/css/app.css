@@ -1861,3 +1861,31 @@ canvas{display:block;width:100%}
   .wz-modes{grid-template-columns:1fr}
   .wz-fldact{justify-content:flex-end}
 }
+
+/* ---- incoming-material testing (GRN testing) --------------------------------
+   Two standing notices in the test form and on a purchase order: an
+   explanatory one (this material has no parameter list / no limits yet, so the
+   readings are recorded rather than graded) and a FAILED one, which has to read
+   as a problem the office must act on — the goods are already in stock by the
+   time a lot fails, so this notice is the only thing standing between a failed
+   delivery and it being used. */
+.qc-note{padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--warn,#d99a2b);
+  border-radius:var(--radius);background:var(--panel-2);color:var(--text-dim);line-height:1.6}
+.qc-note.bad{border-left-color:var(--danger,#d64545);color:var(--danger,#d64545);
+  background:var(--danger-soft,#fdecec);font-weight:600}
+
+/* the admin parameter picker: one row per parameter — tick on the left, its
+   min/max on the right, dimmed until the parameter is actually asked for */
+.qc-plist{display:flex;flex-direction:column;gap:2px}
+.qc-prow{display:grid;grid-template-columns:1fr 210px;gap:12px;align-items:center;
+  padding:7px 10px;border-radius:8px}
+.qc-prow:nth-child(odd){background:var(--panel-2)}
+.qc-pchk{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px}
+.qc-plbl{font-weight:600}
+.qc-plim{display:flex;align-items:center;gap:7px;transition:opacity .15s}
+.qc-plim .input{padding:5px 8px;font-size:12px;text-align:right}
+.qc-pdash{color:var(--text-mut);font-size:12px}
+@media (max-width:700px){
+  .qc-prow{grid-template-columns:1fr;gap:6px}
+  .qc-plim{justify-content:flex-start}
+}

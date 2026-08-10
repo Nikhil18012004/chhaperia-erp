@@ -11,6 +11,7 @@ const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const LAB = require("./labService");
+const GT = require("./grnTestService");
 const BC = require("../../../frontend/js/bomcalc");
 
 /* map a work order's free-text line to a production area */
@@ -44,10 +45,25 @@ function redactSpec(p) {
     specKeys: LAB.specKeys(p),
   });
 }
+/* The INCOMING-material yardstick is the same secret as the TDS spec above,
+   only it lives on the stock item (`qcSpec`) rather than on a lab product. The
+   parameter LIST travels — it is the shape of the entry form — while the limits
+   stay behind, so a storekeeper's reading cannot be tuned until it passes.
+   `qcSpecSet` lets a screen say "limits are set" without saying what they are. */
+function redactItemQc(i) {
+  if (!i || (i.qcSpec == null && i.qcParams == null)) return i;
+  const out = Object.assign({}, i);
+  delete out.qcSpec;
+  out.qcSpecSet = GT.specKeys(i).length > 0;
+  return out;
+}
 /* Which jobs still owe a measurement. Computed here, from the unredacted
    products, so every role reads the same list off one calculation. */
 function labPendingFor(d) {
   try { return LAB.pendingLabWork(d); } catch { return []; }
+}
+function grnTestPendingFor(d) {
+  try { return GT.pendingTests(d); } catch { return []; }
 }
 
 function stateForOfficer(user) {
@@ -59,7 +75,16 @@ function stateForOfficer(user) {
       ? d.labProducts.map((p) => Object.assign({}, p, { specKeys: LAB.specKeys(p) }))
       : d.labProducts.map(redactSpec);
   }
+  // admin owns the material master and keeps its limits; office sees only that
+  // limits exist — it is office who books goods in against them
+  if (!isAdmin && Array.isArray(d.items)) d.items = d.items.map(redactItemQc);
   d.labPending = pending;
+  d.grnTestPending = grnTestPendingFor(d);
+  /* Failed lots waiting on the admin's ruling — approve the rejection and the
+     lot is quarantined, decline it and it stands as good stock. Office sees the
+     list too (it is their delivery and their debit note), but only admin may
+     rule; the route enforces that. */
+  d.grnQcDecisions = (() => { try { return GT.pendingDecisions(d); } catch { return []; } })();
   return d;
 }
 
@@ -369,7 +394,9 @@ function stateForLab() {
     settings: d.settings || {},
     warehouses: d.warehouses || [],
     categories: d.categories || [],
-    items: d.items || [],
+    // the incoming-test limits are withheld here for the same reason the TDS
+    // spec is: this is the role that takes the readings
+    items: (d.items || []).map(redactItemQc),
     boms: d.boms || {},
     movements: d.movements || [],
     workorders: d.workorders || [],
@@ -377,6 +404,21 @@ function stateForLab() {
     salesorders: d.salesorders || [],
     suppliers: d.suppliers || [],
     customers: d.customers || [],          // sales orders reference them by id
+    /* GOODS RECEIPTS — the incharge tests what arrived, so the receipt that
+       booked it in is part of the job, not procurement's private business. The
+       receipt is a quantity-and-document record; the money on a purchase order
+       is already in this payload (the order itself is), so nothing new is
+       exposed by naming which delivery a reading belongs to. */
+    grns: d.grns || [],
+    /* Their own filed readings, with the VERDICT removed — same rule as
+       labReports below. `complete` is not a grade (it only says whether the
+       measuring is finished) so it stays, which is what drives the worklist. */
+    grnTests: (d.grnTests || []).map((t) => {
+      const out = Object.assign({}, t);
+      ["result", "results"].forEach((k) => { delete out[k]; });
+      return out;
+    }),
+    grnTestPending: grnTestPendingFor(d),
     labProducts: (d.labProducts || []).map(redactSpec),
     /* The person taking the measurements is never shown the VERDICT either —
        the same reason the spec limits are withheld from them. A reading whose

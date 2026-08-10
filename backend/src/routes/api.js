@@ -14,6 +14,7 @@ const erp = require("../services/erpService");
 const view = require("../services/viewService");
 const production = require("../services/productionService");
 const lab = require("../services/labService");
+const grnTest = require("../services/grnTestService");
 const chatbot = require("../services/chatbotService");
 const bartender = require("../services/bartenderService");
 const { requireAuth, requireRole } = require("./auth");
@@ -273,6 +274,66 @@ router.patch("/lab/reports/:id", requireAuth, rwLab, (req, res, next) => {
 // Deleting a certificate is a records decision — kept with admin/office.
 router.delete("/lab/reports/:id", requireAuth, rw, (req, res, next) => {
   try { res.json(lab.deleteReport(req.params.id)); } catch (e) { next(e); }
+});
+
+/* ---- INCOMING-MATERIAL TESTING (after a PO is received) ----
+   The lab incharge reaches these; admin/office may also file a reading so a
+   receipt is never stuck waiting on one person. The parameter list and its
+   limits are the material master's business, so they stay with admin — the
+   same split as the finished-goods spec above. */
+// The catalogue an admin picks parameters from (shape only, no limits).
+router.get("/grn-tests/params", requireAuth, (req, res) => {
+  res.json({ params: grnTest.PARAMS });
+});
+// The lab incharge's incoming worklist — every receipt line still owing a reading.
+router.get("/grn-tests/pending", requireAuth, rwLab, (req, res, next) => {
+  try { res.json({ pending: grnTest.pendingTests() }); } catch (e) { next(e); }
+});
+// What the entry form needs for one material on one receipt (never the limits).
+router.get("/grns/:grnId/tests/:itemId", requireAuth, rwLab, (req, res, next) => {
+  try { res.json(grnTest.testFormFor(req.params.grnId, req.params.itemId)); } catch (e) { next(e); }
+});
+/* Filing a reading answers with the report — but the person who took the
+   measurement is not shown its verdict, exactly as /lab/reports does above:
+   without this the grade would come straight back in the reply to their own
+   write, and a reading whose Pass/Fail is visible can be nudged until it
+   passes. */
+function testForWriter(out, user) {
+  if (!user || user.role !== "lab" || !out || !out.test) return out;
+  const test = Object.assign({}, out.test);
+  ["result", "results"].forEach((k) => { delete test[k]; });
+  return Object.assign({}, out, { test });
+}
+router.post("/grns/:grnId/tests", requireAuth, rwLab, (req, res, next) => {
+  try {
+    res.status(201).json(testForWriter(grnTest.submitTest(req.params.grnId, req.body || {}, req.user), req.user));
+  } catch (e) { next(e); }
+});
+router.delete("/grn-tests/:id", requireAuth, rw, (req, res, next) => {
+  try { res.json(grnTest.deleteTest(req.params.id)); } catch (e) { next(e); }
+});
+/* WHICH readings a material needs is the lab incharge's trade as much as
+   admin's, so both may set the parameter list. The LIMITS are a different
+   thing: they are the yardstick the incharge's own reading is graded against,
+   so a non-admin `spec` is ignored inside setItemQc — the same division as
+   /lab/products/:id/spec. Office is deliberately out of both: it books goods
+   in, it does not define how they are checked. */
+router.put("/items/:id/qc", requireAuth, requireRole("admin", "lab"), (req, res, next) => {
+  try { res.json(grnTest.setItemQc(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+
+/* ---- A FAILED LOT GOES TO THE ADMIN ----
+   The goods were booked into the store when the receipt was posted, so failing
+   a lot cannot quietly move stock — it raises a decision. Approving the
+   rejection transfers the lot to the quarantine store (production can no
+   longer draw it); declining it leaves the lot standing as good stock. That
+   ruling is admin's alone: it is the difference between material the factory
+   may use and material it may not. */
+router.get("/grn-tests/decisions", requireAuth, requireRole("admin", "office"), (req, res, next) => {
+  try { res.json({ pending: grnTest.pendingDecisions() }); } catch (e) { next(e); }
+});
+router.post("/grn-tests/:id/decision", requireAuth, requireRole("admin"), (req, res, next) => {
+  try { res.json(grnTest.decideTest(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
 });
 
 // Delete a stock item / work order

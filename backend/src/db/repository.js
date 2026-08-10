@@ -111,13 +111,17 @@ function getState() {
   const grns = db.prepare("SELECT id,doc FROM grns ORDER BY id ASC").all()
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id }));
 
+  // ---- Incoming-material test reports, one per (receipt × material) ----
+  const grnTests = db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests ORDER BY id ASC").all()
+    .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, grnId: r.grn_id, itemId: r.item_id }));
+
   return {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers, transporters,
     movements, workorders, salesorders, purchaseorders, leads, appointments, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
-    labProducts, labReports, grns,
+    labProducts, labReports, grns, grnTests,
   };
 }
 
@@ -259,6 +263,12 @@ function saveState(data) {
 
     const gr = db.prepare("INSERT INTO grns(id,doc) VALUES(?,?)");
     replace("grns", "grns", (g) => { const { id, ...rest } = g; gr.run(id, J(rest)); });
+
+    const gt = db.prepare("INSERT INTO grn_tests(id,grn_id,item_id,doc) VALUES(@id,@grn_id,@item_id,@doc)");
+    replace("grnTests", "grn_tests", (t) => {
+      const { id, grnId, itemId, ...rest } = t;
+      gt.run({ id, grn_id: grnId || "", item_id: itemId || "", doc: J(rest) });
+    });
 
     const ap = db.prepare("INSERT INTO appointments(id,date,doc) VALUES(@id,@date,@doc)");
     replace("appointments", "appointments", (a) => {
@@ -461,6 +471,45 @@ function putGrn(g) {
   db.prepare(`INSERT INTO grns(id,doc) VALUES(@id,@doc)
       ON CONFLICT(id) DO UPDATE SET doc=excluded.doc`).run({ id, doc: J(rest) });
   return g;
+}
+function getGrn(id) {
+  const db = getDb();
+  const r = db.prepare("SELECT id,doc FROM grns WHERE id=?").get(id);
+  return r ? Object.assign({}, P(r.doc, {}), { id: r.id }) : null;
+}
+
+/* ---------- INCOMING-MATERIAL TEST REPORTS (granular) ---------- */
+const grnTestRow = (r) => Object.assign({}, P(r.doc, {}),
+  { id: r.id, grnId: r.grn_id, itemId: r.item_id });
+function getGrnTests() {
+  const db = getDb();
+  return db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests ORDER BY id ASC").all().map(grnTestRow);
+}
+function getGrnTest(id) {
+  const db = getDb();
+  const r = db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests WHERE id=?").get(id);
+  return r ? grnTestRow(r) : null;
+}
+/* One report per (receipt × material) — re-measuring the same line updates it
+   rather than filing a second, contradictory result for the same delivery. */
+function getGrnTestFor(grnId, itemId) {
+  const db = getDb();
+  const r = db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests WHERE grn_id=? AND item_id=?")
+    .get(grnId, itemId);
+  return r ? grnTestRow(r) : null;
+}
+function putGrnTest(t) {
+  const db = getDb();
+  const { id, grnId, itemId, ...rest } = t;
+  db.prepare(`INSERT INTO grn_tests(id,grn_id,item_id,doc) VALUES(@id,@grn_id,@item_id,@doc)
+      ON CONFLICT(id) DO UPDATE SET grn_id=excluded.grn_id, item_id=excluded.item_id,
+        doc=excluded.doc`)
+    .run({ id, grn_id: grnId || "", item_id: itemId || "", doc: J(rest) });
+  return t;
+}
+function deleteGrnTest(id) {
+  getDb().prepare("DELETE FROM grn_tests WHERE id=?").run(id);
+  return { id };
 }
 
 /* ---------- SALES ORDERS (granular) ---------- */
@@ -870,7 +919,9 @@ function hrIsEmpty() { return getDb().prepare("SELECT COUNT(*) AS c FROM hr_work
 
 module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
-  deletePurchaseOrder, getGrns, putGrn, getSalesOrder, putSalesOrder, deleteSalesOrder,
+  deletePurchaseOrder, getGrns, putGrn, getGrn,
+  getGrnTests, getGrnTest, getGrnTestFor, putGrnTest, deleteGrnTest,
+  getSalesOrder, putSalesOrder, deleteSalesOrder,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
   getCustomer, putCustomer, deleteCustomer,
   getSupplier, putSupplier, deleteSupplier,

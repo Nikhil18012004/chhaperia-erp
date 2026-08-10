@@ -86,9 +86,15 @@
 
   /* ============== PROCUREMENT ============== */
   M.purchase = { title:"Procurement", sub:"Purchase orders & receipts", render(root, params){
-    let tab="open";
+    /* The lab incharge comes to this screen for one reason — to test what a
+       delivery brought in — so it opens on RECEIVED orders rather than on the
+       buyer's open-order list, which holds nothing for them. */
+    const qcOnly=App.isLab();
+    let tab=qcOnly?"done":"open";
     let filter={from:"", to:"", q:""};
-    root.appendChild(pageHead("Procurement","Auto-suggested reorders, open POs and goods receipts that post straight to stock",[
+    root.appendChild(pageHead("Procurement",
+      qcOnly?"Goods receipts awaiting an incoming-material test"
+            :"Auto-suggested reorders, open POs and goods receipts that post straight to stock",[
       h("button",{class:"btn",onclick:reorderWizard,html:"🪄 Reorder Suggestions"}),
       h("button",{class:"btn primary",onclick:()=>poForm(params&&params.create),html:"＋ New PO"})
     ]));
@@ -96,12 +102,41 @@
     const open=pos.filter(p=>p.status!=="Received");
     const pendVal=open.reduce((s,p)=>s+p.lines.reduce((a,l)=>a+(l.qty-(l.recd||0))*l.rate,0),0);
     const overdue=open.filter(p=>p.eta<DB.helpers.iso(DB.helpers.today())).length;
-    root.appendChild(h("div",{class:"grid kpi-grid",style:"margin-bottom:16px"},[
+    /* QC's headline is its own worklist, not the buyer's money. Rates and order
+       values are withheld from this role throughout the screen — they are here
+       to measure material, and a price is no part of that job. */
+    const qcPend=(ENG.data.grnTestPending||[]).length;
+    const qcRulings=(ENG.data.grnQcDecisions||[]).length;
+    root.appendChild(h("div",{class:"grid kpi-grid",style:"margin-bottom:16px"},qcOnly?[
+      kpi({icon:"🧪",label:"Materials Awaiting Test",value:ENG.num(qcPend),
+        delta:qcPend?"Action needed":"All clear",deltaType:qcPend?"down":"up"}),
+      kpi({icon:"📥",label:"Goods Receipts",value:ENG.num((ENG.data.grns||[]).filter(g=>g.status!=="Cancelled").length)}),
+      kpi({icon:"✓",label:"Orders Received",value:ENG.num(pos.filter(p=>p.status==="Received").length)}),
+      kpi({icon:"🛒",label:"Orders In Transit",value:ENG.num(open.length)}),
+    ]:[
       kpi({icon:"🛒",label:"Open Purchase Orders",value:ENG.num(open.length)}),
       kpi({icon:"💵",label:"Pending Inbound Value",value:ENG.money(pendVal)}),
-      kpi({icon:"⏰",label:"Overdue POs",value:ENG.num(overdue),delta:overdue?"Follow up":"On track",deltaType:overdue?"down":"up"}),
-      kpi({icon:"📥",label:"Received (total)",value:ENG.num(pos.filter(p=>p.status==="Received").length)}),
+      /* A failed lot waiting on a ruling displaces the overdue-PO tile: a late
+         delivery is a chase, an unruled failure is material the factory may be
+         about to use. The tile is a button straight into the queue. */
+      qcRulings
+        ? (()=>{ const c=kpi({icon:"⛔",label:"Failed Lots — Ruling Due",value:ENG.num(qcRulings),
+              delta:"Decide now",deltaType:"down"});
+            c.style.cursor="pointer"; c.setAttribute("role","button"); c.tabIndex=0;
+            c.onclick=qcDecisionQueue;
+            c.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); qcDecisionQueue(); } };
+            return c; })()
+        : kpi({icon:"⏰",label:"Overdue POs",value:ENG.num(overdue),delta:overdue?"Follow up":"On track",deltaType:overdue?"down":"up"}),
+      qcPend
+        ? kpi({icon:"🧪",label:"Incoming Tests Due",value:ENG.num(qcPend),
+            delta:"Awaiting the lab",deltaType:"down"})
+        : kpi({icon:"📥",label:"Received (total)",value:ENG.num(pos.filter(p=>p.status==="Received").length)}),
     ]));
+    /* WHO MAY DO WHAT HERE. Presentation only — the server enforces the same
+       split independently (routes: receive is admin/office, GRN testing adds
+       the lab role). The point is that nobody is handed a button the server
+       will refuse at the end of the form. */
+    const mayReceive=!qcOnly;
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open / Partial","open"),segBtn("Received","done"),segBtn("All","all")]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
@@ -131,16 +166,26 @@
         {key:"id",label:"PO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         {key:"supplier",label:"Supplier",cls:"nm",render:r=>esc(U.trim(ENG.sup(r.supplierId),28)),sort:r=>ENG.sup(r.supplierId)},
         {key:"lines",label:"Items",num:true,render:r=>r.lines.length,sort:r=>r.lines.length},
-        {key:"value",label:"Value",num:true,render:r=>ENG.money(r.value),sort:r=>r.value},
+        qcOnly?null:{key:"value",label:"Value",num:true,render:r=>ENG.money(r.value),sort:r=>r.value},
         {key:"recd",label:"Received",render:r=>{const tot=r.lines.reduce((a,l)=>a+l.qty,0),rec=r.lines.reduce((a,l)=>a+(l.recd||0),0);const p=tot?Math.round(rec/tot*100):0;return `<div style="min-width:110px">${meter(p,p===100?"ok":p>0?"warn":"danger")}<div class="muted" style="font-size:11px;margin-top:3px">${p}%</div></div>`;},sort:r=>{const tot=r.lines.reduce((a,l)=>a+l.qty,0);return tot?r.lines.reduce((a,l)=>a+(l.recd||0),0)/tot:0;}},
         {key:"date",label:"Ordered",render:r=>r.date,sort:r=>r.date},
         {key:"eta",label:"ETA",render:r=>{const late=r.status!=="Received"&&r.eta<DB.helpers.iso(DB.helpers.today());return `<span style="color:${late?'var(--danger)':'inherit'}">${r.eta}${late?" ⏰":""}</span>`;},sort:r=>r.eta},
         {key:"status",label:"Status",render:r=>badge(r.status==="Received"?"ok":r.status==="Partially Received"?"warn":"info",r.status),sort:r=>r.status},
+        /* QC of what actually arrived. Only ever populated once something has
+           been received, so an order still on the water reads "—" rather than
+           an alarming "Test due". */
+        {key:"qc",label:"QC",render:r=>qcBadge(qcForPo(r)),sort:r=>{const q=qcForPo(r);return !q?3:q.fail?0:q.pending?1:2;}},
+        /* ONE action on the row, and it is the one the buyer presses all day.
+           Printing and testing both live inside the order — open the row and
+           they are there, alongside the receipt they belong to. Crowding them
+           into the list gave three buttons per row and, worse, made testing
+           look like something done to an ORDER when it is done to a DELIVERY. */
         {key:"act",label:"",noSort:true,render:r=>h("div",{class:"flex gap aic",style:"gap:6px;justify-content:flex-end"},[
-          printBtn("po",r),
-          r.status!=="Received"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();receivePO(r);},text:"Receive"}):h("span",{class:"muted",text:"✓"})
-        ])},
-      ],{onRow:r=>poDetail(r),empty:filter.q?"No purchase order matches that search":"No purchase orders"}));
+          mayReceive
+            ? (r.status!=="Received"?h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();receivePO(r);},text:"Receive"}):h("span",{class:"muted",text:"✓"}))
+            : null
+        ].filter(Boolean))},
+      ].filter(Boolean),{onRow:r=>poDetail(r),empty:filter.q?"No purchase order matches that search":"No purchase orders"}));
     }
     draw();
     // ⌘K "New Purchase Order" lands here with openNew; consume the flag so a
@@ -162,10 +207,26 @@
         ? [["IGST",ENG.money(calc.igst)]]
         : [["CGST",ENG.money(calc.cgst)],["SGST",ENG.money(calc.sgst)]];
       const poGrns=(ENG.data.grns||[]).filter(g=>g.poId===po.id);
+      const poQc=qcForPo(po);
       const body=h("div",{},[
         MW.dl([["Supplier",ENG.sup(po.supplierId)],["Billing Entity",companyByKey(po.company).name],
           ["Status",badge(po.status==="Received"?"ok":"info",po.status)],["Ordered",po.date],["ETA",po.eta]]
-          .concat(po.refNo?[["Ref / Quote",po.refNo]]:[])),
+          .concat(po.refNo?[["Ref / Quote",po.refNo]]:[])
+          // the QC verdict belongs with the order's own facts, not buried below
+          .concat(poQc?[["Incoming QC",qcBadge(poQc)]]:[])),
+        /* A FAILED LOT SAYS SO AT THE TOP. The goods were booked into stock when
+           the receipt was posted, so the office has to see this without opening
+           anything: it is their decision to raise a debit note or send it back
+           through the rejection path the receipt form already has. */
+        poQc&&poQc.awaiting?h("div",{class:"qc-note bad",style:"margin:14px 0 0;font-size:12.5px"},[
+          h("div",{text:"A material on this order FAILED its incoming test and is waiting on an admin's ruling. The stock was booked in when the receipt was posted, so production can still draw it until the rejection is approved."}),
+          (App.isAdmin&&App.isAdmin())?h("button",{class:"btn sm danger",style:"margin-top:9px",
+            onclick:()=>{UI.$("#modalHost").hidden=true;qcDecisionQueue();},text:"Rule on it now"}):null,
+        ]):poQc&&poQc.quarantined?h("div",{class:"qc-note bad",style:"margin:14px 0 0;font-size:12.5px",
+          text:poQc.quarantined+(poQc.quarantined===1?" material":" materials")+" from this order failed and "
+            +(poQc.quarantined===1?"is":"are")+" quarantined — held in the QC store, out of reach of production. Returning it to the supplier is a separate debit note."}):
+        poQc&&poQc.fail?h("div",{class:"qc-note",style:"margin:14px 0 0;font-size:12.5px",
+          text:"A material on this order failed its incoming test, and an admin declined the rejection — the lot stands as good stock."}):null,
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Order Lines"}),
         table(po.lines,[
           {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(it.name||r.itemId)}</div><div class="cell-sub">${r.itemId}</div>`;},noSort:true},
@@ -173,12 +234,12 @@
           {key:"qty",label:"Ordered",num:true,render:r=>ENG.num(r.qty),noSort:true},
           {key:"recd",label:"Received",num:true,render:r=>ENG.num(r.recd||0),noSort:true},
           {key:"pend",label:"Pending",num:true,render:r=>{const p=r.qty-(r.recd||0);return p>0?`<span class="badge-s s-warn">${ENG.num(p)}</span>`:'<span class="muted">—</span>';},noSort:true},
-          {key:"rate",label:"Rate",num:true,render:r=>"₹"+ENG.num(r.rate,2),noSort:true},
-          {key:"gst",label:"GST %",num:true,render:r=>lineGstPct(r,ENG.item(r.itemId)),noSort:true},
-          {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true},
-        ],{empty:"No lines"}),
-        h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Tax Summary"}),
-        MW.dl([["Taxable",ENG.money(calc.taxable)]].concat(gstPairs).concat([
+          qcOnly?null:{key:"rate",label:"Rate",num:true,render:r=>"₹"+ENG.num(r.rate,2),noSort:true},
+          qcOnly?null:{key:"gst",label:"GST %",num:true,render:r=>lineGstPct(r,ENG.item(r.itemId)),noSort:true},
+          qcOnly?null:{key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true},
+        ].filter(Boolean),{empty:"No lines"}),
+        qcOnly?null:h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Tax Summary"}),
+        qcOnly?null:MW.dl([["Taxable",ENG.money(calc.taxable)]].concat(gstPairs).concat([
           ["Freight",ENG.money(calc.freight)],["Grand Total",ENG.money(calc.grandTotal)]])),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Goods Receipts"}),
         poGrns.length?table(poGrns,[
@@ -188,20 +249,45 @@
           {key:"acc",label:"Accepted",num:true,render:g=>ENG.num((g.lines||[]).reduce((s,x)=>s+(+x.accepted||0),0),2),noSort:true},
           {key:"rej",label:"Rejected",num:true,render:g=>{const r=(g.lines||[]).reduce((s,x)=>s+(+x.rejected||0),0);
             return r>0?`<span class="badge-s s-warn">${ENG.num(r,2)}</span>`:'<span class="muted">—</span>';},noSort:true},
-          {key:"val",label:"Value",num:true,render:g=>ENG.money((g.lines||[]).reduce((s,x)=>s+(+x.accepted||0)*(+x.rate||0),0)),noSort:true},
+          qcOnly?null:{key:"val",label:"Value",num:true,render:g=>ENG.money((g.lines||[]).reduce((s,x)=>s+(+x.accepted||0)*(+x.rate||0),0)),noSort:true},
+          // the test state of THIS delivery — a cancelled note has nothing to test
+          {key:"qc",label:"QC",render:g=>g.status==="Cancelled"?'<span class="muted">—</span>':qcBadge(qcForGrn(g)),noSort:true},
           {key:"by",label:"By",render:g=>esc(g.by||"—"),noSort:true},
-          {key:"act",label:"",render:g=>h("button",{class:"btn sm",onclick:e=>{e.stopPropagation();printGrn(g);},html:PRINT_IC+" GRN"}),noSort:true},
-        ],{empty:"No goods receipt notes"}):
-        h("div",{class:"muted",style:"font-size:12.5px",text:"No goods receipt notes yet — press Receive Goods to post one."}),
+          /* ONE button per receipt, and it follows the work: while readings are
+             owed it MAKES the report, and once every material has been measured
+             the only thing left to do with it is PRINT it. Two buttons sitting
+             side by side asked the user to know which one they wanted; one
+             button that changes with the state does not.
+             (The plain receipt is still printable from inside the report panel,
+             so an untested delivery is not stranded.) */
+          {key:"act",label:"",render:g=>{
+            if(g.status==="Cancelled") return '<span class="muted">—</span>';
+            const q=qcForGrn(g);
+            return q.pending
+              ? h("button",{class:"btn sm primary",
+                  title:"Enter the incoming-material test readings for this receipt",
+                  onclick:e=>{e.stopPropagation();UI.$("#modalHost").hidden=true;makeGrnTestReport(g);},
+                  text:"🧪 Make GRN Test Report"})
+              : h("button",{class:"btn sm",
+                  title:"Print the goods receipt note cum test report for this delivery",
+                  onclick:e=>{e.stopPropagation();printGrn(g);},
+                  html:PRINT_IC+" Print GRN Test Report"});
+          },noSort:true},
+        ].filter(Boolean),{empty:"No goods receipt notes"}):
+        h("div",{class:"muted",style:"font-size:12.5px",
+          text:qcOnly?"No goods receipt notes yet — nothing to test on this order."
+                     :"No goods receipt notes yet — press Receive Goods to post one."}),
       ]);
       const anyRecd=po.lines.some(l=>(l.recd||0)>0);
-      const foot=[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
+      /* The incharge's footer holds no order paperwork — they neither raise nor
+         bill an order. Testing is reached from the receipt rows above. */
+      const foot=qcOnly?[]:[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
         h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"}),
         h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Labels"}),
         h("button",{class:"btn",title:"Download the label rows as CSV for the BarTender label template",
           onclick:()=>bartenderPO(po),text:"⤓ BarTender"})];
-      if(!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
-      if(po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
+      if(!qcOnly&&!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
+      if(!qcOnly&&po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
     }
 
@@ -2167,11 +2253,535 @@
   }
 
   /* ============================================================
+     INCOMING-MATERIAL TESTING ("GRN testing")
+     A purchase order is received, the server issues a numbered GRN,
+     and the material then has to be checked before anyone trusts
+     it. The lab incharge opens the receipt from here, enters the
+     readings for each material, and the verdict comes back onto the
+     purchase order.
+
+     WHAT THIS SIDE MAY KNOW: the limits a reading is graded against
+     never leave the server, and the lab role is not sent the verdict
+     either (backend grnTestService + viewService explain why). So
+     `test.result` is simply ABSENT for the incharge, and every badge
+     here falls back to "measured / not measured" rather than
+     inventing a grade. Grading is the server's job, always.
+     ============================================================ */
+  const qcTests = () => ENG.data.grnTests || [];
+  const qcTestFor = (grnId,itemId) => qcTests().find(t=>t.grnId===grnId&&t.itemId===itemId) || null;
+  /** Per-line state for one receipt + the receipt's own roll-up. */
+  function qcForGrn(g){
+    const lines=(g.lines||[]).map(l=>{
+      const t=qcTestFor(g.id,l.itemId);
+      return {itemId:l.itemId, name:l.name||l.itemId, test:t, tested:!!(t&&t.complete),
+        // a failed lot with no ruling yet is the state that needs a human
+        awaiting:!!(t&&t.result==="Fail"&&!t.decision),
+        decision:(t&&t.decision)||""};
+    });
+    const done=lines.filter(l=>l.tested).length;
+    return {lines, total:lines.length, tested:done, pending:lines.length-done,
+      fail:lines.some(l=>l.test&&l.test.result==="Fail"),
+      awaiting:lines.filter(l=>l.awaiting).length,
+      quarantined:lines.filter(l=>l.decision==="quarantined").length,
+      released:lines.filter(l=>l.decision==="released").length,
+      pass:done===lines.length&&lines.length>0&&lines.some(l=>l.test&&l.test.result==="Pass")};
+  }
+  /** Roll every receipt of one order into a single verdict for the PO list. */
+  function qcForPo(po){
+    const gs=(ENG.data.grns||[]).filter(g=>g.poId===po.id&&g.status!=="Cancelled");
+    if(!gs.length) return null;
+    const each=gs.map(qcForGrn);
+    const pending=each.reduce((s,x)=>s+x.pending,0);
+    const total=each.reduce((s,x)=>s+x.total,0);
+    return {pending, total, tested:total-pending,
+      fail:each.some(x=>x.fail),
+      awaiting:each.reduce((s,x)=>s+x.awaiting,0),
+      quarantined:each.reduce((s,x)=>s+x.quarantined,0),
+      released:each.reduce((s,x)=>s+x.released,0),
+      pass:!pending&&each.some(x=>x.pass)};
+  }
+  /* One badge, several audiences and several states. Order matters: an
+     UNRULED FAILURE outranks everything, because the lot is sitting in the
+     store and drawable until somebody decides. Then the settled outcomes
+     (quarantined / released), then testing progress, then the verdict.
+     Never render a grade the payload did not carry — for the lab incharge the
+     verdict is absent by design, and an absent verdict is a redaction, not a
+     pass. */
+  function qcBadge(st){
+    if(!st) return '<span class="muted">—</span>';
+    if(st.awaiting) return badge("danger","⛔ Approval due");
+    if(st.quarantined) return badge("danger","Quarantined");
+    if(st.fail) return badge("warn","✗ Failed · released");
+    if(st.pending) return badge("warn",st.tested?`Testing ${st.tested}/${st.total}`:"Test due");
+    if(App.isLab()) return badge("ok","✓ Tested");
+    return st.pass?badge("ok","✓ QC Pass"):badge("info","Recorded");
+  }
+  function qcLineBadge(l){
+    if(!l.tested) return badge("warn","Test due");
+    if(l.awaiting) return badge("danger","⛔ Approval due");
+    if(l.decision==="quarantined") return badge("danger","Quarantined");
+    if(l.decision==="released") return badge("warn","Failed · released");
+    if(l.test&&l.test.result==="Fail") return badge("danger","✗ Fail");
+    if(App.isLab()||!l.test||!l.test.result) return badge("ok","✓ Tested");
+    return l.test.result==="Pass"?badge("ok","✓ Pass"):badge("info",l.test.result);
+  }
+
+  /* ============================================================
+     THE ADMIN'S RULING ON A FAILED LOT
+     The lab has failed a material. The goods were booked into the store when
+     the receipt was posted, so the failure did not move anything — it put the
+     lot here. Approving the rejection transfers it to the quarantine store,
+     where production cannot draw it. Declining it leaves the lot exactly where
+     it is, as good stock. Both are recorded against the test report with who
+     ruled and when, because this is the decision that says whether the factory
+     may use the material.
+     ============================================================ */
+  function qcDecisionForm(q, after){
+    const sup=(ENG.data.suppliers||[]).find(s=>s.id===q.supplierId);
+    const wh=(ENG.data.warehouses||[]).find(w=>w.id===q.wh);
+    const hold=(ENG.data.warehouses||[]).find(w=>/quarantine|qc.?hold|reject/i.test(String(w.type||"")+" "+String(w.name||"")));
+    const body=h("div",{},[
+      h("div",{class:"qc-note bad",style:"font-size:12.5px;margin-bottom:16px",
+        text:q.itemName+" failed its incoming test on "+((q.failed||[]).join(", ")||"a measured parameter")
+          +". The lot is in "+((wh&&wh.name)||q.wh||"the store")+" now and production can still draw it until you decide."}),
+      MW.dl([["Material",q.itemName],["Code",q.itemId],
+        ["Quantity in question",ENG.num(q.acceptedQty,3)+" "+(q.uom||"")],
+        ["Goods Receipt",q.grnId],["Purchase Order",q.poId||"—"],
+        ["Supplier",(sup&&sup.name)||q.supplierId||"—"],
+        ["Out of limit",(q.failed||[]).join(", ")||"—"],
+        ["Tested by",(q.testedBy||"—")+(q.testedAt?" on "+String(q.testedAt).slice(0,10):"")]]),
+      h("div",{class:"field full",style:"margin-top:16px"},[
+        h("label",{text:"Note (kept on the test report)"}),
+        h("textarea",{class:"input",id:"qcdNote",rows:"2",maxlength:"500",
+          placeholder:"why you are approving or declining the rejection"}),
+      ]),
+      h("div",{class:"qc-note",style:"font-size:11.5px;margin-top:14px",
+        text:"Approve → the lot moves to "+((hold&&hold.name)||"the quarantine store")
+          +" and no work order can draw it. Decline → the lot stays where it is and counts as good stock. "
+          +"Neither writes the material off; returning it to the supplier is a separate debit note."}),
+    ]);
+    const mo=modal({title:"⛔ Failed lot — your ruling", sub:q.grnId+" · "+q.itemName, wide:true, body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Decide later"}),
+        h("button",{class:"btn",id:"qcdNo",onclick:()=>go(false),text:"Decline — keep as stock"}),
+        h("button",{class:"btn danger",id:"qcdYes",onclick:()=>go(true),text:"Approve — quarantine the lot"})]});
+    async function go(approve){
+      const y=UI.$("#qcdYes"), n=UI.$("#qcdNo");
+      y.disabled=n.disabled=true; (approve?y:n).textContent="Saving…";
+      try{
+        const r=await DB.grnTests.decide(q.id,approve,UI.$("#qcdNote").value);
+        mo.close();
+        toast(approve
+          ? (r.moved?`Quarantined — ${ENG.num(r.moved.qty,3)} ${q.uom||""} moved out of reach of production`
+                    :"Quarantined — the lot is marked and cannot be drawn")
+          : "Rejection declined — the lot stands as good stock",
+          {type:approve?"warn":"ok",title:"Failed lot"});
+        await App.refreshView();
+        if(after) after();
+      }catch(e){
+        toast(e.message||"Could not record the ruling",{type:"danger"});
+        y.disabled=n.disabled=false; y.textContent="Approve — quarantine the lot"; n.textContent="Decline — keep as stock";
+      }
+    }
+  }
+
+  /* Every failed lot still waiting on a ruling, in one place — reached from the
+     Procurement KPI and from the alerts drawer. */
+  function qcDecisionQueue(){
+    const list=ENG.data.grnQcDecisions||[];
+    if(!list.length){ toast("No failed lots are waiting on a decision.",{type:"ok"}); return; }
+    const admin=App.isAdmin&&App.isAdmin();
+    const body=h("div",{},[
+      h("div",{class:"qc-note bad",style:"font-size:12.5px;margin-bottom:14px",
+        text:list.length+(list.length===1?" lot has":" lots have")+" failed an incoming test and "
+          +(admin?"needs your ruling":"is waiting on an admin's ruling")
+          +". Until then the material stays in the store and production can draw it."}),
+      table(list,[
+        {key:"item",label:"Material",cls:"nm",render:q=>`<div class="cell-main">${esc(q.itemName)}</div><div class="cell-sub">${esc(q.itemId)}</div>`,noSort:true},
+        {key:"qty",label:"Quantity",num:true,render:q=>ENG.num(q.acceptedQty,3)+" "+esc(q.uom||""),noSort:true},
+        {key:"failed",label:"Out of limit",render:q=>esc((q.failed||[]).join(", ")||"—"),noSort:true},
+        {key:"grn",label:"Receipt",render:q=>`<span class="mono">${esc(q.grnId)}</span>`,noSort:true},
+        {key:"po",label:"Order",render:q=>esc(q.poId||"—"),noSort:true},
+        {key:"by",label:"Tested By",render:q=>esc(q.testedBy||"—"),noSort:true},
+        {key:"act",label:"",noSort:true,render:q=>admin
+          ? h("button",{class:"btn sm danger",onclick:e=>{e.stopPropagation();UI.$("#modalHost").hidden=true;qcDecisionForm(q,qcDecisionQueue);},text:"Rule on it"})
+          : h("span",{class:"muted",text:"admin only"})},
+      ],{empty:"Nothing waiting"}),
+    ]);
+    modal({title:"⛔ Failed lots awaiting a ruling", sub:list.length+" pending", wide:true, body});
+  }
+
+  /* The entry form. Parameters and any readings already filed are FETCHED
+     rather than read out of state: the parameter list belongs to the material
+     master and is the one thing the client must not guess at, or a report ends
+     up graded on a parameter the form never asked for. */
+  async function grnTestForm(grnId,itemId,after){
+    let f;
+    try{ f=await DB.grnTests.form(grnId,itemId); }
+    catch(e){ toast(e.message||"Could not open the test form",{type:"danger"}); return; }
+    const sup=ENG.data.suppliers.find(s=>s.id===f.grn.supplierId);
+    const vals=Object.assign({},f.values||{});
+    const rows=(f.params||[]).map(p=>{
+      const id="qc_"+p.key;
+      const cur=vals[p.key]!=null?String(vals[p.key]):"";
+      return h("div",{class:"field"},[
+        h("label",{text:p.label+(p.unit?" ("+p.unit+")":"")}),
+        p.type==="text"
+          ? h("input",{class:"input",id,value:cur,placeholder:"as received",maxlength:"200"})
+          : h("input",{class:"input",id,type:"number",step:"any",value:cur,placeholder:"measured value"}),
+      ]);
+    });
+    const body=h("div",{},[
+      MW.dl([["Material",f.item.name],["Code",f.item.id],
+        ["Received",ENG.num(f.line.accepted,3)+" "+(f.item.uom||"")],
+        ["Goods Receipt",f.grn.id],["Purchase Order",f.grn.poId||"—"],
+        ["Supplier",(sup&&sup.name)||f.grn.supplierId||"—"],
+        ["Supplier Inv.",f.grn.invNo||"—"]]),
+      /* SAMPLING + TRACEABILITY. A reading without a sample size is an
+         anecdote — "0.081 mm" means one thing if three rolls of 200 were
+         checked and another if all 200 were. And a failure cannot be pinned on
+         the supplier without their own identity for the lot. All optional: the
+         form asks, it does not invent. */
+      h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Sampling & Traceability"}),
+      h("div",{class:"form-grid"},[
+        h("div",{class:"field"},[
+          h("label",{text:"Sample size ("+(f.item.uom||"units")+" checked)"}),
+          h("input",{class:"input",id:"qc_sample",type:"number",step:"any",min:"0",
+            value:f.sampleSize!=null?String(f.sampleSize):"",
+            placeholder:"of "+ENG.num(f.line.accepted,3)+" received"}),
+        ]),
+        h("div",{class:"field"},[
+          h("label",{text:"Supplier batch / heat no."}),
+          h("input",{class:"input",id:"qc_batch",maxlength:"60",value:f.supplierBatch||"",
+            placeholder:"as marked on the bale / drum"}),
+        ]),
+        h("div",{class:"field"},[
+          h("label",{text:"Supplier test certificate ref."}),
+          h("input",{class:"input",id:"qc_cert",maxlength:"60",value:f.certRef||"",
+            placeholder:"their COA / mill cert no."}),
+        ]),
+      ]),
+      /* Say plainly when a material is running on the derived default list — it
+         is the difference between "these are the checks we agreed" and "these
+         are the fields the master happens to record". */
+      !f.configured?h("div",{class:"qc-note",style:"margin:14px 0 0;font-size:12px",
+        text:"No parameter list has been set for this material yet, so it is being checked on what the item master records. An admin can change the parameters and their limits from Stock Items."}):null,
+      !f.specSet?h("div",{class:"qc-note",style:"margin:10px 0 0;font-size:12px",
+        text:"No pass/fail limits are set for this material, so the readings are recorded but not graded."}):null,
+      /* THE PARAMETER LIST IS EDITABLE FROM HERE. The person who notices a
+         missing parameter is the one standing at the delivery with the
+         micrometer, so they do not have to leave the report, find the material
+         in Stock Items and come back. Lab incharge and admin both. */
+      h("div",{class:"flex aic",style:"margin:18px 0 10px;gap:10px;flex-wrap:wrap"},[
+        h("h3",{style:"margin:0;font-size:14px",text:"Test Readings"}),
+        (App.isLab()||App.isAdmin())?h("button",{class:"btn sm ghost",
+          title:"Add or remove the parameters this material is tested on",
+          onclick:()=>editParams(),text:"✎ Edit parameters"}):null,
+      ].filter(Boolean)),
+      h("div",{class:"form-grid"},rows),
+      h("div",{class:"field full",style:"margin-top:6px"},[
+        h("label",{text:"Remarks"}),
+        h("textarea",{class:"input",id:"qc_remarks",rows:"2",maxlength:"500",text:f.remarks||""}),
+      ]),
+      f.testedAt?h("div",{class:"muted",style:"font-size:11.5px;margin-top:10px",
+        text:"Last filed by "+(f.testedBy||"—")+" on "+String(f.testedAt).slice(0,10)+" — saving again replaces that reading."}):null,
+    ]);
+    const mo=modal({title:"🧪 GRN Testing — "+f.item.name, sub:f.grn.id+(f.grn.poId?" · "+f.grn.poId:""),
+      wide:true, body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn primary",id:"qcSave",onclick:save,text:"Save Test Report"})]});
+    /* Reopen the reading form once the parameter list changes, so the parameter
+       just added is immediately a field to fill in rather than something the
+       user has to go and find again. */
+    function editParams(){
+      const it=ENG.item(itemId);
+      const edit=(window._erpUtil||{}).qcForm;
+      if(!it||!edit){ toast("The material master is not loaded — try again.",{type:"warn"}); return; }
+      mo.close();
+      edit(it,()=>grnTestForm(grnId,itemId,after));
+    }
+    async function save(){
+      const out={};
+      (f.params||[]).forEach(p=>{ const el=UI.$("#qc_"+p.key); if(el) out[p.key]=el.value; });
+      const btn=UI.$("#qcSave"); btn.disabled=true; btn.textContent="Saving…";
+      try{
+        await DB.grnTests.submit(grnId,{itemId, values:out,
+          remarks:UI.$("#qc_remarks").value,
+          sampleSize:UI.$("#qc_sample").value,
+          supplierBatch:UI.$("#qc_batch").value,
+          certRef:UI.$("#qc_cert").value});
+        mo.close();
+        /* The incharge is told it was filed, not how it graded — the office
+           reads the verdict. Saying "Pass" here would defeat the redaction. */
+        toast(App.isLab()?"Reading filed for "+f.item.name:"Test report saved for "+f.item.name,
+          {type:"ok",title:"GRN testing"});
+        await App.refreshView();
+        if(after) after();
+      }catch(e){
+        toast(e.message||"Could not save the test report",{type:"danger"});
+        btn.disabled=false; btn.textContent="Save Test Report";
+      }
+    }
+  }
+
+  /* Every material on one receipt, so the incharge can work down a delivery
+     instead of hunting line by line from the order screen. */
+  function grnTestPanel(g){
+    const st=qcForGrn(g);
+    const body=h("div",{},[
+      MW.dl([["Goods Receipt",g.id],["Date",g.date||"—"],
+        ["Purchase Order",g.poId||"—"],["Supplier Inv.",g.invNo||"—"],
+        ["Materials",st.total+" · "+st.tested+" tested"]]),
+      h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Materials Received"}),
+      table(st.lines,[
+        {key:"item",label:"Material",cls:"nm",render:l=>`<div class="cell-main">${esc(l.name)}</div><div class="cell-sub">${esc(l.itemId)}</div>`,noSort:true},
+        {key:"qc",label:"QC",render:l=>qcLineBadge(l),noSort:true},
+        {key:"by",label:"Tested By",render:l=>esc((l.test&&l.test.testedBy)||"—"),noSort:true},
+        {key:"act",label:"",noSort:true,render:l=>h("div",{class:"flex gap aic",style:"gap:6px;justify-content:flex-end"},[
+          /* A lot that failed and is waiting on a ruling puts the ruling first —
+             re-testing it is not the next step, deciding is. */
+          (l.awaiting&&App.isAdmin&&App.isAdmin())?h("button",{class:"btn sm danger",
+            onclick:e=>{e.stopPropagation();
+              const q=(ENG.data.grnQcDecisions||[]).find(x=>x.grnId===g.id&&x.itemId===l.itemId);
+              UI.$("#modalHost").hidden=true;
+              if(q) qcDecisionForm(q,()=>grnTestPanel(g)); else qcDecisionQueue();},
+            text:"Rule on it"}):null,
+          h("button",{class:"btn sm "+(l.tested?"":"primary"),
+            onclick:e=>{e.stopPropagation();UI.$("#modalHost").hidden=true;grnTestForm(g.id,l.itemId,()=>grnTestPanel(g));},
+            text:l.tested?"✎ Re-test":"🧪 Test"}),
+        ].filter(Boolean))},
+      ],{empty:"This receipt has no lines"}),
+      st.awaiting?h("div",{class:"qc-note bad",style:"margin-top:14px;font-size:12px",
+        text:st.awaiting+(st.awaiting===1?" lot has":" lots have")+" failed and "+(st.awaiting===1?"is":"are")
+          +" waiting on an admin's ruling. Until the rejection is approved the material stays in the store and production can draw it."}):null,
+    ]);
+    /* The footer print follows the same rule as the row button: once every
+       material is measured this document IS the test report, so say so; while
+       readings are owed it is still only the goods receipt note. */
+    modal({title:"🧪 GRN Test Report", sub:g.id, wide:true, body,
+      foot:[h("button",{class:"btn",onclick:()=>printGrn(g),
+        html:PRINT_IC+(st.pending?" Print Goods Receipt":" Print GRN Test Report")})]});
+  }
+
+  /* "Make GRN Test Report" goes STRAIGHT to the readings — no menu in between.
+     Almost every delivery is one or two materials, and asking the user to pick
+     one off a list before typing a number is a click that buys nothing.
+     On a multi-material receipt it walks the delivery: save one material and
+     the next untested one opens itself, until none are left and the finished
+     report is shown. `seen` guards the walk — a material that is saved but
+     still reads untested (nothing was entered, or a save was refused) must not
+     be reopened for ever. */
+  function makeGrnTestReport(g, seen){
+    seen=seen||{};
+    const fresh=(ENG.data.grns||[]).find(x=>x.id===g.id)||g;
+    const st=qcForGrn(fresh);
+    const next=st.lines.find(l=>!l.tested&&!seen[l.itemId]);
+    if(!next){ grnTestPanel(fresh); return; }
+    seen[next.itemId]=true;
+    grnTestForm(fresh.id,next.itemId,()=>makeGrnTestReport(fresh,seen));
+  }
+
+  /* Kept for a part-delivered order: several receipts, each tested on its own,
+     so they are listed rather than merged — a reading belongs to the lot that
+     arrived, not to the order. */
+  function openPoTesting(po){
+    const gs=(ENG.data.grns||[]).filter(g=>g.poId===po.id&&g.status!=="Cancelled");
+    if(!gs.length){ toast("Nothing has been received against "+po.id+" yet.",{type:"warn"}); return; }
+    if(gs.length===1){ grnTestPanel(gs[0]); return; }
+    const body=h("div",{},[
+      h("div",{class:"muted",style:"font-size:12.5px;margin-bottom:12px",
+        text:"This order was delivered in "+gs.length+" parts. Each receipt is tested separately."}),
+      table(gs,[
+        {key:"id",label:"GRN No",render:g=>`<b>${esc(g.id)}</b>`,noSort:true},
+        {key:"date",label:"Date",render:g=>esc(g.date||"—"),noSort:true},
+        {key:"inv",label:"Supplier Inv.",render:g=>esc(g.invNo||"—"),noSort:true},
+        {key:"qc",label:"QC",render:g=>qcBadge(qcForGrn(g)),noSort:true},
+        {key:"act",label:"",noSort:true,render:g=>h("button",{class:"btn sm"+(qcForGrn(g).pending?" primary":""),
+          onclick:e=>{e.stopPropagation();UI.$("#modalHost").hidden=true;grnTestPanel(g);},
+          text:qcForGrn(g).pending?"🧪 Test":"🧪 View"})},
+      ],{empty:"No receipts"}),
+    ]);
+    modal({title:"🧪 GRN Testing", sub:po.id+" · "+ENG.sup(po.supplierId), wide:true, body});
+  }
+
+  /* ============================================================
+     THE TEST REPORT IS PART OF THE GRN DOCUMENT
+     The incoming readings are not a separate certificate: the goods
+     receipt note IS the test report for that delivery, so the two
+     print as one numbered document (the sheet already carried a
+     "REMARKS / QC" box and an "Inspected By (QC / Lab)" signature
+     line — this fills them in with the real readings).
+
+     WHAT PRINTS DEPENDS ON WHO PRINTS, for the same reason the
+     screens differ: the limits are admin's and the verdict is
+     withheld from the person who took the reading. So the SPECIFIED
+     column appears only when the payload actually carries limits
+     (admin), and a lab-incharge copy shows the readings marked
+     "Measured" rather than an invented Pass. A document must never
+     print a grade the payload did not contain.
+     ============================================================ */
+  /* ONE numbered section heading, used by every block on the sheet. The document
+     reads as a sequence a storekeeper and an auditor can both follow —
+     information, parties, what arrived, what was tested, what was decided, who
+     signed — instead of a stack of unlabelled tables where you have to infer
+     what each one is. `extra` carries a right-hand chip (the overall stamp). */
+  function sec(n,label,extra){
+    return `<div class="sec"><span class="sec-n">${n}</span><span class="sec-t">${label}</span>`
+      +(extra||"")+`</div>`;
+  }
+  function grnTestHtml(g,secNo){
+    const st=qcForGrn(g);
+    const done=st.lines.filter(l=>l.test);
+    if(!done.length) return "";
+    const RES={pass:['#1c7a3e','PASS'],fail:['#b02a2a','FAIL'],na:['#767c82','RECORDED']};
+    /* THE SECTION READS AS A TEST REPORT IN ITS OWN RIGHT — it carries its own
+       header line (who tested, when, against which receipt) and its own overall
+       verdict, so the page can be handed to a customer's auditor as the
+       inspection record for that delivery rather than looking like a footnote
+       on a stores document. */
+    const graded1=done.some(l=>l.test&&l.test.results);
+    const anyFail=done.some(l=>l.test&&l.test.result==="Fail");
+    /* ACCEPTED needs one thing to have actually been graded and nothing to have
+       failed. A material with no limits grades "Pending" — it is recorded, not
+       judged — and that must neither block the stamp nor be counted as a pass:
+       the per-material blocks still read RECORDED, and the note under the
+       section says so, so the page never overclaims at the line level. */
+    const anyPass=done.some(l=>l.test&&l.test.result==="Pass");
+    const stamp=!graded1?['#767c82','MEASURED']:anyFail?['#b02a2a','REJECTED']
+      :anyPass?['#1c7a3e','ACCEPTED']:['#767c82','RECORDED'];
+    const testers=[...new Set(done.map(l=>(l.test&&l.test.testedBy)||"").filter(Boolean))].join(", ");
+    const dates=[...new Set(done.map(l=>(l.test&&l.test.date)||"").filter(Boolean))].map(fmtD);
+    /* ONE TABLE for the whole delivery, so the Specified-Limit column is decided
+       ONCE — per material it would give rows of differing widths under a single
+       header. Present when any material on the receipt has limits (and never for
+       a role that was not sent them); a material without limits prints "—". */
+    const specOf1=(iid)=>{ const it=ENG.item(iid)||{};
+      return (it.qcSpec&&typeof it.qcSpec==="object"&&Object.keys(it.qcSpec).length)?it.qcSpec:null; };
+    const anySpec=done.some(l=>!!specOf1(l.itemId));
+    const NC=anySpec?6:5;   // colspan for the full-width grouping / footer rows
+    /* ONE TEST REPORT PER RECEIPT, and it is numbered by the receipt.
+       A delivery is tested once; the materials on it are SECTIONS of that one
+       report, not separate certificates. Giving each material its own report
+       number made a single delivery look like several test reports, which is
+       exactly what the user did not want on a purchase order. */
+    const metaCells=[
+      ["Test Report No.",g.id],
+      ["Test Date",dates.join(" · ")||"—"],
+      ["Tested By",testers||"—"],
+      ["Materials Tested",done.length+" of "+st.total],
+      ["Supplier Inv. No.",g.invNo||"—"],
+      ["Overall Result",stamp[1]],
+    ].map(([k,v])=>`<div class="ip"><span>${k}</span><b>${esc(String(v))}</b></div>`).join("");
+    const blocks=done.map(l=>{
+      const t=l.test;
+      const it=ENG.item(l.itemId)||{};
+      const spec=specOf1(l.itemId);   // admin only — null for every other role
+      const graded=!!t.results;       // absent for the lab role — see above
+      const rows=(t.params||[]).map((p,pi)=>{
+        const v=(t.values||{})[p.key];
+        const r=graded?(t.results[p.key]||"—"):null;
+        const sp=spec?(spec[p.key]||null):null;
+        const lim=!sp?"—":[sp.min!=null?"min "+sp.min:null,sp.max!=null?"max "+sp.max:null].filter(Boolean).join(" · ");
+        const rc=graded&&RES[r]?RES[r]:null;
+        return `<tr><td class="c">${pi+1}</td><td>${esc(p.label)}</td><td class="c">${esc(p.unit||"—")}</td>`+
+          (anySpec?`<td class="c">${esc(lim)}</td>`:"")+
+          `<td class="r"><b>${esc(v==null?"—":String(v))}</b></td>`+
+          `<td class="c">${rc?`<span style="color:${rc[0]};font-weight:800">${rc[1]}</span>`
+            :'<span style="color:#767c82;font-weight:700">MEASURED</span>'}</td></tr>`;
+      }).join("");
+      const overall=graded?(t.result==="Fail"?['#b02a2a','FAILED']:t.result==="Pass"?['#1c7a3e','PASSED']:['#767c82','RECORDED'])
+        :['#767c82','MEASURED'];
+      /* WHAT WAS DECIDED ABOUT A FAILED LOT belongs on the document as much as
+         the readings do — the paper has to say whether the material was held or
+         let through, and on whose authority. */
+      const dec=t.decision==="quarantined"
+        ? `<div class="tr-dec bad">QUARANTINED on ${esc(t.decidedBy||"admin")}'s approval${t.decidedAt?" ("+esc(String(t.decidedAt).slice(0,10))+")":""} — held in the QC store, not available to production.${t.decisionNote?" "+esc(t.decisionNote):""}</div>`
+        : t.decision==="released"
+        ? `<div class="tr-dec">Rejection DECLINED by ${esc(t.decidedBy||"admin")}${t.decidedAt?" ("+esc(String(t.decidedAt).slice(0,10))+")":""} — the lot stands as good stock.${t.decisionNote?" "+esc(t.decisionNote):""}</div>`
+        : (graded&&t.result==="Fail")
+        ? '<div class="tr-dec bad">AWAITING ADMIN RULING — the lot is in the store pending a decision to quarantine or release.</div>'
+        : "";
+      const qty=(g.lines||[]).find(x=>x.itemId===l.itemId)||{};
+      /* SAMPLING LINE — lot size vs sample size, plus the supplier's own
+         identity for the lot. This is what turns a reading into evidence: a
+         figure taken from 3 of 200 rolls says something different from one
+         taken across the whole delivery, and a failure is only chargeable to a
+         supplier if their batch number is on the paper. Each part is printed
+         only when it is actually known. */
+      const lot=qty.accepted!=null?ENG.num(qty.accepted,2)+" "+(t.uom||qty.uom||""):null;
+      const samp=[
+        lot?`Lot size <b>${esc(lot)}</b>`:null,
+        t.sampleSize!=null?`Sample <b>${ENG.num(t.sampleSize,2)} ${esc(t.uom||qty.uom||"")}</b>`:null,
+        t.supplierBatch?`Supplier batch <b>${esc(t.supplierBatch)}</b>`:null,
+        t.certRef?`Supplier cert <b>${esc(t.certRef)}</b>`:null,
+      ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+      return `<tr class="tr-grp"><td colspan="${NC}">
+          <span class="tr-nm">${esc(t.itemName||l.name)}<span class="tr-cd">${esc(l.itemId)}</span></span>
+          <span class="tr-res" style="color:${overall[0]};border-color:${overall[0]}">${overall[1]}</span>
+          ${samp?`<div class="tr-samp">${samp}</div>`:""}
+        </td></tr>${rows}${dec?`<tr class="tr-decr"><td colspan="${NC}">${dec}</td></tr>`:""}
+        <tr class="tr-ftr"><td colspan="${NC}">Tested by <b>${esc(t.testedBy||"—")}</b>${
+          t.date?" on <b>"+esc(fmtD(t.date))+"</b>":""}${
+          t.remarks?' &nbsp;·&nbsp; Remarks: '+esc(t.remarks):""}</td></tr>`;
+    }).join("");
+    const untested=st.pending;
+    /* THE DISPOSITION, in the three states a real inspection report has to
+       distinguish — and which "Pass / Fail" alone cannot express:
+         ACCEPTED               nothing failed
+         REJECTED               failed, and the rejection was approved (held)
+         CONDITIONALLY ACCEPTED failed, and an admin took it into stock anyway
+       That last one is a CONCESSION — the material is being used despite a
+       failed reading, on a named person's authority. It is the single most
+       important line on the page for an auditor, and calling it "released"
+       buried it. */
+    const anyHeld=done.some(l=>l.test&&l.test.decision==="quarantined");
+    const anyConcession=done.some(l=>l.test&&l.test.decision==="released");
+    const anyUnruled=done.some(l=>l.test&&l.test.result==="Fail"&&!l.test.decision);
+    const disp=!graded1?null
+      :anyUnruled?['#b02a2a','PENDING DISPOSITION','A material failed. The lot is in the store awaiting an authorised decision to reject or accept it under concession.']
+      :anyHeld&&anyConcession?['#b02a2a','PART REJECTED','One material was rejected and held; another was accepted under concession. See each material above.']
+      :anyHeld?['#b02a2a','REJECTED','The failed lot is held in the quarantine store and is not available to production.']
+      :anyConcession?['#c07a1a','CONDITIONALLY ACCEPTED','A material failed its specification and was accepted under concession on the authority named above.']
+      :anyFail?null
+      :['#1c7a3e','ACCEPTED','The material conforms to the specification and has been taken into stock.'];
+    /* Signatures: the person who MEASURED and the person who RULED are
+       different people, and on a failed lot the second signature is the one
+       that matters. Blank when nobody has ruled — never a pre-filled name. */
+    const ruler=[...new Set(done.map(l=>(l.test&&l.test.decidedBy)||"").filter(Boolean))].join(", ");
+    const n=secNo||4;
+    return `<div class="tr-wrap">
+      ${sec(n,"INCOMING MATERIAL TESTING",
+        `<span class="tr-stamp" style="color:${stamp[0]};border-color:${stamp[0]}">${stamp[1]}</span>`)}
+      <div class="tr-meta">${metaCells}</div>
+      ${untested?`<div class="tr-pend">${untested} material${untested===1?"":"s"} on this receipt ${untested===1?"has":"have"} not been tested yet — this report covers only the ${done.length} listed below.</div>`:""}
+      <table class="tr-tbl tr-one"><thead><tr><th class="c">Sl.</th><th>Test Parameter</th><th class="c">Unit</th>`+
+        (anySpec?'<th class="c">Specified Limit</th>':"")+
+        `<th class="r">Observed Value</th><th class="c">Result</th></tr></thead><tbody>${blocks}</tbody></table>
+      ${!graded1?'<div class="tr-note">Readings are recorded for the record. No pass/fail limits are set for these materials, so no material has been graded.</div>':""}
+      ${disp?`${sec(n+1,"DISPOSITION")}
+        <div class="tr-disp">
+          <span class="tr-disp-v" style="color:${disp[0]};border-color:${disp[0]}">${disp[1]}</span>
+          <span class="tr-disp-n">${esc(disp[2])}</span></div>`:""}
+    </div>`;
+  }
+  /* WHO SIGNS, once. The inspector and the reviewer are part of the document's
+     ONE signature strip at the foot rather than a second strip mid-page —
+     signing twice on the same sheet reads as two documents stapled together,
+     which is the opposite of what this page is for. Returns the extra cells the
+     strip grows by when a test report is present. */
+  function grnTestSigners(g){
+    const done=qcForGrn(g).lines.filter(l=>l.test);
+    if(!done.length) return null;
+    const uniq=(k)=>[...new Set(done.map(l=>(l.test&&l.test[k])||"").filter(Boolean))].join(", ");
+    return { inspector: uniq("testedBy"), reviewer: uniq("decidedBy") };
+  }
+
+  /* ============================================================
      GOODS RECEIPT NOTE — the numbered receipt document, printed
      from the frozen GRN record the server issued (never recomputed
      from live stock, so a reprint always matches the original).
      Same press as the PO print: header band, info grid, party
-     blocks, dark item table, signature strip.
+     blocks, dark item table, signature strip — plus the incoming
+     test report above, when the delivery has been measured.
      ============================================================ */
   function printGrn(g){
     const co=companyByKey(g.company);
@@ -2186,11 +2796,29 @@
     const accVal=recdVal-rejVal;
     const anyRej=lines.some(x=>(+x.rejected||0)>0);
 
+    /* THE TEST REPORT IS PART OF THIS DOCUMENT, so the sheet says so in its
+       title once readings exist: one page is both the stores receipt and the
+       incoming-inspection record for that delivery. Before anything is tested
+       it is still just a goods receipt note, and claiming otherwise on paper
+       would be a lie. */
+    const qcSt=qcForGrn(g);
+    const tested=qcSt.lines.filter(l=>l.test).length;
+    const signers=grnTestSigners(g);   // extra signature cells, or null
+    const docTitle=tested?"GOODS RECEIPT NOTE CUM TEST REPORT":"GOODS RECEIPT NOTE";
+    const qcVerdict=!tested?null
+      :qcSt.fail?(qcSt.quarantined?"Failed — quarantined":qcSt.awaiting?"Failed — awaiting ruling":"Failed — released")
+      :qcSt.pending?"Part tested":App.isLab()?"Tested":qcSt.pass?"Passed":"Recorded";
+
     const infoPairs=[
       ["GRN No.",g.id],["GRN Date",fmtD(g.date)],["Warehouse",whName],
       ["Against PO",g.poId||"—"],["PO Date",fmtD(g.poDate)],["Received By",g.by||"—"],
       ["Supplier Inv. No.",g.invNo||"—"],["Invoice Date",fmtD(g.invDate)],["Vehicle No.",g.vehicle||"—"],
-    ].concat(g.lrNo?[["LR / Docket No.",g.lrNo],["",""],["",""]]:[]);
+    ].concat(g.lrNo?[["LR / Docket No.",g.lrNo]]:[]);
+    /* No "Incoming QC" row here. The verdict is stated by the test report's own
+       stamp and, in words, by its DISPOSITION line — saying it a third time in
+       the receipt header was noise, and three copies of one fact is how they
+       start disagreeing. */
+    while(infoPairs.length%3) infoPairs.push(["",""]);
     const infoCells=infoPairs.map(([k,vv])=>k?`<div class="ip"><span>${k}</span><b>${esc(String(vv))}</b></div>`:'<div class="ip"></div>').join("");
 
     const rows=lines.map((x,i)=>`<tr><td class="c">${i+1}</td>`+
@@ -2200,13 +2828,23 @@
       `<td class="r">${ENG.num(x.accepted,2)}</td>`+
       `<td class="r">${(+x.rejected||0)>0?`<span class="rej">${ENG.num(x.rejected,2)}</span>`:"—"}</td>`+
       `<td class="r">${IN(x.rate)}</td><td class="r">${IN((+x.accepted||0)*(+x.rate||0))}</td></tr>`).join("");
+    /* Filler rows pad a short receipt so the table does not look truncated. A
+       receipt that carries a test report below it needs no padding — the page is
+       already full, and two blank rows between the goods and their test results
+       just push them apart. */
     let filler="";
-    for(let i=0;i<2;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(10)}</tr>`;
+    if(!tested) for(let i=0;i<2;i++) filler+=`<tr class="fill">${'<td>&nbsp;</td>'.repeat(10)}</tr>`;
 
-    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Goods Receipt Note ${esc(g.id)}</title>
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(docTitle==="GOODS RECEIPT NOTE"?"Goods Receipt Note":"Goods Receipt Note cum Test Report")} ${esc(g.id)}</title>
 <style>
   @page{size:A4;margin:8mm}
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* An explicit WHITE ground. These sheets are dark text on mostly unstyled
+     rows, so a browser in dark mode paints its own dark background behind them
+     and every un-zebra'd row goes dark-on-dark — in the on-screen preview, and
+     on paper whenever "background graphics" is switched off. Paper is white;
+     the document should say so rather than inherit whatever the viewer prefers. */
+  html,body{background:#fff}
   body{font:12px/1.38 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
   .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:96px}
   .logo-side{flex:1.05;display:flex;align-items:center;padding:5px 0 5px 16px}
@@ -2235,6 +2873,10 @@
   td.r,th.r{text-align:right} td.c,th.c{text-align:center}
   td .sub{font-size:9.5px;color:#777}
   .rej{color:#b02a2a;font-weight:700}
+  /* "GOODS RECEIPT NOTE CUM TEST REPORT" is nearly twice as long as the plain
+     title — at 20px/4px it runs into the copy chip, so the combined form gets
+     its own tighter setting rather than being allowed to overflow. */
+  .title.long{font-size:15px;letter-spacing:2px}
   .bottom{display:flex;gap:12px;align-items:flex-start;margin-bottom:8px}
   .rem{flex:1.4;border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:5px 12px;font-size:11px;line-height:1.45}
   .lbl{font-size:9px;font-weight:800;letter-spacing:1px;color:#F06820;text-transform:uppercase}
@@ -2247,12 +2889,60 @@
   .words b{display:block;margin-top:2px;font-size:11.5px}
   .sign{display:flex;gap:12px;margin-top:26px}
   .sig{flex:1;border-top:1.5px solid #555;padding-top:5px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.5px;color:#333;text-transform:uppercase}
+  /* who actually did it, under the role — the receipt records real people */
+  .sig-nm{font-size:9.5px;font-weight:600;letter-spacing:0;color:#767c82;text-transform:none;margin-top:2px}
   .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
   .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
   .cancel{position:fixed;top:40%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);
     font-size:64px;font-weight:900;letter-spacing:8px;color:rgba(176,42,42,.18);
     border:6px solid rgba(176,42,42,.18);border-radius:12px;padding:6px 30px;pointer-events:none}
+  /* the incoming test report, printed as part of this same document */
+  /* NUMBERED SECTION HEADINGS. Every block on the sheet gets one, so the page
+     reads as a sequence — information, parties, what arrived, what was tested,
+     what was decided, who signed — instead of a stack of unlabelled tables. */
+  .sec{display:flex;align-items:center;gap:9px;margin:13px 0 7px}
+  .sec-n{flex:0 0 auto;width:16px;height:16px;border-radius:50%;background:#F06820;color:#fff;
+    font-size:9.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .sec-t{font-size:10.5px;font-weight:800;letter-spacing:1.5px;color:#26282b;text-transform:uppercase}
+  .sec::after{content:"";flex:1;height:1px;background:#dfe2e5}
+  .sec .tr-stamp{flex:0 0 auto;order:3}
+  .tr-wrap{break-inside:avoid}
+  .tr-stamp{font-size:11px;font-weight:900;letter-spacing:2px;border:2px solid;border-radius:4px;
+    padding:3px 12px;white-space:nowrap}
+  .tr-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;
+    border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:9px}
+  .tr-pend{font-size:10px;font-weight:700;color:#b02a2a;border:1px solid #e3b7b7;
+    background:#fdf3f3;border-radius:4px;padding:4px 10px;margin-bottom:8px}
+  .tr-note{font-size:9.5px;color:#767c82;font-style:italic;margin-top:4px}
+  .tr-sub{font-size:9.5px;color:#767c82;margin:-2px 0 5px}
+  .tr-sub b{color:#333}
+  /* ONE table for the whole delivery: each material is a full-width grouping
+     row rather than its own bordered card. Half the vertical space, and a
+     multi-material receipt still fits one page — the same idiom the BOM
+     components table already uses for layer headings. */
+  .tr-nm{font-size:11.5px;font-weight:800;color:#26282b}
+  .tr-cd{font-size:9.5px;font-weight:600;color:#777;margin-left:7px}
+  .tr-res{font-size:9px;font-weight:800;letter-spacing:1px;border:1.5px solid;border-radius:3px;
+    padding:1px 8px;white-space:nowrap;float:right}
+  .tr-samp{font-size:9.5px;color:#767c82;font-weight:500;margin-top:2px;clear:both}
+  .tr-samp b{color:#333}
+  table.tr-tbl{width:100%;border-collapse:collapse}
+  table.tr-tbl th{background:#26282b;color:#fff;font-size:9px;text-transform:uppercase;letter-spacing:.4px;
+    padding:4px 7px;border:1px solid #26282b;font-weight:800}
+  table.tr-tbl td{border:1px solid #e3e6e8;padding:3.5px 7px;font-size:11px}
+  tr.tr-grp > td{background:#eef0f2;border-top:1.5px solid #b9bec3;padding:5px 8px 4px}
+  tr.tr-ftr > td{font-size:9.5px;color:#767c82;background:#fafbfc;padding:3px 8px}
+  tr.tr-ftr b{color:#333}
+  tr.tr-decr > td{padding:0;border:0}
+  .tr-dec{font-size:10px;line-height:1.5;padding:4px 8px;background:#f6f7f8;
+    border-left:3px solid #767c82;color:#4a5057;font-weight:600}
+  .tr-dec.bad{background:#fdf3f3;border-left-color:#b02a2a;color:#b02a2a;font-weight:700}
+  /* the disposition: the one line an auditor reads first */
+  .tr-disp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:7px 12px;
+    border:1px solid #d8dbde;border-left:4px solid #26282b;border-radius:0 8px 8px 0;background:#fafbfc}
+  .tr-disp-v{font-size:11.5px;font-weight:900;letter-spacing:1.4px;border:2px solid;border-radius:4px;padding:2px 11px}
+  .tr-disp-n{font-size:10px;color:#4a5057;flex:1;min-width:180px;line-height:1.5}
   @media print{body{padding:0 6mm 0}.band{margin:0 -6mm}.rule{margin:0 -6mm 12px}.note{display:none}}
 </style></head><body>
   ${cancelled?'<div class="cancel">CANCELLED</div>':""}
@@ -2266,8 +2956,10 @@
     </div>
   </div>
   <div class="rule"></div>
-  <div class="title-row"><span class="title">GOODS RECEIPT NOTE</span><span class="copy">Store Copy</span></div>
+  <div class="title-row"><span class="title${tested?" long":""}">${esc(docTitle)}</span><span class="copy">${tested?"Store &amp; QC Copy":"Store Copy"}</span></div>
+  ${sec(1,"RECEIPT INFORMATION")}
   <div class="info">${infoCells}</div>
+  ${sec(2,"SUPPLIER &amp; RECEIVING STORE")}
   <div class="parties">
     <div class="party"><div class="plbl">SUPPLIER / VENDOR</div>
       <div class="pnm">${esc(p.name||"")}</div>
@@ -2282,13 +2974,14 @@
       <div>Store : ${esc(whName)}</div>
     </div>
   </div>
+  ${sec(3,"MATERIAL RECEIVED")}
   <table class="items"><thead><tr>
     <th class="c">Sl.</th><th>Item Description</th><th class="c">HSN</th><th class="c">Unit</th>
     <th class="r">Ordered</th><th class="r">Received</th><th class="r">Accepted</th><th class="r">Rejected</th>
     <th class="r">Rate (₹)</th><th class="r">Amount (₹)</th>
   </tr></thead><tbody>${rows}${filler}</tbody></table>
   <div class="bottom">
-    <div class="rem"><span class="lbl">REMARKS / QC</span>
+    <div class="rem"><span class="lbl">${tested?"STORE REMARKS":"REMARKS / QC"}</span>
       ${g.remarks?`<div>${esc(g.remarks)}</div>`:'<div class="sub" style="color:#777">—</div>'}
       <div>Accepted quantities are posted to stock at PO rates${anyRej?"; rejected material returns to the supplier and is quoted on the debit note":""}.</div>
     </div>
@@ -2301,12 +2994,16 @@
       <div class="words"><span class="lbl">AMOUNT IN WORDS</span><b>${esc(GST.amountInWords(accVal))}</b></div>
     </div>
   </div>
+  ${grnTestHtml(g,4)}
+  ${sec(tested?6:4,"SIGN-OFF")}
   <div class="sign">
-    <div class="sig">Prepared By (Store)</div>
-    <div class="sig">Inspected By (QC / Lab)</div>
-    <div class="sig">For <b>${esc(co.name)}</b> — Authorised Signatory</div>
+    <div class="sig">Prepared By (Store)${g.by?`<div class="sig-nm">${esc(g.by)}</div>`:""}</div>
+    <div class="sig">Inspected By (QC / Lab)${signers&&signers.inspector?`<div class="sig-nm">${esc(signers.inspector)}</div>`:""}</div>
+    ${signers?`<div class="sig">Reviewed &amp; Approved By${signers.reviewer?`<div class="sig-nm">${esc(signers.reviewer)}</div>`:""}</div>`:""}
+    <div class="sig">${signers?"Authorised Signatory":`For <b>${esc(co.name)}</b> — Authorised Signatory`}${
+      signers?`<div class="sig-nm">for ${esc(co.name)}</div>`:""}</div>
   </div>
-  <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>This is a computer generated goods receipt note · ${esc(g.id)}</b></div>
+  <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>This is a computer generated ${tested?"goods receipt note cum test report":"goods receipt note"} · ${esc(g.id)}</b></div>
   <div class="note">Use your browser's "Save as PDF" to download</div>
   <script>window.onload=function(){window.print();}<\/script>
 </body></html>`;
@@ -2417,6 +3114,12 @@
      page). The 8mm page margin plus the body's 6mm gives a 14mm side margin. */
   @page{size:A4;margin:8mm}
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* An explicit WHITE ground. These sheets are dark text on mostly unstyled
+     rows, so a browser in dark mode paints its own dark background behind them
+     and every un-zebra'd row goes dark-on-dark — in the on-screen preview, and
+     on paper whenever "background graphics" is switched off. Paper is white;
+     the document should say so rather than inherit whatever the viewer prefers. */
+  html,body{background:#fff}
   body{font:12px/1.38 "Segoe UI",Arial,sans-serif;color:#1a1c1e;max-width:860px;margin:0 auto;padding:0 20px 20px}
   .band{display:flex;align-items:stretch;gap:0;margin:0 -20px 0;min-height:96px}
   .logo-side{flex:1.05;display:flex;align-items:center;padding:5px 0 5px 16px}
@@ -2647,6 +3350,12 @@
   const PRINT_IC='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1.5px" aria-hidden="true"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="15" width="12" height="7" rx="1"/></svg>';
   function printBtn(kind,r){ return h("button",{class:"btn sm ghost",title:(kind==="po"?"Print / download PO":"Print / download invoice"),
     onclick:e=>{e.stopPropagation();printDoc(kind,r);},html:PRINT_IC}); }
+
+  /* The incoming-test form is reached from two places — the receipt rows here,
+     and the lab incharge's own worklist on the Lab Reports page — so it is
+     shared the same way the goods-receipt form is (see _erpUtil.receiveStockForm).
+     One form, one endpoint, whichever screen the work starts from. */
+  window._erpUtil = Object.assign(window._erpUtil||{}, { grnTestForm, grnTestPanel, qcDecisionQueue, printGrn });
 
   // register ⌘K quick actions for Procurement & Sales
   window.ERPActions = Object.assign(window.ERPActions||{}, {

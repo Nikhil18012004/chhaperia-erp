@@ -361,6 +361,29 @@ CREATE TABLE IF NOT EXISTS grns (
 
 
 -- ============================================================
+--  INCOMING-MATERIAL TEST REPORTS ("GRN testing")
+--  One row per (goods receipt × material): after a purchase order
+--  is received, the lab incharge measures what actually arrived
+--  and files the readings here. Pass/Fail is computed on the
+--  server against the material's hidden qcSpec (on the item), so
+--  the person taking the measurement can neither read the limits
+--  nor see the verdict — the same rule the finished-goods
+--  certificates in lab_reports follow.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS grn_tests (
+  id        TEXT PRIMARY KEY,          -- GT-0001
+  grn_id    TEXT NOT NULL,             -- GRN/26-27/0001
+  item_id   TEXT NOT NULL,             -- the material tested
+  doc       TEXT NOT NULL              -- JSON: poId,supplierId,itemName,uom,date,params[{key,
+                                       --       label,unit,type}],values{param:n|s},
+                                       --       results{param:pass|fail|na|—},result(Pass|Fail|
+                                       --       Pending),complete,testedBy,testedAt,remarks
+);
+CREATE INDEX IF NOT EXISTS idx_grn_tests_grn  ON grn_tests(grn_id);
+CREATE INDEX IF NOT EXISTS idx_grn_tests_item ON grn_tests(item_id);
+
+
+-- ============================================================
 --  CHATBOT — trainable knowledge base.
 --  One row per trained Q&A pair, uploaded by admin/office.
 --  Deliberately OUTSIDE saveState()'s wipe list, so training

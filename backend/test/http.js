@@ -595,6 +595,309 @@ async function run() {
   ok("lab CANNOT set a spec — it is the yardstick it is graded by (403)",
     (await call("PUT", "/lab/products/LP-0001/spec", LB, { spec: {} })).status === 403);
 
+  /* ============================================================
+     INCOMING-MATERIAL TESTING ("GRN testing")
+     A purchase order is received → the lab incharge measures what actually
+     arrived → the verdict shows on the order. The rules worth pinning down are
+     the same ones the finished-goods certificates follow: the limits live with
+     admin, the measurer sees neither the limits nor the grade, and grading
+     happens server-side.
+     ============================================================ */
+  section("Incoming-material testing after a goods receipt");
+  {
+    const poQ = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-20",
+      lines: [{ itemId: rm, qty: 100, rate: 30 }] })).d;
+
+    // ---- the material master decides what is measured, and admin owns it ----
+    const cat = await call("GET", "/grn-tests/params", LB);
+    ok("the parameter catalogue is readable", cat.status === 200
+      && Array.isArray(cat.d.params) && cat.d.params.some((p) => p.key === "thickness"));
+    const setQc = await call("PUT", "/items/" + rm + "/qc", A,
+      { params: ["thickness", "massPerArea", "visual"],
+        spec: { thickness: { min: 0.07, max: 0.09 }, massPerArea: { min: 100, max: 130 } } });
+    ok("admin sets the parameters + their limits", setQc.status === 200
+      && setQc.d.params.join(",") === "thickness,massPerArea,visual", JSON.stringify(setQc.d).slice(0, 120));
+    ok("office cannot touch the parameter list at all (403)",
+      (await call("PUT", "/items/" + rm + "/qc", O, { params: ["thickness"] })).status === 403);
+    /* The lab incharge MAY edit the list — see the fuller check further down,
+       which also proves a `spec` they send is ignored rather than applied. */
+    const labProbe = await call("PUT", "/items/" + rm + "/qc", LB,
+      { params: ["thickness", "massPerArea", "visual"], spec: { thickness: { min: 99, max: 100 } } });
+    ok("the lab incharge may edit the list, but not the limits",
+      labProbe.status === 200 && labProbe.d.specEditable === false,
+      JSON.stringify(labProbe.d).slice(0, 130));
+    ok("a minimum above its maximum is refused (400)",
+      (await call("PUT", "/items/" + rm + "/qc", A,
+        { params: ["thickness"], spec: { thickness: { min: 9, max: 1 } } })).status === 400);
+    // a limit for a parameter that is not on the list is dropped, not stored —
+    // otherwise a report is graded against something it never asked for
+    await call("PUT", "/items/" + rm + "/qc", A, { params: ["thickness", "massPerArea", "visual"],
+      spec: { thickness: { min: 0.07, max: 0.09 }, massPerArea: { min: 100, max: 130 }, tensile: { min: 999 } } });
+    const rmAdmin = ((await call("GET", "/state", A)).d.items || []).find((i) => i.id === rm);
+    ok("a limit for an unlisted parameter is not stored", rmAdmin && !rmAdmin.qcSpec.tensile,
+      JSON.stringify(rmAdmin && rmAdmin.qcSpec));
+    // a visual check has no min/max — a limit on one is meaningless and dropped
+    ok("a text parameter cannot carry limits", !rmAdmin.qcSpec.visual);
+
+    // ---- nothing to test until something is received ----
+    const early = (await call("GET", "/grn-tests/pending", LB)).d.pending || [];
+    ok("an order still in transit owes no test", !early.some((p) => p.poId === poQ.id));
+
+    const recQ = await call("POST", "/purchase-orders/" + poQ.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 100 }], invNo: "QC/INV/9" });
+    const gq = recQ.d.grn;
+    ok("the goods are received and a GRN issued", recQ.status === 200 && !!gq, JSON.stringify(recQ.d).slice(0, 100));
+
+    // ---- and now it does ----
+    const due = ((await call("GET", "/grn-tests/pending", LB)).d.pending || []).filter((p) => p.grnId === gq.id);
+    ok("the received material lands on the incharge's worklist", due.length === 1, JSON.stringify(due).slice(0, 140));
+    const form = (await call("GET", "/grns/" + encodeURIComponent(gq.id) + "/tests/" + rm, LB)).d;
+    ok("the entry form asks for exactly the parameters admin chose",
+      (form.params || []).map((p) => p.key).join(",") === "thickness,massPerArea,visual",
+      JSON.stringify((form.params || []).map((p) => p.key)));
+    ok("the entry form never carries the limits",
+      !form.spec && !form.qcSpec && JSON.stringify(form).indexOf("0.07") < 0);
+    ok("a material not on the receipt has no form (404)",
+      (await call("GET", "/grns/" + encodeURIComponent(gq.id) + "/tests/GHOST", LB)).status === 404);
+
+    // ---- filing a reading ----
+    const part = await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.08 } });
+    ok("a part-filled report is refused, naming what is missing", part.status === 400
+      && /Mass per unit area/.test(JSON.stringify(part.d)), JSON.stringify(part.d).slice(0, 140));
+    const filed = await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.08, massPerArea: 118, visual: "clean" }, remarks: "3 rolls sampled",
+        sampleSize: 12, supplierBatch: "BME/2291/A", certRef: "COA-77412" });
+    ok("a complete reading is accepted", filed.status === 201, JSON.stringify(filed.d).slice(0, 110));
+    /* SAMPLING + TRACEABILITY. A reading with no sample size is an anecdote, and
+       a failure cannot be charged to a supplier without their own batch number
+       — so both travel with the report and onto the printed page. */
+    ok("the sample size and supplier traceability are kept",
+      filed.d.test.sampleSize === 12 && filed.d.test.supplierBatch === "BME/2291/A"
+      && filed.d.test.certRef === "COA-77412",
+      JSON.stringify({ s: filed.d.test.sampleSize, b: filed.d.test.supplierBatch, c: filed.d.test.certRef }));
+    ok("…and they survive a re-measure that does not resend them",
+      (await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+        { itemId: rm, values: { thickness: 0.082, massPerArea: 119, visual: "clean" } }))
+        .d.test.supplierBatch === "BME/2291/A");
+    ok("a junk sample size is dropped rather than stored",
+      (await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+        { itemId: rm, values: { thickness: 0.08, massPerArea: 118, visual: "clean" }, sampleSize: "abc" }))
+        .d.test.sampleSize === 12, "kept the previous value rather than NaN");
+    ok("the writer is told it is complete but NOT how it graded",
+      filed.d.test.complete === true && filed.d.test.result === undefined
+      && filed.d.test.results === undefined, JSON.stringify(filed.d.test).slice(0, 150));
+    ok("an unknown receipt is refused (404)",
+      (await call("POST", "/grns/GRN%2F99-99%2F9999/tests", LB, { itemId: rm, values: {} })).status === 404);
+    ok("a material not on the receipt is refused (400)",
+      (await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+        { itemId: "GHOST", values: {} })).status === 400);
+    ok("a supervisor cannot file an incoming reading (403)",
+      (await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", C,
+        { itemId: rm, values: {} })).status === 403);
+    ok("anonymous cannot either (401)",
+      (await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", null,
+        { itemId: rm, values: {} })).status === 401);
+    ok("the line leaves the worklist once measured",
+      !((await call("GET", "/grn-tests/pending", LB)).d.pending || [])
+        .some((p) => p.grnId === gq.id && p.itemId === rm));
+
+    // ---- who sees the verdict ----
+    const oSt = (await call("GET", "/state", O)).d;
+    const oT = (oSt.grnTests || []).find((t) => t.grnId === gq.id && t.itemId === rm);
+    ok("the office reads the graded result", !!oT && oT.result === "Pass", oT && oT.result);
+    ok("…graded per parameter, with the visual check recorded but not graded",
+      oT.results.thickness === "pass" && oT.results.massPerArea === "pass" && oT.results.visual === "na",
+      JSON.stringify(oT.results));
+    const lSt = (await call("GET", "/state", LB)).d;
+    const lT = (lSt.grnTests || []).find((t) => t.grnId === gq.id);
+    ok("the lab payload carries the receipt it must test", (lSt.grns || []).some((g) => g.id === gq.id));
+    ok("the lab payload strips the verdict, keeping `complete`",
+      !!lT && lT.result === undefined && lT.results === undefined && lT.complete === true,
+      JSON.stringify(lT && Object.keys(lT)));
+    const lRm = (lSt.items || []).find((i) => i.id === rm);
+    ok("the lab payload strips the material's limits but keeps the parameter list",
+      lRm && lRm.qcSpec === undefined && lRm.qcSpecSet === true && (lRm.qcParams || []).length === 3,
+      JSON.stringify(lRm && { qcSpec: lRm.qcSpec, qcSpecSet: lRm.qcSpecSet, qcParams: lRm.qcParams }));
+    const oRm = (oSt.items || []).find((i) => i.id === rm);
+    ok("office is not sent the limits either", oRm && oRm.qcSpec === undefined && oRm.qcSpecSet === true);
+    ok("admin keeps them — it owns the master",
+      rmAdmin.qcSpec && rmAdmin.qcSpec.thickness.min === 0.07);
+
+    // ---- a failure, and re-measuring ----
+    const bad = await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.061, massPerArea: 118, visual: "thin patches" } });
+    ok("re-measuring the same lot is accepted", bad.status === 201);
+    const afterBad = ((await call("GET", "/state", O)).d.grnTests || [])
+      .filter((t) => t.grnId === gq.id && t.itemId === rm);
+    ok("it UPDATES the report rather than filing a contradictory second one",
+      afterBad.length === 1, afterBad.length + " reports");
+    ok("an out-of-limit reading grades Fail and names the parameter",
+      afterBad[0].result === "Fail" && afterBad[0].results.thickness === "fail"
+      && afterBad[0].results.massPerArea === "pass", JSON.stringify(afterBad[0].results));
+
+    // ---- moving the limits re-grades what was already signed off ----
+    const widened = await call("PUT", "/items/" + rm + "/qc", A,
+      { params: ["thickness", "massPerArea", "visual"],
+        spec: { thickness: { min: 0.05, max: 0.09 }, massPerArea: { min: 100, max: 130 } } });
+    ok("changing the limits re-grades existing reports, and says how many",
+      widened.d.regraded >= 1, JSON.stringify(widened.d));
+    const regraded = ((await call("GET", "/state", O)).d.grnTests || [])
+      .find((t) => t.grnId === gq.id && t.itemId === rm);
+    ok("the failed lot now reads Pass against the widened limits",
+      regraded.result === "Pass", regraded.result);
+
+    // ---- an unconfigured material still gets checked, just not graded ----
+    await call("PUT", "/items/" + rm + "/qc", A, { params: [], spec: {} });
+    const bare = (await call("GET", "/grns/" + encodeURIComponent(gq.id) + "/tests/" + rm, LB)).d;
+    ok("a material with no parameter list falls back to derived defaults",
+      (bare.params || []).length > 0 && bare.configured === false,
+      JSON.stringify((bare.params || []).map((p) => p.key)));
+    ok("…and says plainly that nothing will be graded", bare.specSet === false);
+
+    // ---- the lab incharge owns the parameter LIST, admin owns the LIMITS ----
+    await call("PUT", "/items/" + rm + "/qc", A, { params: ["thickness", "massPerArea", "visual"],
+      spec: { thickness: { min: 0.05, max: 0.09 } } });
+    const labEdit = await call("PUT", "/items/" + rm + "/qc", LB,
+      { params: ["thickness", "visual"], spec: { thickness: { min: 0, max: 99 } } });
+    ok("the lab incharge MAY change which parameters are measured", labEdit.status === 200
+      && labEdit.d.params.join(",") === "thickness,visual", JSON.stringify(labEdit.d).slice(0, 130));
+    ok("…and is told the limits were not theirs to change", labEdit.d.specEditable === false);
+    const afterLabEdit = ((await call("GET", "/state", A)).d.items || []).find((i) => i.id === rm);
+    ok("their save did NOT move the limits", afterLabEdit.qcSpec
+      && afterLabEdit.qcSpec.thickness.min === 0.05 && afterLabEdit.qcSpec.thickness.max === 0.09,
+      JSON.stringify(afterLabEdit.qcSpec));
+    ok("office is shut out of the parameter list entirely (403)",
+      (await call("PUT", "/items/" + rm + "/qc", O, { params: ["visual"] })).status === 403);
+
+    /* ============================================================
+       A FAILED LOT GOES TO THE ADMIN, WHO RULES ON IT
+       approve → the lot is transferred to the quarantine store and production
+       can no longer draw it; decline → it stands as good stock.
+       ============================================================ */
+    await call("PUT", "/items/" + rm + "/qc", A, { params: ["thickness", "visual"],
+      spec: { thickness: { min: 0.07, max: 0.09 } } });
+    const poF = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-22",
+      lines: [{ itemId: rm, qty: 40, rate: 30 }] })).d;
+    const gF = (await call("POST", "/purchase-orders/" + poF.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 40 }] })).d.grn;
+    const failed = await call("POST", "/grns/" + encodeURIComponent(gF.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.02, visual: "very thin" } });
+    ok("a failing reading raises a decision rather than making one",
+      failed.status === 201 && failed.d.awaitingDecision === true, JSON.stringify(failed.d.awaitingDecision));
+    const queue = await call("GET", "/grn-tests/decisions", A);
+    const mineQ = (queue.d.pending || []).filter((x) => x.grnId === gF.id);
+    ok("the failed lot appears on the admin's decision queue", mineQ.length === 1,
+      JSON.stringify(mineQ).slice(0, 170));
+    ok("…naming the quantity and the parameter that failed",
+      mineQ[0] && Math.abs(mineQ[0].acceptedQty - 40) < 0.001 && (mineQ[0].failed || []).join() === "Thickness",
+      JSON.stringify(mineQ[0] && { qty: mineQ[0].acceptedQty, failed: mineQ[0].failed }));
+    ok("the lab incharge cannot rule on it (403)",
+      (await call("POST", "/grn-tests/" + mineQ[0].id + "/decision", LB, { approve: true })).status === 403);
+    ok("nor can office — it is the use-or-not-use decision (403)",
+      (await call("POST", "/grn-tests/" + mineQ[0].id + "/decision", O, { approve: true })).status === 403);
+
+    // stock is STILL in the receiving store while the ruling is outstanding
+    const preRule = (await call("GET", "/state", A)).d;
+    const inStore = (preRule.movements || []).filter((m) => m.itemId === rm && m.wh === "WH-RM")
+      .reduce((s, m) => s + (+m.qty || 0), 0);
+    ok("the lot stays in the receiving store until the admin decides", inStore > 0, "on hand " + inStore);
+
+    // ---- approve: the lot is quarantined ----
+    const ruled = await call("POST", "/grn-tests/" + mineQ[0].id + "/decision", A,
+      { approve: true, note: "return to supplier" });
+    ok("admin approving the rejection quarantines the lot", ruled.status === 200
+      && ruled.d.test.decision === "quarantined", JSON.stringify(ruled.d.test && ruled.d.test.decision));
+    ok("…by TRANSFERRING it, not writing it off", ruled.d.moved
+      && Math.abs(ruled.d.moved.qty - 40) < 0.001 && ruled.d.moved.from === "WH-RM",
+      JSON.stringify(ruled.d.moved));
+    const post = (await call("GET", "/state", A)).d;
+    const holdWh = (post.warehouses || []).find((w) => /quarantine/i.test(String(w.type || "") + String(w.name || "")));
+    const inHold = (post.movements || []).filter((m) => m.itemId === rm && m.wh === holdWh.id)
+      .reduce((s, m) => s + (+m.qty || 0), 0);
+    ok("the quarantine store now holds it", Math.abs(inHold - 40) < 0.001, "hold " + inHold);
+    const totalAll = (post.movements || []).filter((m) => m.itemId === rm).reduce((s, m) => s + (+m.qty || 0), 0);
+    const totalBefore = (preRule.movements || []).filter((m) => m.itemId === rm).reduce((s, m) => s + (+m.qty || 0), 0);
+    ok("total on-hand is unchanged — a location change, not a write-off",
+      Math.abs(totalAll - totalBefore) < 0.001, totalBefore + " → " + totalAll);
+    ok("ruling twice is refused (409)",
+      (await call("POST", "/grn-tests/" + mineQ[0].id + "/decision", A, { approve: false })).status === 409);
+    ok("the lot leaves the decision queue once ruled on",
+      !((await call("GET", "/grn-tests/decisions", A)).d.pending || []).some((x) => x.grnId === gF.id));
+
+    /* THE POINT OF QUARANTINE: production must not be able to draw it. Asserted
+       at the two seams that decide that — what a job may be made from, and which
+       store an issue is posted against. */
+    const GTsvc = require("../src/services/grnTestService");
+    const PRsvc = require("../src/services/productionService");
+    const Ssvc = require("../src/services/stageService");
+    ok("the transfer is recorded against the receipt that brought the lot in",
+      (post.movements || []).some((m) => m.itemId === rm && m.wh === holdWh.id
+        && m.type === "XFER" && m.ref === gF.id), "ref " + gF.id);
+    ok("the quarantine store is recognised as a held store",
+      GTsvc.heldWarehouseIds(post).indexOf(holdWh.id) >= 0, JSON.stringify(GTsvc.heldWarehouseIds(post)));
+    const availAll = (post.movements || []).filter((m) => m.itemId === rm)
+      .reduce((s, m) => s + (+m.qty || 0), 0);
+    const availProd = PRsvc.onHandMap(post)[rm] || 0;
+    ok("quarantined stock is EXCLUDED from what production may draw",
+      Math.abs(availAll - availProd - 40) < 0.001,
+      "ledger " + availAll.toFixed(2) + " vs available " + availProd.toFixed(2) + " (40 held)");
+    const itemsById = Object.fromEntries((post.items || []).map((i) => [i.id, i]));
+    const picked = Ssvc.issuingWarehouse(rm, itemsById, post.movements, GTsvc.heldWarehouseIds(post));
+    ok("an issue is never posted against the quarantine store", picked !== holdWh.id, "picked " + picked);
+    ok("…while the ledger itself still shows the lot — it was held, not lost",
+      Math.abs(((post.movements || []).filter((m) => m.itemId === rm && m.wh === holdWh.id)
+        .reduce((s, m) => s + (+m.qty || 0), 0)) - 40) < 0.001);
+
+    // ---- decline: the lot stands as good stock ----
+    const poR = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-23",
+      lines: [{ itemId: rm, qty: 25, rate: 30 }] })).d;
+    const gR = (await call("POST", "/purchase-orders/" + poR.id + "/receive", A,
+      { wh: "WH-RM", lines: [{ i: 0, qty: 25 }] })).d.grn;
+    await call("POST", "/grns/" + encodeURIComponent(gR.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.02, visual: "thin" } });
+    const q2 = ((await call("GET", "/grn-tests/decisions", A)).d.pending || []).find((x) => x.grnId === gR.id);
+    ok("a second failed lot queues independently", !!q2, JSON.stringify(q2 && q2.grnId));
+    const beforeDecline = (await call("GET", "/state", A)).d.movements
+      .filter((m) => m.itemId === rm && m.wh === holdWh.id).reduce((s, m) => s + (+m.qty || 0), 0);
+    const declined = await call("POST", "/grn-tests/" + q2.id + "/decision", A,
+      { approve: false, note: "acceptable for binder use" });
+    ok("declining the rejection releases the lot", declined.status === 200
+      && declined.d.test.decision === "released" && !declined.d.moved, JSON.stringify(declined.d.test.decision));
+    const afterDecline = (await call("GET", "/state", A)).d.movements
+      .filter((m) => m.itemId === rm && m.wh === holdWh.id).reduce((s, m) => s + (+m.qty || 0), 0);
+    ok("…moving nothing — it was already good stock where it stood",
+      Math.abs(afterDecline - beforeDecline) < 0.001, beforeDecline + " → " + afterDecline);
+    ok("a PASSING lot never asks for a ruling", (await call("POST",
+      "/grns/" + encodeURIComponent(gR.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.08, visual: "clean" } })).d.awaitingDecision === false);
+    ok("re-testing to a PASS clears the decision the failure had collected",
+      !((await call("GET", "/state", A)).d.grnTests || [])
+        .find((t) => t.grnId === gR.id && t.itemId === rm).decision);
+    ok("a lot that is not failing cannot be ruled on (400)",
+      (await call("POST", "/grn-tests/" + q2.id + "/decision", A, { approve: true })).status === 400);
+    await call("DELETE", "/purchase-orders/" + poF.id, A);
+    await call("DELETE", "/purchase-orders/" + poR.id, A);
+
+    // ---- the seeder gives every purchasable material a real starting list ----
+    const seeded = GTsvc.ensureItemQc();
+    ok("the seeder covers every purchasable material", seeded.items > 0
+      && seeded.changed >= 0, JSON.stringify(seeded));
+    ok("a mica paper is checked on its dielectric strength, a paste is not",
+      GTsvc.derivedParamKeys({ name: "MICA TAPE CP25G", uom: "MTR", gsm: 120, thicknessMM: 0.08, widthMM: 1000 }).indexOf("bdv") >= 0
+      && GTsvc.derivedParamKeys({ name: "CARBON PASTE CLOFT 908", uom: "KG" }).indexOf("bdv") < 0,
+      JSON.stringify(GTsvc.derivedParamKeys({ name: "CARBON PASTE CLOFT 908", uom: "KG" })));
+
+    // ---- a cancelled receipt has nothing to test ----
+    await call("DELETE", "/purchase-orders/" + poQ.id, A);
+    const cancelled = await call("POST", "/grns/" + encodeURIComponent(gq.id) + "/tests", LB,
+      { itemId: rm, values: { thickness: 0.08, massPerArea: 118, visual: "x" } });
+    ok("a cancelled receipt refuses a reading (400)", cancelled.status === 400,
+      JSON.stringify(cancelled.d).slice(0, 110));
+    ok("and it drops off the worklist",
+      !((await call("GET", "/grn-tests/pending", LB)).d.pending || []).some((p) => p.grnId === gq.id));
+  }
+
   /* ---- two-stage measurement of one batch ---- */
   section("Two-stage lab measurement (production + lab on one batch)");
   const lpId = (labState.labProducts || [])[0] && labState.labProducts[0].id;

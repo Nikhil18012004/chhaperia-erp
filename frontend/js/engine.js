@@ -205,6 +205,19 @@
           kind:"lead", id:l.id, ts:4});
       }
     });
+    /* MATERIAL THAT FAILED ITS INCOMING TEST AND IS WAITING ON A RULING.
+       This is the loudest thing in the list on purpose: the lot is sitting in
+       the store, drawable by the next work order, until an admin either
+       approves the rejection (it goes to quarantine) or declines it (it stands
+       as good stock). The list comes from the server (grnTestService
+       .pendingDecisions) so the badge and the page cannot disagree. */
+    (D.grnQcDecisions||[]).forEach(q=>{
+      out.push({sev:"danger", ic:"⛔",
+        title:`${q.itemName} failed incoming test`,
+        desc:`${q.grnId}${q.poId?" · "+q.poId:""} — ${q.failed&&q.failed.length?q.failed.join(", ")+" out of limit":"out of limit"}`
+          +` · ${num(q.acceptedQty)} ${q.uom||""} awaiting your approval to quarantine`,
+        kind:"qcDecision", id:q.id, ts:-1});
+    });
     return out.sort((a,b)=> ({danger:0,warn:1,info:2})[a.sev]-({danger:0,warn:1,info:2})[b.sev]);
   }
 
@@ -377,6 +390,11 @@
          Every role counts the same batches, because the lab incharge works
          the same list the office sees. */
       labPending:(D.labPending||[]).length,
+      /* Two separate counts on the Procurement pill's behalf: materials the
+         lab still has to measure, and failed lots waiting on an admin ruling.
+         A ruling is the more urgent of the two — the stock is live meanwhile. */
+      grnTestPending:(D.grnTestPending||[]).length,
+      grnQcDecisions:(D.grnQcDecisions||[]).length,
       hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 

@@ -237,6 +237,26 @@
     remove(id) { return http("DELETE", "/lab/reports/" + enc(id)); },
   };
 
+  /* ---- Incoming-material testing: the lab incharge checks what a goods
+     receipt actually brought in, and the result shows on the purchase order.
+     `form` is fetched rather than read from state because it carries the
+     parameter list for one material and the readings already filed. ---- */
+  const grnTests = {
+    catalogue() { return http("GET", "/grn-tests/params"); },
+    pending() { return http("GET", "/grn-tests/pending"); },
+    form(grnId, itemId) { return http("GET", "/grns/" + enc(grnId) + "/tests/" + enc(itemId)); },
+    submit(grnId, payload) { return http("POST", "/grns/" + enc(grnId) + "/tests", payload); },
+    remove(id) { return http("DELETE", "/grn-tests/" + enc(id)); },
+    /* Which parameters a material is tested on: admin OR the lab incharge.
+       `spec` (the pass/fail limits) is admin's alone — the server ignores it
+       from anyone else rather than refusing the save, so a lab edit of the
+       parameter list still goes through. */
+    setItemQc(itemId, params, spec) { return http("PUT", "/items/" + enc(itemId) + "/qc", { params, spec }); },
+    // failed lots awaiting the admin's ruling, and that ruling
+    decisions() { return http("GET", "/grn-tests/decisions"); },
+    decide(id, approve, note) { return http("POST", "/grn-tests/" + enc(id) + "/decision", { approve, note }); },
+  };
+
   /* ---- production / supervisor stage actions ---- */
   const production = {
     // advance a work order's CURRENT stage: start | pause | complete | dispatch
@@ -299,7 +319,7 @@
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
     items, movements, purchase, sales, boms, leads, appointments, customers, suppliers, org, transporters, warehouses, hr,
-    labProducts, labReports, chat, bartender,
+    labProducts, labReports, grnTests, chat, bartender,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);
