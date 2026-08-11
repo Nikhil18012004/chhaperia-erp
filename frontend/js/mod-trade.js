@@ -696,13 +696,13 @@
           fld(`Horizontal (${u})`,gxEl),fld(`Vertical (${u})`,gyEl)]));
 
         /* -- background --
-           A colour, or a picture from this device over it. Choosing either
-           retires the house watermark and wordmark: the operator asked for
-           their own ground, and the picture is exactly how a company logo
-           comes back — wherever, and as faint as, they want it. The dial is
-           the browser's own colour picker (every colour there is), with the
-           standard set beside it because picking "white" or "yellow" off a
-           swatch is faster than driving a picker. */
+           A colour, or a picture from this device over it. The label carries
+           NO branding of its own (user rule, 2026-08-11): a watermark exists
+           only when the operator places one here, as a picture — wherever,
+           and as faint as, they want it. The dial is the browser's own colour
+           picker (every colour there is), with the standard set beside it
+           because picking "white" or "yellow" off a swatch is faster than
+           driving a picker. */
         left.appendChild(h("div",{class:"wz-sec",text:"Background"}));
         const preview=h("div",{class:"wz-inkpv"});
         preview.textContent="RAW MATERIAL";
@@ -943,12 +943,8 @@
         one.appendChild(h("div",{class:"wz-dim",html:
           `<b>${(cfg.shape==="circle"||cfg.shape==="disc")
             ?"⌀ "+fmm(g.labelW):fmm(g.labelW)+" × "+fmm(g.labelH)} mm</b><br>`+
-          (!m.showBrand
-            ?"No house branding — a coloured or pictured background is your own design"
-            :m.big?"Wordmark on top + watermark behind — at least "+STICKER_BIG_W+" mm wide and "
-                 +STICKER_BIG_H+" mm tall"
-               :"Watermark only — under "+STICKER_BIG_W+" mm wide or "+STICKER_BIG_H
-                 +" mm tall, too small for the wordmark")+
+          "The label prints exactly as designed — no logo or watermark is added; "+
+          "place one yourself with the background picture in step 2 if you want it"+
           (m.k<.55?`<br><span style="color:var(--warn)">Type is scaled to ${Math.round(m.k*100)}% — `+
             `untick a field or use a bigger label for larger print.</span>`:"")}));
 
@@ -2322,23 +2318,17 @@
   }
 
   /* ---- How one label is composed at the chosen size -------------------
-     THE LOGO RULE, exactly as specified: a label at least 100 mm wide AND at
-     least 50 mm tall carries the full Chhaperia wordmark across the top. Below
-     either of those, the wordmark is dropped. The centred mark stays in both
-     cases as a watermark at 10% visibility — that never changes, only the
-     wordmark comes and goes.
+     NO AUTOMATIC BRANDING — the user ruled it out (2026-08-11): no wordmark
+     on top, no watermark behind, on any size or colour of label. A logo is
+     something the operator PLACES, through the background-picture option,
+     wherever and as faint as they want it.
 
-     Type then scales to whatever room is left: the 100 × 150 mm label is the
+     Type scales to the room there is: the 100 × 150 mm label is the
      reference design (k = 1) and k shrinks until the ticked rows fit the
      label's height, so untick a field and everything else prints bigger. */
-  const STICKER_BIG_W=100, STICKER_BIG_H=50;
+  const STICKER_BIG_W=100;
   function labelMetrics(cfg,geom,list){
     const lw=geom.labelW, lh=geom.labelH;
-    /* A coloured or pictured label carries no branding: the operator asked for
-       their own ground, so the wordmark and the watermark both step aside (the
-       picture feature is how a logo comes back, wherever they want it). */
-    const showBrand=(cfg.bg||"#ffffff")==="#ffffff"&&!cfg.bgImg;
-    const big=showBrand&&lw>=STICKER_BIG_W&&lh>=STICKER_BIG_H;
     const added=addedDefs(cfg);
     const rows=added.filter(x=>x.row);
     const head=added.some(x=>x.head), status=added.some(x=>x.boxes);
@@ -2371,7 +2361,7 @@
       const font=3*k, cellPad=plain?1.4*k:3.8*k;
       const capW=inner*.47-cellPad, valW=inner*.53-cellPad;
       const rowExtra=plain?(1.6*k):(3*k+0.3*k);           // padding (+ border in table mode)
-      let hgt=(big?16.2*k:0);
+      let hgt=0;
       if(cfg.title) hgt+=linesOf(cfg.title,inner,4.6*k)*4.6*k*1.35+3.2*k;
       if(head) hgt+=worst(v=>"PRODUCT: "+(v.product||""),inner,3.8*k)*3.8*k*1.35+4.2*k;
       rows.forEach(x=>{
@@ -2394,7 +2384,7 @@
       for(let i=0;i<26;i++){ const mid=(lo+hi)/2; if(needAt(mid)<=fitH) lo=mid; else hi=mid; }
       k=Math.max(.12,lo);
     }
-    return {big,rows,head,status,plain,padY,padX,k,showBrand};
+    return {rows,head,status,plain,padY,padX,k};
   }
 
   const STICKER_STATUS_PLAIN=`<div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>`
@@ -2430,8 +2420,6 @@
     border-radius:${rad};${guide}
     font:${u(3.2)}/1.35 "Times New Roman",Georgia,serif;color:${ink};
     -webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .lb .wm{position:absolute;z-index:0;left:50%;top:50%;transform:translate(-50%,-50%);
-    width:62%;opacity:.10;pointer-events:none}
   /* the operator's background picture: scaled to one side of the label,
      faded by the transparency dial, nudged by the offsets */
   .lb .bgi{position:absolute;z-index:0;pointer-events:none;
@@ -2447,8 +2435,6 @@
     background:#fff;box-shadow:inset 0 0 0 .15mm #999}
   .lb .in{position:relative;z-index:1;height:100%;box-sizing:border-box;
     padding:${m.padY.toFixed(2)}mm ${m.padX.toFixed(2)}mm;display:flex;flex-direction:column}
-  .lb .lg{text-align:center;margin-bottom:${u(3.2)}}
-  .lb .lg img{height:${u(13)};max-width:92%;object-fit:contain}
   .lb .ttl{text-align:center;font-size:${u(4.6)};font-weight:700;letter-spacing:.02em;margin-bottom:${u(3.2)}}
   .lb .prod{font-size:${u(3.8)};font-weight:700;margin:0 0 ${u(4.2)};white-space:pre-wrap}
   /* flex:1 hands the field block whatever height the header did not use, and
@@ -2477,11 +2463,6 @@
   }
 
   function labelHtml(v,cfg,m){
-    /* logo-full is the dark-background lockup — its lettering is pure white and
-       would print invisibly here, so the label uses the print-safe twin with
-       that same artwork darkened. */
-    const logo=location.origin+"/assets/logo-full-print.png";
-    const mark=location.origin+"/assets/mark.png";
     const BLANK='<span class="wr"></span>';
     const cell=(x)=>x?esc(x):BLANK;
     const body=m.plain
@@ -2491,17 +2472,15 @@
       : `<table><tbody>${m.rows.map(x=>
           `<tr><th>${esc(x.cap)}</th><td>${cell(v[x.k])}</td></tr>`).join("")}${
           m.status?STICKER_STATUS_TR:""}</tbody></table>`;
-    /* Decoration around the content: the operator's own picture OR the house
-       watermark (never both — a picture is their design, not ours), the placed
+    /* Decoration around the content: the operator's own picture (their only
+       watermark — the label carries no branding of its own), the placed
        symbols, and the disc's punched hole on top of everything. */
-    const deco=(cfg.bgImg?`<img class="bgi" src="${cfg.bgImg}" alt="">`
-        :m.showBrand?`<img class="wm" src="${mark}" alt="">`:"")
+    const deco=(cfg.bgImg?`<img class="bgi" src="${cfg.bgImg}" alt="">`:"")
       +(cfg.syms||[]).map(o=>`<span class="sy" style="left:${o.x}mm;top:${o.y}mm;`+
         `font-size:${o.s}mm">${esc(o.g)}</span>`).join("")
       +(cfg.shape==="disc"&&cfg.holeDia>0?`<div class="hole"></div>`:"");
     return `<div class="lb">${deco}
       <div class="in">
-        ${m.big?`<div class="lg"><img src="${logo}" alt="Chhaperia"></div>`:""}
         ${cfg.title?`<div class="ttl">${esc(cfg.title)}</div>`:""}
         ${m.head?`<div class="prod">PRODUCT: <b>${cell(v.product)}</b></div>`:""}
         ${body}
