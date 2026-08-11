@@ -312,7 +312,7 @@
       const cfg=stickerCfg();
       const vals=stickerValues(po,cfg);
       if(!vals.length){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
-      const STEPS=["Fields & Data","Layout","Design & Print"];
+      const STEPS=["Fields & Data","Layout","Design","Print"];
       let step=0, cur=0, pvPage=0;
 
       const rail=h("div",{class:"wz-rail"});
@@ -338,6 +338,15 @@
       const fld=(label,el,hint)=>h("div",{class:"field"},
         [h("label",{text:label}),el,hint?h("div",{class:"hint",text:hint}):null]);
       const grid=(n,kids)=>h("div",{style:`display:grid;grid-template-columns:repeat(${n},1fr);gap:12px`},kids);
+      /* A print document at true mm size, scaled to fit a preview box — used
+         by the design canvas and the sheet pane alike. */
+      const frame=(html,wMM,hMM,boxW,boxH)=>{
+        const s=Math.min(boxW/(wMM*PX_MM),boxH/(hMM*PX_MM));
+        return h("div",{class:"wz-frame",
+          style:`width:${(wMM*PX_MM*s).toFixed(1)}px;height:${(hMM*PX_MM*s).toFixed(1)}px`},
+          h("iframe",{srcdoc:html,scrolling:"no","aria-hidden":"true",
+            style:`width:${wMM}mm;height:${hMM}mm;transform:scale(${s.toFixed(4)});transform-origin:top left`}));
+      };
 
       /* Every box that holds label text is multi-line: Enter starts a new line
          and the box grows to show it, because a value like an address or a
@@ -363,7 +372,7 @@
           toast("The labels do not fit the sheet — fix the sizes before previewing",{type:"warn"});
           step=1; render(); return;
         }
-        step=Math.max(0,Math.min(2,i)); render();
+        step=Math.max(0,Math.min(3,i)); render();
       }
 
       function render(){
@@ -372,13 +381,13 @@
           class:"wz-step"+(i===step?" on":"")+(i<step?" done":""), onclick:()=>go(i)},
           [h("span",{class:"n",text:i<step?"✓":String(i+1)}),h("span",{text:t})])));
         pane.innerHTML="";
-        [stepFields,stepLayout,stepPreview][step]();
+        [stepFields,stepLayout,stepDesign,stepPrint][step]();
         foot.innerHTML="";
         foot.appendChild(h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}));
         foot.appendChild(h("div",{style:"flex:1"}));
         if(step>0) foot.appendChild(h("button",{class:"btn",onclick:()=>go(step-1),text:"← Back"}));
-        if(step<2) foot.appendChild(h("button",{class:"btn primary",onclick:()=>go(step+1),
-          text:(step===0?"Layout":"Design")+" →"}));
+        if(step<3) foot.appendChild(h("button",{class:"btn primary",onclick:()=>go(step+1),
+          text:["Layout","Design","Print"][step]+" →"}));
         /* The dialog deliberately STAYS OPEN across a print: closing it dropped
            the operator back at the purchase-order list, losing the place they
            were at just to run one sheet. */
@@ -768,7 +777,7 @@
          padding box and the other objects — the way one arranges things in
          Word. The document in the pane is byte-for-byte what the printer gets;
          handles and guides are bound from outside it and never print. */
-      function stepPreview(){
+      function stepDesign(){
         const g=stickerGeom(cfg);
         let m=labelMetrics(cfg,g,vals);
         let sel=null;                 // {t:"sym",i} | {t:"img"} | {t:"blk",k}
@@ -781,8 +790,8 @@
            confirmation — a modal here would replace the whole wizard. */
         function requestDelete(){
           if(!sel) return;
-          if(sel.t==="sym"){ cfg.syms.splice(sel.i,1); sel=null; paintCanvas(); sheetSoon(); return; }
-          if(sel.t==="img"){ cfg.bgImg=""; sel=null; paintTools(); paintCanvas(); sheetSoon(); return; }
+          if(sel.t==="sym"){ cfg.syms.splice(sel.i,1); sel=null; paintCanvas(); return; }
+          if(sel.t==="img"){ cfg.bgImg=""; sel=null; paintTools(); paintCanvas(); return; }
           confirmDel=sel.k; paintInsp();
         }
         function doDelete(k){
@@ -798,18 +807,10 @@
           }
           if(cfg.pos) delete cfg.pos[k];
           confirmDel=null; sel=null;
-          paintCanvas(); sheetSoon();
+          paintCanvas();
         }
 
-        const frame=(html,wMM,hMM,boxW,boxH)=>{
-          const s=Math.min(boxW/(wMM*PX_MM),boxH/(hMM*PX_MM));
-          return h("div",{class:"wz-frame",
-            style:`width:${(wMM*PX_MM*s).toFixed(1)}px;height:${(hMM*PX_MM*s).toFixed(1)}px`},
-            h("iframe",{srcdoc:html,scrolling:"no","aria-hidden":"true",
-              style:`width:${wMM}mm;height:${hMM}mm;transform:scale(${s.toFixed(4)});transform-origin:top left`}));
-        };
-
-        /* -- left: the label, live -- */
+        /* -- the label, live -- */
         const one=h("div",{class:"wz-pv"},[h("h4",{text:"Label design — click to style, drag to place"})]);
         const insp=h("div",{class:"wz-insp"});
         const canvasSlot=h("div",{class:"wz-canvas"});
@@ -835,7 +836,7 @@
           m=labelMetrics(cfg,g,vals);
           canvasSlot.innerHTML="";
           const fr=frame(labelOneHtml(cfg,vals[Math.min(cur,vals.length-1)],vals),
-            g.labelW,g.labelH,470,430);
+            g.labelW,g.labelH,640,470);
           canvasSlot.appendChild(fr);
           const ifr=fr.querySelector("iframe");
           ifr.addEventListener("load",()=>bindCanvas(ifr));
@@ -848,11 +849,10 @@
           if(!skipInsp) paintInsp();
         }
 
-        /* Debounced canvas/sheet repaints, so inspector typing keeps its focus
-           and a drag doesn't redraw the sheet on every step. */
-        let cvTmr=null,shTmr=null;
+        /* Debounced canvas repaint, so inspector typing keeps its focus. The
+           sheet lives in the Print tab now and rebuilds from cfg on entry. */
+        let cvTmr=null;
         const canvasSoon=()=>{ clearTimeout(cvTmr); cvTmr=setTimeout(()=>paintCanvas(true),260); };
-        const sheetSoon=()=>{ clearTimeout(shTmr); shTmr=setTimeout(paintSheet,400); };
 
         /* ---- the editor bound onto the print document ---- */
         function bindCanvas(ifr){
@@ -968,7 +968,7 @@
                 cfg.pos[sel.k]={x:rd(Math.max(-g.labelW,Math.min(g.labelW-2,r0.x+fx))),
                                 y:rd(Math.max(-g.labelH,Math.min(g.labelH-2,r0.y+fy)))};
               }
-              paintCanvas(); sheetSoon();
+              paintCanvas();
             };
             doc.addEventListener("pointermove",move);
             doc.addEventListener("pointerup",up);
@@ -1005,17 +1005,17 @@
               step:String(stp2||1),value:String(get()),style:"width:88px"});
             el.addEventListener("input",()=>{ if(el.value==="")return;
               const v=+el.value; if(isNaN(v))return;
-              set(Math.min(hi,Math.max(lo,v))); canvasSoon(); sheetSoon(); });
+              set(Math.min(hi,Math.max(lo,v))); canvasSoon(); });
             el.addEventListener("blur",()=>{ el.value=String(get()); });
             return h("label",{class:"wz-inspfld"},[h("span",{text:label}),el]);
           };
           const dial=(get,set,label)=>{
             const d=h("input",{type:"color",class:"wz-dial",title:label,"aria-label":label});
             d.value=get()||labelInk(cfg.bg);
-            d.addEventListener("input",()=>{ set(d.value.toLowerCase()); canvasSoon(); sheetSoon(); });
+            d.addEventListener("input",()=>{ set(d.value.toLowerCase()); canvasSoon(); });
             const a=h("button",{class:"btn sm ghost",text:get()?"Auto":"Auto ✓",
               title:"Follow the background automatically",
-              onclick:()=>{ set(""); paintInsp(); paintCanvas(true); sheetSoon(); }});
+              onclick:()=>{ set(""); paintInsp(); paintCanvas(true); }});
             return h("span",{style:"display:inline-flex;align-items:center;gap:6px"},[d,a]);
           };
           if(sel.t==="sym"){
@@ -1045,7 +1045,7 @@
             if(cfg.pos&&cfg.pos[sel.k])
               insp.appendChild(h("button",{class:"btn sm ghost",text:"↩ Back into the flow",
                 title:"Return this block to the automatic stacked layout",
-                onclick:()=>{ delete cfg.pos[sel.k]; paintCanvas(); sheetSoon(); }}));
+                onclick:()=>{ delete cfg.pos[sel.k]; paintCanvas(); }}));
             insp.appendChild(h("button",{class:"btn sm ghost",text:"🗑 Remove from label",
               title:"Takes it off the label after a confirmation — or press Delete",
               onclick:requestDelete}));
@@ -1056,9 +1056,12 @@
         const tools=h("div",{class:"wz-pv wz-tools"},[h("h4",{text:"Design tools"})]);
         const toolPaints=[];
         const paintTools=()=>toolPaints.forEach(f=>f());
+        /* full-width rail: three columns — colour & picture · symbols · text */
+        const colA=h('div'),colB=h('div'),colC=h('div');
+        tools.appendChild(h('div',{class:'wz-toolgrid'},[colA,colB,colC]));
 
         // background colour
-        tools.appendChild(h("div",{class:"wz-sec",text:"Background"}));
+        colA.appendChild(h("div",{class:"wz-sec",text:"Background"}));
         const dial=h("input",{type:"color",class:"wz-dial",value:cfg.bg,
           title:"Any colour — opens the full colour picker","aria-label":"Label background colour"});
         const hexIn=h("input",{class:"input wz-hex",value:cfg.bg,maxlength:"7","aria-label":"Colour hex code"});
@@ -1069,7 +1072,7 @@
           swatches.querySelectorAll(".wz-chip").forEach(c=>
             c.classList.toggle("on",c.getAttribute("data-c")===cfg.bg));
         });
-        const setColour=(hx)=>{ cfg.bg=String(hx).toLowerCase(); paintTools(); paintCanvas(true); sheetSoon(); };
+        const setColour=(hx)=>{ cfg.bg=String(hx).toLowerCase(); paintTools(); paintCanvas(true); };
         STICKER_COLOURS.forEach(c=>{
           swatches.appendChild(h("button",{class:"wz-chip","data-c":c.v,title:c.l,"aria-label":c.l,
             style:`background:${c.v}`,onclick:()=>setColour(c.v)}));
@@ -1080,21 +1083,21 @@
           if(/^#[0-9a-fA-F]{6}$/.test(t)) setColour(t);
         });
         hexIn.addEventListener("blur",()=>{ hexIn.value=cfg.bg; });
-        tools.appendChild(h("div",{class:"wz-colrow"},[dial,hexIn]));
-        tools.appendChild(swatches);
+        colA.appendChild(h("div",{class:"wz-colrow"},[dial,hexIn]));
+        colA.appendChild(swatches);
 
         // background picture — the operator's own watermark/logo
         const fileIn=h("input",{type:"file",accept:"image/png,image/jpeg,image/webp,image/gif"});
         fileIn.hidden=true;
         const opIn=h("input",{class:"input",type:"number",min:"0",max:"95",step:"5"});
         opIn.addEventListener("input",()=>{ if(opIn.value==="")return;
-          cfg.bgImgOp=Math.min(95,Math.max(0,Math.round(+opIn.value||0))); canvasSoon(); sheetSoon(); });
+          cfg.bgImgOp=Math.min(95,Math.max(0,Math.round(+opIn.value||0))); canvasSoon(); });
         opIn.addEventListener("blur",()=>{ opIn.value=String(cfg.bgImgOp); });
         const fitSeg=h("div",{class:"seg"},[
           h("button",{text:"To width",title:"Scale the picture to the label's width",
-            onclick:()=>{ cfg.bgImgFit="w"; paintTools(); paintCanvas(true); sheetSoon(); }}),
+            onclick:()=>{ cfg.bgImgFit="w"; paintTools(); paintCanvas(true); }}),
           h("button",{text:"To height",title:"Scale the picture to the label's height",
-            onclick:()=>{ cfg.bgImgFit="h"; paintTools(); paintCanvas(true); sheetSoon(); }})]);
+            onclick:()=>{ cfg.bgImgFit="h"; paintTools(); paintCanvas(true); }})]);
         const picCtl=h("div",{class:"wz-picwrap"},[
           grid(2,[fld("Transparency (%)",opIn),fld("Adjust the picture",fitSeg)]),
           h("div",{class:"hint",style:"margin-top:6px",
@@ -1114,7 +1117,7 @@
           const rd=new FileReader();
           rd.onload=()=>{
             const url=String(rd.result||"");
-            const use=(v)=>{ cfg.bgImg=v; paintTools(); paintCanvas(true); sheetSoon(); };
+            const use=(v)=>{ cfg.bgImg=v; paintTools(); paintCanvas(true); };
             if(url.length<=750000) return use(url);
             /* over the server's 750 kB cap: redraw it smaller before keeping
                it, or it would be silently dropped on save */
@@ -1142,21 +1145,21 @@
         const picThumb=h("img",{class:"wz-thumb",alt:"Selected picture"});
         const picX=h("button",{class:"wz-mini danger",title:"Remove the selected picture",text:"✕",
           onclick:()=>{ cfg.bgImg=""; if(sel&&sel.t==="img") sel=null;
-            paintTools(); paintCanvas(); sheetSoon(); }});
+            paintTools(); paintCanvas(); }});
         toolPaints.push(()=>{
           const on=!!cfg.bgImg;
           picThumb.hidden=picX.hidden=!on;
           if(on&&picThumb.getAttribute("src")!==cfg.bgImg) picThumb.src=cfg.bgImg;
         });
-        tools.appendChild(h("div",{class:"wz-picchip",style:"margin-top:10px"},[
+        colA.appendChild(h("div",{class:"wz-picchip",style:"margin-top:10px"},[
           h("button",{class:"btn sm",text:"🖼 Picture from this device…",
             title:"A logo or pattern for the background — drag it into place on the label",
             onclick:()=>fileIn.click()}),
           picThumb,picX,fileIn]));
-        tools.appendChild(picCtl);
+        colA.appendChild(picCtl);
 
         // symbols — click to place, then drag on the label
-        tools.appendChild(h("div",{class:"wz-sec",text:"Symbols"}));
+        colB.appendChild(h("div",{class:"wz-sec",text:"Symbols"}));
         const symPal=h("div",{class:"wz-sw"});
         STICKER_SYMBOLS.forEach(s=>{
           symPal.appendChild(h("button",{class:"wz-symb",title:s.l,"aria-label":"Place "+s.l,
@@ -1166,49 +1169,56 @@
               (cfg.syms=cfg.syms||[]).push({g:s.v,
                 x:Math.round(g.labelW/2),y:Math.round(g.labelH/2),s:8});
               sel={t:"sym",i:cfg.syms.length-1};
-              paintCanvas(); sheetSoon();
+              paintCanvas();
             }}));
         });
-        tools.appendChild(symPal);
-        tools.appendChild(h("div",{class:"hint",style:"margin-top:6px",
+        colB.appendChild(symPal);
+        colB.appendChild(h("div",{class:"hint",style:"margin-top:6px",
           text:"A placed symbol lands mid-label — drag it where you want it, click it to size or remove it."}));
 
         // text: the face and the default inks
-        tools.appendChild(h("div",{class:"wz-sec",text:"Text"}));
+        colC.appendChild(h("div",{class:"wz-sec",text:"Text"}));
         const fontSel=h("select",{class:"select"},STICKER_FONTS.map(f=>h("option",{value:f.v},f.l)));
         fontSel.value=cfg.font;
-        fontSel.addEventListener("change",()=>{ cfg.font=fontSel.value; paintCanvas(true); sheetSoon(); });
-        tools.appendChild(fld("Font",fontSel));
+        fontSel.addEventListener("change",()=>{ cfg.font=fontSel.value; paintCanvas(true); });
+        colC.appendChild(fld("Font",fontSel));
         const inkPair=(key,label)=>{
           const d=h("input",{type:"color",class:"wz-dial",title:label+" colour",
             "aria-label":label+" colour"});
           const autoB=h("button",{class:"btn sm ghost",
             title:"Follow the background automatically"});
-          d.addEventListener("input",()=>{ cfg[key]=d.value.toLowerCase(); paintTools(); paintCanvas(true); sheetSoon(); });
-          autoB.addEventListener("click",()=>{ cfg[key]=""; paintTools(); paintCanvas(true); sheetSoon(); });
+          d.addEventListener("input",()=>{ cfg[key]=d.value.toLowerCase(); paintTools(); paintCanvas(true); });
+          autoB.addEventListener("click",()=>{ cfg[key]=""; paintTools(); paintCanvas(true); });
           toolPaints.push(()=>{ d.value=cfg[key]||labelInk(cfg.bg);
             autoB.textContent=cfg[key]?"Auto":"Auto ✓"; });
           return h("div",{style:"display:flex;align-items:center;gap:8px"},[d,autoB]);
         };
-        tools.appendChild(h("div",{style:"margin-top:10px"},grid(2,[
+        colC.appendChild(h("div",{style:"margin-top:10px"},grid(2,[
           fld("Captions",inkPair("capC","Caption")),fld("Values",inkPair("valC","Value"))])));
-        tools.appendChild(h("div",{class:"hint",
+        colC.appendChild(h("div",{class:"hint",
           text:"Defaults for every caption and value — step 1 colours single fields, and clicking a block on the label colours just that block."}));
 
         // start over on the arrangement without losing content
-        tools.appendChild(h("div",{style:"margin-top:14px"},[
+        colC.appendChild(h("div",{style:"margin-top:14px"},[
           h("button",{class:"btn sm ghost",text:"↺ Reset arrangement",
             title:"Every block returns to the automatic flow and its automatic size — colours, symbols and the picture stay",
             onclick:()=>{ cfg.pos={}; cfg.fs={title:0,prod:0,body:0,para:0};
-              sel=null; paintCanvas(); sheetSoon(); }})]));
+              sel=null; paintCanvas(); }})]));
 
         paintTools();
         paintCanvas();
 
-        /* -- right: the sheet as it will print --
-           Repainted on its own rather than through render(), so changing the
-           copy count updates the sheet and its pager without taking the focus
-           out of the box the operator is still typing in. */
+        /* Design tab: the label on top, the tools beneath it — both running
+           the full width of the dialog. */
+        pane.appendChild(one);
+        pane.appendChild(tools);
+      }
+
+      /* ============ STEP 4 — the sheet and the printer ============
+         The printing half of what used to share a screen with the designer:
+         the sheet as it will come off the tray, then the size of the run. */
+      function stepPrint(){
+        const g=stickerGeom(cfg);
         const sheet=h("div",{class:"wz-pv"},[h("h4",{text:"Sheet layout"})]);
         const sheetSlot=h("div"), sheetNav=h("div",{class:"wz-nav"});
         sheet.appendChild(sheetSlot); sheet.appendChild(sheetNav);
@@ -1217,7 +1227,7 @@
           pvPage=Math.min(Math.max(0,pvPage),sh-1);
           sheetSlot.innerHTML="";
           sheetSlot.appendChild(frame(labelSheetHtml(po,cfg,vals,{onlyPage:pvPage}),
-            g.pgW,g.pgH,440,420));
+            g.pgW,g.pgH,620,540));
           sheetNav.innerHTML="";
           sheetNav.appendChild(h("button",{class:"btn sm",disabled:sh<2?"disabled":null,
             onclick:()=>{pvPage=(pvPage-1+sh)%sh;paintSheet();},text:"◀"}));
@@ -1230,8 +1240,7 @@
           `<b>${(PAGE_SIZES.find(p=>p.v===cfg.page)||{}).l||"Custom"}</b>`+
           (cfg.landscape?" · landscape":"")+`<br>${fmm(g.pgW)} × ${fmm(g.pgH)} mm · `+
           `${g.perPage} per sheet`}));
-
-        pane.appendChild(h("div",{class:"wz-split",style:"grid-template-columns:1.4fr 1fr;margin-bottom:18px"},[one,tools]));
+        pane.appendChild(sheet);
 
         /* How many of each label to run off in one go. Copies of the same
            label stay adjacent, so the two stickers for one drum come off the
@@ -1258,15 +1267,12 @@
         copyIn.addEventListener("blur",()=>{ copyIn.value=String(cfg.copies||1);
           clearTimeout(copyTmr); paintSheet(); });
         retally();
-        const printCol=h("div",{},[
-          h("div",{class:"wz-copies"},[
-            h("div",{class:"field",style:"flex:0 0 auto"},
-              [h("label",{text:"No. of labels (copies of each)"}),copyIn]),
-            tally]),
-          h("div",{class:"muted",style:"margin-top:14px;font-size:12px;line-height:1.65",
-            html:"<b>Print Labels</b> opens the sheet in a new tab and raises your printer dialog — pick the label printer or the tray there. Set the printer's paper size to match the sheet beside this and its scaling to 100% (never “fit to page”), or the millimetres will not come out true. This dialog stays open behind it, so you come back exactly where you left off."}),
-        ]);
-        pane.appendChild(h("div",{class:"wz-split"},[sheet,printCol]));
+        pane.appendChild(h("div",{class:"wz-copies",style:"margin-top:18px"},[
+          h("div",{class:"field",style:"flex:0 0 auto"},
+            [h("label",{text:"No. of labels (copies of each)"}),copyIn]),
+          tally]));
+        pane.appendChild(h("div",{class:"muted",style:"margin-top:14px;font-size:12px;line-height:1.65",
+          html:"<b>Print Labels</b> opens the sheet in a new tab and raises your printer dialog — pick the label printer or the tray there. Set the printer's paper size to match the sheet above and its scaling to 100% (never “fit to page”), or the millimetres will not come out true. This dialog stays open behind it, so you come back exactly where you left off."}));
       }
 
       render();

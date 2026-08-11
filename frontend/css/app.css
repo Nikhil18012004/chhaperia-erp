@@ -1848,6 +1848,11 @@ canvas{display:block;width:100%}
 .wz-tools .hint{font-size:11.5px;line-height:1.55}
 .wz-picchip{display:flex;align-items:center;gap:9px}
 .wz-picchip .wz-thumb{width:42px;height:30px}
+/* the full-width tools rail lays out as three columns; each column's first
+   section drops the divider it would otherwise start with */
+.wz-toolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+  gap:4px 30px;width:100%}
+.wz-toolgrid>div>.wz-sec:first-child{margin-top:0;padding-top:0;border-top:0}
 
 /* step 1 — a tick and its fetched value, side by side */
 .wz-fld{display:grid;grid-template-columns:minmax(152px,196px) 1fr;gap:12px;align-items:center;
