@@ -140,6 +140,7 @@
     }
     function buildCard(r){
       const row=h("button",{class:"tbl-card-row",onclick:()=>openCard(r)});
+      if(r&&r.id!=null) row.setAttribute("data-row-id",String(r.id));   // phones highlight too
       const main=h("div",{class:"tbl-card-main"});
       const head=h("div",{class:"tbl-card-head"}); putVal(head, renderVal(cols[0],r)); main.appendChild(head);
       const hasMain=!!head.querySelector(".cell-main");
@@ -189,6 +190,10 @@
         // is still waiting on raw material)
         const extra=opts.rowClass?(opts.rowClass(r)||""):"";
         const tr=h("tr",{class:((opts.onRow?"row-click":"")+" "+extra).trim()});
+        /* Stamp the record's own id on the row so anything that navigates HERE
+           can point at the exact line it meant — App.go({highlight:id}) finds
+           it, scrolls to it and flashes it. Costs one attribute per row. */
+        if(r&&r.id!=null) tr.setAttribute("data-row-id",String(r.id));
         if(opts.onRow) tr.onclick=(e)=>{ if(e.target.closest("button,a,input,select")) return; opts.onRow(r); };
         cols.forEach(c=>{
           // data-label drives the stacked "card" table layout on phones

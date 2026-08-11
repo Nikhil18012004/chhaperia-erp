@@ -299,8 +299,35 @@
       try{ mod.render(view, params); }
       catch(err){ console.error("Module error:",err); view.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"⚠"}),h("div",{text:"Module failed to render: "+err.message})])); }
       view.scrollTop=0;
+      /* params.highlight names a record this navigation was ABOUT — the
+         calendar sends the order/work order you clicked. Landing on the module
+         and leaving you to find the line again is what made those marks feel
+         like they went nowhere, so bring it into view and flash it. */
+      if(params&&params.highlight!=null) this.flashRow(String(params.highlight));
       // on tablet, picking a menu item closes the drawer
       if(this.isDrawerWidth&&this.isDrawerWidth()) this.closeNavDrawer();
+    },
+
+    /* Find the row a navigation was about, scroll it into view and flash it.
+       Runs after the module has rendered; a table built asynchronously gets a
+       second look on the next frame before we give up. Rows are stamped with
+       data-row-id by UI.table(), so this works for every section at once. */
+    flashRow(id){
+      const view=$("#view");
+      if(!view||!id) return;
+      const find=()=>view.querySelector('[data-row-id="'+(window.CSS&&CSS.escape?CSS.escape(id):id.replace(/"/g,'\\"'))+'"]');
+      const put=(el)=>{
+        if(!el) return false;
+        el.classList.remove("row-flash");
+        void el.offsetWidth;                    // restart the animation on a repeat click
+        el.classList.add("row-flash");
+        try{ el.scrollIntoView({block:"center",behavior:"smooth"}); }
+        catch{ el.scrollIntoView(); }
+        setTimeout(()=>el.classList.remove("row-flash"), 2600);
+        return true;
+      };
+      if(put(find())) return;
+      requestAnimationFrame(()=>{ if(!put(find())) setTimeout(()=>put(find()),180); });
     },
 
     /* the settings document — both save paths build it here so neither can

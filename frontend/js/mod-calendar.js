@@ -314,7 +314,10 @@
     function openEvent(ev) {
       if (ev.source === "appt") { apptDetail(ev.raw); return; }
       UI.$("#modalHost").hidden = true;
-      App.go(ev.go);
+      /* Carry the record's own id across so the destination highlights the very
+         line that was clicked. A leave mark's id has the day appended (one mark
+         per day of the absence), so send the underlying record's id instead. */
+      App.go(ev.go, { highlight: (ev.raw && ev.raw.id) || ev.id });
     }
 
     function dayModal(ds, list) {

@@ -391,6 +391,21 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 .fx-dir{margin-left:6px;font-size:10px;font-weight:800}
 .fx-dir.up{color:var(--ok)}
 .fx-dir.down{color:var(--danger)}
+/* A row the calendar (or anything else) navigated TO: hold it lit long enough
+   to find, then fade out so the table reads normally again. */
+@keyframes rowFlash{
+  0%{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  70%{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  100%{background:transparent;box-shadow:inset 3px 0 0 transparent}
+}
+/* tables flash their cells (a <tr> takes no background of its own); anything
+   card-shaped — phone rows, the CRM board's leads — flashes as one block */
+tr.row-flash>td,.row-flash:not(tr){animation:rowFlash 2.6s ease-out 1}
+.tbl-card-row.row-flash,.crm-lead.row-flash{border-radius:10px}
+@media (prefers-reduced-motion:reduce){
+  tr.row-flash>td,.row-flash:not(tr){animation:none;background:var(--accent-soft)}
+}
+
 .fx-dir.flat{color:var(--text-mut)}
 /* Google could not be read for this pair — we show nothing rather than a
    number from another source (see backend/src/services/fxService.js) */

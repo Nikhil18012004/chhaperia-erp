@@ -254,7 +254,10 @@
     function leadCard(l, meta) {
       const overdue = l.nextFollowUp && l.nextFollowUp < todayISO() && l.stage !== "Won" && l.stage !== "Lost";
       const initial = (String(l.company || "?").trim().charAt(0) || "?").toUpperCase();
-      return h("div", { class: "crm-lead", style: "--sc:" + meta.color, onclick: () => leadDetail(l.id) }, [
+      // stamped like a table row, so a calendar chase-date can highlight this
+      // exact lead on the board — see App.flashRow()
+      return h("div", { class: "crm-lead", "data-row-id": String(l.id), style: "--sc:" + meta.color,
+        onclick: () => leadDetail(l.id) }, [
         h("div", { class: "crm-lead-top" }, [
           h("div", { class: "crm-lead-ava", text: initial }),
           h("div", { class: "crm-lead-id" }, [
