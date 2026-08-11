@@ -161,6 +161,32 @@ function updateSettings(doc) {
       para: txt(s.para, "", 1200),
       bg: hex(s.bg, "#ffffff"),                 // label background colour
       capC: hex(s.capC, ""), valC: hex(s.valC, ""),   // caption/value text ("" = auto ink)
+      // the design layer: a whitelisted font, per-part inks, per-block font
+      // sizes (mm, 0 = auto scale) and free positions (mm from the top-left)
+      font: ["times", "georgia", "cambria", "arial", "calibri", "courier"].indexOf(s.font) >= 0 ? s.font : "times",
+      titleC: hex(s.titleC, ""), prodC: hex(s.prodC, ""), paraC: hex(s.paraC, ""),
+      fieldC: (() => {
+        const o = {};
+        keys.forEach((k) => {
+          const v = s.fieldC && s.fieldC[k];
+          if (/^#[0-9a-fA-F]{6}$/.test(String(v || ""))) o[k] = String(v).toLowerCase();
+        });
+        return o;
+      })(),
+      fs: (() => {
+        const src = s.fs || {}, o = {};
+        ["title", "prod", "body", "para"].forEach((k) => { o[k] = dim(src[k], 0, 0, 60); });
+        return o;
+      })(),
+      pos: (() => {
+        const src = s.pos || {}, o = {};
+        ["title", "prod", "body", "para"].forEach((k) => {
+          const p = src[k];
+          if (p && typeof p === "object" && isFinite(+p.x) && isFinite(+p.y))
+            o[k] = { x: dim(p.x, 0, -500, 1000), y: dim(p.y, 0, -500, 1000) };
+        });
+        return o;
+      })(),
       /* label outline: rectangle, rounded, ellipse, circle or disc (circle
          with a punched hole); the curved ones carry their own parameters */
       shape: ["rect", "round", "ellipse", "circle", "disc"].indexOf(s.shape) >= 0 ? s.shape : "rect",

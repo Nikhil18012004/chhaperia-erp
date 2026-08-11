@@ -2241,6 +2241,21 @@ async function run() {
       (await call("PATCH", "/settings", A, { sticker: { bgImg: "data:image/svg+xml;base64,PHN2Zz4=" } })).d.sticker.bgImg === "");
     ok("a raster background picture is kept",
       (await call("PATCH", "/settings", A, { sticker: { bgImg: "data:image/png;base64,iVBORw0KGgo=" } })).d.sticker.bgImg === "data:image/png;base64,iVBORw0KGgo=");
+
+    /* The design layer: font, per-field inks, block sizes and free positions. */
+    ok("a whitelisted font is kept",
+      (await call("PATCH", "/settings", A, { sticker: { font: "arial" } })).d.sticker.font === "arial");
+    ok("an arbitrary font string falls back to Times",
+      (await call("PATCH", "/settings", A, { sticker: { font: "Comic Sans MS, evil" } })).d.sticker.font === "times");
+    const fc = (await call("PATCH", "/settings", A, { sticker: { fieldC: { supplier: "#B71C1C", hack: "#112233", grade: "red" } } })).d.sticker.fieldC;
+    ok("per-field colours keep hex literals on known fields only",
+      fc.supplier === "#b71c1c" && fc.hack === undefined && fc.grade === undefined, JSON.stringify(fc));
+    const pos = (await call("PATCH", "/settings", A, { sticker: { pos: { title: { x: 12, y: 8 }, body: { x: "junk" }, evil: { x: 1, y: 1 } } } })).d.sticker.pos;
+    ok("a dragged block keeps its position; junk and unknown blocks are dropped",
+      pos.title && pos.title.x === 12 && pos.title.y === 8 && pos.body === undefined && pos.evil === undefined, JSON.stringify(pos));
+    const fsr = (await call("PATCH", "/settings", A, { sticker: { fs: { title: 9, body: 9999, para: -4 } } })).d.sticker.fs;
+    ok("block font sizes clamp to the 0–60 mm range",
+      fsr.title === 9 && fsr.body === 60 && fsr.para === 0, JSON.stringify(fsr));
   }
 
   section("Validation rejects bad input");

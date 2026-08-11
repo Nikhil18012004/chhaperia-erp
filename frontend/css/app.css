@@ -1823,6 +1823,19 @@ canvas{display:block;width:100%}
 .wz-thumb{width:46px;height:34px;object-fit:contain;border:1px solid var(--line);
   border-radius:9px;background:var(--surface-2);flex:none}
 .wz-picwrap{margin-top:12px}
+/* per-field colour dot in step 1 */
+.wz-dot{width:26px;height:26px;padding:1px;border:1px solid var(--line);border-radius:7px;
+  background:var(--surface-2);cursor:pointer;flex:none}
+.wz-dot::-webkit-color-swatch-wrapper{padding:0}
+.wz-dot::-webkit-color-swatch{border:none;border-radius:5px}
+/* the design pane's inspector: whatever is selected, its knobs in one strip */
+.wz-insp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;
+  padding:7px 10px;margin-bottom:10px;border:1px solid var(--line);border-radius:10px;
+  background:var(--surface-2)}
+.wz-insplbl{font-size:12px;font-weight:800;letter-spacing:.04em;color:var(--text)}
+.wz-inspfld{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
+  color:var(--text-dim)}
+.wz-inspfld .input{height:30px;padding:0 8px}
 
 /* step 1 — a tick and its fetched value, side by side */
 .wz-fld{display:grid;grid-template-columns:minmax(152px,196px) 1fr;gap:12px;align-items:center;
