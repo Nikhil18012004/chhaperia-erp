@@ -1829,13 +1829,25 @@ canvas{display:block;width:100%}
 .wz-dot::-webkit-color-swatch-wrapper{padding:0}
 .wz-dot::-webkit-color-swatch{border:none;border-radius:5px}
 /* the design pane's inspector: whatever is selected, its knobs in one strip */
-.wz-insp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;
-  padding:7px 10px;margin-bottom:10px;border:1px solid var(--line);border-radius:10px;
+.wz-insp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;width:100%;
+  padding:7px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:10px;
   background:var(--surface-2)}
 .wz-insplbl{font-size:12px;font-weight:800;letter-spacing:.04em;color:var(--text)}
 .wz-inspfld{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
   color:var(--text-dim)}
 .wz-inspfld .input{height:30px;padding:0 8px}
+/* the canvas well the label floats in */
+.wz-canvas{display:flex;justify-content:center;align-items:center;width:100%;
+  padding:18px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2)}
+/* the design-tools rail: a proper settings panel — sections divide with a
+   rule, every row stretches full width, nothing floats centred */
+.wz-pv.wz-tools{align-items:stretch}   /* out-specifies .wz-pv's centring below */
+.wz-tools .wz-sec{margin:14px 0 9px;padding-top:13px;border-top:1px solid var(--line)}
+.wz-tools .wz-sec:first-of-type{margin-top:0;padding-top:0;border-top:0}
+.wz-tools .seg{display:inline-flex}
+.wz-tools .hint{font-size:11.5px;line-height:1.55}
+.wz-picchip{display:flex;align-items:center;gap:9px}
+.wz-picchip .wz-thumb{width:42px;height:30px}
 
 /* step 1 — a tick and its fetched value, side by side */
 .wz-fld{display:grid;grid-template-columns:minmax(152px,196px) 1fr;gap:12px;align-items:center;

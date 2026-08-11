@@ -772,6 +772,34 @@
         const g=stickerGeom(cfg);
         let m=labelMetrics(cfg,g,vals);
         let sel=null;                 // {t:"sym",i} | {t:"img"} | {t:"blk",k}
+        let confirmDel=null;          // a content-block delete awaiting its warning
+
+        /* Deleting the selection — the ✕ badge, the inspector button and the
+           Delete key all land here. A symbol or the picture goes at once; a
+           content block (title, product, fields, paragraph) is data fetched or
+           typed in step 1, so it warns first and the inspector holds the
+           confirmation — a modal here would replace the whole wizard. */
+        function requestDelete(){
+          if(!sel) return;
+          if(sel.t==="sym"){ cfg.syms.splice(sel.i,1); sel=null; paintCanvas(); sheetSoon(); return; }
+          if(sel.t==="img"){ cfg.bgImg=""; sel=null; paintTools(); paintCanvas(); sheetSoon(); return; }
+          confirmDel=sel.k; paintInsp();
+        }
+        function doDelete(k){
+          if(k==="title") cfg.title="";
+          else if(k==="para") cfg.para="";
+          else if(k==="prod"){ cfg.order=cfg.order.filter(x=>x!=="product"); syncFields(); }
+          else if(k==="body"){
+            /* the whole ruled block: every row field and the status boxes go;
+               the product headline is its own block and stays */
+            const defs=fieldDefs(cfg);
+            cfg.order=cfg.order.filter(x=>{ const f=defs.find(d=>d.k===x); return f&&f.head; });
+            syncFields();
+          }
+          if(cfg.pos) delete cfg.pos[k];
+          confirmDel=null; sel=null;
+          paintCanvas(); sheetSoon();
+        }
 
         const frame=(html,wMM,hMM,boxW,boxH)=>{
           const s=Math.min(boxW/(wMM*PX_MM),boxH/(hMM*PX_MM));
@@ -784,8 +812,17 @@
         /* -- left: the label, live -- */
         const one=h("div",{class:"wz-pv"},[h("h4",{text:"Label design — click to style, drag to place"})]);
         const insp=h("div",{class:"wz-insp"});
-        const canvasSlot=h("div");
+        const canvasSlot=h("div",{class:"wz-canvas"});
         const dimNote=h("div",{class:"wz-dim"});
+        /* Delete / Backspace removes the selection — but never while the
+           operator is typing in a box, and only on this step. */
+        pane.onkeydown=(e)=>{
+          if(step!==2) return;
+          if(e.key!=="Delete"&&e.key!=="Backspace") return;
+          if(e.target.closest&&e.target.closest("input,textarea,select")) return;
+          if(!sel) return;
+          e.preventDefault(); requestDelete();
+        };
         one.appendChild(insp);
         one.appendChild(canvasSlot);
         if(vals.length>1) one.appendChild(h("div",{class:"wz-nav"},[
@@ -827,7 +864,11 @@
             .sel-ring{outline:.45mm dashed #2196f3;outline-offset:.4mm}
             .gd{position:absolute;z-index:11;pointer-events:none}
             .gd-v{top:0;height:100%;width:0;border-left:.3mm dashed #e91e63}
-            .gd-h{left:0;width:100%;height:0;border-top:.3mm dashed #e91e63}`;
+            .gd-h{left:0;width:100%;height:0;border-top:.3mm dashed #e91e63}
+            .delx{position:absolute;z-index:12;width:4.4mm;height:4.4mm;border-radius:50%;
+              border:.3mm solid #fff;background:#e53935;color:#fff;cursor:pointer;padding:0;
+              font:700 2.5mm/4mm Arial,sans-serif;text-align:center;
+              box-shadow:0 .4mm 1mm rgba(0,0,0,.35)}`;
           doc.head.appendChild(st);
           const selEl=()=>{
             if(!sel) return null;
@@ -835,11 +876,27 @@
             if(sel.t==="img") return doc.querySelector('[data-drag="img"]');
             return doc.querySelector(`[data-drag="${sel.k}"]`);
           };
+          /* the ✕ badge rides the selection's top-right corner; clicking it —
+             or pressing Delete — removes the object (blocks warn first) */
+          const xBtn=doc.createElement("button");
+          xBtn.className="delx"; xBtn.textContent="✕"; xBtn.title="Delete (Del key works too)";
+          xBtn.addEventListener("pointerdown",(e)=>{ e.stopPropagation(); e.preventDefault(); });
+          xBtn.addEventListener("click",(e)=>{ e.stopPropagation(); requestDelete(); });
+          const mmClamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
           const ringSel=()=>{
             doc.querySelectorAll(".sel-ring").forEach(e=>e.classList.remove("sel-ring"));
-            const el=selEl(); if(el) el.classList.add("sel-ring");
+            xBtn.remove();
+            const el=selEl(); if(!el) return;
+            el.classList.add("sel-ring");
+            const r=el.getBoundingClientRect();
+            xBtn.style.left=mmClamp(mmOf(r.right)-1,1,g.labelW-5.5)+"mm";
+            xBtn.style.top =mmClamp(mmOf(r.top)-2.2,1,g.labelH-5.5)+"mm";
+            lb.appendChild(xBtn);
           };
           ringSel();
+          doc.addEventListener("keydown",(e)=>{
+            if((e.key==="Delete"||e.key==="Backspace")&&sel){ e.preventDefault(); requestDelete(); }
+          });
           const guides=[];
           const clearGuides=()=>{ guides.splice(0).forEach(e=>e.remove()); };
           const guide=(axis,at)=>{
@@ -853,7 +910,8 @@
 
           doc.addEventListener("pointerdown",(ev)=>{
             const el=ev.target.closest&&ev.target.closest("[data-drag]");
-            if(!el){ if(sel){ sel=null; ringSel(); paintInsp(); } return; }
+            confirmDel=null;                      // touching the canvas withdraws a pending warning
+            if(!el){ if(sel){ sel=null; ringSel(); } paintInsp(); return; }
             const kind=el.getAttribute("data-drag");
             sel=kind.indexOf("sym:")===0?{t:"sym",i:+kind.slice(4)}
               :kind==="img"?{t:"img"}:{t:"blk",k:kind};
@@ -878,6 +936,7 @@
               let dx=mmOf(e2.clientX-sx), dy=mmOf(e2.clientY-sy);
               if(!moved&&Math.abs(dx)<.25&&Math.abs(dy)<.25) return;
               moved=true;
+              xBtn.remove();                      // the badge would trail a stale corner
               const cx=r0.x+r0.w/2+dx, cy=r0.y+r0.h/2+dy;
               clearGuides();
               const TH=1.1;
@@ -919,9 +978,26 @@
         /* ---- the inspector: whatever is selected, its own knobs ---- */
         function paintInsp(){
           insp.innerHTML="";
+          if(confirmDel){
+            /* the warning for content blocks: this is data fetched from the
+               system or typed in step 1, so deleting asks first */
+            const names={title:"the title",prod:"the product line — data fetched from the order",
+              body:"the whole fields block — the data fetched from the system",
+              para:"the paragraph"};
+            insp.appendChild(h("span",{class:"wz-insplbl",style:"color:var(--danger)",
+              text:"⚠ Remove "+(names[confirmDel]||confirmDel)+"?"}));
+            insp.appendChild(h("span",{class:"muted",style:"font-size:12px",
+              text:"It comes off the label now — add it back any time from step 1, Fields & Data."}));
+            insp.appendChild(h("button",{class:"btn sm",
+              style:"background:var(--danger);border-color:var(--danger);color:#fff",
+              text:"🗑 Delete",onclick:()=>doDelete(confirmDel)}));
+            insp.appendChild(h("button",{class:"btn sm ghost",text:"Cancel",
+              onclick:()=>{ confirmDel=null; paintInsp(); }}));
+            return;
+          }
           if(!sel){
             insp.appendChild(h("span",{class:"muted",style:"font-size:12px",
-              text:"Click anything on the label to style it, drag it to move it — dotted lines appear when it lines up with the centre, the margins or another object."}));
+              text:"Click anything on the label to style it, drag it to move it — dotted lines appear when it lines up with the centre, the margins or another object. ✕ or the Delete key removes it."}));
             return;
           }
           const numB=(label,get,set,lo,hi,stp2)=>{
@@ -948,13 +1024,13 @@
             insp.appendChild(h("span",{class:"wz-insplbl",text:"Symbol  "+o.g}));
             insp.appendChild(numB("Size (mm)",()=>o.s,v=>{o.s=v;},2,200,1));
             insp.appendChild(h("button",{class:"btn sm ghost",text:"✕ Remove",
-              onclick:()=>{ cfg.syms.splice(sel.i,1); sel=null; paintCanvas(); sheetSoon(); }}));
+              title:"Or press Delete",onclick:requestDelete}));
           }else if(sel.t==="img"){
             insp.appendChild(h("span",{class:"wz-insplbl",text:"Background picture"}));
             insp.appendChild(h("span",{class:"muted",style:"font-size:12px",
               text:"Drag to place it — transparency and fit are in the tools →"}));
             insp.appendChild(h("button",{class:"btn sm ghost",text:"✕ Remove",
-              onclick:()=>{ cfg.bgImg=""; sel=null; paintCanvas(); sheetSoon(); paintTools(); }}));
+              title:"Or press Delete",onclick:requestDelete}));
           }else{
             const names={title:"Title",prod:"Product line",body:"Fields block",para:"Paragraph"};
             insp.appendChild(h("span",{class:"wz-insplbl",text:names[sel.k]||sel.k}));
@@ -970,11 +1046,14 @@
               insp.appendChild(h("button",{class:"btn sm ghost",text:"↩ Back into the flow",
                 title:"Return this block to the automatic stacked layout",
                 onclick:()=>{ delete cfg.pos[sel.k]; paintCanvas(); sheetSoon(); }}));
+            insp.appendChild(h("button",{class:"btn sm ghost",text:"🗑 Remove from label",
+              title:"Takes it off the label after a confirmation — or press Delete",
+              onclick:requestDelete}));
           }
         }
 
         /* ---- right rail: the design tools ---- */
-        const tools=h("div",{class:"wz-pv"},[h("h4",{text:"Design tools"})]);
+        const tools=h("div",{class:"wz-pv wz-tools"},[h("h4",{text:"Design tools"})]);
         const toolPaints=[];
         const paintTools=()=>toolPaints.forEach(f=>f());
 
@@ -1058,11 +1137,22 @@
           };
           rd.readAsDataURL(f);
         });
-        tools.appendChild(h("div",{style:"margin-top:10px"},[
+        /* the chosen picture shows beside the chooser with its own ✕, so
+           removing it never means hunting for it on the label first */
+        const picThumb=h("img",{class:"wz-thumb",alt:"Selected picture"});
+        const picX=h("button",{class:"wz-mini danger",title:"Remove the selected picture",text:"✕",
+          onclick:()=>{ cfg.bgImg=""; if(sel&&sel.t==="img") sel=null;
+            paintTools(); paintCanvas(); sheetSoon(); }});
+        toolPaints.push(()=>{
+          const on=!!cfg.bgImg;
+          picThumb.hidden=picX.hidden=!on;
+          if(on&&picThumb.getAttribute("src")!==cfg.bgImg) picThumb.src=cfg.bgImg;
+        });
+        tools.appendChild(h("div",{class:"wz-picchip",style:"margin-top:10px"},[
           h("button",{class:"btn sm",text:"🖼 Picture from this device…",
             title:"A logo or pattern for the background — drag it into place on the label",
             onclick:()=>fileIn.click()}),
-          fileIn]));
+          picThumb,picX,fileIn]));
         tools.appendChild(picCtl);
 
         // symbols — click to place, then drag on the label
