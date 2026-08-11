@@ -2194,6 +2194,53 @@ async function run() {
     ok("junk field keys never reach the settings document",
       (await call("PATCH", "/settings", A, { sticker: { w: 100, fields: { hack: true } } })).d.sticker.fields.hack === undefined);
     ok("supervisor cannot touch settings (403)", (await call("PATCH", "/settings", C, { sticker: { w: 50 } })).status === 403);
+
+    /* Label background colour + symbol. `bg` is written straight into the print
+       stylesheet, so it must only ever come back as a #rrggbb literal — a value
+       carrying its own CSS would otherwise ride into the printed page. */
+    const col = (v) => call("PATCH", "/settings", A, { sticker: { bg: v } });
+    ok("a hex colour is kept", (await col("#FFE0B2")).d.sticker.bg === "#ffe0b2");
+    ok("a named colour is refused, falling back to white",
+      (await col("red")).d.sticker.bg === "#ffffff");
+    ok("a css injection in the colour is refused",
+      (await col("#fff;background:url(http://x/y)")).d.sticker.bg === "#ffffff");
+    ok("a short hex is refused", (await col("#fff")).d.sticker.bg === "#ffffff");
+    ok("the colour survives into the state document",
+      (await col("#c8e6c9"), ((await call("GET", "/state", A)).d.settings.sticker || {}).bg === "#c8e6c9"));
+
+    /* Placed symbols: glyph + centre position + size. The glyph cap (2
+       characters, counted as a person counts them) is what keeps markup and
+       whole sentences off the printed label. */
+    const sym = (v) => call("PATCH", "/settings", A, { sticker: { syms: v } });
+    const s1 = (await sym([{ g: "⚠", x: 20, y: 30, s: 12 }])).d.sticker.syms;
+    ok("a placed symbol keeps its glyph, position and size",
+      s1.length === 1 && s1[0].g === "⚠" && s1[0].x === 20 && s1[0].y === 30 && s1[0].s === 12,
+      JSON.stringify(s1));
+    ok("a sentence smuggled in as a symbol is dropped",
+      (await sym([{ g: "UNDER TEST — do not use", x: 1, y: 1, s: 8 }])).d.sticker.syms.length === 0);
+    ok("markup in the symbol is dropped by the length rule",
+      (await sym([{ g: "<img src=x onerror=alert(1)>", x: 1, y: 1, s: 8 }])).d.sticker.syms.length === 0);
+    // an astral glyph is ONE character to a person, two UTF-16 units to naive code
+    ok("an emoji symbol counts as one character",
+      (await sym([{ g: "🔥", x: 1, y: 1, s: 8 }])).d.sticker.syms[0].g === "🔥");
+    ok("the symbol list is capped at 12",
+      (await sym(Array.from({ length: 30 }, () => ({ g: "★", x: 1, y: 1, s: 8 })))).d.sticker.syms.length === 12);
+    ok("a symbol's size clamps to the printable range",
+      (await sym([{ g: "★", x: 1, y: 1, s: 9999 }])).d.sticker.syms[0].s === 200);
+
+    /* Shape, auto-fit and the background picture. */
+    ok("a label shape is kept",
+      (await call("PATCH", "/settings", A, { sticker: { shape: "disc", holeDia: 20 } })).d.sticker.shape === "disc");
+    ok("an unknown shape falls back to the rectangle",
+      (await call("PATCH", "/settings", A, { sticker: { shape: "star" } })).d.sticker.shape === "rect");
+    ok("auto-fit defaults to solving the gaps",
+      (await call("PATCH", "/settings", A, { sticker: {} })).d.sticker.autoFit === "gaps");
+    ok("legacy autoSize:false reads as auto-fit off",
+      (await call("PATCH", "/settings", A, { sticker: { autoSize: false } })).d.sticker.autoFit === "none");
+    ok("an SVG background picture is refused — it can carry script",
+      (await call("PATCH", "/settings", A, { sticker: { bgImg: "data:image/svg+xml;base64,PHN2Zz4=" } })).d.sticker.bgImg === "");
+    ok("a raster background picture is kept",
+      (await call("PATCH", "/settings", A, { sticker: { bgImg: "data:image/png;base64,iVBORw0KGgo=" } })).d.sticker.bgImg === "data:image/png;base64,iVBORw0KGgo=");
   }
 
   section("Validation rejects bad input");

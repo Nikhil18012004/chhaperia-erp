@@ -541,23 +541,36 @@
 
       /* ============ STEP 2 — how they sit on the sheet ============ */
       function stepLayout(){
+        // repaint hooks the colour/picture/symbol blocks register as they are
+        // built; refresh() runs once before any of them exist, so it walks a list
+        const paints=[];
         const diag=h("div",{class:"wz-diag"});
         const dims=h("div",{class:"wz-dim"});
         const alert=h("div",{});
+        const isRound=()=>cfg.shape==="circle"||cfg.shape==="disc";
         const lwEl=h("input",{class:"input",id:"stk_lw",type:"number",step:stp(),min:"5"});
         const lhEl=h("input",{class:"input",id:"stk_lh",type:"number",step:stp(),min:"5"});
+        const diaEl=h("input",{class:"input",id:"stk_dia",type:"number",step:stp(),min:"5"});
+        const gxEl=h("input",{class:"input",type:"number",step:stp(),min:"0"});
+        const gyEl=h("input",{class:"input",type:"number",step:stp(),min:"0"});
 
         /* Only the readouts redraw as the operator types — re-rendering the
-           whole step would take the focus out of the box mid-keystroke. */
+           whole step would take the focus out of the box mid-keystroke. Every
+           box mirrors the EFFECTIVE geometry (a solved gap, a derived size),
+           skipping only the box being typed in. */
         function refresh(){
           const g=stickerGeom(cfg);
-          if(cfg.autoSize){ lwEl.value=toU(g.labelW); lhEl.value=toU(g.labelH); }
-          lwEl.disabled=lhEl.disabled=cfg.autoSize;
+          paints.forEach(f=>f());
+          const setBox=(el,v)=>{ if(document.activeElement!==el) el.value=String(v); };
+          setBox(lwEl,toU(g.labelW)); setBox(lhEl,toU(g.labelH)); setBox(diaEl,toU(g.labelW));
+          lwEl.disabled=lhEl.disabled=diaEl.disabled=cfg.autoFit==="size";
+          setBox(gxEl,toU(g.gapX)); setBox(gyEl,toU(g.gapY));
+          gxEl.disabled=gyEl.disabled=cfg.autoFit==="gaps";
           diag.innerHTML=""; diag.appendChild(diagram(g)); diag.appendChild(dims);
           const total=vals.length*Math.max(1,cfg.copies||1);
           const sheets=Math.max(1,Math.ceil(total/g.perPage));
           dims.innerHTML=`Sheet <b>${fmm(g.pgW)} × ${fmm(g.pgH)} mm</b><br>`+
-            `Label <b>${fmm(g.labelW)} × ${fmm(g.labelH)} mm</b><br>`+
+            `Label <b>${isRound()?"⌀ "+fmm(g.labelW):fmm(g.labelW)+" × "+fmm(g.labelH)} mm</b><br>`+
             `${cfg.cols} × ${cfg.rows} = <b>${g.perPage}</b> per sheet · `+
             `${total} label${total>1?"s":""} on <b>${sheets}</b> sheet${sheets>1?"s":""}`;
           alert.innerHTML=""; alert.appendChild(alertFor(g));
@@ -580,6 +593,14 @@
           cfg.labelW=Math.min(1000,Math.max(5,frU(lwEl.value))); refresh(); });
         lhEl.addEventListener("input",()=>{ if(lhEl.value==="")return;
           cfg.labelH=Math.min(1000,Math.max(5,frU(lhEl.value))); refresh(); });
+        // a circle has one dimension: the diameter box writes both
+        diaEl.addEventListener("input",()=>{ if(diaEl.value==="")return;
+          cfg.labelW=cfg.labelH=Math.min(1000,Math.max(5,frU(diaEl.value))); refresh(); });
+        gxEl.addEventListener("input",()=>{ if(gxEl.value==="")return;
+          cfg.gapX=Math.min(100,Math.max(0,frU(gxEl.value))); refresh(); });
+        gyEl.addEventListener("input",()=>{ if(gyEl.value==="")return;
+          cfg.gapY=Math.min(100,Math.max(0,frU(gyEl.value))); refresh(); });
+        [lwEl,lhEl,diaEl,gxEl,gyEl].forEach(el=>el.addEventListener("blur",refresh));
 
         const u=cfg.unit;
         const left=h("div",{});
@@ -601,6 +622,30 @@
             fld(`Sheet width (${u})`,numIn("pageW",20,1000)),
             fld(`Sheet height (${u})`,numIn("pageH",20,1000))])));
 
+        /* -- label shape --
+           The outline the label is cut to. Picking a shape swaps the size boxes
+           it needs (a circle has one diameter, not a width and a height), so a
+           change re-renders the whole step. */
+        left.appendChild(h("div",{class:"wz-sec",text:"Label shape"}));
+        const shapes=h("div",{class:"wz-shapes"});
+        [["rect","Rectangle","Square corners"],
+         ["round","Rounded","Rectangle with rounded corners"],
+         ["ellipse","Ellipse","Oval — the width and height are its two axes"],
+         ["circle","Circle","One diameter"],
+         ["disc","Disc","Circle with a punched centre hole"]]
+          .forEach(([v,l,tip])=>{
+            shapes.appendChild(h("button",{class:"wz-shp"+(cfg.shape===v?" on":""),
+              title:tip,"aria-label":l+" — "+tip,
+              onclick:()=>{ if(cfg.shape===v) return;
+                cfg.shape=v;
+                // entering a one-diameter shape collapses the size to it
+                if((v==="circle"||v==="disc")&&cfg.labelW>0&&cfg.labelH>0)
+                  cfg.labelW=cfg.labelH=Math.min(cfg.labelW,cfg.labelH);
+                render(); }},
+              [h("i",{class:"s-"+v}),h("span",{text:l})]));
+          });
+        left.appendChild(shapes);
+
         /* -- margins -- */
         left.appendChild(h("div",{class:"wz-sec",text:"Margins"}));
         left.appendChild(grid(4,[
@@ -612,20 +657,218 @@
         left.appendChild(grid(2,[
           fld("Rows",numIn("rows",1,50,true)), fld("Columns",numIn("cols",1,20,true))]));
 
-        /* -- label size -- */
-        const auto=h("input",{type:"checkbox"}); auto.checked=cfg.autoSize;
-        auto.addEventListener("change",()=>{ cfg.autoSize=auto.checked;
-          if(!cfg.autoSize){ const g=stickerGeom(cfg); cfg.labelW=g.labelW; cfg.labelH=g.labelH; }
-          refresh(); });
+        /* -- label size + gaps --
+           The two auto-fits solve opposite sides of the same equation — fix
+           the gaps and derive the size, or fix the size and stretch the gaps
+           across the margins — so they can never both be on. Turning one OFF
+           freezes the numbers it was computing, so nothing jumps. */
+        const sizeAuto=h("input",{type:"checkbox"}); sizeAuto.checked=cfg.autoFit==="size";
+        const gapAuto=h("input",{type:"checkbox"});  gapAuto.checked=cfg.autoFit==="gaps";
+        sizeAuto.addEventListener("change",()=>{
+          const g=stickerGeom(cfg);
+          if(sizeAuto.checked) cfg.autoFit="size";
+          else { cfg.labelW=g.labelW; cfg.labelH=g.labelH; cfg.autoFit="none"; }
+          render();
+        });
+        gapAuto.addEventListener("change",()=>{
+          const g=stickerGeom(cfg);
+          if(gapAuto.checked){ cfg.labelW=g.labelW; cfg.labelH=g.labelH; cfg.autoFit="gaps"; }
+          else { cfg.gapX=g.gapX; cfg.gapY=g.gapY; cfg.autoFit="none"; }
+          render();
+        });
         left.appendChild(h("div",{class:"wz-sec",style:"display:flex;align-items:center;gap:14px"},[
           h("span",{text:"Label size"}),
-          h("label",{class:"wz-auto"},[auto,h("span",{text:"Auto-fit to the layout"})])]));
-        left.appendChild(grid(2,[fld(`Width (${u})`,lwEl),fld(`Height (${u})`,lhEl)]));
+          h("label",{class:"wz-auto"},[sizeAuto,h("span",{text:"Auto-fit — fill the layout"})])]));
+        if(isRound()){
+          const kids=[fld(`Diameter (${u})`,diaEl)];
+          if(cfg.shape==="disc") kids.push(fld(`Hole diameter (${u})`,numIn("holeDia",0,1000)));
+          left.appendChild(grid(2,kids));
+        }else{
+          const kids=[fld(`Width (${u})`,lwEl),fld(`Height (${u})`,lhEl)];
+          if(cfg.shape==="round") kids.push(fld(`Corner radius (${u})`,numIn("radius",0,100)));
+          left.appendChild(grid(kids.length,kids));
+        }
 
-        /* -- gaps -- */
-        left.appendChild(h("div",{class:"wz-sec",text:"Gap between labels"}));
+        left.appendChild(h("div",{class:"wz-sec",style:"display:flex;align-items:center;gap:14px"},[
+          h("span",{text:"Gap between labels"}),
+          h("label",{class:"wz-auto"},[gapAuto,h("span",{text:"Auto-fit — spread to the margins"})])]));
         left.appendChild(grid(2,[
-          fld(`Horizontal (${u})`,numIn("gapX",0,100)),fld(`Vertical (${u})`,numIn("gapY",0,100))]));
+          fld(`Horizontal (${u})`,gxEl),fld(`Vertical (${u})`,gyEl)]));
+
+        /* -- background --
+           A colour, or a picture from this device over it. Choosing either
+           retires the house watermark and wordmark: the operator asked for
+           their own ground, and the picture is exactly how a company logo
+           comes back — wherever, and as faint as, they want it. The dial is
+           the browser's own colour picker (every colour there is), with the
+           standard set beside it because picking "white" or "yellow" off a
+           swatch is faster than driving a picker. */
+        left.appendChild(h("div",{class:"wz-sec",text:"Background"}));
+        const preview=h("div",{class:"wz-inkpv"});
+        preview.textContent="RAW MATERIAL";
+        const dial=h("input",{type:"color",class:"wz-dial",value:cfg.bg,
+          title:"Any colour — opens the full colour picker","aria-label":"Label background colour"});
+        const hexIn=h("input",{class:"input wz-hex",value:cfg.bg,maxlength:"7","aria-label":"Colour hex code"});
+        const swatches=h("div",{class:"wz-sw"});
+        paints.push(()=>{
+          dial.value=cfg.bg;
+          if(document.activeElement!==hexIn) hexIn.value=cfg.bg;
+          swatches.querySelectorAll(".wz-chip").forEach(c=>
+            c.classList.toggle("on",c.getAttribute("data-c")===cfg.bg));
+          preview.style.background=cfg.bg;
+          preview.style.color=labelInk(cfg.bg);
+        });
+        const setColour=(hx)=>{ cfg.bg=String(hx).toLowerCase(); refresh(); };
+        STICKER_COLOURS.forEach(c=>{
+          swatches.appendChild(h("button",{class:"wz-chip","data-c":c.v,title:c.l,"aria-label":c.l,
+            style:`background:${c.v}`,onclick:()=>setColour(c.v)}));
+        });
+        dial.addEventListener("input",()=>setColour(dial.value));
+        hexIn.addEventListener("input",()=>{
+          const t=hexIn.value.trim();
+          if(/^#[0-9a-fA-F]{6}$/.test(t)) setColour(t);          // ignore half-typed codes
+        });
+        hexIn.addEventListener("blur",()=>{ hexIn.value=cfg.bg; });
+        left.appendChild(h("div",{class:"wz-colrow"},[dial,hexIn,preview]));
+        left.appendChild(swatches);
+
+        /* -- background picture -- */
+        const fileIn=h("input",{type:"file",accept:"image/png,image/jpeg,image/webp,image/gif"});
+        fileIn.hidden=true;
+        const thumb=h("img",{class:"wz-thumb",alt:""});
+        const fitSeg=h("div",{class:"seg"},[
+          h("button",{text:"To width",title:"Scale the picture to the label's width",
+            onclick:()=>{ cfg.bgImgFit="w"; refresh(); }}),
+          h("button",{text:"To height",title:"Scale the picture to the label's height",
+            onclick:()=>{ cfg.bgImgFit="h"; refresh(); }})]);
+        const opIn=h("input",{class:"input",type:"number",min:"0",max:"95",step:"5"});
+        opIn.addEventListener("input",()=>{ if(opIn.value==="")return;
+          cfg.bgImgOp=Math.min(95,Math.max(0,Math.round(+opIn.value||0))); refresh(); });
+        opIn.addEventListener("blur",()=>{ opIn.value=String(cfg.bgImgOp); });
+        const picCtl=h("div",{class:"wz-picwrap"},[
+          grid(3,[fld("Transparency (%)",opIn),fld("Adjust the picture",fitSeg),
+            fld("Picture",h("div",{style:"display:flex;align-items:center;gap:10px"},[thumb,
+              h("button",{class:"btn sm ghost",text:"✕ Remove",title:"Remove the picture",
+                onclick:()=>{ cfg.bgImg=""; refresh(); }})]))]),
+          h("div",{style:"margin-top:12px"},grid(2,[
+            fld(`Move right (${u})`,numIn("bgImgX",-300,300)),
+            fld(`Move down (${u})`,numIn("bgImgY",-300,300))])),
+          h("div",{class:"hint",style:"margin-top:6px",
+            text:"High transparency turns the picture into a watermark — your logo, faint behind the text, moved wherever you want it. Negative offsets move it the other way."}),
+        ]);
+        paints.push(()=>{
+          picCtl.hidden=!cfg.bgImg;
+          if(cfg.bgImg&&thumb.getAttribute("src")!==cfg.bgImg) thumb.src=cfg.bgImg;
+          if(document.activeElement!==opIn) opIn.value=String(cfg.bgImgOp);
+          [...fitSeg.children].forEach((b,i)=>
+            b.classList.toggle("on",(i===0)===(cfg.bgImgFit!=="h")));
+        });
+        /* Anything bigger than the server's 750 kB cap is redrawn smaller
+           before it is kept — a phone photo would otherwise be dropped on
+           save, and the operator would never learn why. */
+        fileIn.addEventListener("change",()=>{
+          const f=fileIn.files&&fileIn.files[0]; fileIn.value="";
+          if(!f) return;
+          if(!/^image\/(png|jpeg|webp|gif)$/.test(f.type)){
+            toast("Pick a PNG, JPEG, WebP or GIF picture",{type:"warn"}); return; }
+          const rd=new FileReader();
+          rd.onload=()=>{
+            const url=String(rd.result||"");
+            const use=(v)=>{ cfg.bgImg=v; refresh(); };
+            if(url.length<=750000) return use(url);
+            const im=new Image();
+            im.onload=()=>{
+              for(let cap=1400,q=.85;cap>=350;cap-=350,q=Math.max(.5,q-.12)){
+                const sc=Math.min(1,cap/Math.max(im.naturalWidth,im.naturalHeight));
+                const cv=document.createElement("canvas");
+                cv.width=Math.max(1,Math.round(im.naturalWidth*sc));
+                cv.height=Math.max(1,Math.round(im.naturalHeight*sc));
+                cv.getContext("2d").drawImage(im,0,0,cv.width,cv.height);
+                // PNG keeps a logo's transparent ground; JPEG is the size fallback
+                let out=f.type==="image/png"?cv.toDataURL("image/png"):cv.toDataURL("image/jpeg",q);
+                if(out.length>750000&&f.type==="image/png") out=cv.toDataURL("image/jpeg",q);
+                if(out.length<=750000) return use(out);
+              }
+              toast("That picture is too detailed to store — use a simpler one",{type:"warn"});
+            };
+            im.onerror=()=>toast("That file could not be read as a picture",{type:"warn"});
+            im.src=url;
+          };
+          rd.readAsDataURL(f);
+        });
+        left.appendChild(h("div",{style:"margin-top:12px"},[
+          h("button",{class:"btn sm",text:"🖼 Picture from this device…",
+            title:"Use a picture — a logo, a pattern — as the label's background",
+            onclick:()=>fileIn.click()}),
+          fileIn]));
+        left.appendChild(picCtl);
+
+        /* -- text colour --
+           The captions and the values each take their own ink; Auto follows
+           the background — near-black on a pale label, white on a dark one. */
+        left.appendChild(h("div",{class:"wz-sec",text:"Text colour"}));
+        const inkPair=(key,label)=>{
+          const d=h("input",{type:"color",class:"wz-dial",title:label+" colour",
+            "aria-label":label+" colour"});
+          const autoB=h("button",{class:"btn sm ghost",
+            title:"Follow the background automatically"});
+          d.addEventListener("input",()=>{ cfg[key]=d.value.toLowerCase(); refresh(); });
+          autoB.addEventListener("click",()=>{ cfg[key]=""; refresh(); });
+          paints.push(()=>{ d.value=cfg[key]||labelInk(cfg.bg);
+            autoB.textContent=cfg[key]?"Auto":"Auto ✓"; });
+          return h("div",{style:"display:flex;align-items:center;gap:8px"},[d,autoB]);
+        };
+        left.appendChild(grid(2,[fld("Captions",inkPair("capC","Caption")),
+          fld("Values",inkPair("valC","Value"))]));
+
+        /* -- symbols --
+           The Word-style palette: click a glyph to place it on the label, then
+           say where it sits and how big it prints. Fixed glyphs rather than
+           free text, so a label cannot come out of another machine's printer
+           as a blank box. */
+        left.appendChild(h("div",{class:"wz-sec",text:"Symbols"}));
+        const symPal=h("div",{class:"wz-sw"});
+        const symList=h("div",{});
+        function paintSyms(){
+          symList.innerHTML="";
+          if(!(cfg.syms||[]).length) return;
+          symList.appendChild(h("div",{class:"wz-symhead"},[
+            h("span"),h("span",{text:`From left (${u})`}),
+            h("span",{text:`From top (${u})`}),h("span",{text:`Size (${u})`}),h("span")]));
+          cfg.syms.forEach((o,i)=>{
+            const num=(get,set,lo,hi)=>{
+              const el=h("input",{class:"input",type:"number",step:stp(),min:String(toU(lo)),
+                value:String(toU(get()))});
+              el.addEventListener("input",()=>{ if(el.value==="")return;
+                const v=frU(el.value); set(Math.min(hi,Math.max(lo,isNaN(v)?lo:v))); refresh(); });
+              el.addEventListener("blur",()=>{ el.value=String(toU(get())); });
+              return el; };
+            symList.appendChild(h("div",{class:"wz-symrow"},[
+              h("span",{class:"g",text:o.g}),
+              num(()=>o.x,v=>o.x=v,0,1000),
+              num(()=>o.y,v=>o.y=v,0,1000),
+              num(()=>o.s,v=>o.s=v,2,200),
+              h("button",{class:"wz-mini danger",title:"Remove this symbol",text:"✕",
+                onclick:()=>{ cfg.syms.splice(i,1); paintSyms(); refresh(); }}),
+            ]));
+          });
+        }
+        STICKER_SYMBOLS.forEach(s=>{
+          symPal.appendChild(h("button",{class:"wz-symb",title:s.l,"aria-label":"Place "+s.l,
+            text:s.v,onclick:()=>{
+              if((cfg.syms||[]).length>=12){
+                toast("Up to 12 symbols fit on one label",{type:"warn"}); return; }
+              const g=stickerGeom(cfg);
+              (cfg.syms=cfg.syms||[]).push({g:s.v,
+                x:Math.round(g.labelW/2),y:Math.round(g.labelH/2),s:8});
+              paintSyms(); refresh();
+            }}));
+        });
+        left.appendChild(symPal);
+        left.appendChild(h("div",{class:"hint",style:"margin-top:8px",
+          text:"Click a symbol to place it, then set where its centre sits — measured from the label's top-left corner — and how big it prints. Step 3 shows it in place."}));
+        left.appendChild(symList);
+        paintSyms();
 
         left.appendChild(alert);
         pane.appendChild(h("div",{class:"wz-cols"},[left,diag]));
@@ -640,13 +883,19 @@
         const page=h("div",{class:"wz-page",
           style:`width:${(g.pgW*s).toFixed(1)}px;height:${(g.pgH*s).toFixed(1)}px`});
         const max=Math.min(cfg.rows*cfg.cols,400);
+        /* the same outline the label will be cut to, so a circle reads as a
+           circle here and not as the square that would waste the corners */
+        const curved=cfg.shape==="ellipse"||cfg.shape==="circle"||cfg.shape==="disc";
+        const rad=curved?"50%":cfg.shape==="round"?Math.max(1,cfg.radius*s).toFixed(1)+"px":"0";
         for(let i=0;i<max;i++){
           const r=Math.floor(i/cfg.cols), c=i%cfg.cols;
-          const x=cfg.mLeft+c*(g.labelW+cfg.gapX), y=cfg.mTop+r*(g.labelH+cfg.gapY);
+          // g.gapX/gapY, never cfg's — auto-fit gaps solves them per layout
+          const x=cfg.mLeft+c*(g.labelW+g.gapX), y=cfg.mTop+r*(g.labelH+g.gapY);
           const bad=(x+g.labelW>g.pgW-cfg.mRight+0.15)||(y+g.labelH>g.pgH-cfg.mBottom+0.15);
           page.appendChild(h("div",{class:"wz-lab"+(bad?" bad":""),
             style:`left:${(x*s).toFixed(1)}px;top:${(y*s).toFixed(1)}px;`+
-              `width:${Math.max(1,g.labelW*s).toFixed(1)}px;height:${Math.max(1,g.labelH*s).toFixed(1)}px`}));
+              `width:${Math.max(1,g.labelW*s).toFixed(1)}px;height:${Math.max(1,g.labelH*s).toFixed(1)}px;`+
+              `border-radius:${rad}`}));
         }
         return page;
       }
@@ -692,8 +941,11 @@
           h("span",{text:`Label ${cur+1} of ${vals.length}`}),
           h("button",{class:"btn sm",onclick:()=>{cur=(cur+1)%vals.length;render();},text:"▶"})]));
         one.appendChild(h("div",{class:"wz-dim",html:
-          `<b>${fmm(g.labelW)} × ${fmm(g.labelH)} mm</b><br>`+
-          (m.big?"Wordmark on top + watermark behind — at least "+STICKER_BIG_W+" mm wide and "
+          `<b>${(cfg.shape==="circle"||cfg.shape==="disc")
+            ?"⌀ "+fmm(g.labelW):fmm(g.labelW)+" × "+fmm(g.labelH)} mm</b><br>`+
+          (!m.showBrand
+            ?"No house branding — a coloured or pictured background is your own design"
+            :m.big?"Wordmark on top + watermark behind — at least "+STICKER_BIG_W+" mm wide and "
                  +STICKER_BIG_H+" mm tall"
                :"Watermark only — under "+STICKER_BIG_W+" mm wide or "+STICKER_BIG_H
                  +" mm tall, too small for the wordmark")+
@@ -1884,6 +2136,49 @@
     {k:"status",       label:"Status tick-boxes",  cap:"STATUS",                csv:"Status",        boxes:true},
   ];
 
+  /* The standard colour set beside the dial. Deliberately pale: a label is
+     read, written on by hand and photocopied, so these are stock-paper tints
+     rather than saturated ink. The dial covers everything else. */
+  const STICKER_COLOURS=[
+    {v:"#ffffff",l:"White"},      {v:"#f2f2f2",l:"Light grey"},
+    {v:"#fff9c4",l:"Yellow"},     {v:"#ffe0b2",l:"Orange"},
+    {v:"#ffcdd2",l:"Red"},        {v:"#f8bbd0",l:"Pink"},
+    {v:"#e1bee7",l:"Purple"},     {v:"#c5cae9",l:"Indigo"},
+    {v:"#bbdefb",l:"Blue"},       {v:"#b2ebf2",l:"Cyan"},
+    {v:"#c8e6c9",l:"Green"},      {v:"#dcedc8",l:"Lime"},
+    {v:"#d7ccc8",l:"Brown"},      {v:"#cfd8dc",l:"Blue grey"},
+    {v:"#424242",l:"Charcoal"},   {v:"#000000",l:"Black"},
+  ];
+
+  /* The symbol palette — the Word-style pre-given set. Kept to glyphs that
+     carry meaning on a materials sticker — status, handling, hazard, plus the
+     general marks Word's own Symbol dialog leads with — and that render the
+     same on every machine, so a printed label cannot come out as a blank box.
+     Clicking one PLACES it (cfg.syms), at any position and size. */
+  const STICKER_SYMBOLS=[
+    {v:"✓", l:"Tick — approved"},   {v:"✗", l:"Cross — rejected"},
+    {v:"☑", l:"Boxed tick"},        {v:"☒", l:"Boxed cross"},
+    {v:"☐", l:"Empty box"},         {v:"⚠", l:"Warning"},
+    {v:"⏳",l:"Under test"},         {v:"⚗", l:"Lab / testing"},
+    {v:"🔥",l:"Flammable"},          {v:"☣", l:"Biohazard"},
+    {v:"☢", l:"Radioactive"},       {v:"⚡", l:"Electrical"},
+    {v:"❄", l:"Keep cold"},          {v:"☂", l:"Keep dry"},
+    {v:"☀", l:"Keep off sunlight"},  {v:"🍷",l:"Fragile"},
+    {v:"↑", l:"This way up"},       {v:"→", l:"Arrow right"},
+    {v:"←", l:"Arrow left"},        {v:"↓", l:"Arrow down"},
+    {v:"♲", l:"Recyclable"},        {v:"⚖", l:"Weight / check"},
+    {v:"⚙", l:"Machine part"},      {v:"✂", l:"Cut here"},
+    {v:"☎", l:"Telephone"},         {v:"✉", l:"Post / enquiry"},
+    {v:"☞", l:"Pointing hand"},     {v:"⚑", l:"Flag"},
+    {v:"★", l:"Star — priority"},   {v:"✦", l:"Sparkle"},
+    {v:"●", l:"Filled circle"},     {v:"■", l:"Filled square"},
+    {v:"▲", l:"Triangle"},          {v:"❖", l:"Diamond"},
+    {v:"©", l:"Copyright"},         {v:"®", l:"Registered"},
+    {v:"™", l:"Trade mark"},        {v:"№", l:"Numero"},
+    {v:"§", l:"Section"},           {v:"°", l:"Degree"},
+    {v:"±", l:"Plus-minus"},        {v:"⌀", l:"Diameter"},
+  ];
+
   /* Sheet sizes the layout step offers — the standard papers plus a custom
      size. There is deliberately NO preset label here: the label is whatever
      the operator's own sheet, margins and grid leave, or whatever size they
@@ -1938,12 +2233,33 @@
     const pick=(v,d,lo,hi)=>{ v=+v; return isNaN(v)||v<=0?d:Math.min(hi,Math.max(lo,v)); };
     const int=(v,d,lo,hi)=>{ v=Math.round(+v); return isNaN(v)?d:Math.min(hi,Math.max(lo,v)); };
     const txt=(v,d,max)=>{ v=(v==null?d:String(v)); return v.slice(0,max); };
+    const hex6=(v,d)=>/^#[0-9a-fA-F]{6}$/.test(String(v||""))?String(v).toLowerCase():d;
     return {
       fields, order, custom,
       /* The heading is no longer welded to "RAW MATERIAL" — it is text like
          any other, and the type scale accounts for however long it runs. */
       title: txt(s.title,"RAW MATERIAL",120),
       para:  txt(s.para,"",1200),           // free paragraph printed under the fields
+      /* Colours are only ever #rrggbb literals because they are written into
+         the print stylesheet; the picture is only ever a raster data URL (no
+         SVG — it can carry script). The server enforces the same shapes. */
+      bg: hex6(s.bg,"#ffffff"),
+      capC: hex6(s.capC,""), valC: hex6(s.valC,""),      // "" = the auto ink
+      shape: ["rect","round","ellipse","circle","disc"].indexOf(s.shape)>=0?s.shape:"rect",
+      radius: dim(s.radius,4,0,100),
+      holeDia: dim(s.holeDia,15,0,1000),
+      autoFit: ["gaps","size","none"].indexOf(s.autoFit)>=0?s.autoFit
+        :(s.autoSize===false?"none":"gaps"),
+      bgImg: (typeof s.bgImg==="string"&&s.bgImg.length<=750000
+        &&/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s.bgImg))?s.bgImg:"",
+      bgImgOp: int(s.bgImgOp,70,0,95),
+      bgImgFit: s.bgImgFit==="h"?"h":"w",
+      bgImgX: dim(s.bgImgX,0,-300,300), bgImgY: dim(s.bgImgY,0,-300,300),
+      syms: (Array.isArray(s.syms)?s.syms:[]).slice(0,12).map(o=>{
+        const g=String((o&&o.g)||"").trim();
+        if(!g||[...g].length>2) return null;
+        return {g, x:dim(o&&o.x,0,0,1000), y:dim(o&&o.y,0,0,1000), s:dim(o&&o.s,8,2,200)};
+      }).filter(Boolean),
       layout: s.layout==="plain"?"plain":"table",
       copies: int(s.copies,1,1,500),
       page: PAGE_SIZES.some(p=>p.v===s.page)?s.page:"A4",
@@ -1956,7 +2272,6 @@
       /* No preset label size: 0 means "never set", and the layout decides.
          The legacy roll w/h is deliberately NOT read across — it would put
          a 100 × 150 default back on labels nobody asked for. */
-      autoSize: s.autoSize!==false,
       labelW: dim(s.labelW,0,0,1000), labelH: dim(s.labelH,0,0,1000),
       gapX: dim(s.gapX,3,0,100),   gapY: dim(s.gapY,3,0,100),
     };
@@ -1970,24 +2285,37 @@
   }
 
   /* Everything the layout step, the diagram and the printer need to agree on.
-     With auto-size on, the label is whatever is left once the margins and the
-     gaps are taken out of the page — so it always fits by construction; with
-     it off the operator's own size is used and `fits` reports the truth. */
+     Auto-fit solves ONE side of the geometry from the rest:
+       "size"  — the label is whatever the margins, grid and gaps leave over
+       "gaps"  — the label size is the operator's; the gaps stretch so the run
+                 of labels spans margin to margin on both axes
+       "none"  — everything is the operator's, and `fits` reports the truth.
+     A circle or disc has one diameter, so both dimensions collapse to it.
+     The EFFECTIVE gaps live in the result (gapX/gapY) — the diagram and the
+     printed sheet must read them from here, never from cfg. */
   function stickerGeom(cfg){
     const pg=pageMM(cfg);
     const innerW=pg.w-cfg.mLeft-cfg.mRight, innerH=pg.h-cfg.mTop-cfg.mBottom;
-    let lw=cfg.labelW, lh=cfg.labelH;
-    /* An unset size (0) falls back to the layout too, so a config that has
-       never had a label size typed into it still has one to print. */
-    if(cfg.autoSize||!(lw>0)||!(lh>0)){
-      lw=(innerW-(cfg.cols-1)*cfg.gapX)/cfg.cols;
-      lh=(innerH-(cfg.rows-1)*cfg.gapY)/cfg.rows;
+    const round=cfg.shape==="circle"||cfg.shape==="disc";
+    let lw=cfg.labelW, lh=cfg.labelH, gx=cfg.gapX, gy=cfg.gapY;
+    if(round&&lw>0&&lh>0){ const d=Math.min(lw,lh); lw=lh=d; }
+    /* An unset size (0) always derives from the layout, whatever the mode, so
+       a config that has never had a size typed into it still has one to print. */
+    if(cfg.autoFit==="size"||!(lw>0)||!(lh>0)){
+      lw=(innerW-(cfg.cols-1)*gx)/cfg.cols;
+      lh=(innerH-(cfg.rows-1)*gy)/cfg.rows;
+      if(round){ const d=Math.min(lw,lh); lw=lh=d; }
+    }else if(cfg.autoFit==="gaps"){
+      gx=cfg.cols>1?(innerW-cfg.cols*lw)/(cfg.cols-1):0;
+      gy=cfg.rows>1?(innerH-cfg.rows*lh)/(cfg.rows-1):0;
+      gx=Math.max(0,Math.round(gx*10)/10);      // labels wider than the sheet
+      gy=Math.max(0,Math.round(gy*10)/10);      // clamp to 0 and read as overflow
     }
     lw=Math.round(lw*10)/10; lh=Math.round(lh*10)/10;
-    const needW=cfg.cols*lw+(cfg.cols-1)*cfg.gapX, needH=cfg.rows*lh+(cfg.rows-1)*cfg.gapY;
+    const needW=cfg.cols*lw+(cfg.cols-1)*gx, needH=cfg.rows*lh+(cfg.rows-1)*gy;
     const EPS=0.15;                       // a rounded 0.1mm must not read as overflow
-    return { pgW:pg.w, pgH:pg.h, innerW, innerH, labelW:lw, labelH:lh, needW, needH,
-      overW:needW-innerW, overH:needH-innerH,
+    return { pgW:pg.w, pgH:pg.h, innerW, innerH, labelW:lw, labelH:lh, gapX:gx, gapY:gy,
+      needW, needH, overW:needW-innerW, overH:needH-innerH,
       fitsW: lw>=5 && needW<=innerW+EPS, fitsH: lh>=5 && needH<=innerH+EPS,
       fits: lw>=5 && lh>=5 && needW<=innerW+EPS && needH<=innerH+EPS,
       perPage: Math.max(1,cfg.rows*cfg.cols) };
@@ -2006,12 +2334,21 @@
   const STICKER_BIG_W=100, STICKER_BIG_H=50;
   function labelMetrics(cfg,geom,list){
     const lw=geom.labelW, lh=geom.labelH;
-    const big=lw>=STICKER_BIG_W&&lh>=STICKER_BIG_H;
+    /* A coloured or pictured label carries no branding: the operator asked for
+       their own ground, so the wordmark and the watermark both step aside (the
+       picture feature is how a logo comes back, wherever they want it). */
+    const showBrand=(cfg.bg||"#ffffff")==="#ffffff"&&!cfg.bgImg;
+    const big=showBrand&&lw>=STICKER_BIG_W&&lh>=STICKER_BIG_H;
     const added=addedDefs(cfg);
     const rows=added.filter(x=>x.row);
     const head=added.some(x=>x.head), status=added.some(x=>x.boxes);
     const plain=cfg.layout==="plain";
-    const padY=Math.max(1.2,lh*.035), padX=Math.max(1.2,lw*.045);
+    /* Text inside a curved outline must keep off the curve: the inscribed
+       rectangle of an ellipse insets each side by (1−1/√2)/2 ≈ 14.6% of the
+       full dimension, so curved shapes take that on top of the base padding. */
+    const curved=cfg.shape==="ellipse"||cfg.shape==="circle"||cfg.shape==="disc";
+    const padY=Math.max(1.2,lh*.035)+(curved?lh*.1464:0);
+    const padX=Math.max(1.2,lw*.045)+(curved?lw*.1464:0);
     const avail=lh-2*padY, inner=Math.max(lw-2*padX,1);
 
     /* The longest text that will actually print, across EVERY label in the
@@ -2057,7 +2394,7 @@
       for(let i=0;i<26;i++){ const mid=(lo+hi)/2; if(needAt(mid)<=fitH) lo=mid; else hi=mid; }
       k=Math.max(.12,lo);
     }
-    return {big,rows,head,status,plain,padY,padX,k};
+    return {big,rows,head,status,plain,padY,padX,k,showBrand};
   }
 
   const STICKER_STATUS_PLAIN=`<div>[&nbsp;&nbsp;&nbsp;&nbsp;] UNDER TEST</div>`
@@ -2067,13 +2404,47 @@
 
   /* Sizes are in mm, not px: a millimetre means the same thing to the printer
      as it does on screen, so the preview and the sheet cannot drift apart. */
-  function labelCss(geom,m){
+  /* Ink that stays readable on whatever background was chosen: a dark label
+     with black rules and black type prints as a solid block. Luminance decides,
+     so the operator picks a colour and the label keeps working. */
+  function labelInk(bg){
+    const m=/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(String(bg||"#ffffff"));
+    if(!m) return "#000";
+    const lin=(c)=>{ c=parseInt(c,16)/255; return c<=.03928?c/12.92:Math.pow((c+.055)/1.055,2.4); };
+    const L=.2126*lin(m[1])+.7152*lin(m[2])+.0722*lin(m[3]);
+    return L>.42?"#000":"#fff";      // same threshold the preview swatch uses
+  }
+  function labelCss(geom,m,cfg){
     const u=(n)=>(n*m.k).toFixed(2)+"mm";
+    const bg=(cfg&&cfg.bg)||"#ffffff", ink=labelInk(bg);
+    // the operator's own inks when set; the luminance-picked one otherwise
+    const capC=(cfg&&cfg.capC)||ink, valC=(cfg&&cfg.valC)||ink;
+    const shape=(cfg&&cfg.shape)||"rect";
+    const rad=shape==="round"?`${cfg.radius||0}mm`
+      :(shape==="ellipse"||shape==="circle"||shape==="disc")?"50%":"0";
+    /* A shaped label cut from white stock is invisible without its cut line;
+       on a coloured or pictured ground the shape shows itself. */
+    const guide=(shape!=="rect"&&bg==="#ffffff")?`box-shadow:inset 0 0 0 .15mm #999;`:"";
     return `
-  .lb{position:relative;width:${geom.labelW}mm;height:${geom.labelH}mm;overflow:hidden;background:#fff;
-    font:${u(3.2)}/1.35 "Times New Roman",Georgia,serif;color:#000}
+  .lb{position:relative;width:${geom.labelW}mm;height:${geom.labelH}mm;overflow:hidden;background:${bg};
+    border-radius:${rad};${guide}
+    font:${u(3.2)}/1.35 "Times New Roman",Georgia,serif;color:${ink};
+    -webkit-print-color-adjust:exact;print-color-adjust:exact}
   .lb .wm{position:absolute;z-index:0;left:50%;top:50%;transform:translate(-50%,-50%);
     width:62%;opacity:.10;pointer-events:none}
+  /* the operator's background picture: scaled to one side of the label,
+     faded by the transparency dial, nudged by the offsets */
+  .lb .bgi{position:absolute;z-index:0;pointer-events:none;
+    left:calc(50% + ${(cfg&&cfg.bgImgX)||0}mm);top:calc(50% + ${(cfg&&cfg.bgImgY)||0}mm);
+    transform:translate(-50%,-50%);${(cfg&&cfg.bgImgFit)==="h"?"height":"width"}:100%;
+    opacity:${((100-((cfg&&cfg.bgImgOp!=null)?cfg.bgImgOp:70))/100).toFixed(2)}}
+  /* placed symbols ride above the content, each at its own spot and size */
+  .lb .sy{position:absolute;z-index:2;line-height:1;transform:translate(-50%,-50%);
+    color:${ink};pointer-events:none}
+  /* the disc's punched hole: paper shows through, with its own cut line */
+  .lb .hole{position:absolute;z-index:3;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:${(cfg&&cfg.holeDia)||0}mm;height:${(cfg&&cfg.holeDia)||0}mm;border-radius:50%;
+    background:#fff;box-shadow:inset 0 0 0 .15mm #999}
   .lb .in{position:relative;z-index:1;height:100%;box-sizing:border-box;
     padding:${m.padY.toFixed(2)}mm ${m.padX.toFixed(2)}mm;display:flex;flex-direction:column}
   .lb .lg{text-align:center;margin-bottom:${u(3.2)}}
@@ -2084,18 +2455,18 @@
      the rows share it out — so the fields fill the label instead of stranding
      a band of blank paper under the last row. */
   .lb table{width:100%;border-collapse:collapse;table-layout:fixed;flex:1 1 auto}
-  .lb th,.lb td{border:${Math.max(.15,.25*m.k).toFixed(2)}mm solid #000;padding:${u(1.5)} ${u(1.9)};
+  .lb th,.lb td{border:${Math.max(.15,.25*m.k).toFixed(2)}mm solid ${ink};padding:${u(1.5)} ${u(1.9)};
     font-size:${u(3.0)};font-weight:400;text-align:left;vertical-align:middle;
     overflow-wrap:anywhere;white-space:pre-wrap}
-  .lb th{width:47%}
-  .lb td{font-weight:700}
+  .lb th{width:47%;color:${capC}}
+  .lb td{font-weight:700;color:${valC}}
   .lb td.st{font-weight:400;line-height:1.45;white-space:nowrap}
   /* Non-table layout: the SAME two columns and the same alignment, with the
      rules simply not drawn. */
   .lb .pl{flex:1 1 auto;display:flex;flex-direction:column;justify-content:space-between}
   .lb .pr{display:flex;align-items:baseline;gap:${u(1.4)};padding:${u(.8)} 0}
-  .lb .pk{width:47%;flex:0 0 47%;font-size:${u(3.0)};font-weight:400}
-  .lb .pv{flex:1 1 auto;font-size:${u(3.0)};font-weight:700;
+  .lb .pk{width:47%;flex:0 0 47%;font-size:${u(3.0)};font-weight:400;color:${capC}}
+  .lb .pv{flex:1 1 auto;font-size:${u(3.0)};font-weight:700;color:${valC};
     overflow-wrap:anywhere;white-space:pre-wrap}
   .lb .pv.st{font-weight:400;line-height:1.45;white-space:nowrap}
   /* the free paragraph, set smaller than the fields so it reads as a note */
@@ -2120,7 +2491,15 @@
       : `<table><tbody>${m.rows.map(x=>
           `<tr><th>${esc(x.cap)}</th><td>${cell(v[x.k])}</td></tr>`).join("")}${
           m.status?STICKER_STATUS_TR:""}</tbody></table>`;
-    return `<div class="lb"><img class="wm" src="${mark}" alt="">
+    /* Decoration around the content: the operator's own picture OR the house
+       watermark (never both — a picture is their design, not ours), the placed
+       symbols, and the disc's punched hole on top of everything. */
+    const deco=(cfg.bgImg?`<img class="bgi" src="${cfg.bgImg}" alt="">`
+        :m.showBrand?`<img class="wm" src="${mark}" alt="">`:"")
+      +(cfg.syms||[]).map(o=>`<span class="sy" style="left:${o.x}mm;top:${o.y}mm;`+
+        `font-size:${o.s}mm">${esc(o.g)}</span>`).join("")
+      +(cfg.shape==="disc"&&cfg.holeDia>0?`<div class="hole"></div>`:"");
+    return `<div class="lb">${deco}
       <div class="in">
         ${m.big?`<div class="lg"><img src="${logo}" alt="Chhaperia"></div>`:""}
         ${cfg.title?`<div class="ttl">${esc(cfg.title)}</div>`:""}
@@ -2164,11 +2543,11 @@
   .pg{width:${geom.pgW}mm;height:${geom.pgH}mm;overflow:hidden;background:#fff;
     padding:${cfg.mTop}mm ${cfg.mRight}mm ${cfg.mBottom}mm ${cfg.mLeft}mm;
     display:grid;grid-template-columns:repeat(${cfg.cols},${geom.labelW}mm);
-    grid-auto-rows:${geom.labelH}mm;column-gap:${cfg.gapX}mm;row-gap:${cfg.gapY}mm;
+    grid-auto-rows:${geom.labelH}mm;column-gap:${geom.gapX}mm;row-gap:${geom.gapY}mm;
     align-content:start;justify-content:start;
     page-break-after:always;break-after:page}
   .pg:last-child{page-break-after:auto;break-after:auto}
-  ${labelCss(geom,m)}
+  ${labelCss(geom,m,cfg)}
 </style></head>
 <body>${pages}${opts.print?`
 <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>`:""}
@@ -2183,7 +2562,7 @@
     return `<!doctype html><html><head><meta charset="utf-8"><style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   html,body{background:#fff}
-  ${labelCss(geom,m)}
+  ${labelCss(geom,m,cfg)}
 </style></head><body>${labelHtml(v,cfg,m)}</body></html>`;
   }
 

@@ -136,12 +136,45 @@ function updateSettings(doc) {
     const order = (Array.isArray(s.order) ? s.order : []).map(String)
       .filter((k, i, a) => keys.indexOf(k) >= 0 && a.indexOf(k) === i);
     const txt = (v, d, max) => (v == null ? d : String(v)).slice(0, max);
+    /* Colours go straight into the print stylesheet, so only a #rrggbb literal
+       is ever stored — anything else (a url(), a second declaration) must never
+       survive the save. */
+    const hex = (v, d) => (/^#[0-9a-fA-F]{6}$/.test(String(v || "")) ? String(v).toLowerCase() : d);
+    /* The background picture is a data URL rendered in an <img>. SVG is
+       deliberately excluded — an SVG can carry script — and the base64 charset
+       in the pattern doubles as attribute-injection proof. */
+    const IMG_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+    const img = (v) => (typeof v === "string" && v.length <= 750000 && IMG_RE.test(v) ? v : "");
+    /* Symbols placed on the label: glyph + centre position + size. The glyph
+       cap (2 characters, counted as a person counts them) is what keeps markup
+       and whole sentences out; everything numeric clamps. */
+    const syms = (Array.isArray(s.syms) ? s.syms : []).slice(0, 12).map((o) => {
+      const g = String((o && o.g) || "").trim();
+      if (!g || [...g].length > 2) return null;
+      return { g, x: dim(o && o.x, 0, 0, 1000), y: dim(o && o.y, 0, 0, 1000), s: dim(o && o.s, 8, 2, 200) };
+    }).filter(Boolean);
     clean.sticker = {
       w: mm(s.w, 100), h: mm(s.h, 150), fields, custom,
       // an empty order means "never picked" — the client falls back to the ticks
       order: order.length ? order : undefined,
       title: txt(s.title, "RAW MATERIAL", 120),
       para: txt(s.para, "", 1200),
+      bg: hex(s.bg, "#ffffff"),                 // label background colour
+      capC: hex(s.capC, ""), valC: hex(s.valC, ""),   // caption/value text ("" = auto ink)
+      /* label outline: rectangle, rounded, ellipse, circle or disc (circle
+         with a punched hole); the curved ones carry their own parameters */
+      shape: ["rect", "round", "ellipse", "circle", "disc"].indexOf(s.shape) >= 0 ? s.shape : "rect",
+      radius: dim(s.radius, 4, 0, 100),         // rounded-rectangle corner, mm
+      holeDia: dim(s.holeDia, 15, 0, 1000),     // disc centre hole, mm
+      /* which side of the geometry auto-fit solves: the gaps (label size is
+         the operator's), the label size (gaps are the operator's), or neither */
+      autoFit: ["gaps", "size", "none"].indexOf(s.autoFit) >= 0 ? s.autoFit
+        : (s.autoSize === false ? "none" : "gaps"),
+      bgImg: img(s.bgImg),                      // watermark/background picture
+      bgImgOp: int(s.bgImgOp, 70, 0, 95),       // its transparency, %
+      bgImgFit: s.bgImgFit === "h" ? "h" : "w", // scaled to label height or width
+      bgImgX: dim(s.bgImgX, 0, -300, 300), bgImgY: dim(s.bgImgY, 0, -300, 300),
+      syms,                                     // placed symbols
       layout: s.layout === "plain" ? "plain" : "table",
       copies: int(s.copies, 1, 1, 500),
       page: STICKER_PAGES.includes(s.page) ? s.page : "A4",
@@ -151,7 +184,6 @@ function updateSettings(doc) {
       mTop: dim(s.mTop, 10, 0, 200), mBottom: dim(s.mBottom, 10, 0, 200),
       mLeft: dim(s.mLeft, 8, 0, 200), mRight: dim(s.mRight, 8, 0, 200),
       rows: int(s.rows, 2, 1, 50), cols: int(s.cols, 2, 1, 20),
-      autoSize: s.autoSize !== false,
       // 0 = no label size has ever been set; the layout decides it instead
       labelW: dim(s.labelW, 0, 0, 1000), labelH: dim(s.labelH, 0, 0, 1000),
       gapX: dim(s.gapX, 3, 0, 100), gapY: dim(s.gapY, 3, 0, 100),

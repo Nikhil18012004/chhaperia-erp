@@ -1775,6 +1775,55 @@ canvas{display:block;width:100%}
 .wz-auto{display:inline-flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;
   font-size:12px;font-weight:600;color:var(--text-dim);cursor:pointer}
 
+/* ---- label colour + symbol (layout step) ----
+   The dial is the OS colour picker; the chips are the standard set. Both write
+   the same cfg.bg, and the small preview shows the ink the label will use. */
+.wz-colrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.wz-dial{width:46px;height:34px;padding:2px;border:1px solid var(--line);border-radius:9px;
+  background:var(--surface-2);cursor:pointer;flex:none}
+.wz-dial::-webkit-color-swatch-wrapper{padding:0}
+.wz-dial::-webkit-color-swatch{border:none;border-radius:6px}
+.wz-hex{width:104px;flex:none;font-family:var(--mono);text-transform:lowercase}
+.wz-inkpv{flex:1 1 130px;min-width:120px;height:34px;display:flex;align-items:center;
+  justify-content:center;border:1px solid var(--line);border-radius:9px;
+  font:700 12px/1 "Times New Roman",Georgia,serif;letter-spacing:.04em;
+  background:#fff;color:#000;overflow:hidden}
+.wz-sw{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.wz-chip{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+  cursor:pointer;padding:0;position:relative;transition:transform .1s ease}
+.wz-chip:hover{transform:scale(1.09)}
+.wz-chip.on{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent)}
+.wz-symb{min-width:34px;height:34px;border-radius:9px;border:1px solid var(--line);
+  background:var(--surface-2);color:var(--text);cursor:pointer;font-size:16px;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center;padding:0 6px}
+.wz-symb:hover{border-color:var(--accent)}
+/* the shape picker — the icon IS the shape, drawn in CSS so it cannot fall
+   back to a missing-glyph box the way a unicode ellipse might */
+.wz-shapes{display:flex;gap:8px;flex-wrap:wrap}
+.wz-shp{display:flex;flex-direction:column;align-items:center;gap:6px;padding:9px 10px 7px;
+  min-width:64px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);
+  color:var(--text-dim);cursor:pointer;font-size:11px;font-weight:600;transition:var(--tr)}
+.wz-shp:hover{border-color:var(--accent)}
+.wz-shp.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-300)}
+.wz-shp i{display:block;width:26px;height:16px;border:2px solid currentColor;border-radius:2px}
+.wz-shp i.s-round{border-radius:6px}
+.wz-shp i.s-ellipse{border-radius:50%}
+.wz-shp i.s-circle,.wz-shp i.s-disc{width:16px;border-radius:50%}
+.wz-shp i.s-disc{position:relative}
+.wz-shp i.s-disc::after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;
+  border-radius:50%;border:2px solid currentColor;transform:translate(-50%,-50%)}
+/* placed symbols: a header row, then glyph · x · y · size · remove */
+.wz-symhead,.wz-symrow{display:grid;grid-template-columns:34px 1fr 1fr 1fr 30px;gap:8px;
+  align-items:center}
+.wz-symhead{margin-top:12px;font-size:10px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--text-mut)}
+.wz-symrow{margin-top:6px}
+.wz-symrow .g{font-size:17px;text-align:center}
+/* background picture controls */
+.wz-thumb{width:46px;height:34px;object-fit:contain;border:1px solid var(--line);
+  border-radius:9px;background:var(--surface-2);flex:none}
+.wz-picwrap{margin-top:12px}
+
 /* step 1 — a tick and its fetched value, side by side */
 .wz-fld{display:grid;grid-template-columns:minmax(152px,196px) 1fr;gap:12px;align-items:center;
   padding:6px 10px;border-radius:10px;border:1px solid transparent;transition:var(--tr)}
