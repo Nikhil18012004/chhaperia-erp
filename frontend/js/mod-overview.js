@@ -482,9 +482,12 @@
   }
 
   const FX_POLL_MS=60000;
-  // fxRates = ₹ per 1 unit of each currency, served by our backend which
-  // cross-verifies a LIVE market feed against 3 independent daily sources
-  let fxRates=null, fxPrev=null, fxFetchedAt=0, fxInfo="";
+  // fxRates = ₹ per 1 unit of each currency; fxShown = the exact digits Google
+  // prints, rendered verbatim so the card reads the same as a Google search.
+  // Google is the only source — a currency Google can't be read for shows "—"
+  // rather than a number from anywhere else.
+  let fxRates=null, fxShown=null, fxAsOf=null, fxChange=null,
+      fxUnavailable=[], fxFetchedAt=0, fxStale=false;
 
   function fxCard(){
     const stamp=h("div",{class:"sub",text:"Fetching live rates…"});
@@ -515,25 +518,54 @@
 
     function fillSelects(){
       if(selFrom.codes.length) return;                 // populate once
-      // only real currencies we can name, listed "CODE SYM — Full Name".
+      // every currency we can name, listed "CODE SYM — Full Name". The list is
+      // no longer limited to what the payload carries: the card fetches only the
+      // six it displays, and any other pair is pulled from Google on demand.
       // Sorted by the NAME, not the code: the name is what you read down the
       // list, and code order scatters it (AED "UAE Dirham" would lead, CHF
       // "Swiss Franc" would sit between Canadian and Chinese).
-      const codes=Object.keys(fxRates).filter(c=>CCY_META[c])
+      const codes=Object.keys(CCY_META)
         .sort((a,b)=>CCY_META[a][0].localeCompare(CCY_META[b][0]));
       selFrom.setCodes(codes); selTo.setCodes(codes);
       selFrom.value="USD"; selTo.value="INR";
     }
-    function convert(){
-      if(!fxRates){ out.textContent="—"; rate.textContent=""; return; }
-      const v=parseFloat(amt.value);
-      const rf=fxRates[selFrom.value], rt=fxRates[selTo.value];   // ₹ per unit
-      if(!isFinite(v)||!rf||!rt){ out.textContent="—"; rate.textContent=""; return; }
-      const res=v*rf/rt, unit=rf/rt;
-      const fmt=n=>n.toLocaleString("en-IN",{maximumFractionDigits:n<1?6:2});
-      out.textContent=fmt(res);                  // bare number — the To picker names the currency
-      rate.textContent=`1 ${selFrom.value} = ${fmt(unit)} ${selTo.value}`;
-      out.title=rate.textContent;
+
+    /* The unit rate for any pair, as Google quotes that pair. Deriving USD→EUR
+       by dividing two INR quotes would NOT equal Google's own USD-EUR figure,
+       so anything that isn't already on the card is fetched directly. */
+    const pairCache=new Map();                       // "USD-EUR" -> {rate,shown,at}
+    async function unitRate(from,to){
+      if(from===to) return {rate:1,shown:"1"};
+      // X→INR is already on the card, and that value IS Google's X-INR quote
+      if(to==="INR"&&fxRates&&fxRates[from]) return {rate:fxRates[from],shown:fxShown[from]};
+      const key=from+"-"+to, hit=pairCache.get(key);
+      if(hit&&Date.now()-hit.at<FX_POLL_MS) return hit;
+      const res=await fetch(`/api/fx/pair?from=${from}&to=${to}`);
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      const j=await res.json();
+      if(!(j.rate>0)) throw new Error("no rate");
+      const rec={rate:j.rate,shown:j.shown,at:Date.now()};
+      pairCache.set(key,rec);
+      return rec;
+    }
+
+    let convSeq=0;                                   // ignore out-of-order replies
+    async function convert(){
+      const seq=++convSeq;
+      const v=parseFloat(amt.value), from=selFrom.value, to=selTo.value;
+      if(!isFinite(v)){ out.textContent="—"; rate.textContent=""; return; }
+      try{
+        const u=await unitRate(from,to);
+        if(seq!==convSeq) return;                    // a newer request has taken over
+        const fmt=n=>n.toLocaleString("en-IN",{maximumFractionDigits:n<1?6:2});
+        out.textContent=fmt(v*u.rate);               // bare number — the To picker names the currency
+        rate.textContent=`1 ${from} = ${u.shown} ${to}`;   // Google's own digits
+        out.title=rate.textContent;
+      }catch(e){
+        if(seq!==convSeq) return;
+        out.textContent="—";
+        rate.textContent=`Google has no rate for ${from}/${to}`;
+      }
     }
 
     const card=h("div",{class:"card"},[
@@ -546,23 +578,45 @@
     function paint(){
       list.innerHTML="";
       FX_LIST.forEach(c=>{
-        const perUnit=fxRates[c.code];                       // ₹ per 1 unit of foreign currency
-        if(!perUnit) return;
-        const prev=fxPrev? fxPrev[c.code] : null;
-        const dir=prev==null||Math.abs(perUnit-prev)<1e-6 ? 0 : (perUnit>prev?1:-1);
-        list.appendChild(h("div",{class:"fx-row"},[
+        // Google's printed digits, verbatim — NOT re-rounded. Re-rounding to 2dp
+        // is what used to make the card read ₹95.42 while Google showed 95.4276.
+        const txt=fxShown&&fxShown[c.code];
+        const chg=fxChange&&fxChange[c.code];              // Google's own "today" move
+        const dir=!chg?0:(/^\+/.test(chg)?1:/^-/.test(chg)?-1:0);
+        const asOf=fxAsOf&&fxAsOf[c.code];
+        const row=h("div",{class:"fx-row"},[
           flagEl(c.cc,c.country),
           h("span",{class:"fx-code",text:c.code}),
           h("span",{class:"fx-name",text:c.name}),
-          h("span",{class:"fx-val"},[
-            document.createTextNode("₹"+perUnit.toFixed(perUnit<1?4:2)),
-            h("span",{class:"fx-dir "+(dir>0?"up":dir<0?"down":"flat"),
-              text:dir>0?"▲":dir<0?"▼":"–"})
-          ])
-        ]));
+          txt
+            ? h("span",{class:"fx-val"},[
+                document.createTextNode("₹"+txt),
+                h("span",{class:"fx-dir "+(dir>0?"up":dir<0?"down":"flat"),
+                  text:dir>0?"▲":dir<0?"▼":"–"})
+              ])
+            : h("span",{class:"fx-val fx-na",text:"—"})
+        ]);
+        /* Click a row to open the very page this figure was read from. The
+           office used to check against the Google SEARCH box, which quotes a
+           different feed (Morningstar) and always disagreed by a few paise —
+           this puts the matching page one click away. */
+        const url="https://www.google.com/finance/quote/"+c.code+"-INR";
+        row.title=txt
+          ? `Google Finance: 1 ${c.code} = ₹${txt}${asOf?"  ·  as of "+asOf:""}`
+            +`${chg?"  ·  "+chg+" today":""}\nClick to open this rate on Google Finance`
+          : `Google's rate for ${c.code} could not be read — no other source is used`;
+        row.style.cursor="pointer";
+        row.onclick=()=>window.open(url,"_blank","noopener");
+        list.appendChild(row);
       });
-      stamp.textContent=fxInfo+" · updated "+
-        new Date(fxFetchedAt).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+      const na=fxUnavailable.length?" · "+fxUnavailable.join(", ")+" unavailable":"";
+      stamp.textContent="Source: Google Finance"+na+
+        (fxStale?" · STALE, Google unreachable":"")+
+        " · fetched "+new Date(fxFetchedAt).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+      stamp.title="Every figure here is Google Finance's own published number, shown to "+
+        "the same digits Google shows. Click any row to open that rate on Google Finance "+
+        "and compare. Note: Google's SEARCH box quotes a different feed (Morningstar) and "+
+        "will read a few paise apart — that is two Google feeds disagreeing, not an error here.";
       fillSelects(); convert();
     }
 
@@ -572,11 +626,10 @@
         const res=await fetch("/api/fx");
         if(!res.ok) throw new Error("HTTP "+res.status);
         const j=await res.json();
-        if(!j.rates||!j.rates.USD) throw new Error("bad response");
-        fxPrev=fxRates; fxRates=j.rates; fxFetchedAt=j.fetchedAt||Date.now();
-        fxInfo=(j.googleCount?"✓ Google rate ("+j.googleCount+" pairs)"
-            :j.liveCount?"✓ live market rate ("+j.liveCount+" pairs)":"daily reference rate")+
-          " · cross-checked vs "+(j.dailySources||[]).length+" sources"+(j.stale?" · STALE":"");
+        if(!j.rates||!j.shown) throw new Error("bad response");
+        fxRates=j.rates; fxShown=j.shown; fxAsOf=j.asOf||{}; fxChange=j.change||{};
+        fxUnavailable=j.unavailable||[]; fxStale=!!j.stale;
+        fxFetchedAt=j.fetchedAt||Date.now();
         paint();
       }catch(e){
         if(fxRates){ paint(); stamp.textContent+=" · refresh failed, showing last rates"; }

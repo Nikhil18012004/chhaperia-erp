@@ -314,7 +314,12 @@
 
   /* ---- BarTender hand-off: the server writes the sticker rows and starts
      the label app on its own machine (see backend bartenderService) ---- */
-  const bartender = { stickers: (poId, csv) => http("POST", "/bartender/stickers", { poId, csv }) };
+  const bartender = {
+    stickers: (poId, csv) => http("POST", "/bartender/stickers", { poId, csv }),
+    // the designed .btw the button opens — read by anyone, replaced by admin
+    template: () => http("GET", "/bartender/template"),
+    putTemplate: (name, data) => http("PUT", "/bartender/template", { name, data }),
+  };
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,

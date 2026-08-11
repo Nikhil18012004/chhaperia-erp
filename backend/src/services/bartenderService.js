@@ -130,10 +130,14 @@ function stickers({ poId, csv }) {
   // the test suite must never pop the BarTender window open mid-run
   const noLaunch = process.env.CHHAPERIA_BARTENDER_NOLAUNCH === "1";
   let launched = false, via = null;
-  if (!noLaunch) {
+  /* Starting BarTender with no template just puts an empty designer on screen —
+     the operator pressed the button to get THEIR label, and a blank window reads
+     as "the button is broken". With no .btw we now start nothing and say what is
+     missing, so the CSV is still written and the message is actionable. */
+  if (!noLaunch && template) {
     if (exe) {
       try {
-        const child = spawn(exe, template ? [template] : [], { detached: true, stdio: "ignore", windowsHide: false });
+        const child = spawn(exe, [template], { detached: true, stdio: "ignore", windowsHide: false });
         child.unref();
         launched = true; via = "exe";
       } catch { /* fall through to the association route below */ }
@@ -152,21 +156,67 @@ function stickers({ poId, csv }) {
 
   const message = noLaunch
     ? "Sticker data written to " + CSV_PATH + "; the launch is suppressed on this server."
+    : !template
+      ? "No label template has been uploaded yet, so BarTender was not opened — it would have "
+        + "come up empty. Design your sticker once in BarTender, bind its fields to " + CSV_PATH
+        + ", save it as a .btw, then upload it with “Upload BarTender template”. Every press after "
+        + "that opens BarTender on your own label with the fresh rows. The sticker data is already "
+        + "saved to " + CSV_PATH + "."
     : launched && via === "exe"
-      ? (template
-        ? "BarTender opened with " + path.basename(template) + " — edit the stickers there and print."
-        : "BarTender opened, but no label template exists yet. Design the sticker once, bind it to " + CSV_PATH + ", and save the .btw into " + BT_DIR + ".")
+      ? "BarTender opened with " + path.basename(template) + " — edit the stickers there and print."
     : launched
       ? path.basename(template) + " was handed to Windows to open in BarTender with the fresh sticker rows."
-    : !exe && !template
-      ? "bartend.exe was not found on this computer (Program Files was scanned three levels deep; the registry and PATH were asked) and no .btw template exists yet. "
-        + "If BarTender IS installed here: open it once, design the sticker bound to " + CSV_PATH + ", and save the label as a .btw into " + BT_DIR
-        + " — from then on this button opens it automatically. A non-standard install can be pinned with CHHAPERIA_BARTENDER_EXE=<full path to bartend.exe>. "
-        + "The sticker data was saved to " + CSV_PATH + "."
+    : !exe
+      ? "bartend.exe was not found on this computer (Program Files was scanned three levels deep; the "
+        + "registry and PATH were asked), and Windows would not open " + path.basename(template)
+        + " either. A non-standard install can be pinned with CHHAPERIA_BARTENDER_EXE=<full path to "
+        + "bartend.exe>. The sticker data was saved to " + CSV_PATH + "."
       : "BarTender could not be started — open " + CSV_PATH + " manually.";
 
   return { ok: true, poId, csvPath: CSV_PATH, exeFound: !!exe, exePath: exe || null,
-    templateFound: !!template, launched, via, message };
+    templateFound: !!template, templateName: template ? path.basename(template) : null,
+    launched, via, message };
 }
 
-module.exports = { stickers };
+/* ============================================================
+   THE LABEL TEMPLATE ITSELF
+   A .btw is BarTender's own binary format — the ERP cannot author one from the
+   sticker layout held in settings, so the operator designs it once in BarTender
+   and hands it over. Uploading it through the ERP means nobody needs file access
+   to the server laptop, which is the only reason the template was ever missing.
+   ============================================================ */
+function getTemplate() {
+  const t = findTemplate();
+  if (!t) return { present: false, name: null, size: 0, modified: null, csvPath: CSV_PATH, dir: BT_DIR };
+  const st = fs.statSync(t);
+  return { present: true, name: path.basename(t), size: st.size,
+    modified: st.mtime.toISOString(), csvPath: CSV_PATH, dir: BT_DIR };
+}
+
+/** Store the operator's designed .btw. `data` is a base64 payload from the browser. */
+function putTemplate({ name, data }) {
+  if (typeof name !== "string" || !/\.btw$/i.test(name.trim()))
+    throw err("The template must be a BarTender .btw file.");
+  const safe = path.basename(name.trim());
+  if (!/^[A-Za-z0-9][A-Za-z0-9 _.()-]{0,63}\.btw$/i.test(safe))
+    throw err("That file name has characters the label folder cannot take.");
+  if (typeof data !== "string" || !data) throw err("The template file was empty.");
+
+  const buf = Buffer.from(data, "base64");
+  if (!buf.length) throw err("The template file was empty.");
+  if (buf.length > 8 * 1024 * 1024) throw err("That .btw is larger than 8 MB.", 413);
+
+  fs.mkdirSync(BT_DIR, { recursive: true });
+  // one template at a time: findTemplate() takes the first .btw, so leaving an
+  // older one behind would make which label opens depend on alphabetical order
+  try {
+    fs.readdirSync(BT_DIR)
+      .filter((f) => f.toLowerCase().endsWith(".btw"))
+      .forEach((f) => fs.rmSync(path.join(BT_DIR, f), { force: true }));
+  } catch { /* nothing to clear */ }
+
+  fs.writeFileSync(path.join(BT_DIR, safe), buf);
+  return Object.assign({ ok: true }, getTemplate());
+}
+
+module.exports = { stickers, getTemplate, putTemplate };

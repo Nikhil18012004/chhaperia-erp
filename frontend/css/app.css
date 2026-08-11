@@ -392,6 +392,9 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 .fx-dir.up{color:var(--ok)}
 .fx-dir.down{color:var(--danger)}
 .fx-dir.flat{color:var(--text-mut)}
+/* Google could not be read for this pair — we show nothing rather than a
+   number from another source (see backend/src/services/fxService.js) */
+.fx-val.fx-na{color:var(--text-mut);font-weight:600}
 
 /* donut legend */
 .legend{display:flex;flex-direction:column;gap:9px}

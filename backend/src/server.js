@@ -40,13 +40,32 @@ const bigBody = (limit) => {
 app.use("/api/lab", bigBody("25mb"));
 app.use("/api/state", bigBody("25mb"));   // full-dataset restore
 app.use("/api/chatbot/knowledge", bigBody("10mb")); // bulk training uploads
+// a .btw label template arrives base64-encoded, so 8 MB of file is ~11 MB of body
+app.use("/api/bartender/template", bigBody("14mb"));
 app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)
 app.use("/api/auth", authRoutes);
-// Cross-verified INR exchange rates (multi-source; no business data — public)
+// Exchange rates, sourced from Google only (no business data — public).
+// ?add=THB,SEK warms extra currencies the converter needs beyond the listed set.
 app.get("/api/fx", (req, res, next) => {
-  require("./services/fxService").getRates()
+  const add = String(req.query.add || "")
+    .toUpperCase()
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^[A-Z]{3}$/.test(s))
+    .slice(0, 8);
+  require("./services/fxService").getRates(add)
+    .then((payload) => { res.set("Cache-Control", "no-store"); res.json(payload); })
+    .catch(next);
+});
+// One direct pair as Google quotes it (converter, for non-INR pairs)
+app.get("/api/fx/pair", (req, res, next) => {
+  const ok = (s) => /^[A-Z]{3}$/.test(s);
+  const from = String(req.query.from || "").toUpperCase();
+  const to = String(req.query.to || "").toUpperCase();
+  if (!ok(from) || !ok(to)) return res.status(400).json({ error: "from/to must be 3-letter codes" });
+  require("./services/fxService").getPair(from, to)
     .then((payload) => { res.set("Cache-Control", "no-store"); res.json(payload); })
     .catch(next);
 });

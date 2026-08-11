@@ -407,6 +407,51 @@ try {
       ok(key + ": every column the user filled in came back verbatim", lost.length === 0, lost.join(", "));
     });
   }
+
+  /* ---------- exchange rates: Google's printed figure, and only Google -------
+     The dashboard is checked against a Google search by the office, so the
+     parser must return the number Google DISPLAYS. It reads obfuscated class
+     names off the quote page, so this pins the shape with a fixture — if
+     Google restyles the page these fail here instead of on the dashboard.
+     Offline by design: no network in the test suite. */
+  section("Exchange rates (Google-only)");
+  {
+    const fx = require("../src/services/fxService");
+    // trimmed from a real www.google.com/finance/quote/USD-INR response
+    const FIXTURE =
+      '<style>.N6SYTe{font-weight:500;font-size:24px}</style>' +
+      '<div class="KycIzb"><div class="gO24Ff">United States Dollar / Indian Rupee</div>' +
+      '<div class="N6SYTe"><span jsname="Pdsbrc" class=""><span>95.4283</span></span></div>' +
+      '<div class="DAicsd"><div jsname="ohpORc"></div>' +
+      '<span jsname="vY9t3b" class=""><span class="ougHge">+0.03%</span></span></div>' +
+      '<div class="jZZ2de">Aug 11, 6:36:00 AM UTC</div></div>' +
+      '<a href="./quote/EUR-INR"><span jsname="Pdsbrc"><span>110.0669</span></span></a>';
+
+    const q = fx.parseQuote(FIXTURE);
+    ok("a Google quote page can be parsed", !!q);
+    ok("the rate is the figure Google DISPLAYS, not the history tail",
+      q && q.rate === 95.4283, q && String(q.rate));
+    ok("the printed digits are kept verbatim for display",
+      q && q.shown === "95.4283", q && q.shown);
+    ok("Google's own as-of line is captured",
+      q && q.asOf === "Aug 11, 6:36:00 AM UTC", q && q.asOf);
+    ok("today's move is captured for the arrow", q && q.change === "+0.03%", q && q.change);
+    // the page also lists OTHER pairs (EUR/INR above); the headline must win
+    ok("a related pair on the same page is not mistaken for the headline",
+      q && q.rate !== 110.0669);
+
+    ok("a page whose markup we no longer recognise yields nothing (never a guess)",
+      fx.parseQuote("<html><body>no quote here</body></html>") === null);
+    ok("a non-numeric price is rejected",
+      fx.parseQuote('<div class="N6SYTe"><span><span>—</span></span></div>') === null);
+    // thousands separators appear on weak-currency pairs (e.g. IDR-INR)
+    const c = fx.parseQuote('<div class="N6SYTe"><span><span>1,234.56</span></span></div>');
+    ok("a comma-grouped price parses to a number", c && c.rate === 1234.56, c && String(c.rate));
+
+    ok("the dashboard's six currencies are the eagerly fetched set",
+      ["USD", "EUR", "GBP", "AED", "CNY", "JPY"].every((x) => fx.BASE_CODES.includes(x)) &&
+      fx.BASE_CODES.length === 6, fx.BASE_CODES.join(","));
+  }
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

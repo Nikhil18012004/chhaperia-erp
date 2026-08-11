@@ -283,9 +283,7 @@
          bill an order. Testing is reached from the receipt rows above. */
       const foot=qcOnly?[]:[h("button",{class:"btn danger",onclick:()=>deletePO(po),text:"🗑 Delete"}),
         h("button",{class:"btn",onclick:()=>printDoc("po",po),html:PRINT_IC+" Print"}),
-        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Labels"}),
-        h("button",{class:"btn",title:"Download the label rows as CSV for the BarTender label template",
-          onclick:()=>bartenderPO(po),text:"⤓ BarTender"})];
+        h("button",{class:"btn",onclick:()=>stickersPO(po),text:"🏷 Labels"})];
       if(!qcOnly&&!anyRecd) foot.push(h("button",{class:"btn ghost",onclick:()=>{UI.$("#modalHost").hidden=true;poForm(po);},text:"✎ Edit"}));
       if(!qcOnly&&po.status!=="Received") foot.push(h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;receivePO(po);},text:"Receive Goods"}));
       modal({title:po.id, sub:ENG.sup(po.supplierId), wide:true, body, foot});
@@ -538,7 +536,7 @@
           "Set smaller than the fields so it reads as a note. It counts towards the fit, so a long paragraph shrinks the rest."));
 
         pane.appendChild(h("div",{class:"muted",style:"margin-top:18px;font-size:12px;line-height:1.65",
-          html:"The field list, the title, the paragraph and the layout are saved for everyone, and shape the printed label <b>and</b> the BarTender file. Edited <b>values</b> apply to this print run only — they are never written back to the purchase order."}));
+          html:"The field list, the title, the paragraph and the layout are saved for everyone, and shape the printed label. Edited <b>values</b> apply to this print run only — they are never written back to the purchase order."}));
       }
 
       /* ============ STEP 2 — how they sit on the sheet ============ */
@@ -766,8 +764,6 @@
 
       render();
     }
-    function bartenderPO(po){ sendToBartender(po); }
-
     async function deletePO(po){
       const grn=ENG.data.movements.filter(m=>m.ref===po.id);
       const msg=grn.length
@@ -1934,7 +1930,7 @@
     let order=Array.isArray(s.order)?s.order.map(String).filter(k=>all.some(f=>f.k===k)):null;
     if(!order||!order.length) order=all.filter(f=>!s.fields||s.fields[f.k]!==false).map(f=>f.k);
     order=order.filter((k,i)=>order.indexOf(k)===i);
-    // kept in step with `order` so the BarTender CSV still reads one flag per field
+    // kept in step with `order`: one flag per field
     const fields={}; all.forEach(f=>{ fields[f.k]=order.indexOf(f.k)>=0; });
     /* dim() accepts 0 — a zero margin or gap is a real choice, unlike a zero
        page or label size, which pick() rejects in favour of the default. */
@@ -2211,47 +2207,6 @@
     });
   }
 
-  /* The BarTender bridge: the same label rows as a CSV the .btw template
-     binds to as its data source. Columns come off STICKER_FIELDS, so adding a
-     field adds its column here too; an unticked field ships empty rather than
-     vanishing, so an existing .btw keeps finding every column it expects. */
-  function stickerCsv(po,list){
-    const rows=list||stickerValues(po);
-    if(!rows.length) return null;
-    const cfg=stickerCfg(), f=cfg.fields;
-    /* Built-in columns always ship, in their fixed order, so an existing .btw
-       keeps finding every column it was designed against; invented fields are
-       appended after them. An unticked field ships empty rather than vanishing. */
-    const cols=STICKER_FIELDS.concat(cfg.custom||[]);
-    const q=(v)=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
-    // UTF-8 BOM, so Excel and BarTender read g/m² correctly
-    return "﻿"+[
-      ["PONo"].concat(cols.map(x=>x.csv)).map(q).join(","),
-      ...rows.map(v=>[po.id].concat(cols.map(x=>
-        (x.boxes||!f[x.k])?"":(v[x.k]||""))).map(q).join(",")),
-    ].join("\r\n");
-  }
-
-  /* Pressing ⤓ BarTender asks the SERVER to write the rows and start the
-     BarTender app on its machine — the browser cannot start desktop programs.
-     When the app is not installed there, the operator still gets the file:
-     it downloads locally instead, with the server's explanation. */
-  async function sendToBartender(po){
-    const csv=stickerCsv(po);
-    if(!csv){ toast("This purchase order has no lines to label",{type:"warn"}); return; }
-    try{
-      const r=await DB.bartender.stickers(po.id,csv);
-      if(r.launched&&r.templateFound){ toast(r.message,{type:"ok",title:"BarTender"}); return; }
-      if(r.launched){ toast(r.message,{title:"BarTender — one-time setup"}); return; }
-      U.downloadCSV(`${po.id}-stickers.csv`,csv);
-      toast(r.message+" The file was also downloaded here.",{type:"warn",title:"BarTender not started"});
-    }catch(e){
-      U.downloadCSV(`${po.id}-stickers.csv`,csv);
-      toast((e.message||"The server could not hand off to BarTender.")+" The label file was downloaded instead.",
-        {type:"warn",title:"BarTender"});
-    }
-  }
-
   /* ============================================================
      INCOMING-MATERIAL TESTING ("GRN testing")
      A purchase order is received, the server issues a numbered GRN,
@@ -2375,7 +2330,9 @@
                     :"Quarantined — the lot is marked and cannot be drawn")
           : "Rejection declined — the lot stands as good stock",
           {type:approve?"warn":"ok",title:"Failed lot"});
-        await App.refreshView();
+        // same reason as the reading save: the ruling has to be back in
+        // ENG.data before `after` re-renders anything that reads it
+        await App.reloadState();
         if(after) after();
       }catch(e){
         toast(e.message||"Could not record the ruling",{type:"danger"});
@@ -2514,7 +2471,11 @@
            reads the verdict. Saying "Pass" here would defeat the redaction. */
         toast(App.isLab()?"Reading filed for "+f.item.name:"Test report saved for "+f.item.name,
           {type:"ok",title:"GRN testing"});
-        await App.refreshView();
+        /* reloadState, NOT refreshView: refreshView only re-renders from the
+           dataset already in memory, so the reading we just filed was still
+           missing from ENG.data.grnTests and the report panel reopened saying
+           "0 tested / Test due" on a receipt the server had stored complete. */
+        await App.reloadState();
         if(after) after();
       }catch(e){
         toast(e.message||"Could not save the test report",{type:"danger"});
@@ -2571,11 +2532,26 @@
      still reads untested (nothing was entered, or a save was refused) must not
      be reopened for ever. */
   function makeGrnTestReport(g, seen){
+    const walked=!!seen;              // set only when we got here after a save
     seen=seen||{};
     const fresh=(ENG.data.grns||[]).find(x=>x.id===g.id)||g;
     const st=qcForGrn(fresh);
     const next=st.lines.find(l=>!l.tested&&!seen[l.itemId]);
-    if(!next){ grnTestPanel(fresh); return; }
+    if(!next){
+      /* Filing the last reading ENDS the job. Re-opening the report here read
+         as "the submit didn't go through" — the operator submits and expects
+         to be done, not handed the document back. The finished report is still
+         one click away from the receipt row when they want to print it. */
+      if(walked){
+        UI.$("#modalHost").hidden=true;
+        if(st.total>1&&!st.pending)
+          toast("GRN test report submitted — all "+st.total+" materials filed for "+fresh.id,
+            {type:"ok",title:"GRN testing"});
+        return;
+      }
+      grnTestPanel(fresh);
+      return;
+    }
     seen[next.itemId]=true;
     grnTestForm(fresh.id,next.itemId,()=>makeGrnTestReport(fresh,seen));
   }

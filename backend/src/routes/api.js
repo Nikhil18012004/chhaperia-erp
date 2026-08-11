@@ -27,6 +27,15 @@ router.get("/health", (req, res) => {
 
 // Raw-material sticker hand-off: writes the rows to the fixed csv the .btw
 // template reads and starts BarTender on this machine (see bartenderService).
+// which label template BarTender will open (and whether one exists at all)
+router.get("/bartender/template", requireAuth, (req, res, next) => {
+  try { res.json(bartender.getTemplate()); } catch (e) { next(e); }
+});
+// the operator's designed .btw, uploaded from the browser so nobody needs file
+// access to the server laptop — admin only, it decides what every label prints
+router.put("/bartender/template", requireAuth, requireRole("admin"), (req, res, next) => {
+  try { res.json(bartender.putTemplate(req.body || {})); } catch (e) { next(e); }
+});
 router.post("/bartender/stickers", requireAuth, requireRole("admin", "office"), (req, res, next) => {
   try { res.json(bartender.stickers(req.body || {})); } catch (e) { next(e); }
 });
