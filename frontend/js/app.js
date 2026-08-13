@@ -46,6 +46,7 @@
     },
 
     async bootFullApp(){
+      this._leaveGuard=null;          // a fresh shell owes nothing to the last one
       let data;
       try{
         data = await DB.loadAsync();
@@ -178,6 +179,9 @@
 
     async logout(){
       this.stopAutoRefresh();
+      /* The signed-out screen has no module on it, so a guard left behind from
+         the last one would stall the next session's first render and its poll. */
+      this._leaveGuard=null;
       try{ await DB.auth.logout(); }catch{}
       this.user=null;
       location.hash="";
@@ -281,9 +285,30 @@
       return first ? first.id : "dashboard";
     },
 
+    /* A module with unsaved work registers a guard when it renders; the next
+       navigation away asks before it throws that work out. Label Studio is the
+       one screen where you can lose twenty minutes to a mis-click on the menu.
+       The guard is cleared by the navigation itself, so it can never outlive
+       the module that set it. */
+    setLeaveGuard(fn){ this._leaveGuard = typeof fn==="function" ? fn : null; },
+
     go(id, params){
       if(!M[id]){ id=this.homeId(); }
       if(!this.canAccess(id)){ id=this.homeId(); } // block hidden modules by hash/palette
+      /* Same-module navigation is guarded too: the menu item for the screen you
+         are already on re-renders it, which is just as destructive as leaving. */
+      if(this._leaveGuard){
+        const msg=this._leaveGuard();
+        if(msg){
+          UI.confirm(msg,{title:"Unsaved changes",danger:true}).then(ok=>{
+            if(ok){ this._leaveGuard=null; this.go(id,params); }
+            // the hash may already have moved (someone edited the URL) — put it back
+            else if(location.hash.replace("#","")!==this.current) location.hash=this.current;
+          });
+          return;
+        }
+      }
+      this._leaveGuard=null;
       this.current=id; this.params=params||null;
       location.hash=id;
       // nav active state
@@ -395,6 +420,9 @@
        still starts at the top, because that is a different page. */
     refreshView(){
       if(!(this.current && M[this.current])) return;
+      /* Never rebuild an editor — a refresh is housekeeping, and it does not get
+         to throw the operator's design away. Live again the moment they leave. */
+      if(this._leaveGuard) return;
       const view=$("#view");
       const top=view?view.scrollTop:0;
       const prev=view?view.style.scrollBehavior:"";
