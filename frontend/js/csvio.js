@@ -135,10 +135,15 @@
     customers: {
       label: "Customers", idKey: "id", kind: "array", path: "customers", autoId: "CUS-",
       cols: [C("id", "Customer ID"), C("name", "Customer Name"), C("segment", "Segment"), C("gst", "GSTIN"), C("stateCode", "GST State Code"), C("state", "State"),
-        C("address", "Billing Address"), C("shipTo", "Ship-To Address"), C("city", "City"), C("rating", "Grade"), C("contact", "Contact Person"), C("phone", "Phone"),
+        C("address", "Billing Address"), C("shipTo", "Ship-To Address"), C("city", "City"), C("country", "Country"), C("currency", "Currency"),
+        C("rating", "Grade"), C("contact", "Contact Person"), C("phone", "Phone"),
         C("email", "Email"), C("terms", "Payment Terms"), C("since", "Customer Since")],
+      // Currency is imported as written and NOT re-derived from Country: the
+      // sheet is the user's own record of what a client actually settles in,
+      // and a Vietnamese buyer paying in dollars must not be silently reset to
+      // dong. A blank one falls back to the country's currency at display time.
       form: ["id", "name", "segment", "gst", "stateCode", "state", "address", "shipTo",
-        "city", "rating", "contact", "phone", "email", "terms", "since"],
+        "city", "country", "currency", "rating", "contact", "phone", "email", "terms", "since"],
     },
     suppliers: {
       label: "Suppliers", idKey: "id", kind: "array", path: "suppliers", autoId: "SUP-",

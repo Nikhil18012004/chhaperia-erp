@@ -1018,6 +1018,14 @@
       if(inp) inp.value=cur?cur.l:"";
     }
   }
+  /* Set a searchSelect from code — the caller has an id, not the wrapper. Fires
+     the same "change" a click would, so anything listening (a currency's live
+     rate line, a form recalc) reacts to a programmatic pick exactly as it does
+     to a human one. Silently does nothing if that widget isn't on screen. */
+  function ssSet(id, v){
+    const wrap=document.querySelector('.ss[data-ss="'+String(id).replace(/"/g,'\\"')+'"]');
+    if(wrap) ssPick(wrap, v);
+  }
   function ssPick(wrap, v){
     const hid=ssHidden(wrap), inp=ssInput(wrap);
     const cur=(_ssOpts.get(wrap.getAttribute("data-ss"))||[]).find(o=>o.v===String(v));
@@ -1097,7 +1105,7 @@
      material master here, and the test report itself — the lab incharge notices
      a missing parameter while standing at the delivery, not while browsing
      Stock Items. One editor, both entry points. */
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, receiveStockForm, qcForm});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, ssSet, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, receiveStockForm, qcForm});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

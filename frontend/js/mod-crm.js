@@ -412,6 +412,11 @@
         phone: l.phone || "—",
         email: l.email || "—",
         since: String(DB.helpers.today().getFullYear()),
+        /* A lead carries a city but never a country, so a converted client
+           starts domestic and is invoiced in rupees. Stamped rather than left
+           blank so the exported sheet says what the screen says; the customer
+           master re-derives the currency the moment someone sets a country. */
+        country: "India", countryCode: "IN", currency: "INR",
       };
       ENG.data.customers.push(cust);
       createdCustomer = true;

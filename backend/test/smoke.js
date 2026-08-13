@@ -452,6 +452,86 @@ try {
       ["USD", "EUR", "GBP", "AED", "CNY", "JPY"].every((x) => fx.BASE_CODES.includes(x)) &&
       fx.BASE_CODES.length === 6, fx.BASE_CODES.join(","));
   }
+
+  /* ---------- a client's currency follows their country ----------------------
+     The sales desk types a country on the customer master and the money that
+     client is invoiced in follows from it (frontend/js/ccy.js, shared with the
+     sales order and the dashboard converter). Pure lookups — no network. */
+  section("Country → currency");
+  {
+    const CCY = require("../../frontend/js/ccy.js");
+
+    ok("the country table covers the world, not a handful of markets",
+      CCY.COUNTRIES.length > 180, CCY.COUNTRIES.length + " countries");
+    ok("every country's currency is one we can name and print",
+      CCY.COUNTRIES.filter((c) => !CCY.known(c.ccy)).length === 0,
+      CCY.COUNTRIES.filter((c) => !CCY.known(c.ccy)).map((c) => c.name + "=" + c.ccy).join(", "));
+    const dupes = [];
+    const seenCc = {}, seenName = {};
+    CCY.COUNTRIES.forEach((c) => {
+      if (seenCc[c.cc]) dupes.push("cc " + c.cc);
+      if (seenName[CCY.norm(c.name)]) dupes.push("name " + c.name);
+      seenCc[c.cc] = seenName[CCY.norm(c.name)] = 1;
+    });
+    ok("no country is listed twice", dupes.length === 0, dupes.join(", "));
+
+    ok("India bills in rupees", CCY.forCountry("India") === "INR");
+    ok("a Gulf client bills in dirhams", CCY.forCountry("United Arab Emirates") === "AED");
+    ok("a euro-area client bills in euro", CCY.forCountry("Germany") === "EUR");
+    // the desk types what it types: aliases, ISO codes, punctuation, accents
+    ok("\"usa\" resolves", CCY.forCountry("usa") === "USD");
+    ok("\"U.A.E.\" resolves", CCY.forCountry("U.A.E.") === "AED");
+    ok("\"UK\" resolves", CCY.forCountry("UK") === "GBP");
+    ok("an ISO-2 code resolves", CCY.forCountry("SG") === "SGD");
+    ok("an ISO-3 code resolves", CCY.forCountry("LKA") === "LKR");
+    ok("accents are folded — Côte d'Ivoire finds the CFA franc",
+      CCY.forCountry("Côte d'Ivoire") === "XOF", CCY.forCountry("Côte d'Ivoire"));
+    ok("a country stores under its canonical spelling",
+      (CCY.country("holland") || {}).name === "Netherlands");
+
+    /* The rule the table follows: the currency you would actually INVOICE in,
+       which for a dollarised economy is not the one on the banknotes. */
+    ok("a dollarised economy bills in dollars, not its own note",
+      CCY.forCountry("Ecuador") === "USD" && CCY.forCountry("Panama") === "USD" &&
+      CCY.forCountry("Zimbabwe") === "USD");
+
+    // nothing recognised must never guess — the caller keeps what it had
+    ok("an unknown country yields nothing rather than a guess",
+      CCY.forCountry("Atlantis") === "" && CCY.forCountry("") === "" &&
+      CCY.forCountry(null) === "");
+
+    ok("a currency reads as code, symbol and name", CCY.full("USD") === "USD $ — US Dollar", CCY.full("USD"));
+    ok("a currency with no Latin symbol still reads cleanly",
+      CCY.short("SDG") === "SDG", CCY.short("SDG"));
+    ok("an unknown code degrades to itself rather than throwing",
+      CCY.name("ZZZ") === "ZZZ" && CCY.short("ZZZ") === "ZZZ");
+
+    /* The dashboard converter offers a deliberate subset — the currencies the
+       office actually converts between. Pinned so growing the master table for
+       the customer master never quietly reshapes that card's pickers. */
+    ok("the converter still offers exactly its own 42 currencies",
+      CCY.CONVERTER_CODES.length === 42 && new Set(CCY.CONVERTER_CODES).size === 42,
+      String(CCY.CONVERTER_CODES.length));
+    ok("every converter code is nameable",
+      CCY.CONVERTER_CODES.every((c) => CCY.known(c)));
+    ok("the converter list is sorted by NAME, not code",
+      CCY.sortedByName(CCY.CONVERTER_CODES)[0] === "AUD",
+      CCY.sortedByName(CCY.CONVERTER_CODES).slice(0, 3).join(","));
+
+    /* rate() is a thin caller of /api/fx/pair, i.e. of the Google-only feed
+       pinned above; what is worth checking HERE — the suite is synchronous and
+       offline — is that asking for one outside a browser is inert rather than
+       an exception. What it resolves TO (a figure, or null so the caller shows
+       "—") is the fxService contract tested in the section above. */
+    const savedFetch = global.fetch;
+    global.fetch = undefined;
+    let rateThrew = null;
+    let thenable = null;
+    try { thenable = CCY.rate("USD", "INR"); } catch (e) { rateThrew = e.message; }
+    global.fetch = savedFetch;
+    ok("asking for a rate with no feed available does not throw", rateThrew === null, rateThrew);
+    ok("rate() always hands back a promise", thenable && typeof thenable.then === "function");
+  }
 } catch (e) {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));

@@ -1738,6 +1738,8 @@
           ["Status",badge(so.status==="Dispatched"?"ok":"info",so.status)],["Priority",so.priority],
           ["Order Date",so.date],["Promised",so.promised]]
           .concat(so.invoiceNo&&so.invoiceNo!==so.id?[["Invoice No.",so.invoiceNo]]:[])
+          // only worth a row when it isn't rupees — every domestic order is
+          .concat(so.currency&&so.currency!=="INR"?[["Currency",CCY.full(so.currency)]]:[])
           .concat(so.custPoNo?[["Customer PO",so.custPoNo]]:[])
           .concat(so.placeOfSupply?[["Place of Supply",so.placeOfSupply+" — "+GST.stateName(so.placeOfSupply)]]:[])
           .concat(so.transportMode?[["Transport",[so.transportMode,so.vehicleNo].filter(Boolean).join(" · ")]]:[])
@@ -1793,7 +1795,13 @@
         sec("Invoice Details"),
         h("div",{class:"form-grid g3"},[
           U.field("Invoice Type",U.selectHTML("so_itype",[{v:"domestic",l:"Domestic — GST Tax Invoice"},{v:"export",l:"Export — Commercial Invoice"}],editSo?(editSo.invoiceType||"domestic"):"domestic")),
-          U.field("Currency",U.selectHTML("so_ccy",[{v:"INR",l:"INR ₹"},{v:"USD",l:"USD $"},{v:"EUR",l:"EUR €"},{v:"GBP",l:"GBP £"},{v:"AED",l:"AED"},{v:"SAR",l:"SAR"}],editSo?(editSo.currency||"INR"):"INR")),
+          /* A new order opens in the CUSTOMER'S currency — the one their master
+             record carries, derived from their country. Every currency is on
+             offer, not the old six, because a client can be anywhere; the live
+             rate under the box is Google's, for the desk's own sanity check. */
+          U.field("Currency",
+            U.searchSelect("so_ccy",CCY.options(),editSo?(editSo.currency||"INR"):custCcy(cust0),"Search currency…")
+            +`<div class="muted" id="so_rate" style="font-size:11px;margin-top:5px;line-height:1.4"></div>`),
           U.field("Invoice No.",`<input class="input" id="so_inv" value="${esc(editSo?(editSo.invoiceNo||editSo.id):soId)}">`),
           U.field("Order Date",`<input class="input" id="so_date" type="date" value="${editSo?(editSo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
           U.field("Promised / Due Date",`<input class="input" id="so_prom" type="date" value="${editSo?editSo.promised:DB.helpers.daysAhead(10)}">`),
@@ -1856,18 +1864,36 @@
           const c=custs.find(x=>x.id===UI.$("#so_cust").value)||{};
           UI.$("#so_notify").value=[c.name,c.address||c.city,c.phone,c.email].filter(Boolean).join("\n");
         }
-        if(ex&&UI.$("#so_ccy").value==="INR") UI.$("#so_ccy").value="USD";
+        /* Switching to an export invoice off rupees: take the buyer's own
+           currency if their master record names one, and only fall back to
+           dollars when it doesn't (an Indian party invoiced for export). */
+        if(ex&&UI.$("#so_ccy").value==="INR"){
+          const c=custs.find(x=>x.id===UI.$("#so_cust").value);
+          const want=custCcy(c);
+          U.ssSet("so_ccy", want==="INR"?"USD":want);
+        }
         recalc();
       });
-      // customer switch refreshes place of supply, ship-to + payment terms
+      // customer switch refreshes place of supply, ship-to, payment terms and
+      // the currency their invoice is raised in
       const custHid=UI.$("#so_cust");
       if(custHid) custHid.addEventListener("change",()=>{
         const c=custs.find(x=>x.id===custHid.value); if(!c) return;
         const posEl=UI.$("#so_pos"); const sc=partyStateCode(c); if(posEl&&sc) posEl.value=sc;
         const shipEl=UI.$("#so_ship"); if(shipEl) shipEl.value=c.shipTo||c.address||"";
         const tEl=UI.$("#so_terms"); if(tEl&&c.terms) tEl.value=c.terms;
+        const want=custCcy(c);
+        if(UI.$("#so_ccy") && UI.$("#so_ccy").value!==want) U.ssSet("so_ccy",want);
+        // the commercial invoice asks for the destination country; the client's
+        // own country is the answer unless the desk has already typed one
+        const cdEl=UI.$("#so_cdest");
+        if(cdEl && !cdEl.value.trim() && custCountry(c)!=="India") cdEl.value=custCountry(c);
         recalc();
       });
+      // the live Google rate under the currency box, kept in step with it
+      const soCcyEl=UI.$("#so_ccy"), soRateEl=UI.$("#so_rate");
+      if(soCcyEl) soCcyEl.addEventListener("change",()=>ccyRateLine(soRateEl,soCcyEl.value));
+      ccyRateLine(soRateEl, soCcyEl?soCcyEl.value:"INR");
       /* Batch = the work order this line is served from. Only FINISHED jobs
          appear, each with the quantity still unclaimed, so an order is filled
          from what the floor has actually produced. */
@@ -2117,6 +2143,12 @@
   }};
 
   /* ============== CUSTOMERS ============== */
+  /* Where the client is, and what their invoice is raised in. A record saved
+     before these fields existed falls back through its country to India/INR,
+     so nothing in the list reads as blank or broken. */
+  function custCountry(c){ const k=CCY.country(c&&c.country); return k?k.name:((c&&c.country)||"India"); }
+  function custCcy(c){ return String((c&&c.currency)||CCY.forCountry(c&&c.country)||"INR").toUpperCase(); }
+
   M.customers = { title:"Customers", sub:"Client master & orders", render(root){
     root.appendChild(pageHead("Customers","HT cable manufacturers and order history",[
       MW.excelMenu("customers"),
@@ -2124,15 +2156,19 @@
     ]));
     let q="";
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search customer, city, segment, GSTIN, contact…", v=>{q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search customer, city, country, currency, GSTIN, contact…", v=>{q=v.toLowerCase().trim();draw();}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"custCount"}))
     ]));
     const host=h("div"); root.appendChild(host);
     /* Grade and SO number are in here too: "grade a" narrows to the key
-       accounts, and pasting an SO number finds whose order it is. */
+       accounts, and pasting an SO number finds whose order it is. Country and
+       currency match on the code, the symbol-less short form AND the full name,
+       so "usd", "dollar" and "united states" all find the same accounts. */
     function custMatch(c){
       if(!q) return true;
+      const ccy=custCcy(c);
       const hay=[c.name, c.city, c.segment, c.gst, c.contact, c.phone, c.email, c.terms, c.since,
+        custCountry(c), ccy, CCY.name(ccy),
         c.rating?"grade "+c.rating:null]
         .concat(ENG.data.salesorders.filter(s=>s.customerId===c.id).map(s=>s.id));
       return hay.filter(Boolean).join(" ").toLowerCase().includes(q);
@@ -2150,10 +2186,19 @@
         const orders=ENG.data.salesorders.filter(s=>s.customerId===c.id);
         const total=orders.reduce((s,o)=>s+o.value,0);
         const open=orders.filter(o=>o.status!=="Dispatched").length;
+        const ccy=custCcy(c), ctry=custCountry(c);
         grid.appendChild(h("div",{class:"card hover"},[
           h("div",{class:"flex between aic"},[
-            h("div",{},[h("h3",{style:"font-size:15px",text:c.name}),h("div",{class:"muted",style:"font-size:12px",text:[c.city,c.segment].filter(Boolean).join(" · ")})]),
-            h("span",{html:badge(c.rating==="A"?"ok":c.rating==="B"?"warn":"mut","Grade "+c.rating)})
+            // the country only earns a line when it isn't home — every other
+            // client on the page would otherwise repeat "India"
+            h("div",{},[h("h3",{style:"font-size:15px",text:c.name}),
+              h("div",{class:"muted",style:"font-size:12px",
+                text:[c.city, ctry==="India"?null:ctry, c.segment].filter(Boolean).join(" · ")})]),
+            h("div",{class:"flex gap aic",style:"gap:6px"},[
+              h("span",{class:"chip",style:"font-size:10.5px;font-weight:700",
+                title:"Invoices for this client are raised in "+CCY.name(ccy),text:CCY.short(ccy)}),
+              h("span",{html:badge(c.rating==="A"?"ok":c.rating==="B"?"warn":"mut","Grade "+c.rating)})
+            ])
           ]),
           // statgrid-3: three tiny figures — they stay side by side on a phone
           h("div",{class:"grid cols-3 statgrid-3",style:"margin:14px 0;gap:8px"},[
@@ -2257,9 +2302,40 @@
       }
     }
   }
+  /* ---- the live line under a currency picker: "1 USD = ₹95.4283" ------------
+     Google's own printed digits, from the same feed the dashboard reads. A pair
+     Google cannot quote says so plainly instead of showing a number from
+     somewhere else — see backend/src/services/fxService.js for why there is no
+     second source. Rupees need no line; they are the books' own currency. */
+  function ccyRateLine(el, code){
+    if(!el) return;
+    const c=String(code||"").toUpperCase();
+    // a stale reply from a currency the user has already moved off must not win
+    const seq=(el._rateSeq=(el._rateSeq||0)+1);
+    if(!c){ el.textContent=""; return; }
+    if(c==="INR"){ el.textContent="Invoiced in rupees — the books' own currency."; return; }
+    el.textContent="Fetching Google's rate for "+c+"…";
+    CCY.rate(c,"INR").then(r=>{
+      if(el._rateSeq!==seq) return;
+      el.textContent = r
+        ? "1 "+c+" = ₹"+r.shown+"  ·  Google Finance"+(r.asOf?", "+r.asOf:"")
+        : "Google has no rate for "+c+"/INR — the invoice still prints in "+c+".";
+    });
+  }
+
+  /* ---- CUSTOMER MASTER: country decides the currency ------------------------
+     The desk types where the client IS; the money their invoice is raised in
+     follows from that (ccy.js holds the table). It is a DEFAULT, not a lock —
+     the picker stays open, because a buyer in Vietnam or Nigeria very often
+     settles an export in dollars whatever is legal tender at home. Whatever
+     ends up here is what a sales order for this client opens in. */
   function customerForm(edit){
     const yr=String(DB.helpers.today().getFullYear());
     const v=k=>esc(edit?(edit[k]||""):"");
+    // a record saved before this field existed is an Indian client — the same
+    // assumption the supplier form has always made
+    const ctry0=CCY.country(edit&&edit.country)||CCY.country("India");
+    const ccy0=(edit&&edit.currency)||ctry0.ccy;
     const body=h("div",{class:"form-grid"},[
       U.field("Customer Name *",`<input class="input" id="cu_name" value="${v("name")}" placeholder="e.g. Apar Industries Ltd.">`,"full"),
       U.field("Segment",`<input class="input" id="cu_seg" value="${esc(edit?(edit.segment||"HT Cables"):"HT Cables")}">`),
@@ -2268,6 +2344,10 @@
       U.field("Billing Address",`<textarea class="input" id="cu_addr" rows="2">${v("address")}</textarea>`,"full"),
       U.field("Ship-To Address",`<textarea class="input" id="cu_ship" rows="2" placeholder="leave blank if same as billing">${v("shipTo")}</textarea>`,"full"),
       U.field("City",`<input class="input" id="cu_city" value="${v("city")}">`),
+      U.field("Country",U.searchSelect("cu_country",CCY.countryOptions(),ctry0.name,"Search country…")),
+      U.field("Currency (invoiced in)",
+        U.searchSelect("cu_ccy",CCY.options(),ccy0,"Search currency…")
+        +`<div class="muted" id="cu_rate" style="font-size:11.5px;margin-top:5px;line-height:1.4"></div>`,"full"),
       U.field("Grade",U.selectHTML("cu_rating",[{v:"A",l:"A — key account"},{v:"B",l:"B — regular"},{v:"C",l:"C — occasional"}],edit?(edit.rating||"B"):"B")),
       U.field("Contact Person",`<input class="input" id="cu_contact" value="${v("contact")}">`),
       U.field("Phone",`<input class="input" id="cu_phone" value="${v("phone")}" placeholder="+91…">`),
@@ -2284,15 +2364,32 @@
         h("button",{class:"btn primary",onclick:save,text:edit?"Save Changes":"Add Customer"})]});
     const gstEl=UI.$("#cu_gst");
     if(gstEl) gstEl.addEventListener("input",()=>{ const sc=GST.stateFromGSTIN(gstEl.value); if(sc) UI.$("#cu_state").value=sc; });
+    /* Pick a country and the currency follows; pick a currency and the rate
+       under it refreshes. Editing an existing client only re-derives when the
+       country actually MOVES, so a deliberate override (a Nigerian buyer set to
+       USD) survives re-opening the dialog. */
+    const ctryEl=UI.$("#cu_country"), ccyEl=UI.$("#cu_ccy"), rateEl=UI.$("#cu_rate");
+    if(ctryEl) ctryEl.addEventListener("change",()=>{
+      const c=CCY.forCountry(ctryEl.value);
+      if(c && ccyEl && ccyEl.value!==c) U.ssSet("cu_ccy",c);
+    });
+    if(ccyEl) ccyEl.addEventListener("change",()=>ccyRateLine(rateEl,ccyEl.value));
+    ccyRateLine(rateEl,ccy0);
     function save(){
       const name=UI.$("#cu_name").value.trim();
       if(!name){ toast("Customer name is required",{type:"warn"}); return; }
       const gst=UI.$("#cu_gst").value.trim().toUpperCase();
       if(gst&&!GST.validGSTIN(gst)){ toast("That GSTIN doesn't look valid (15 chars, e.g. 27ABCDE1234F1Z5)",{type:"warn"}); return; }
+      // the picker hands back a canonical name, but a hand-typed "usa" still
+      // resolves — store the canonical spelling plus its ISO code either way
+      const ctry=CCY.country(ctryEl&&ctryEl.value)||CCY.country("India");
       const doc={ name, segment:UI.$("#cu_seg").value.trim()||"HT Cables", gst,
         state:GST.stateName(UI.$("#cu_state").value), stateCode:UI.$("#cu_state").value,
         address:UI.$("#cu_addr").value.trim(), shipTo:UI.$("#cu_ship").value.trim(),
-        city:UI.$("#cu_city").value.trim(), rating:UI.$("#cu_rating").value,
+        city:UI.$("#cu_city").value.trim(),
+        country:ctry.name, countryCode:ctry.cc,
+        currency:((ccyEl&&ccyEl.value)||ctry.ccy).toUpperCase(),
+        rating:UI.$("#cu_rating").value,
         contact:UI.$("#cu_contact").value.trim(), phone:UI.$("#cu_phone").value.trim(),
         email:UI.$("#cu_email").value.trim(), terms:UI.$("#cu_terms").value.trim()||"30 days",
         since:UI.$("#cu_since").value.trim()||yr };

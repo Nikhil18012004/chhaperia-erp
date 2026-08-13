@@ -328,38 +328,16 @@
     {code:"CNY", name:"Chinese Yuan",   cc:"CN", country:"China"},
     {code:"JPY", name:"Japanese Yen",   cc:"JP", country:"Japan"},
   ];
-  // Real currencies for the converter dropdowns: code → [full name, symbol].
-  // Only codes listed here appear in the pickers, which also keeps the crypto
-  // and obscure feeds out of the /api/fx payload from cluttering the list.
-  // Gulf/Arabic currencies use their common Latin symbols (Dh, SR, KD …) — the
-  // native RTL glyphs (د.إ) reorder unpredictably inside a Latin option label.
-  const CCY_META={
-    INR:["Indian Rupee","₹"],        USD:["US Dollar","$"],
-    EUR:["Euro","€"],                GBP:["British Pound","£"],
-    AED:["UAE Dirham","Dh"],         SAR:["Saudi Riyal","SR"],
-    JPY:["Japanese Yen","¥"],        CNY:["Chinese Yuan","CN¥"],
-    SGD:["Singapore Dollar","S$"],   AUD:["Australian Dollar","A$"],
-    CAD:["Canadian Dollar","C$"],    CHF:["Swiss Franc","Fr"],
-    HKD:["Hong Kong Dollar","HK$"],  NZD:["New Zealand Dollar","NZ$"],
-    SEK:["Swedish Krona","kr"],      NOK:["Norwegian Krone","kr"],
-    DKK:["Danish Krone","kr"],       ZAR:["South African Rand","R"],
-    THB:["Thai Baht","฿"],           MYR:["Malaysian Ringgit","RM"],
-    IDR:["Indonesian Rupiah","Rp"],  PHP:["Philippine Peso","₱"],
-    KRW:["South Korean Won","₩"],    TRY:["Turkish Lira","₺"],
-    RUB:["Russian Ruble","₽"],       BRL:["Brazilian Real","R$"],
-    MXN:["Mexican Peso","Mex$"],     PLN:["Polish Zloty","zł"],
-    CZK:["Czech Koruna","Kč"],       HUF:["Hungarian Forint","Ft"],
-    ILS:["Israeli Shekel","₪"],      KWD:["Kuwaiti Dinar","KD"],
-    BHD:["Bahraini Dinar","BD"],     OMR:["Omani Rial","RO"],
-    QAR:["Qatari Riyal","QR"],       LKR:["Sri Lankan Rupee","Rs"],
-    BDT:["Bangladeshi Taka","৳"],    NPR:["Nepalese Rupee","रू"],
-    PKR:["Pakistani Rupee","₨"],     EGP:["Egyptian Pound","E£"],
-    VND:["Vietnamese Dong","₫"],     TWD:["Taiwan Dollar","NT$"],
-  };
-  const ccySym  =c=>(CCY_META[c]||[])[1]||"";
+  /* Currency names and symbols moved to ccy.js when the customer master began
+     deriving a client's billing currency from their country — one table, so a
+     name can never read one way here and another on an invoice. What the
+     converter OFFERS is unchanged: CCY.CONVERTER_CODES is the same set of real
+     currencies this card has always listed, which keeps the crypto and obscure
+     feeds in the /api/fx payload out of the pickers. */
+  const ccySym  =c=>CCY.sym(c);
   // collapsed picker = "USD $"; each row of the open list adds the full name
-  const ccyShort =c=>(c+" "+ccySym(c)).trim();
-  const ccyFull  =c=>ccyShort(c)+" — "+(CCY_META[c]||[])[0];
+  const ccyShort =c=>CCY.short(c);
+  const ccyFull  =c=>CCY.full(c);
   /* ---- currency picker ---------------------------------------------------
      A native <select> hands its popup to the OS to draw, and on Windows that
      renderer has no colour-emoji support — the flags simply never appeared in
@@ -397,7 +375,7 @@
           onclick:()=>{ setValue(c,true); closePick(true); }},[
           h("span",{class:"fx-code",text:c}),
           h("span",{class:"fx-opt-sym",text:ccySym(c)}),
-          h("span",{class:"fx-name",text:(CCY_META[c]||[])[0]||c}),
+          h("span",{class:"fx-name",text:CCY.name(c)}),
         ]));
       });
       mark();
@@ -409,7 +387,7 @@
       });
     }
     function setValue(c,fire){
-      if(!c||!CCY_META[c]) return;
+      if(!c||!CCY.known(c)) return;
       value=c; cur.textContent=ccyShort(c); mark();
       if(fire) wrap.dispatchEvent(new Event("change"));
     }
@@ -447,7 +425,7 @@
       taBuf=(now-taAt>900?"":taBuf)+e.key; taAt=now;
       const q=taBuf.toUpperCase();
       const hit=codes.find(c=>c.startsWith(q))
-             || codes.find(c=>String((CCY_META[c]||[])[0]||"").toUpperCase().startsWith(q));
+             || codes.find(c=>CCY.name(c).toUpperCase().startsWith(q));
       if(!hit) return;
       e.preventDefault();
       if(pop.hidden) setValue(hit,true);
@@ -518,14 +496,13 @@
 
     function fillSelects(){
       if(selFrom.codes.length) return;                 // populate once
-      // every currency we can name, listed "CODE SYM — Full Name". The list is
-      // no longer limited to what the payload carries: the card fetches only the
+      // the converter's own set, listed "CODE SYM — Full Name". The list is
+      // not limited to what the payload carries: the card fetches only the
       // six it displays, and any other pair is pulled from Google on demand.
       // Sorted by the NAME, not the code: the name is what you read down the
       // list, and code order scatters it (AED "UAE Dirham" would lead, CHF
       // "Swiss Franc" would sit between Canadian and Chinese).
-      const codes=Object.keys(CCY_META)
-        .sort((a,b)=>CCY_META[a][0].localeCompare(CCY_META[b][0]));
+      const codes=CCY.sortedByName(CCY.CONVERTER_CODES);
       selFrom.setCodes(codes); selTo.setCodes(codes);
       selFrom.value="USD"; selTo.value="INR";
     }
