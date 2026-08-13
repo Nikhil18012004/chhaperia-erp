@@ -39,9 +39,13 @@ const bigBody = (limit) => {
 };
 app.use("/api/lab", bigBody("25mb"));
 app.use("/api/state", bigBody("25mb"));   // full-dataset restore
-app.use("/api/chatbot/knowledge", bigBody("10mb")); // bulk training uploads
 // a .btw label template arrives base64-encoded, so 8 MB of file is ~11 MB of body
 app.use("/api/bartender/template", bigBody("14mb"));
+/* Label Studio designs live in the settings document and can carry a placed
+   picture per object as a data URL, so the settings patch needs more than the
+   1 MB the rest of the API gets. The per-picture and per-document caps are
+   enforced in erpService — this only decides what the parser will accept. */
+app.use("/api/settings", bigBody("12mb"));
 app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)

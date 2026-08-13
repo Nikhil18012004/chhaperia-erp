@@ -244,8 +244,7 @@ function saveState(data) {
        collection is not the same as one that empties it: buildSeed() carries no
        transporters / lab / HR / appointments keys, so reset() and the boot-time
        migrations must leave those tables standing rather than wipe them.
-       (chatbot_knowledge stays out of here on purpose — it is not part of the
-       state document at all, so trained answers survive a restore.) */
+       */
     const replace = (key, table, write) => {
       if (!Array.isArray(d[key])) return;
       db.prepare(`DELETE FROM ${table}`).run();
@@ -733,31 +732,6 @@ function putLabReport(rep) {
 }
 function deleteLabReport(id) { getDb().prepare("DELETE FROM lab_reports WHERE id=?").run(id); return { id }; }
 
-/* ---- Chatbot knowledge base (trainable Q&A, doc-only rows) ---- */
-function listChatKnowledge() {
-  return getDb().prepare("SELECT doc FROM chatbot_knowledge ORDER BY id").all().map((r) => P(r.doc));
-}
-function getChatKnowledge(id) {
-  const r = getDb().prepare("SELECT doc FROM chatbot_knowledge WHERE id=?").get(id);
-  return r ? P(r.doc) : null;
-}
-function putChatKnowledge(k) {
-  getDb().prepare("INSERT INTO chatbot_knowledge(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(k.id, J(k));
-  return k;
-}
-/* All-or-nothing bulk write. A training upload is one file to the user, so a bad
-   row halfway down must not leave the first half committed — that made a retry
-   duplicate every entry it had already saved. */
-function putChatKnowledgeBulk(list) {
-  const db = getDb();
-  const st = db.prepare("INSERT INTO chatbot_knowledge(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc");
-  const tx = db.transaction((rows) => { rows.forEach((k) => st.run(k.id, J(k))); });
-  tx(list || []);
-  return list || [];
-}
-function deleteChatKnowledge(id) { getDb().prepare("DELETE FROM chatbot_knowledge WHERE id=?").run(id); return { id }; }
-
 function getSettings() {
   const db = getDb();
   return P(db.prepare("SELECT doc FROM settings WHERE id=1").pluck().get(), {});
@@ -941,5 +915,4 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   // Lab reports
   getLabProduct, putLabProduct, deleteLabProduct, labProductsEmpty,
   getLabReport, putLabReport, deleteLabReport,
-  // Chatbot knowledge base
-  listChatKnowledge, getChatKnowledge, putChatKnowledge, putChatKnowledgeBulk, deleteChatKnowledge };
+};
