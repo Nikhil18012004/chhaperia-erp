@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/theme.css?v=5" />
-  <link rel="stylesheet" href="css/app.css?v=9" />
+  <link rel="stylesheet" href="css/app.css?v=26" />
 </head>
 <body>
   <!-- Splash -->
@@ -132,7 +132,10 @@
   <script src="js/mod-inventory.js?v=16"></script>
   <script src="js/mod-production.js?v=10"></script>
   <script src="js/mod-trade.js?v=10"></script>
-  <script src="js/mod-label-studio.js?v=1"></script>
+  <!-- the label designer's engine — symbologies, document model, canvas,
+       print run. Must load BEFORE the module that mounts it. -->
+  <script src="js/labelstudio.js?v=18"></script>
+  <script src="js/mod-label-studio.js?v=2"></script>
   <script src="js/mod-crm.js?v=9"></script>
   <script src="js/mod-calendar.js?v=1"></script>
   <script src="js/mod-hr.js?v=1"></script>
