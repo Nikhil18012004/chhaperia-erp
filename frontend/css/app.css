@@ -2559,6 +2559,38 @@ select.ls-in{padding-left:3px;cursor:pointer}
 .ls-lay-custom .field{margin:0}
 .ls-lay-swap{display:flex}
 
+/* ---- the chooser, split: set it up on the left, see it on the right ----
+   The preview is sticky because the stock list scrolls: picking the 22nd
+   Novajet card must not scroll the picture of what you just picked off the
+   screen, which is the only reason the picture is there. */
+.ls-lay-2{display:grid;grid-template-columns:minmax(0,1fr) 248px;gap:18px;align-items:start}
+.ls-lay-l{display:flex;flex-direction:column;gap:12px;min-width:0}
+.ls-lay-prev{position:sticky;top:0;display:flex;flex-direction:column;gap:6px;
+  padding:14px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2)}
+.ls-lay-pt{font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--text-mut)}
+.ls-lay-pt+.ls-lay-one,.ls-lay-pt+.ls-lay-pagewrap{margin-top:2px}
+.ls-lay-one{display:flex;align-items:center;justify-content:center;padding:10px 0 4px}
+/* the label is white because a label is white — same rule as the canvas */
+.ls-lay-onebox{background:#fff;border:1px solid #b9bec4;box-shadow:0 1px 4px rgba(0,0,0,.18)}
+.ls-lay-cap{font-size:11px;color:var(--text-mut);text-align:center;
+  font-variant-numeric:tabular-nums;line-height:1.45}
+.ls-lay-cap.bad{color:var(--danger);font-weight:700}
+.ls-lay-pagewrap{display:flex;justify-content:center;padding:8px 0 4px}
+.ls-lay-page{position:relative;background:#fff;border:1px solid #b9bec4;
+  box-shadow:0 1px 5px rgba(0,0,0,.2)}
+.ls-lay-cell{position:absolute;background:#eef1f4;border:.5px solid #9aa0a6}
+/* where one feed of the roll ends and the next begins */
+.ls-lay-feed{position:absolute;left:0;right:0;height:0;border-top:1px dashed #c2c7cc}
+.ls-lay-roll{display:flex;flex-direction:column;gap:10px;padding-top:2px}
+.ls-lay-roll .field{margin:0}
+.ls-lay-unver{font-size:10.5px;line-height:1.5;color:var(--warn,#c08a2e);
+  border-top:1px solid var(--line);padding-top:8px;margin-top:2px}
+@media (max-width:900px){
+  .ls-lay-2{grid-template-columns:1fr}
+  .ls-lay-prev{position:static}
+}
+
 .ls-props-dlg{display:grid;grid-template-columns:172px minmax(0,1fr);gap:20px;align-items:start}
 .ls-pcats{display:flex;flex-direction:column;gap:3px}
 .ls-pcat{padding:9px 11px;border-radius:8px;border:1px solid transparent;background:var(--panel-2);
@@ -2659,6 +2691,22 @@ select.ls-in{padding-left:3px;cursor:pointer}
 .ls-pp-span b{font-family:var(--mono),monospace;font-size:14px;color:var(--text)}
 
 /* ---- every page of the run ---- */
+/* ---- the two print previews: the sticker, and the sheet it lands on ----
+   Both are iframes of the REAL print HTML, so they carry the label's own white
+   ground rather than the studio's chrome. The number badges sit over the sheet
+   and are pointer-transparent — the iframe underneath must stay inert. */
+.ls-pp-one{display:flex;justify-content:center;padding:10px 0 4px}
+.ls-pp-cap{font-size:11px;color:var(--text-mut);text-align:center;
+  font-variant-numeric:tabular-nums;padding-bottom:4px}
+.ls-pp-sheetwrap{display:flex;justify-content:center;padding:8px 0 4px}
+.ls-pp-sheet{position:relative;overflow:hidden;background:#fff;
+  border:1px solid #b9bec4;box-shadow:0 1px 6px rgba(0,0,0,.22)}
+.ls-pp-sheet iframe{border:0;display:block;pointer-events:none}
+.ls-pp-num{position:absolute;display:flex;align-items:center;justify-content:center;
+  pointer-events:none}
+.ls-pp-num span{min-width:15px;padding:1px 4px;border-radius:20px;
+  background:rgba(20,22,26,.72);color:#fff;font-size:9.5px;font-weight:800;
+  line-height:1.5;font-variant-numeric:tabular-nums}
 .ls-pp-strip{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 8px}
 .ls-pp-page{flex:0 0 auto;width:104px;display:flex;flex-direction:column;gap:6px;padding:7px;
   border-radius:10px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;

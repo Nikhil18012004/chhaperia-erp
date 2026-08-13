@@ -565,7 +565,15 @@
      do.
      ============================================================ */
   const STOCKS=[
-    /* --- roll: the page is the label --- */
+    /* --- roll: a 100 mm web, and what this plant dies out of it. The first
+       two are the runs the shop floor actually does — two 50 × 25 side by side
+       with the die leaving NO gap between them and ~5 mm of feed above and
+       below, and a single 100 × 120 with the same 5 mm feed gap. `web` is the
+       roll as bought; `across` is how many the die cuts out of it. --- */
+    {v:"roll-100w-50x25x2", mode:"roll", w:50, h:25, web:100, across:2,
+      rGapX:0, rGapY:5, n:"100 mm web — two up, no gap"},
+    {v:"roll-100w-100x120", mode:"roll", w:100, h:120, web:100, across:1,
+      rGapX:0, rGapY:5, n:"100 mm web — single, 5 mm feed"},
     {v:"roll-100x150", mode:"roll", w:100, h:150, n:"Dispatch carton (4 × 6 in)"},
     {v:"roll-100x125", mode:"roll", w:100, h:125, n:"Dispatch, short"},
     {v:"roll-100x100", mode:"roll", w:100, h:100, n:"Carton (4 × 4 in)"},
@@ -587,46 +595,119 @@
     {v:"roll-25x15",   mode:"roll", w:25,  h:15,  n:"Reel-end flag"},
     {v:"roll-25x12",   mode:"roll", w:25,  h:12,  n:"Cable flag"},
 
-    /* --- A4 sheet: margins measured off the real die-cut stock --- */
-    {v:"a4-24", mode:"sheet", w:63.5, h:33.9, n:"Address",
-      page:"A4", mTop:12.7, mBottom:12.7, mLeft:7.2, mRight:7.2, gapX:2.5, gapY:0},
-    {v:"a4-21", mode:"sheet", w:63.5, h:38.1, n:"Address, tall",
-      page:"A4", mTop:10.7, mBottom:10.7, mLeft:7.2, mRight:7.2, gapX:2.5, gapY:0},
-    {v:"a4-14", mode:"sheet", w:99.1, h:38.1, n:"Wide",
-      page:"A4", mTop:8.7, mBottom:8.7, mLeft:4.6, mRight:4.6, gapX:2.5, gapY:0},
-    {v:"a4-8",  mode:"sheet", w:99.1, h:67.7, n:"Shipping",
-      page:"A4", mTop:13.1, mBottom:13.1, mLeft:4.6, mRight:4.6, gapX:2.5, gapY:0},
-    {v:"a4-4",  mode:"sheet", w:99.1, h:139,  n:"Quarter page",
-      page:"A4", mTop:8.5, mBottom:8.5, mLeft:4.6, mRight:4.6, gapX:2.5, gapY:0},
-    {v:"a4-2",  mode:"sheet", w:199.6, h:143.5, n:"Half page",
-      page:"A4", mTop:4.5, mBottom:4.5, mLeft:5.2, mRight:5.2, gapX:0, gapY:0},
-    {v:"a4-1",  mode:"sheet", w:194, h:281, n:"Full page",
-      page:"A4", mTop:8, mBottom:8, mLeft:8, mRight:8, gapX:0, gapY:0},
+    /* --- A4 sheet: NOVAJET self-adhesive MPL stock, the sheets this plant
+       actually buys. Product code, label size and the across × down count come
+       off the Novajet sheet chart; `cols`/`rows` are the DIE-CUT counts and are
+       asserted against sheetGrid() at load (see assertStocks) so a preset can
+       never quietly print fewer labels than the sheet holds.
 
-    /* --- A4 sheet: margins solved by auto-fit --- */
-    {v:"a4-38x21",  mode:"sheet", w:38.1, h:21.2, page:"A4", af:true, n:"Mini / asset tag"},
-    {v:"a4-46x25",  mode:"sheet", w:45.7, h:25.4, page:"A4", af:true, n:"Small barcode"},
-    {v:"a4-64x30",  mode:"sheet", w:63.5, h:29.6, page:"A4", af:true, n:"Address, narrow"},
-    {v:"a4-64x47",  mode:"sheet", w:63.5, h:46.6, page:"A4", af:true, n:"Product"},
-    {v:"a4-99x34",  mode:"sheet", w:99.1, h:34,   page:"A4", af:true, n:"Wide, short"},
-    {v:"a4-64x72",  mode:"sheet", w:63.5, h:72,   page:"A4", af:true, n:"Square-ish"},
-    {v:"a4-99x57",  mode:"sheet", w:99.1, h:57,   page:"A4", af:true, n:"Wide, tall"},
-    {v:"a4-99x93",  mode:"sheet", w:99.1, h:93.1, page:"A4", af:true, n:"Large"},
+       The margins are CENTRED and the gaps come from Novajet's own pitch
+       columns (pitch − label = gap). The chart photo is a 531 px snapshot and
+       several of its pitch figures are not legible with certainty; every row
+       here is therefore reconciled arithmetically against A4 210 × 297 — margin
+       = (page − (n·size + (n−1)·gap)) / 2 — and any row that would not fit is
+       refused at load rather than shipped wrong. --- */
+    {v:"nj-01P-297", mode:"sheet", nj:"01P", w:210, h:297, cols:1, rows:1, n:"Full sheet, no border",
+      page:"A4", mTop:0, mBottom:0, mLeft:0, mRight:0, gapX:0, gapY:0},
+    {v:"nj-01P-288", mode:"sheet", nj:"01P", w:210, h:288, cols:1, rows:1, n:"Full sheet",
+      page:"A4", mTop:4.5, mBottom:4.5, mLeft:0, mRight:0, gapX:0, gapY:0},
+    {v:"nj-02L", mode:"sheet", nj:"02L", w:200, h:146, cols:1, rows:2, n:"Half sheet",
+      page:"A4", mTop:2.5, mBottom:2.5, mLeft:5, mRight:5, gapX:0, gapY:0},
+    {v:"nj-04P", mode:"sheet", nj:"04P", w:100, h:145, cols:2, rows:2, n:"Quarter sheet",
+      page:"A4", mTop:3.25, mBottom:3.25, mLeft:3.5, mRight:3.5, gapX:3, gapY:0.5},
+    {v:"nj-06L", mode:"sheet", nj:"06L", w:99, h:93, cols:2, rows:3, n:"Large",
+      page:"A4", mTop:4.5, mBottom:4.5, mLeft:3.5, mRight:3.5, gapX:5, gapY:4},
+    {v:"nj-08L", mode:"sheet", nj:"08L", w:100, h:72, cols:2, rows:4, n:"Shipping",
+      page:"A4", mTop:4.5, mBottom:4.5, mLeft:3.5, mRight:3.5, gapX:3, gapY:0},
+    {v:"nj-08LA", mode:"sheet", nj:"08LA", w:90, h:55, cols:2, rows:4, n:"Shipping, small",
+      page:"A4", mTop:16, mBottom:16, mLeft:7, mRight:7, gapX:10, gapY:15},
+    {v:"nj-12L", mode:"sheet", nj:"12L", w:100, h:44, cols:2, rows:6, n:"Wide",
+      page:"A4", mTop:12.5, mBottom:12.5, mLeft:3.5, mRight:3.5, gapX:3, gapY:0},
+    {v:"nj-15L", mode:"sheet", nj:"15L", w:61, h:21, cols:3, rows:5, n:"Small, wide",
+      page:"A4", mTop:36, mBottom:36, mLeft:10.5, mRight:10.5, gapX:3, gapY:30},
+    {v:"nj-16L", mode:"sheet", nj:"16L", w:99, h:34, cols:2, rows:8, n:"Wide, short",
+      page:"A4", mTop:12.5, mBottom:12.5, mLeft:4.5, mRight:4.5, gapX:3, gapY:0},
+    {v:"nj-18L", mode:"sheet", nj:"18L", w:63.5, h:46.6, cols:3, rows:6, n:"Product",
+      page:"A4", mTop:8.7, mBottom:8.7, mLeft:6.75, mRight:6.75, gapX:0, gapY:0},
+    {v:"nj-21L", mode:"sheet", nj:"21L", w:63.5, h:38, cols:3, rows:7, n:"Address",
+      page:"A4", mTop:15.5, mBottom:15.5, mLeft:6.75, mRight:6.75, gapX:0, gapY:0},
+    {v:"nj-22L", mode:"sheet", nj:"22L", w:100, h:24, cols:2, rows:11, n:"Wide, narrow",
+      page:"A4", mTop:16.5, mBottom:16.5, mLeft:3.5, mRight:3.5, gapX:3, gapY:0},
+    {v:"nj-24L", mode:"sheet", nj:"24L", w:64, h:34, cols:3, rows:8, n:"Address, small",
+      page:"A4", mTop:12.5, mBottom:12.5, mLeft:4.5, mRight:4.5, gapX:3, gapY:0},
+    {v:"nj-30L", mode:"sheet", nj:"30L", w:67, h:27.5, cols:3, rows:10, n:"Barcode, wide",
+      page:"A4", mTop:11, mBottom:11, mLeft:4, mRight:4, gapX:0.5, gapY:0},
+    {v:"nj-30P", mode:"sheet", nj:"30P", w:39, h:47.5, cols:5, rows:6, n:"Tall",
+      page:"A4", mTop:4.5, mBottom:4.5, mLeft:4.5, mRight:4.5, gapX:1.5, gapY:0},
+    {v:"nj-32P", mode:"sheet", nj:"32P", w:25, h:70, cols:8, rows:4, n:"Spine / flag",
+      page:"A4", mTop:8.5, mBottom:8.5, mLeft:5, mRight:5, gapX:0, gapY:0},
+    {v:"nj-40L", mode:"sheet", nj:"40L", w:39, h:35, cols:5, rows:8, n:"Square-ish",
+      page:"A4", mTop:8.5, mBottom:8.5, mLeft:4.5, mRight:4.5, gapX:1.5, gapY:0},
+    {v:"nj-40P", mode:"sheet", nj:"40P", w:18, h:73, cols:10, rows:4, n:"Narrow spine",
+      page:"A4", mTop:2.5, mBottom:2.5, mLeft:6, mRight:6, gapX:2, gapY:0},
+    {v:"nj-48L", mode:"sheet", nj:"48L", w:48, h:24, cols:4, rows:12, n:"Barcode",
+      page:"A4", mTop:4.5, mBottom:4.5, mLeft:5, mRight:5, gapX:2, gapY:0},
+    {v:"nj-56L", mode:"sheet", nj:"56L", w:48, h:20, cols:4, rows:14, n:"Barcode, short",
+      page:"A4", mTop:8.5, mBottom:8.5, mLeft:5, mRight:5, gapX:2, gapY:0},
+    {v:"nj-65L", mode:"sheet", nj:"65L", w:38, h:21, cols:5, rows:13, n:"Mini",
+      page:"A4", mTop:12, mBottom:12, mLeft:5, mRight:5, gapX:1, gapY:0},
+    {v:"nj-84L", mode:"sheet", nj:"84L", w:46, h:11, cols:4, rows:21, n:"Cable flag",
+      page:"A4", mTop:13, mBottom:13, mLeft:8.5, mRight:8.5, gapX:3, gapY:2},
+    {v:"nj-110L", mode:"sheet", nj:"110L", w:35, h:10, cols:5, rows:22, n:"Mini flag",
+      page:"A4", mTop:17.5, mBottom:17.5, mLeft:13.5, mRight:13.5, gapX:2, gapY:2},
+
+    /* --- Novajet CDL — circle and disc stock. ⚠ UNVERIFIED. The circle rows
+       on the chart photo are the most degraded of the lot and what can be made
+       out does not reconcile: ~116.5 / 117 / 118 mm diameters against codes
+       reading 02 / 03 / 06 / 08, and two 117 mm circles are 234 mm on a 210 mm
+       sheet. These are therefore the STANDARD Novajet CDL diameters, not the
+       chart's, and every one is flagged `unver` so the picker says so out loud.
+       Replace with the real figures the moment a legible chart exists. --- */
+    {v:"nj-cdl-1", mode:"sheet", nj:"CDL 01", w:116, h:116, cols:1, rows:2, round:true, unver:true, n:"Disc, large",
+      page:"A4", mTop:29.5, mBottom:29.5, mLeft:47, mRight:47, gapX:0, gapY:6},
+    {v:"nj-cdl-6", mode:"sheet", nj:"CDL 06", w:88, h:88, cols:2, rows:3, round:true, unver:true, n:"Disc",
+      page:"A4", mTop:9.5, mBottom:9.5, mLeft:15, mRight:15, gapX:4, gapY:2},
+    {v:"nj-cdl-12", mode:"sheet", nj:"CDL 12", w:63, h:63, cols:3, rows:4, round:true, unver:true, n:"Disc, small",
+      page:"A4", mTop:19.5, mBottom:19.5, mLeft:9, mRight:9, gapX:1.5, gapY:2},
+    {v:"nj-cdl-24", mode:"sheet", nj:"CDL 24", w:40, h:40, cols:4, rows:6, round:true, unver:true, n:"Core / seal",
+      page:"A4", mTop:22.5, mBottom:22.5, mLeft:22, mRight:22, gapX:2, gapY:2},
   ];
+  /* Every sheet preset names the count its die actually cuts. A preset whose
+     geometry does not yield that count is a preset that will silently print a
+     short sheet for the rest of its life, so it is caught HERE, at load, and
+     reported — never shipped quietly. Roll presets are solved, not declared. */
+  function stockProblems(){
+    return STOCKS.filter(s=>s.mode==="sheet"&&s.cols&&s.rows).map(s=>{
+      const g=sheetGrid(applyStock(cleanDoc({w:s.w,h:s.h}),s.v));
+      return (g.cols===s.cols&&g.rows===s.rows) ? null
+        : {v:s.v, want:s.cols+"×"+s.rows, got:g.cols+"×"+g.rows};
+    }).filter(Boolean);
+  }
   /* Millimetres read the way a ruler reads them: 100, not 100.00; 63.5, not 63.5000. */
   const mmS=(v)=>String(Math.round((+v||0)*100)/100);
   const sizeS=(w,h)=>mmS(w)+" × "+mmS(h)+" mm";
-  const stockLabel=(s)=>(s.mode==="roll"?"Roll · ":"A4 sheet · ")+sizeS(s.w,s.h)+(s.n?" — "+s.n:"");
+  const stockLabel=(s)=>(s.mode==="roll"
+    ? "Roll · "+((+s.across||1)>1?(s.across+" up on a "+mmS(s.web||s.w)+" mm web · "):"")
+    : "A4 sheet · "+(s.nj?"NJ MPL "+s.nj+" · ":""))+sizeS(s.w,s.h)+(s.n?" — "+s.n:"");
   /* How many of a sheet layout land on one page. COMPUTED, through the same
      sheetGrid() that lays out the printed sheet — see the warning above. */
   function perPageOf(s){
-    if(s.mode==="roll") return 1;
+    /* A roll is no longer always one-up — a two-up die puts two across the web
+       on every feed, and the card has to say so or the operator reads "1" and
+       orders twice the stock. */
+    if(s.mode==="roll") return Math.max(1,+s.across||1);
     try{ return sheetGrid(applyStock(cleanDoc({w:s.w,h:s.h}),s.v)).perPage; }
     catch(e){ return 0; }
   }
   function applyStock(d,v){
     const s=STOCKS.find(x=>x.v===v); if(!s) return d;
     d.mode=s.mode; d.w=s.w; d.h=s.h;
+    if(s.mode==="roll"){
+      /* A roll preset that names no web is a one-up roll: the web IS the
+         label, which is what every single-up entry in the list above means. */
+      d.rollW=+s.web||s.w; d.across=+s.across||1;
+      d.rGapX=+s.rGapX||0; d.rGapY=+s.rGapY||0;
+    }
     if(s.mode==="sheet"){
       d.page=s.page; d.landscape=false;
       if(s.af){ d.autoFit=true; applyAutoFit(d); }
@@ -644,7 +725,12 @@
     const near=(a,b)=>Math.abs(a-b)<0.06;
     const s=STOCKS.find(x=>{
       if(x.mode!==d.mode||!near(x.w,d.w)||!near(x.h,d.h)) return false;
-      if(x.mode==="roll") return true;
+      /* A roll is identified by its web and its across-count too, or the
+         two-up 50 × 25 and a plain one-up 50 × 25 would read as the same
+         stock and picking either would show the other as selected. */
+      if(x.mode==="roll") return near(+x.web||x.w,d.rollW)&&
+        (+x.across||1)===(d.across||1)&&
+        near(+x.rGapX||0,d.rGapX)&&near(+x.rGapY||0,d.rGapY);
       if(x.page!==d.page) return false;
       /* An auto-fit layout is identified by its two sizes and the flag. Its
          margins are solved, so comparing them would only ever be comparing the
@@ -662,6 +748,17 @@
   const hex=(v,d)=>/^#[0-9a-fA-F]{6}$/.test(String(v||""))?String(v).toLowerCase():d;
   const IMG_RE=/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
   const uid=(p)=>p+Math.random().toString(36).slice(2,9);
+
+  /* PRINT ORDER — the four BarTender offers. "Top" and "bottom" are which end
+     of the sheet label 1 sits at; "across" and "down" are which way the count
+     runs from there. On a roll there is only one row, so the two directions
+     collapse and only the start corner has any effect. */
+  const ORDERS=[
+    {v:"th", l:"Top, across",    d:"Label 1 top-left, counting along each row"},
+    {v:"tv", l:"Top, down",      d:"Label 1 top-left, counting down each column"},
+    {v:"bh", l:"Bottom, across", d:"Label 1 bottom-left, counting along each row upwards"},
+    {v:"bv", l:"Bottom, down",   d:"Label 1 bottom-left, counting up each column"},
+  ];
 
   const OBJ_TYPES=[
     {v:"text",   l:"Text",    ic:"T"},
@@ -903,9 +1000,24 @@
       radius:num(d.radius,3,0,100),
       border:!!d.border, borderC:hex(d.borderC,"#000000"), borderW:num(d.borderW,.3,.05,10),
       grid:num(d.grid,2,.5,20), snap:d.snap!==false,
-      /* Sheet or roll. A roll is what a label printer wants: the page IS
-         the label, one per page, no margins to get wrong. */
+      /* Sheet or roll. A roll is what a label printer wants — but it is NOT
+         always one label per page. The plant runs a 100 mm web and dies two
+         50 × 25 labels across it with no gap between them, so the web, how
+         many sit across it and the two gaps are all real numbers a roll
+         carries. One-up is just across=1. */
       mode:d.mode==="roll"?"roll":"sheet",
+      /* The web: the width of the roll as it is bought, which the labels are
+         die-cut out of. Independent of the label width — that is the whole
+         point of a multi-up roll. */
+      rollW:num(d.rollW,100,5,1000),
+      /* How many labels sit across the web. 0 = work it out from the web and
+         the label, which is what an operator means by "fit what fits". */
+      across:int(d.across,0,0,50),
+      /* The roll's OWN gaps, deliberately not the sheet's gapX/gapY. Those two
+         default to 3 mm, and a roll printed before this existed carried that
+         default while the printer ignored it — reusing them would have made
+         every saved roll template silently 3 mm taller on its next print. */
+      rGapX:num(d.rGapX,0,0,100), rGapY:num(d.rGapY,0,0,100),
       page:PAGES.some(p=>p.v===d.page)?d.page:"A4",
       pageW:num(d.pageW,210,20,1000), pageH:num(d.pageH,297,20,1000),
       landscape:!!d.landscape,
@@ -915,6 +1027,11 @@
       /* Auto-fit solves the margins and gaps from the label and page size, so
          the sheet holds as many as it physically can and they sit evenly. */
       autoFit:!!d.autoFit,
+      /* Which die-cut gets label 1, and where 2 goes from there. BarTender's
+         four, and they are not cosmetic: a run of serials peeled off in the
+         wrong direction goes onto the drums in the wrong order, and nobody
+         finds out until the despatch note disagrees with the stack. */
+      printOrder:ORDERS.some(o=>o.v===d.printOrder)?d.printOrder:"th",
       copies:int(d.copies,1,1,500), qty:int(d.qty,1,1,5000),
       updated:str(d.updated,"",30),
       /* When this template was last opened or saved. `updated` is a DATE and
@@ -1182,8 +1299,38 @@
     return doc;
   }
 
+  /* A roll's "page" is ONE ROW ACROSS THE WEB, and its height is the label
+     plus the gap the die leaves before the next one. That is what actually
+     comes off a thermal printer: the feed advances by the pitch, so making the
+     page the pitch is what puts the gap on the stock instead of inside the
+     artwork. Width is the web, never the label — on a two-up 100 mm web the
+     label is 50 and the page is still 100.
+     `across` 0 means "as many as fit", solved through the same fitCount() the
+     sheet uses, so a roll can never claim a column it cannot print either. */
+  function rollGrid(doc){
+    const web=Math.max(doc.w,+doc.rollW||doc.w);
+    const gx=+doc.rGapX||0, gy=+doc.rGapY||0;
+    const cols=doc.across>0
+      ? Math.max(1,Math.min(doc.across,fitCount(web,doc.w,gx)||1))
+      : Math.max(1,fitCount(web,doc.w,gx));
+    return {cols,rows:1,perPage:cols,pgW:web,pgH:doc.h+gy,
+            innerW:web,innerH:doc.h};
+  }
+  /* Sequence position → grid position, for the four print orders. Returns a
+     function rather than an array so the caller can ask about one label at a
+     time — the print preview numbers the die-cuts with exactly this, so the
+     numbers drawn on screen and the labels on the sheet cannot disagree. */
+  function orderSlot(doc,g){
+    const C=Math.max(1,g.cols), R=Math.max(1,g.rows);
+    const ord=ORDERS.some(o=>o.v===doc.printOrder)?doc.printOrder:"th";
+    if(ord==="tv") return (i)=>{ const col=Math.floor(i/R), row=i%R; return row*C+col; };
+    if(ord==="bh") return (i)=>{ const row=R-1-Math.floor(i/C), col=i%C; return row*C+col; };
+    if(ord==="bv") return (i)=>{ const col=Math.floor(i/R), row=R-1-(i%R); return row*C+col; };
+    return (i)=>i;
+  }
+
   function sheetGrid(doc){
-    if(doc.mode==="roll") return {cols:1,rows:1,perPage:1,pgW:doc.w,pgH:doc.h};
+    if(doc.mode==="roll") return rollGrid(doc);
     if(doc.autoFit) applyAutoFit(doc);
     const pg=pageMM(doc);
     const innerW=pg.w-doc.mLeft-doc.mRight, innerH=pg.h-doc.mTop-doc.mBottom;
@@ -1229,10 +1376,36 @@
       use=chunks.slice(lo-1,hi);
     }
     const cut=!!opts.cut&&doc.mode!=="roll";
-    const pages=use.map(c=>`<div class="pg${cut?" cut":""}">`+
-      new Array(c.blanks).fill(`<div class="sk"></div>`).join("")+
-      c.cells.map(ctx=>labelHtml(doc,ctx)).join("")+`</div>`).join("");
+    /* The grid always fills in reading order, so the print order is applied by
+       deciding WHICH die-cut each label in the run lands on rather than by
+       reordering the grid. `skip` counts as consumed positions, so a part-used
+       sheet starts where the operator says it does in whatever direction the
+       run is numbered. */
+    const slotOf=orderSlot(doc,g);
+    const perSlots=Math.max(1,g.perPage);
+    const pages=use.map(c=>{
+      const slots=new Array(perSlots).fill(null);
+      c.cells.forEach((ctx,i)=>{
+        const p=slotOf(i+c.blanks);
+        if(p>=0&&p<perSlots) slots[p]=ctx;
+      });
+      return `<div class="pg${cut?" cut":""}">`+
+        slots.map(ctx=>ctx?labelHtml(doc,ctx):`<div class="sk"></div>`).join("")+`</div>`;
+    }).join("");
     const roll=doc.mode==="roll";
+    /* A multi-up roll still has to place its labels ON the web. The die leaves
+       the vertical gap SPLIT above and below — half of it on each page — so
+       consecutive pages meet at exactly one full gap and the label sits in the
+       middle of its pitch, which is what the die actually cuts. Across the web
+       the row is centred in whatever is left over. */
+    const rPadY=roll?(+doc.rGapY||0)/2:0;
+    const rPadX=roll
+      ? Math.max(0,(g.pgW-(g.cols*doc.w+(g.cols-1)*(+doc.rGapX||0)))/2)
+      : 0;
+    const padT=roll?rPadY:doc.mTop,   padB=roll?rPadY:doc.mBottom;
+    const padL=roll?rPadX:doc.mLeft,  padR=roll?rPadX:doc.mRight;
+    const colGap=roll?(+doc.rGapX||0):doc.gapX;
+    const rowGap=roll?0:doc.gapY;
     return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(doc.name)} — Labels</title>
 <style>
   /* The sheet size is declared, or the browser falls back to Letter and
@@ -1241,9 +1414,9 @@
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   html,body{background:#fff}
   .pg{width:${g.pgW}mm;height:${g.pgH}mm;overflow:hidden;background:#fff;
-    padding:${roll?0:doc.mTop}mm ${roll?0:doc.mRight}mm ${roll?0:doc.mBottom}mm ${roll?0:doc.mLeft}mm;
+    padding:${padT}mm ${padR}mm ${padB}mm ${padL}mm;
     display:grid;grid-template-columns:repeat(${Math.max(1,g.cols)},${doc.w}mm);
-    grid-auto-rows:${doc.h}mm;column-gap:${roll?0:doc.gapX}mm;row-gap:${roll?0:doc.gapY}mm;
+    grid-auto-rows:${doc.h}mm;column-gap:${colGap}mm;row-gap:${rowGap}mm;
     align-content:start;justify-content:start;page-break-after:always;break-after:page}
   .pg:last-child{page-break-after:auto;break-after:auto}
   /* a die-cut deliberately left empty on a part-used sheet */
@@ -2656,6 +2829,13 @@
       if(o.type==="text"&&o.src.kind==="fixed"){
         const c=root.querySelector(".ls-canvas");
         if(c) editText(o,c,PX_MM*zoom);
+      }
+      /* Anything else that was just placed leaves the CANVAS holding focus, so
+         Delete and the arrow-key nudge reach the object straight away instead
+         of after a stray click somewhere to give the canvas the keyboard. */
+      else{
+        const c=root.querySelector(".ls-canvas");
+        if(c&&c.focus) try{ c.focus({preventScroll:true}); }catch(err){ c.focus(); }
       }
     }
 
@@ -4211,11 +4391,14 @@
         :(stockOf(doc())?(doc().mode==="roll"?"roll":"sheet"):"custom");
       let mo=null;
 
+      /* Picking a stock no longer closes the dialog. The whole point of the
+         preview on the right is to be looked at BEFORE committing — a chooser
+         that shuts the moment you touch a card never lets you compare two, and
+         the operator finds out what they picked by printing it. The footer
+         button is what leaves. */
       function pick(s){
         applyStock(doc(),s.v);
-        touch(); paint(); fitOnce();
-        if(mo) mo.close();
-        toast(isNew?("New label: "+sizeS(s.w,s.h)):("Label layout: "+sizeS(s.w,s.h)),{type:"ok"});
+        touch(); paint(); fitOnce(); build();
       }
 
       function cards(){
@@ -4268,7 +4451,7 @@
             v=>{ d.autoFit=v; if(v) applyAutoFit(d); refresh(); }),
         ]);
         const refresh=()=>{
-          touch(); paint();
+          touch(); paint(); drawPreview();
           const g=sheetGrid(d);
           const ok=d.mode==="roll"||!!g.perPage;
           afRow.hidden=(d.mode!=="sheet");
@@ -4276,7 +4459,8 @@
           if(box) box.checked=!!d.autoFit;
           out.className=ok?"ls-ok":"ls-bad";
           out.textContent=d.mode==="roll"
-            ? "✓ The page becomes the label: "+sizeS(d.w,d.h)+" — one per page, no margins."
+            ? "✓ "+g.cols+(g.cols===1?" label":" labels")+" across a "+mmS(g.pgW)+
+              " mm web — set the web and the gaps on the Roll tab."
             : (g.perPage
                 ? `✓ ${g.cols} across × ${g.rows} down = ${g.perPage} per A4 page`
                   +(d.autoFit?"":" — tick auto-fit above if that looks low.")
@@ -4309,19 +4493,121 @@
         return pane;
       }
 
+      /* ---- the roll's own numbers ----
+         A roll is not just a size. The web is what was bought, the across-count
+         is what the die cuts out of it, and the two gaps are what the die
+         leaves — two 50 × 25 with nothing between them across a 100 mm web is a
+         different roll from two with 3 mm between them, and only these boxes
+         can say which. Built once and never rebuilt while you type, for the
+         same caret reason customPane() documents above. */
+      function rollPane(){
+        const d=doc();
+        const pane=h("div",{class:"ls-lay-roll"});
+        const out=h("div",{});
+        const refresh=()=>{ touch(); paint(); drawPreview();
+          const g=sheetGrid(d);
+          out.className="ls-ok";
+          out.textContent="✓ "+g.cols+(g.cols===1?" label":" labels")+" across a "+
+            mmS(g.pgW)+" mm web — each feed advances "+mmS(g.pgH)+" mm.";
+        };
+        pane.appendChild(h("div",{class:"wz-sec",text:"The roll"}));
+        pane.appendChild(row(2,[
+          fld("Web width (mm)",nInput(d.rollW,v=>{d.rollW=Math.max(5,v);refresh();},1,5,1000),
+            "The roll as bought."),
+          fld("Across",nInput(d.across||0,v=>{d.across=Math.max(0,Math.round(v));refresh();},1,0,50),
+            "0 = fit as many as the web takes."),
+        ]));
+        pane.appendChild(row(2,[
+          fld("Gap across (mm)",nInput(d.rGapX,v=>{d.rGapX=Math.max(0,v);refresh();},.5,0,100),
+            "Between labels side by side. 0 for a butt-cut die."),
+          fld("Gap down (mm)",nInput(d.rGapY,v=>{d.rGapY=Math.max(0,v);refresh();},.5,0,100),
+            "The feed gap above and below."),
+        ]));
+        pane.appendChild(out);
+        refresh();
+        return pane;
+      }
+
+      /* ---- THE PREVIEW, on the right ----
+         Two things, because they answer two different questions: what the label
+         itself looks like at this size and shape, and how a whole sheet or web
+         of them lands. Both drawn to scale from the same sheetGrid() the
+         printer uses, so what is shown here is what comes out. */
+      const prevWrap=h("div",{class:"ls-lay-prev"});
+      function drawPreview(){
+        const d=doc();
+        prevWrap.innerHTML="";
+        const g=sheetGrid(d), roll=d.mode==="roll";
+        const shapeCss=(w,hh)=>d.shape==="ellipse"?"border-radius:50%"
+          :d.shape==="round"?("border-radius:"+Math.max(1,Math.min(w,hh)*(d.radius/Math.max(d.w,d.h))*2).toFixed(1)+"px")
+          :"";
+
+        /* 1 — the label itself, as big as the panel allows */
+        prevWrap.appendChild(h("div",{class:"ls-lay-pt",text:"The label"}));
+        const k1=Math.min(210/Math.max(d.w,1),150/Math.max(d.h,1));
+        const lw=Math.max(8,d.w*k1), lh=Math.max(6,d.h*k1);
+        prevWrap.appendChild(h("div",{class:"ls-lay-one"},[
+          h("div",{class:"ls-lay-onebox",
+            style:`width:${lw.toFixed(1)}px;height:${lh.toFixed(1)}px;${shapeCss(lw,lh)}`}),
+        ]));
+        prevWrap.appendChild(h("div",{class:"ls-lay-cap",text:sizeS(d.w,d.h)+
+          (d.shape==="ellipse"?" · ellipse":d.shape==="round"?" · rounded":"")}));
+
+        /* 2 — the stock, tiled */
+        prevWrap.appendChild(h("div",{class:"ls-lay-pt",
+          text:roll?"On the web":"On the sheet"}));
+        const pw=g.pgW, ph=roll?Math.min(g.pgH*3,g.pgH*3):g.pgH;   // 3 feeds of a roll reads as a roll
+        const k2=Math.min(200/Math.max(pw,1),210/Math.max(ph,1));
+        const page=h("div",{class:"ls-lay-page",
+          style:`width:${(pw*k2).toFixed(1)}px;height:${(ph*k2).toFixed(1)}px`});
+        const reps=roll?3:1;
+        for(let r=0;r<reps;r++){
+          for(let row0=0;row0<g.rows;row0++){
+            for(let c=0;c<g.cols;c++){
+              const x=roll
+                ? Math.max(0,(pw-(g.cols*d.w+(g.cols-1)*(+d.rGapX||0)))/2)+c*(d.w+(+d.rGapX||0))
+                : d.mLeft+c*(d.w+d.gapX);
+              const y=roll
+                ? r*g.pgH+(+d.rGapY||0)/2
+                : d.mTop+row0*(d.h+d.gapY);
+              const bw=d.w*k2, bh=d.h*k2;
+              page.appendChild(h("div",{class:"ls-lay-cell",
+                style:`left:${(x*k2).toFixed(1)}px;top:${(y*k2).toFixed(1)}px;`+
+                      `width:${bw.toFixed(1)}px;height:${bh.toFixed(1)}px;${shapeCss(bw,bh)}`}));
+            }
+          }
+          if(roll&&r<reps-1) page.appendChild(h("div",{class:"ls-lay-feed",
+            style:`top:${((r+1)*g.pgH*k2).toFixed(1)}px`}));
+        }
+        prevWrap.appendChild(h("div",{class:"ls-lay-pagewrap"},[page]));
+        const bad=!roll&&!g.perPage;
+        prevWrap.appendChild(h("div",{class:"ls-lay-cap"+(bad?" bad":""),
+          text:bad?"Bigger than the printable area — it will not print."
+            :roll?(g.cols+" across a "+mmS(g.pgW)+" mm web · "+mmS(g.pgH)+" mm per feed")
+                 :(g.cols+" across × "+g.rows+" down = "+g.perPage+" per "+d.page+" sheet")}));
+        const st=STOCKS.find(x=>x.v===stockOf(d));
+        if(st&&st.unver) prevWrap.appendChild(h("div",{class:"ls-lay-unver",
+          text:"⚠ These circle sizes are the standard Novajet range, not read off your chart — "+
+               "check one against a real sheet before a long run."}));
+      }
+
       function build(){
         body.innerHTML="";
-        body.appendChild(h("div",{class:"ls-lay-tabs"},
+        const left=h("div",{class:"ls-lay-l"});
+        left.appendChild(h("div",{class:"ls-lay-tabs"},
           [{v:"roll",l:"Roll"},{v:"sheet",l:"A4 sheet"},{v:"custom",l:"Custom size"}]
             .map(t=>h("button",{class:"ls-lay-tab"+(tab===t.v?" on":""),
               onclick:()=>{tab=t.v;build();},text:t.l}))));
-        body.appendChild(h("div",{class:"ls-lay-sub",text:
+        left.appendChild(h("div",{class:"ls-lay-sub",text:
           tab==="roll"
-            ? "A die-cut roll on a thermal printer — Zebra, TSC, Godex. The page is the label."
+            ? "A die-cut roll on a thermal printer — Zebra, TSC, Godex. Pick a stock, then set the web and the gaps under it."
           : tab==="sheet"
-            ? "Die-cut A4 laser sheets. How many land on a page is worked out from the sizes, not taken on trust."
+            ? "Novajet die-cut A4 sheets. How many land on a page is worked out from the sizes, not taken on trust."
             : "Any size you like, in millimetres."}));
-        body.appendChild(tab==="custom"?customPane():cards());
+        left.appendChild(tab==="custom"?customPane():cards());
+        if(tab==="roll") left.appendChild(rollPane());
+        body.appendChild(h("div",{class:"ls-lay-2"},[left,prevWrap]));
+        drawPreview();
       }
       build();
       mo=modal({
@@ -4686,11 +4972,91 @@
           el.addEventListener("input",()=>{ runOpts.prompts[p.key]=el.value; });
           side.appendChild(field(p.key,el,"asked for by the design"));
         });
+        /* PRINT ORDER. On a roll there is one row, so "across" and "down" are
+           the same journey and only the start corner does anything — offering
+           four identical-looking choices there would be a lie, so the two that
+           differ are the two that show. */
+        side.appendChild(field("Print order",
+          sel1(d.printOrder||"th",
+            (d.mode==="roll"?ORDERS.filter(o=>o.v==="th"||o.v==="bh"):ORDERS)
+              .map(o=>({v:o.v,l:o.l})),
+            v=>{ d.printOrder=v; touch(); redraw(); }),
+          (ORDERS.find(o=>o.v===(d.printOrder||"th"))||ORDERS[0]).d));
         if(d.mode==="sheet")
           side.appendChild(check("Print cut lines between labels",runOpts.cut,
             v=>{runOpts.cut=v;}));
         side.appendChild(check("Print in reverse order",runOpts.reverse,
           v=>{runOpts.reverse=v;}));
+
+        /* ---- WHAT IT WILL LOOK LIKE ----
+           Two pictures, the same two the PO label wizard shows, because the
+           question before a print run is always the same pair: is the sticker
+           itself right, and does the sheet of them land where the die is. Both
+           are rendered through the very functions that print — oneHtml and
+           sheetHtml — so a preview cannot flatter the output. */
+        right.appendChild(h("div",{class:"ls-pp-sec"},[
+          h("span",{text:"The label"}),
+          h("span",{class:"ls-pp-h",text:"one sticker, exactly as it prints"}),
+        ]));
+        {
+          const ctx0={index:0,now:new Date(),prompts:runOpts.prompts,
+            serialStart:runOpts.serialStart};
+          const k=Math.min(250/(d.w*PX_MM),190/(d.h*PX_MM),1.6);
+          right.appendChild(h("div",{class:"ls-pp-one"},[
+            h("div",{class:"wz-frame",
+              style:`width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
+              h("iframe",{srcdoc:oneHtml(d,ctx0),scrolling:"no","aria-hidden":"true",
+                tabindex:"-1",
+                style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${k.toFixed(4)});`+
+                      `transform-origin:top left`})),
+          ]));
+          right.appendChild(h("div",{class:"ls-pp-cap",text:sizeS(d.w,d.h)}));
+        }
+
+        /* the sheet, laid out, with the run numbered the way it will print */
+        if(g.perPage){
+          right.appendChild(h("div",{class:"ls-pp-sec"},[
+            h("span",{text:d.mode==="roll"?"On the web":"On the sheet"}),
+            h("span",{class:"ls-pp-h",text:"numbered in print order"}),
+          ]));
+          const k=Math.min(300/(g.pgW*PX_MM),330/(g.pgH*PX_MM));
+          const wrap=h("div",{class:"ls-pp-sheet",
+            style:`width:${(g.pgW*PX_MM*k).toFixed(1)}px;height:${(g.pgH*PX_MM*k).toFixed(1)}px`});
+          wrap.appendChild(h("iframe",{
+            srcdoc:sheetHtml(d,
+              buildRun(d,{qty:Math.max(1,Math.min(per,total||per)),copies:1,
+                prompts:runOpts.prompts,serialStart:runOpts.serialStart}),
+              {onlyPage:0,skip:skipFor(),cut:runOpts.cut}),
+            scrolling:"no","aria-hidden":"true",tabindex:"-1",
+            style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k.toFixed(4)});`+
+                  `transform-origin:top left`}));
+          /* The numbers are drawn OVER the sheet, from the same orderSlot() the
+             printer uses — so the 7 on screen is the die-cut that gets label 7. */
+          const slotOf=orderSlot(d,g);
+          const roll=d.mode==="roll";
+          const padX=roll?Math.max(0,(g.pgW-(g.cols*d.w+(g.cols-1)*(+d.rGapX||0)))/2):d.mLeft;
+          const padY=roll?(+d.rGapY||0)/2:d.mTop;
+          const gx=roll?(+d.rGapX||0):d.gapX, gy=roll?0:d.gapY;
+          /* EVERY die-cut is numbered, not just the ones this run fills. The
+             question the numbers answer is "which way does the count run", and
+             a run of one would otherwise draw a single 1 and say nothing about
+             the order at all. The artwork underneath still shows only what
+             actually prints. */
+          for(let i=0;i<per;i++){
+            const p=slotOf(i+skipFor());
+            if(p<0||p>=per) continue;
+            const rr=Math.floor(p/Math.max(1,g.cols)), cc=p%Math.max(1,g.cols);
+            const x=(padX+cc*(d.w+gx))*PX_MM*k, y=(padY+rr*(d.h+gy))*PX_MM*k;
+            wrap.appendChild(h("div",{class:"ls-pp-num",
+              style:`left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;`+
+                    `width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
+              h("span",{text:String(i+1)})));
+          }
+          right.appendChild(h("div",{class:"ls-pp-sheetwrap"},[wrap]));
+          right.appendChild(h("div",{class:"ls-pp-cap",
+            text:roll?(g.cols+" across a "+mmS(g.pgW)+" mm web · "+mmS(g.pgH)+" mm per feed")
+                     :(g.cols+" across × "+g.rows+" down = "+per+" per "+d.page+" sheet")}));
+        }
 
         /* ---- THE PAGES ---- */
         right.appendChild(h("div",{class:"ls-pp-sec"},[
@@ -4901,9 +5267,20 @@
         if(full){ full=false; paint(); return; }
       }
       /* Delete removes the selection wherever the studio has focus — but never
-         out from under someone typing into a field. */
+         out from under someone typing into a field.
+
+         ⚠ THE FOCUS TEST USED TO SWALLOW THE KEY. Clicking the canvas to place
+         or pick an object leaves document.activeElement on <body>, and <body>
+         is not inside root — so `root.contains(activeElement)` was false and
+         Delete did nothing at the exact moment an operator expects it to work:
+         object selected, handles showing, nothing typed. "Nothing in
+         particular is focused" belongs to the screen you are looking at, so it
+         counts as the studio; only focus that genuinely sits in another widget
+         (the assistant's input, a field outside root) hands the key over. */
+      const ae=document.activeElement;
+      const loose=!ae||ae===document.body||ae===document.documentElement;
       if((e.key==="Delete")&&!typing&&screen==="design"&&selObj()
-         &&root.contains(document.activeElement||root)){
+         &&(loose||root.contains(ae))){
         e.preventDefault(); delSel(); return;
       }
       if(!(e.ctrlKey||e.metaKey)) return;
