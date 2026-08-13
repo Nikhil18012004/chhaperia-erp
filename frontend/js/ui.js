@@ -298,13 +298,13 @@
     {id:"inventory", icon:"📦", label:"Stock Items", accent:"blue", labOk:true},
     {id:"ledger", icon:"📒", label:"Stock Ledger", accent:"teal"},
     {id:"warehouses", icon:"🏬", label:"Warehouses", accent:"teal", labOk:true},
-    /* Identification labels for material on order. Deliberately NOT labOk:
-       this was a button inside a purchase order before, and that button was
-       already hidden from the lab incharge — moving the feature to its own
-       screen must not quietly hand them access they never had. */
-    /* Reserved for a label feature not yet specified — the screen is an empty
-       placeholder on purpose. Printing a purchase order's labels is NOT here:
-       that is the 🏷 Labels button inside the order itself, in Procurement.
+    /* The label designer — text, barcodes, QR codes, pictures — and the print
+       run for whatever it draws. Deliberately NOT labOk: it was reached from a
+       purchase order before, and that route was already hidden from the lab
+       incharge, so giving the feature its own screen must not quietly hand
+       them access they never had. Printing a purchase order's OWN stickers is
+       still not here: that is the 🏷 Labels button inside the order itself,
+       in Procurement, because those labels belong to that order.
        ⚠ The glyph needs its variation selector (U+1F5A8 U+FE0F). U+1F5A8 is
        Emoji_Presentation=No, so bare it renders as a flat monochrome outline
        that looks broken beside 📦 and 🏬 — with VS16 it comes out in colour. */

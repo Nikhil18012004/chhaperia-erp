@@ -215,6 +215,126 @@ function updateSettings(doc) {
       gapX: dim(s.gapX, 3, 0, 100), gapY: dim(s.gapY, 3, 0, 100),
     };
   }
+  /* ============================================================
+     LABEL STUDIO DESIGNS
+     The designer's saved templates. They live here rather than in a file on
+     someone's laptop, so a label designed on the office PC prints from the
+     store PC. Everything is rebuilt field by field: these values are written
+     straight into a print stylesheet and an <img src>, so a colour is only
+     ever a #rrggbb literal and a picture is only ever a RASTER data URL —
+     SVG is excluded because an SVG can carry script. Mirrors cleanDoc() and
+     cleanObject() in frontend/js/labelstudio.js; a key missing here is
+     silently dropped on save, so the two lists must be changed together.
+     ============================================================ */
+  if (doc.labelDocs != null && Array.isArray(doc.labelDocs)) {
+    // the sticker block's helpers are scoped to that block, so this one has its own
+    const dim = (v, d, lo, hi) => { v = +v; return isNaN(v) ? d : Math.min(hi, Math.max(lo, v)); };
+    const iv = (v, d, lo, hi) => { v = Math.round(+v); return isNaN(v) ? d : Math.min(hi, Math.max(lo, v)); };
+    const tx = (v, d, max) => (v == null ? d : String(v)).slice(0, max);
+    const hx = (v, d) => (/^#[0-9a-fA-F]{6}$/.test(String(v || "")) ? String(v).toLowerCase() : d);
+    const one = (list, v, d) => (list.indexOf(v) >= 0 ? v : d);
+    const IMG = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+    const LS_TYPES = ["text", "barcode", "qr", "image", "box", "ellipse", "line"];
+    const LS_SYMS = ["code128", "code39", "ean13", "itf", "qr"];
+    const LS_FONTS = ["arial", "times", "georgia", "calibri", "courier", "impact"];
+    const LS_PAGES = ["A4", "A5", "A6", "A3", "Letter", "Legal", "custom"];
+
+    const cleanObj = (o, W, H) => {
+      if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+      const t = one(LS_TYPES, o.type, "text");
+      const r = {
+        id: /^o_[a-z0-9]{1,12}$/.test(String(o.id || "")) ? o.id : "o_" + Math.random().toString(36).slice(2, 9),
+        type: t,
+        x: dim(o.x, 0, -W, W * 2), y: dim(o.y, 0, -H, H * 2),
+        w: dim(o.w, 10, 0.2, W * 3), h: dim(o.h, 10, 0.05, H * 3),
+        rot: dim(o.rot, 0, -360, 360),
+        // the eye in Object Layers: hidden everywhere, on screen and on the sheet
+        hidden: !!o.hidden,
+      };
+      const s = (o.src && typeof o.src === "object") ? o.src : {};
+      r.src = {
+        kind: one(["fixed", "date", "serial", "prompt"], s.kind, "fixed"),
+        prefix: tx(s.prefix, "", 40), suffix: tx(s.suffix, "", 40),
+        fmt: tx(s.fmt, "DD.MM.YYYY", 40),
+        start: iv(s.start, 1, 0, 999999999), step: iv(s.step, 1, 1, 10000), pad: iv(s.pad, 0, 0, 12),
+        prompt: tx(s.prompt, "", 40), def: tx(s.def, "", 120),
+      };
+      if (t === "text" || t === "barcode" || t === "qr") {
+        r.text = tx(o.text, "", 600);
+        r.font = one(LS_FONTS, o.font, "arial");
+        r.size = dim(o.size, 4, 0.6, 120);
+        r.color = hx(o.color, "#000000");
+      }
+      if (t === "text") {
+        r.bold = !!o.bold; r.italic = !!o.italic;
+        r.underline = !!o.underline; r.strike = !!o.strike;
+        r.align = one(["left", "center", "right", "justify"], o.align, "left");
+        r.valign = one(["start", "middle", "end"], o.valign, "middle");
+        r.lineH = dim(o.lineH, 1.25, 0.8, 3); r.shrink = o.shrink !== false;
+        // Wrap Text — off means the line runs on and is clipped by its box
+        r.wrap = o.wrap !== false;
+        r.tcase = one(["none", "upper", "lower", "title"], o.tcase, "none");
+        // shading is written straight into a background:, so only a hex literal
+        r.shade = hx(o.shade, "");
+        r.indentL = dim(o.indentL, 0, 0, 200); r.indentR = dim(o.indentR, 0, 0, 200);
+      }
+      if (t === "barcode" || t === "qr") {
+        r.sym = t === "qr" ? "qr" : one(LS_SYMS, o.sym, "code128");
+        r.showText = !!o.showText;
+        r.ecl = one(["L", "M", "Q", "H"], o.ecl, "M");
+      }
+      if (t === "image") {
+        r.data = (typeof o.data === "string" && o.data.length <= 900000 && IMG.test(o.data)) ? o.data : "";
+        r.fit = one(["contain", "cover", "fill"], o.fit, "contain");
+      }
+      if (t === "line") { r.stroke = hx(o.stroke, "#000000"); r.strokeW = dim(o.strokeW, 0.6, 0.05, 20); }
+      if (t === "box" || t === "ellipse") {
+        r.fill = hx(o.fill, ""); r.stroke = hx(o.stroke, "#000000");
+        r.strokeW = dim(o.strokeW, 0.4, 0, 20); r.radius = dim(o.radius, 0, 0, 100);
+      }
+      return r;
+    };
+
+    clean.labelDocs = doc.labelDocs.slice(0, 40).map((d) => {
+      d = (d && typeof d === "object" && !Array.isArray(d)) ? d : {};
+      const W = dim(d.w, 100, 5, 1000), H = dim(d.h, 60, 5, 1000);
+      return {
+        id: /^d_[a-z0-9]{1,12}$/.test(String(d.id || "")) ? d.id : "d_" + Math.random().toString(36).slice(2, 9),
+        name: tx(d.name, "Label", 60) || "Label",
+        w: W, h: H,
+        bg: hx(d.bg, "#ffffff"),
+        /* A background PICTURE on the label itself. Same rule as a placed
+           picture: a RASTER data URL only — an SVG can carry script and this
+           value goes straight into a background-image. */
+        bgImage: (typeof d.bgImage === "string" && d.bgImage.length <= 900000
+          && IMG.test(d.bgImage)) ? d.bgImage : "",
+        bgFit: one(["cover", "contain", "fill", "tile", "custom"], d.bgFit, "cover"),
+        bgX: dim(d.bgX, 0, -2000, 2000), bgY: dim(d.bgY, 0, -2000, 2000),
+        // 0 means "as big as the label", so it follows a change of stock
+        bgW: dim(d.bgW, 0, 0, 2000), bgH: dim(d.bgH, 0, 0, 2000),
+        bgOpacity: dim(d.bgOpacity, 100, 5, 100),
+        // a NEW label is cut with rounded corners; a saved one keeps its own
+        shape: one(["rect", "round", "ellipse"], d.shape, "round"),
+        radius: dim(d.radius, 3, 0, 100),
+        border: !!d.border, borderC: hx(d.borderC, "#000000"), borderW: dim(d.borderW, 0.3, 0.05, 10),
+        grid: dim(d.grid, 2, 0.5, 20), snap: d.snap !== false,
+        mode: d.mode === "roll" ? "roll" : "sheet",
+        page: one(LS_PAGES, d.page, "A4"),
+        pageW: dim(d.pageW, 210, 20, 1000), pageH: dim(d.pageH, 297, 20, 1000),
+        landscape: !!d.landscape,
+        mTop: dim(d.mTop, 8, 0, 200), mBottom: dim(d.mBottom, 8, 0, 200),
+        mLeft: dim(d.mLeft, 8, 0, 200), mRight: dim(d.mRight, 8, 0, 200),
+        gapX: dim(d.gapX, 3, 0, 100), gapY: dim(d.gapY, 3, 0, 100),
+        autoFit: !!d.autoFit,
+        copies: iv(d.copies, 1, 1, 500), qty: iv(d.qty, 1, 1, 5000),
+        updated: tx(d.updated, "", 30),
+        // when it was last opened or saved — what the Recent list sorts on
+        usedAt: tx(d.usedAt, "", 40),
+        objects: (Array.isArray(d.objects) ? d.objects : []).slice(0, 120)
+          .map((o) => cleanObj(o, W, H)).filter(Boolean),
+      };
+    });
+  }
   return repo.updateSettings(clean);
 }
 
