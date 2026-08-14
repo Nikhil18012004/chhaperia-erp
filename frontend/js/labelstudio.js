@@ -44,11 +44,23 @@
 
    WHERE THE DESIGNS LIVE
    In the ERP's own settings document, on the server, exactly like
-   every other setting. Nothing is written to a local folder and
-   nothing is downloaded — the operator saves a template, and it
-   is there for them on any machine that signs in. Printing goes
-   through the browser's own print dialog, so the label printer
-   the plant already uses is the one that gets the job.
+   every other setting — the operator saves a template, and it is
+   there for them on any machine that signs in. That is the only
+   home a design has. A label can also be DOWNLOADED to a .json
+   file and IMPORTED back, which is how one travels to a backup or
+   arrives from another Chhaperia installation; an imported one is
+   a saved template like any other from the moment it lands.
+
+   ⚠ THAT FILE IS NOT A BarTender .btw AND CANNOT BE MADE INTO ONE.
+   BarTender's .btw is Seagull's closed binary format; a browser
+   cannot write it and BarTender rejects anything else outright
+   (error #3323, "not a supported file type"). Feeding BarTender
+   real work is what the SERVER-side bridge is for — see
+   backend/services/bartenderService: it writes a CSV the operator's
+   own .btw template is bound to, and starts BarTender on it.
+
+   Printing goes through the browser's own print dialog, so the
+   label printer the plant already uses is the one that gets the job.
    ============================================================ */
 (function (global) {
   "use strict";
@@ -1947,6 +1959,565 @@
       printDialog();
     }
 
+    /* ============================================================
+       A TEMPLATE AS A FILE — download and import
+
+       The designs live in the ERP's settings document and always
+       will; a file is not a second home for them, it is how one
+       TRAVELS — out to a backup or another installation, in from
+       a supplier who drew your label for you.
+
+       Everything that comes in goes through cleanDoc(), the same
+       gate the server's own settings pass, so a hand-edited or
+       corrupt file cannot put anything into the studio that the
+       studio could not have made itself.
+       ============================================================ */
+    const MAX_IMPORT=12*1024*1024;      // a design may carry placed pictures
+    const LABEL_KIND="chhaperia-label";
+    /* ⚠ .json, AND IT MUST STAY .json. THIS WAS TRIED THE OTHER WAY.
+
+       This was written as ".btw" once, on the reasonable-sounding grounds that
+       .btw is what the plant files labels under. The result was an operator
+       double-clicking the download and getting BarTender error #3323, "not a
+       supported file type" — because a real .btw is Seagull's own closed
+       BINARY OLE container and no browser can write one. The extension was a
+       promise the bytes could not keep, and Windows kept handing the file to
+       the one application guaranteed to reject it.
+
+       The name now matches the contents. Import does not care what a file is
+       called — it reads the bytes — so nothing is lost by being honest here.
+
+       Getting real work into BarTender is the SERVER's job and always was: see
+       backend/services/bartenderService, which writes a CSV the operator's own
+       .btw template is already bound to and launches BarTender on it. */
+    const LABEL_EXT=".json";
+
+    function downloadDoc(d){
+      const payload={kind:LABEL_KIND, version:1,
+        note:"Chhaperia Label Studio template. Import it from Label Studio — "+
+             "this is not a Seagull BarTender document.",
+        exported:new Date().toISOString(),
+        labels:[cleanDoc(JSON.parse(JSON.stringify(d)))]};
+      const name=String(d.name||"label").replace(/[^\w .()-]+/g,"_")
+        .replace(/\s+/g," ").trim().slice(0,60)||"label";
+      const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+      const url=URL.createObjectURL(blob);
+      const a=h("a",{href:url,download:name+LABEL_EXT,style:"display:none"});
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
+      toast("Saved “"+name+LABEL_EXT+"” — bring it back with Import. "+
+            "It is a Label Studio file, not a BarTender one.",
+            {type:"ok",title:"Downloaded",dur:6000});
+    }
+
+    /* A name nobody else in the library is already using, so two imports of the
+       same file do not leave two identically-named templates behind. */
+    function uniqueDocName(base){
+      const name=String(base||"Label").slice(0,60)||"Label";
+      if(!docs.some(d=>d.name===name)) return name;
+      for(let n=2;n<999;n++){
+        const t=(name+" "+n).slice(0,60);
+        if(!docs.some(d=>d.name===t)) return t;
+      }
+      return name;
+    }
+
+    /* One file may hold one label, a handful, or a whole settings dump — take
+       the labels out of whichever shape turned up. */
+    function labelsIn(json){
+      if(!json||typeof json!=="object") return [];
+      if(Array.isArray(json)) return json;
+      if(Array.isArray(json.labels)) return json.labels;
+      if(Array.isArray(json.labelDocs)) return json.labelDocs;
+      if(json.label&&typeof json.label==="object") return [json.label];
+      return [json];
+    }
+    /* cleanDoc() will happily turn {} into a valid empty label, so the shape has
+       to be checked BEFORE it — otherwise any .json at all imports as a blank
+       template and the operator is left wondering what they just added. */
+    const looksLikeLabel=(x)=>!!x&&typeof x==="object"&&!Array.isArray(x)&&
+      (typeof x.w==="number"||typeof x.h==="number"||Array.isArray(x.objects));
+
+    /* ---- WHAT KIND OF FILE IS THIS? FROM ITS BYTES. ----
+
+       ⚠ THE BYTES, NOT THE DECODED TEXT. FileReader.readAsText decodes UTF-8,
+       and D0 CF 11 E0 — the first four bytes of every OLE compound file, and
+       therefore of every BarTender .btw — is not valid UTF-8. It comes back as
+       U+FFFD replacement characters, so a signature test against the decoded
+       string CAN NEVER MATCH. That is why a genuine BarTender file was turned
+       away with the unhelpful "does not hold a label" instead of being named.
+
+       ⚠ AND THE BYTES, NOT THE EXTENSION. A label downloaded from this studio
+       may be sitting under the same three letters; only the content separates
+       them, so nothing here looks at the file name. */
+    const OLE_SIG=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1];   // older .btw
+    const ZIP_SIG=[0x50,0x4b,0x03,0x04];                       // newer .btw
+    const startsWith=(b,sig)=>{
+      if(!b||b.length<sig.length) return false;
+      for(let i=0;i<sig.length;i++) if(b[i]!==sig[i]) return false;
+      return true;
+    };
+    /* ⚠ THE ONE THAT ACTUALLY TURNS UP. A .btw is NOT an OLE blob — every file
+       checked out of this plant, BarTender 11.5 and 12.0 alike, opens with a
+       plain-ASCII banner:
+
+           \r\nBar Tender Format File\r\n(c) 1992 - 2026 Seagull Scientific...
+
+       Testing only for OLE and ZIP therefore called a real BarTender file
+       "text", JSON.parse threw on the banner, and the operator was told their
+       label "does not hold a label". This test goes FIRST because it is the
+       one that fires. OLE and ZIP stay behind it for versions that use them. */
+    const BTW_BANNER="Bar Tender Format File";
+    function isBtwText(bytes){
+      const n=Math.min(bytes.length,64);
+      let s="";
+      for(let i=0;i<n;i++) s+=String.fromCharCode(bytes[i]);
+      return s.replace(/^[\r\n\s]+/,"").indexOf(BTW_BANNER)===0;
+    }
+    function sniff(bytes){
+      if(isBtwText(bytes)) return "btw";
+      if(startsWith(bytes,OLE_SIG)||startsWith(bytes,ZIP_SIG)) return "btw";
+      /* Any other binary. A NUL byte early on is the giveaway, and no text
+         file that could hold a label has one. */
+      const n=Math.min(bytes.length,512);
+      for(let i=0;i<n;i++) if(bytes[i]===0) return "binary";
+      return "text";
+    }
+    /* UTF-8 first, then Windows-1252. A label hand-edited in Notepad on a
+       Hindi- or European-locale machine is not UTF-8, and throwing it away for
+       that would be refusing a perfectly good file over an encoding. */
+    function decode(bytes){
+      try{ return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }
+      catch(e){
+        try{ return new TextDecoder("windows-1252").decode(bytes); }
+        catch(e2){ return ""; }
+      }
+    }
+    function whyNot(f,kind){
+      const nm="\u201c"+(f.name||"that file")+"\u201d";
+      if(kind==="btw")
+        return nm+" is a BarTender file, but nothing could be read out of it "+
+               "\u2014 no template size, or no artwork. Open it in BarTender and "+
+               "save it again, or rebuild the label here.";
+      if(kind==="binary")
+        return nm+" is a binary file, not a label Label Studio can read.";
+      return nm+" does not hold a label Label Studio can read.";
+    }
+
+    /* ============================================================
+       READING A BarTender .btw
+
+       It turns out a .btw is NOT the opaque OLE blob it was assumed to be.
+       Seagull writes a plain-text header first — checked against real files
+       from this plant, BarTender 11.5 and 12.0 both:
+
+         Bar Tender Format File
+         (c) 1992 - 2026 Seagull Scientific, LLC
+         ----------------------------------------------
+         Application: Version=12.0.0; Build=252359; ...
+         Document: CompatibleVersion=2022 and Higher; ...
+         Printer: Name=EPSON L11050 Series; ...
+         <Metadata>...<TemplateSize>98.8 x 34.1 mm</TemplateSize>
+                      <Title>BOX TEMPLATE</Title></Metadata>
+         ----------------------------------------------
+         <binary>
+
+       …and embedded in the binary is a PNG: BarTender's own render of the
+       label, letterboxed inside a square canvas on a grey ground.
+
+       So two of the three things a label needs are right there in the file —
+       ITS SIZE IN MILLIMETRES and A PICTURE OF IT. That is enough to bring the
+       label in: a template cut to the exact stock, carrying the artwork.
+
+       ⚠ WHAT THIS IS NOT. The text, barcodes and fields are objects in the
+       proprietary part of the file and are NOT recovered — what arrives is a
+       picture of them. It prints correctly and it is the right size, but to
+       make a field variable you re-draw it here on top. The toast says so
+       rather than letting anyone discover it at the printer. */
+    const PNG_SIG=[0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a];
+    const PNG_END=[0x49,0x45,0x4e,0x44,0xae,0x42,0x60,0x82];
+    const findSig=(b,sig,from)=>{
+      outer: for(let i=from;i+sig.length<=b.length;i++){
+        for(let j=0;j<sig.length;j++) if(b[i+j]!==sig[j]) continue outer;
+        return i;
+      }
+      return -1;
+    };
+    /* Every PNG in the file; the biggest is the label render, the small one is
+       a thumbnail of it. */
+    function pngsIn(bytes){
+      const out=[]; let from=0;
+      for(;;){
+        const s=findSig(bytes,PNG_SIG,from);
+        if(s<0) break;
+        const e=findSig(bytes,PNG_END,s);
+        if(e<0) break;
+        out.push({at:s,len:e+8-s});
+        from=e+8;
+      }
+      return out;
+    }
+    function btwHeader(bytes){
+      /* latin-1 by hand: the header is ASCII, and TextDecoder("windows-1252")
+         is not guaranteed everywhere. 8 KB is far past the second rule. */
+      let s="";
+      const n=Math.min(bytes.length,8192);
+      for(let i=0;i<n;i++) s+=String.fromCharCode(bytes[i]);
+      const grab=(re)=>{ const m=re.exec(s); return m?m[1].trim():""; };
+      const size=grab(/<TemplateSize>([^<]*)<\/TemplateSize>/);
+      const wh=/([\d.]+)\s*x\s*([\d.]+)\s*mm/i.exec(size);
+      return {
+        title:grab(/<Title>([^<]*)<\/Title>/),
+        w:wh?+wh[1]:0,
+        h:wh?+wh[2]:0,
+        app:grab(/<Application>([^<]*)<\/Application>/),
+      };
+    }
+
+    /* THE LETTERBOX. BarTender renders into a SQUARE canvas and pads the label
+       out to it with flat grey, so pasting the PNG in whole would import a
+       98.8 x 34.1 mm label as a square with two grey bars. The label sits
+       centred and fills one axis, so the crop is pure arithmetic off the
+       template's own aspect ratio — no pixel-hunting, nothing to tune. */
+    function cropToLabel(img,wmm,hmm){
+      const want=wmm/hmm, have=img.width/img.height;
+      let sx=0, sy=0, sw=img.width, sh=img.height;
+      if(have>want){ sw=Math.round(img.height*want); sx=Math.round((img.width-sw)/2); }
+      else if(have<want){ sh=Math.round(img.width/want); sy=Math.round((img.height-sh)/2); }
+      const cv=document.createElement("canvas");
+      cv.width=sw; cv.height=sh;
+      const cx=cv.getContext("2d");
+      if(!cx) return "";
+      cx.drawImage(img,sx,sy,sw,sh,0,0,sw,sh);
+      /* PNG first for a crisp flat-colour label; JPEG only if PNG will not fit
+         under the per-picture cap. */
+      let url=cv.toDataURL("image/png");
+      if(url.length>MAX_IMG) url=cv.toDataURL("image/jpeg",0.9);
+      if(url.length>MAX_IMG) url=cv.toDataURL("image/jpeg",0.72);
+      return url.length<=MAX_IMG?url:"";
+    }
+
+    /* Hands a finished doc to its callback, or null if the file gives up
+       nothing usable. Asynchronous, because decoding a PNG is. */
+    /* ---- THE TEXT INSIDE A .btw ----
+
+       The artwork alone is a photograph of a label: right size, right look,
+       nothing you can change. The words are in there too, and they are worth
+       digging out — an operator who imports a box label wants to edit the type
+       code on it, not admire it.
+
+       WHERE THEY ARE. Past the header the file carries one zlib stream (0x78
+       0x9c and friends). Inflated it is BarTender's own binary record format —
+       undocumented, and not worth guessing at — but the text of every field
+       sits in it as a plain RTF blob in UTF-16, complete with the size,
+       weight and alignment it was typed at.
+
+       WHAT IS NOT IN REACH. Positions. The int32s around each blob are flags
+       and DPI figures, not coordinates; nothing in them reads as x/y in any
+       unit the label could be measured in. Rather than guess and quietly print
+       a field in the wrong place, the recovered text is stacked down the label
+       and the original artwork is left underneath at low opacity as a TRACING
+       GUIDE. Drag each line onto its place, then clear the background.
+
+       DecompressionStream is how a browser inflates; it is asynchronous, hence
+       the callback. Anything at all going wrong here falls back to the picture
+       on its own, which is always better than failing the import. */
+    function inflateZlib(bytes,done){
+      if(typeof DecompressionStream!=="function") return done(null);
+      try{
+        const ds=new DecompressionStream("deflate");
+        new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer()
+          .then(buf=>done(new Uint8Array(buf)))
+          .catch(()=>done(null));
+      }catch(e){ done(null); }
+    }
+    /* The first zlib stream that actually inflates. Only a handful of offsets
+       ever look like one, so this is cheap. */
+    function inflateFirst(bytes,done){
+      const at=[];
+      for(let i=0;i+1<bytes.length;i++){
+        if(bytes[i]===0x78&&(bytes[i+1]===0x01||bytes[i+1]===0x9c||bytes[i+1]===0xda))
+          at.push(i);
+        if(at.length>24) break;
+      }
+      let k=0;
+      (function next(){
+        if(k>=at.length) return done(null);
+        const off=at[k++];
+        inflateZlib(bytes.slice(off),(out)=>{
+          if(out&&out.length>1024) return done(out);
+          next();
+        });
+      })();
+    }
+
+    /* RTF down to the words. The font table, colour table and stylesheet are
+       GROUPS, not text — stripped by matching braces rather than by regex,
+       because "{\fonttbl{\f0 Calibri;}{\f1 Arial;}}" nests and a flat pattern
+       leaves "Calibri;Arial;" glued to the front of every label. */
+    function rtfText(rtf){
+      let s=String(rtf||"");
+      const drop=/\{\\(?:\*|fonttbl|colortbl|stylesheet|themedata|generator|info|listtable|listoverridetable|latentstyles|datastore)/;
+      for(;;){
+        const m=drop.exec(s);
+        if(!m) break;
+        let d=0,i=m.index;
+        for(;i<s.length;i++){
+          if(s[i]==="{") d++;
+          else if(s[i]==="}"){ d--; if(!d){ i++; break; } }
+        }
+        s=s.slice(0,m.index)+s.slice(i);
+      }
+      return s
+        .replace(/\\par[d]?\b/g,"\n")
+        .replace(/\\line\b/g,"\n")
+        .replace(/\\tab\b/g,"\t")
+        .replace(/\\'([0-9a-fA-F]{2})/g,(x,hh)=>String.fromCharCode(parseInt(hh,16)))
+        .replace(/\\u(-?\d+)\s?\??/g,(x,n)=>String.fromCharCode(+n<0?+n+65536:+n))
+        .replace(/\\[a-zA-Z]+-?\d*\s?/g,"")
+        .replace(/[{}]/g,"")
+        .split("\n").map(l=>l.replace(/[ \t]+/g," ").trim())
+        .filter(Boolean).join("\n").trim();
+    }
+
+    /* Every distinct field in the stream, in the order BarTender wrote them.
+       A field turns up twice — once for the template and once for the data
+       entry form — so the same words are taken only once. */
+    function fieldsIn(stream){
+      const s=(function(){
+        let out="";
+        /* UTF-16LE by hand: TextDecoder would be tidier but the stream is not
+           valid UTF-16 throughout and a fatal decode would throw it all away. */
+        for(let i=0;i+1<stream.length;i+=2)
+          out+=String.fromCharCode(stream[i]|(stream[i+1]<<8));
+        return out;
+      })();
+      const out=[], seen={};
+      let from=0;
+      for(;;){
+        const a=s.indexOf("{\\rtf",from);
+        if(a<0) break;
+        /* to the end of the RTF group */
+        let d=0,i=a;
+        for(;i<s.length;i++){
+          if(s[i]==="{") d++;
+          else if(s[i]==="}"){ d--; if(!d){ i++; break; } }
+        }
+        const blob=s.slice(a,i);
+        from=i;
+        const text=rtfText(blob);
+        if(!text||text.length>600) continue;
+        const key=text.toLowerCase();
+        if(seen[key]) continue;
+        seen[key]=1;
+        const al=/\\(qc|ql|qr|qj)\b/.exec(blob);
+        const fs2=/\\fs(\d+)/.exec(blob);
+        out.push({
+          text:text,
+          bold:/\\b\b(?!\w)/.test(blob),
+          italic:/\\i\b(?!\w)/.test(blob),
+          /* RTF sizes are HALF-points; the studio measures type in mm. */
+          mm:fs2?Math.max(1.5,Math.min(40,(+fs2[1]/2)*25.4/72)):4,
+          align:al?({qc:"center",ql:"left",qr:"right",qj:"justify"})[al[1]]:"left",
+        });
+        if(out.length>=24) break;
+      }
+      return out;
+    }
+
+    /* Stacked down the label with a small margin, each line given room in
+       proportion to its type size. Not where BarTender had them — see above —
+       but on the label, editable, and over a guide showing where to drag. */
+    function layoutFields(list,w,h){
+      if(!list.length) return [];
+      const mx=Math.max(1,w*0.04), my=Math.max(1,h*0.06);
+      const iw=w-mx*2, ih=h-my*2;
+      const weight=list.map(f=>Math.max(1,f.mm));
+      const total=weight.reduce((a,b)=>a+b,0);
+      let y=my;
+      return list.map((f,i)=>{
+        const bh=Math.max(2,ih*(weight[i]/total));
+        const o={ id:uid("o_"), type:"text", text:f.text,
+          x:+mx.toFixed(2), y:+y.toFixed(2), w:+iw.toFixed(2), h:+bh.toFixed(2),
+          size:+Math.min(f.mm,bh*0.8).toFixed(2),
+          bold:f.bold, italic:f.italic, align:f.align, valign:"middle",
+          font:"arial" };
+        y+=bh;
+        return o;
+      });
+    }
+
+    /* THE FILE NAME BEATS THE STORED TITLE. Every .btw checked out of this
+       plant — six of them, different labels, different colours — carries
+       <Title>BOX TEMPLATE</Title>, because each was made by "save as" from one
+       original and BarTender keeps the metadata of the file it was born from.
+       Importing six labels all called BOX TEMPLATE is technically faithful and
+       practically useless; the name on the file is the name the operator knows
+       it by. The stored title is the fallback, not the other way round. */
+    function btwName(fileName,title){
+      const base=String(fileName||"").replace(/\.[^.]*$/,"").trim();
+      return (base||title||"Imported label").slice(0,60);
+    }
+    function readBtw(bytes,done,fileName){
+      const hdr=btwHeader(bytes);
+      if(!hdr.w||!hdr.h) return done(null,0);
+      const pngs=pngsIn(bytes);
+      if(!pngs.length) return done(null,0);
+      const big=pngs.slice().sort((a,b)=>b.len-a.len)[0];
+      const blob=new Blob([bytes.slice(big.at,big.at+big.len)],{type:"image/png"});
+      const url=URL.createObjectURL(blob);
+      const img=new Image();
+      img.onload=()=>{
+        let data="";
+        try{ data=cropToLabel(img,hdr.w,hdr.h); }catch(e){ data=""; }
+        URL.revokeObjectURL(url);
+        /* Now go back for the words. The picture is already in hand, so if the
+           text cannot be recovered the import still succeeds — it just arrives
+           as artwork, which is what it used to do every time. */
+        inflateFirst(bytes,(stream)=>{
+          let fields=[];
+          try{ fields=stream?fieldsIn(stream):[]; }catch(e){ fields=[]; }
+          const objects=layoutFields(fields,hdr.w,hdr.h);
+          done(cleanDoc({
+            name:btwName(fileName,hdr.title),
+            w:hdr.w, h:hdr.h, mode:"sheet", autoFit:true,
+            shape:"round",
+            bgImage:data, bgFit:"fill",
+            /* THE ARTWORK BECOMES A TRACING GUIDE once there is real text on
+               top of it, or the words would be printed twice — once as type
+               and once as part of the picture underneath. Faint enough to line
+               things up against, and cleared in Page setup when you are done. */
+            bgOpacity:objects.length?28:100,
+            objects:objects,
+          }),fields.length);
+        });
+      };
+      img.onerror=()=>{ URL.revokeObjectURL(url); done(null,0); };
+      img.src=url;
+    }
+
+    function importFiles(files){
+      const list=[].slice.call(files||[]).filter(Boolean);
+      if(!list.length) return;
+      let added=0, skipped=0, full=false, fromBtw=0, btwText=0, btwFlat=0,
+          pending=list.length;
+      const why=[];
+      const finish=()=>{
+        if(--pending) return;
+        if(added){
+          docs=saveDocs(docs);
+          screen="gallery"; paint();
+          toast("Imported "+added+" label"+(added===1?"":"s")+
+            (skipped?" \u2014 "+skipped+" file"+(skipped===1?"":"s")+" skipped":""),
+            {type:"ok"});
+          /* An imported .btw arrives as ARTWORK, and nobody should find that
+             out at the printer. Said separately so it is not lost in a count. */
+          if(btwText) toast(btwText+" text field"+(btwText===1?"":"s")+
+            " came out of BarTender and "+(btwText===1?"is":"are")+" editable. "+
+            "They are stacked down the label, not where BarTender had them \u2014 "+
+            "the original is underneath, faint, to line them up against. Clear "+
+            "it in Page setup when you are done.",
+            {type:"info",title:"From BarTender",dur:11000});
+          if(btwFlat) toast(btwFlat+" BarTender label"+(btwFlat===1?"":"s")+
+            " came in at the right size, but no text could be read out "+
+            (btwFlat===1?"of it":"of them")+" \u2014 what you have is the artwork.",
+            {type:"info",title:"From BarTender",dur:9000});
+        } else if(full){
+          toast("That is the "+MAX_DOCS+"-template limit \u2014 nothing imported",
+            {type:"warn"});
+        } else {
+          toast(why[0]||"Nothing to import.",
+            {type:"warn",title:"Could not import",dur:8000});
+        }
+      };
+      list.forEach(f=>{
+        if(f.size>MAX_IMPORT){
+          skipped++;
+          why.push("\u201c"+f.name+"\u201d is larger than 12 MB");
+          return finish();
+        }
+        const r=new FileReader();
+        r.onerror=()=>{
+          skipped++;
+          why.push("\u201c"+f.name+"\u201d could not be read");
+          finish();
+        };
+        r.onload=()=>{
+          const bytes=new Uint8Array(r.result||new ArrayBuffer(0));
+          const kind=sniff(bytes);
+          if(kind==="btw"){
+            /* A BarTender file: bring in its size and its artwork. */
+            return readBtw(bytes,(nd,nFields)=>{
+              if(!nd){ skipped++; why.push(whyNot(f,"btw")); return finish(); }
+              if(docs.length>=MAX_DOCS){ full=true; return finish(); }
+              nd.id=uid("d_");
+              nd.name=uniqueDocName(nd.name);
+              stampUsed(nd);
+              docs.push(nd); added++; fromBtw++;
+              if(nFields) btwText+=nFields; else btwFlat++;
+              finish();
+            },f.name);
+          }
+          if(kind!=="text"){ skipped++; why.push(whyNot(f,kind)); return finish(); }
+          /* A byte-order mark and stray whitespace both make JSON.parse throw
+             on a file that is otherwise perfectly good \u2014 Notepad and plenty
+             of export tools leave one behind. Trim before judging. */
+          const text=decode(bytes).replace(/^\uFEFF/,"").trim();
+          let json=null;
+          try{ json=JSON.parse(text); }
+          catch(e){ skipped++; why.push(whyNot(f,"text")); return finish(); }
+          const raw=labelsIn(json).filter(looksLikeLabel);
+          if(!raw.length){ skipped++; why.push(whyNot(f,"text")); return finish(); }
+          raw.forEach(x=>{
+            if(docs.length>=MAX_DOCS){ full=true; return; }
+            const nd=cleanDoc(x);
+            /* A fresh identity, always. An imported file carries the ids it was
+               saved with, and reusing one would have two templates answering to
+               the same name inside the run planner. */
+            nd.id=uid("d_");
+            nd.name=uniqueDocName(nd.name);
+            nd.objects.forEach(o=>{ o.id=uid("o_"); });
+            stampUsed(nd);
+            docs.push(nd); added++;
+          });
+          finish();
+        };
+        /* ArrayBuffer, not text: see sniff() above. */
+        r.readAsArrayBuffer(f);
+      });
+    }
+
+    /* One hidden input, reused: a fresh one per click litters the document, and
+       the same file picked twice in a row fires no change event unless the value
+       is cleared first. */
+    let importInput=null;
+    function askForFile(){
+      if(!importInput){
+        /* NO accept FILTER AT ALL. A label may arrive named .btw, .json, .txt,
+           .label or nothing whatever, and a filter that guesses wrong greys out
+           the very file the operator came to import — with no explanation, in a
+           dialog that cannot show one. Everything is offered; what it actually
+           holds is decided by reading it, and whyNot() explains any refusal in
+           words. */
+        importInput=h("input",{type:"file",multiple:"multiple",
+          style:"display:none"});
+        importInput.addEventListener("change",()=>{
+          /* ⚠ COPY THE LIST FIRST. input.files is LIVE, and clearing the value
+             empties it — do that before the reads and there is nothing left to
+             read by the time they run. */
+          const picked=[].slice.call(importInput.files||[]);
+          importInput.value="";
+          importFiles(picked);
+        });
+      }
+      /* ⚠ ON document.body, NOT the studio root. paint() empties the root on
+         every repaint — including the repaint at the end of an import — so an
+         input parked there is thrown away and the NEXT click opens nothing. */
+      if(!importInput.isConnected) document.body.appendChild(importInput);
+      importInput.click();
+    }
+
     function galleryPane(){
       const wrap=h("div",{class:"ls-gal"});
       const total=docs.length;
@@ -1962,6 +2533,11 @@
           h("div",{class:"ls-hero-a"},[
             h("button",{class:"btn primary",onclick:()=>newBlank(),
               title:"It asks what you are printing on first",text:"＋  New label"}),
+            h("button",{class:"btn",onclick:askForFile,
+              title:"Bring in a label downloaded from a Label Studio. Any file name "+
+                    "will do — the contents decide. One file may hold several. "+
+                    "BarTender .btw files cannot be read."},
+              [ico("open",14),h("span",{text:"Import label…"})]),
             opened?h("button",{class:"btn",onclick:()=>{screen="design";paint();},
               text:"← Back to “"+doc().name+"”"}):null,
           ].filter(Boolean)),
@@ -2107,6 +2683,10 @@
               c.id=uid("d_"); c.name=(d.name+" copy").slice(0,60);
               c.objects.forEach(o=>o.id=uid("o_"));
               docs.push(c); docs=saveDocs(docs); paint(); toast("Duplicated",{type:"ok"}); }},"⧉"),
+            h("button",{class:"mini",
+              title:"Download “"+d.name+"” as a "+LABEL_EXT+" file — for backup, or to "+
+                    "import into another Chhaperia ERP. BarTender cannot open it.",
+              onclick:(e)=>{ e.stopPropagation(); downloadDoc(d); }},"⤓"),
             h("button",{class:"mini danger",title:"Delete",onclick:(e)=>{ e.stopPropagation();
               confirm("Delete the template “"+d.name+"”? This cannot be undone.",
                 {title:"Delete template",danger:true}).then(ok=>{
@@ -2639,6 +3219,25 @@
         h("button",{class:"ls-rfs",type:"button",
           title:full?"Leave full screen  (Esc)":"Fill the screen with the designer",
           onclick:toggleFull},ico("full",14)),
+        /* THE WAY OUT, in the top-right corner where a way out belongs.
+           The designer is a room you walked into from the library, and a room
+           needs a door you can SEE. One existed — right-click a document tab
+           for "Close", or find "Browse all labels…" inside the Open menu — but
+           both are doors only somebody who already knows about them can find.
+
+           It asks nothing before leaving, because nothing is at risk: this
+           only changes which screen is drawn. The edits stay in `docs`, the
+           library card shows them, and opening the label again picks up
+           exactly where it left off. A confirmation here would be asking
+           permission for something that costs nothing. */
+        h("button",{class:"ls-exit",type:"button",
+          title:dirty
+            ? "Back to the label library — this design keeps its unsaved changes"
+            : "Back to the label library",
+          onclick:()=>{ screen="gallery"; paint(); }},[
+          ico("chev",14),
+          h("span",{text:"My Labels"}),
+        ]),
       ]);
     }
 
@@ -4670,6 +5269,25 @@
           d.mode==="roll"
             ? "The page becomes the label itself: "+d.w+" × "+d.h+" mm, no margins. This is what a Zebra or TSC printer expects."
             : "Labels are tiled across the page; the grid is worked out from the sizes below."));
+        /* PRINT ORDER lives here rather than on the print screen because it is
+           a fact about the stock, not about one run: a die-cut sheet is fed the
+           way it is fed. It decides which physical die-cut is number one, so it
+           is also what the numbered sheet on the print screen counts by — and
+           what "Start at position 7" therefore means.
+           On a roll there is one row, so "across" and "down" are the same
+           journey and only the start corner does anything; offering four
+           identical-looking choices there would be a lie. */
+        right.appendChild(fld("Print order",
+          sel1(d.printOrder||"th",
+            (d.mode==="roll"?ORDERS.filter(o=>o.v==="th"||o.v==="bh"):ORDERS)
+              .map(o=>({v:o.v,l:o.l})),
+            v=>{ d.printOrder=v; redraw(); }),
+          (ORDERS.find(o=>o.v===(d.printOrder||"th"))||ORDERS[0]).d));
+        right.appendChild(fld("Copies of each",
+          nInput(d.copies,v=>{d.copies=Math.max(1,Math.min(500,Math.round(v)||1));redraw();},1,1,500),
+          "How many stickers one label is worth — two drums off the same reel "+
+          "carry the same number, so a copy repeats the label rather than "+
+          "advancing it."));
         if(d.mode==="sheet"){
           right.appendChild(row(2,[
             fld("Page",sel1(d.page,PAGES.map(p=>({v:p.v,l:p.v==="custom"?"Custom":p.v})),
@@ -4734,13 +5352,15 @@
     /* ---- WHAT THIS RUN IS, as against what the design says ----
        Quantity and copies are remembered on the design, because a label that
        is always printed 24-up is always printed 24-up. Everything else here
-       belongs to THIS run and nothing else: which serial it carries on from,
-       what the prompts were answered with, and how many die-cuts are already
-       gone off the sheet in the drawer. None of those are facts about the
-       design, and writing them into it would be writing down a guess. */
-    let runOpts={qty:null,copies:null,serialStart:"",prompts:{},skip:0,
+       belongs to THIS run and nothing else: which serial it carries on from
+       and what the prompts were answered with. Neither is a fact about the
+       design, and writing them into it would be writing down a guess.
+
+       WHERE THE RUN STARTS IS NOT HERE ANY MORE. A part-used sheet used to be
+       one number for the whole job, which could only ever describe a job with
+       one design on it. It now lives per design, in planAt — see arrangePlan. */
+    let runOpts={qty:null,copies:null,serialStart:"",prompts:{},
                  cut:false,reverse:false};
-    const skipFor=()=>doc().mode==="roll"?0:Math.max(0,Math.round(+runOpts.skip||0));
 
     /* THE SERIALS A RUN WILL CONSUME.
        A serialised run eats a block of numbers that can never be handed out
@@ -4768,23 +5388,57 @@
        It is one model, not two. A plain run of 50 of one design and
        a hand-mixed sheet are the same object — a list of pages,
        each a list of positions — so there is no "simple mode" to
-       leave and no "advanced mode" to find. Quantities fill the
-       pages for you; after that every position is yours to change.
+       leave and no "advanced mode" to find.
+
+       WHERE EACH DESIGN GOES IS TYPED, NOT PAINTED. Every die-cut on
+       the sheet preview carries the number it prints in, and those
+       are the numbers the operator writes against a design: "1-8, 12"
+       puts that label on those nine die-cuts and nowhere else. A
+       design with no positions typed simply flows, filling whatever
+       the hand-placed ones left.
 
        Only designs cut to the SAME stock may share the run: same
        size, same page, same margins. The palette offers those and
        nothing else, so a mismatch cannot reach the printer.
        ============================================================ */
     let plan=[];          // [[docId|"" × perPage], …] — one entry per page
-    let planPage=0;       // the page open in the editor
-    let brush=null;       // the design being placed, "" for the eraser
+    let planPage=0;       // the page being looked at
     let planQty={};       // docId → how many, for Arrange
+    let planAt={};        // docId → the die-cut IT starts on, as typed text
+    let planNote="";      // what Arrange had to bend, said out loud
+    /* WHICH DESIGNS ARE ON THIS RUN, in the order they were put there. The run
+       opens holding ONLY the label you came in with — every other template cut
+       to the same stock is a candidate, not a participant, and is added by
+       hand. A sheet quietly filling itself with every label of that size is
+       not a convenience, it is a printed mistake. */
+    let planUse=null;
+    let planAdding=false; // the "add another label" picker, open or shut
+
+    /* POSITIONS RUN ON ACROSS THE WHOLE RUN. A 65-up sheet numbers 1..65, and
+       sheet two carries straight on at 66 — so a die-cut has ONE address for
+       the length of the job and "starts at 70" needs no page number beside it.
+       Returned 0-based; page and slot are worked out from it by division. */
+    const MAX_PLAN_PAGES=50;
+    function startOf(id,per){
+      const raw=String(planAt[id]==null?"":planAt[id]).trim();
+      if(!raw) return {at:null, bad:""};
+      if(!/^\d+$/.test(raw)) return {at:null, bad:raw};
+      const n=+raw;
+      /* Refused, not clamped: silently turning 9000 into the last die-cut puts
+         labels somewhere nobody asked for. */
+      if(n<1||n>per*MAX_PLAN_PAGES) return {at:null, bad:raw};
+      return {at:n-1, bad:""};
+    }
 
     const perPage=()=>Math.max(1,sheetGrid(doc()).perPage);
     const blankPage=()=>new Array(perPage()).fill("");
-    /* Every design cut the same way as the open one — the only ones that may
-       share a page with it. */
+    /* Every design cut the same way as the open one — the only ones that MAY
+       share a page with it. Candidates for the run, not members of it. */
     const stockMates=()=>docs.filter(d=>sameStock(d,doc()));
+    /* The ones actually on the run, in the order they were added. Anything
+       deleted or re-sized out of the stock since drops out on its own. */
+    const usedDocs=()=>(planUse||[]).map(id=>docs.find(x=>x.id===id))
+      .filter(m=>m&&sameStock(m,doc()));
 
     /* The plan always has at least one page, and every page is exactly as long
        as the stock has die-cuts — the label size can change under it. */
@@ -4795,49 +5449,141 @@
       if(planPage>=plan.length) planPage=plan.length-1;
       if(planPage<0) planPage=0;
     }
-    /* Fill the pages from the quantities, in palette order, leaving the
-       already-used positions of the first sheet empty. Copies of each land
-       side by side, which is what a "copy" is. */
-    function arrangePlan(){
-      const per=perPage(), skip=Math.min(per-1,skipFor());
-      const cop=Math.max(1,runOpts.copies==null?doc().copies:runOpts.copies);
-      const queue=[];
-      stockMates().forEach(d=>{
-        const n=Math.max(0,Math.round(planQty[d.id]||0));
-        for(let i=0;i<n;i++) for(let c=0;c<cop;c++) queue.push(d.id);
-      });
-      if(!queue.length){ toast("Give at least one design a quantity",{type:"warn"}); return; }
+    /* BUILD THE PAGES — EVERY DESIGN FROM ITS OWN STARTING DIE-CUT.
+
+       Each design in the palette carries two numbers: how many, and which
+       position it begins on. It is laid down from that die-cut onwards, one
+       after another, and it steps over anything an earlier design already
+       occupies rather than printing over it. A design left without a start
+       simply carries on from where the previous one finished, which is what
+       an operator means by "and then the rest".
+
+       This is per DESIGN, not per run: two labels on one sheet is the ordinary
+       case here — 40 of Alpha from die-cut 1 and 44 of Bravo from die-cut 41 —
+       and a single run-wide start could never express it.
+
+       ⚠ THE WALK IS IN PRINT ORDER, not reading order. "Position 7" means the
+       die-cut the sheet preview draws a 7 on, and on a bottom-up or
+       column-wise order that is not the seventh cell of the page. orderSlot is
+       the only thing that knows which one it is, and it is the very function
+       the preview numbers with — so the number typed and the number printed
+       cannot come apart. */
+    function arrangePlan(opts){
+      opts=opts||{};
+      const d0=doc(), g=sheetGrid(d0), per=perPage();
+      const slot=orderSlot(d0,g);
+      const cop=Math.max(1,runOpts.copies==null?d0.copies:runOpts.copies);
+      const mates=usedDocs();
+      planNote="";
       plan=[blankPage()];
-      let at=skip;
-      queue.forEach(id=>{
-        if(at>=per){ plan.push(blankPage()); at=0; }
-        plan[plan.length-1][at++]=id;
+
+      const bad=[], moved=[];
+      let placed=0;
+
+      /* Lay one design down from a given address, stepping over anything
+         already there and opening fresh sheets as it needs them. Returns where
+         it finished, so the next design without a start of its own can carry
+         straight on. */
+      function lay(d,n,at){
+        let pg=Math.floor(at/per), i=at%per;
+        while(plan.length<=pg) plan.push(blankPage());
+        let bumped=false;
+        for(let k=0;k<n;k++){
+          for(;;){
+            if(i>=per){ pg++; i=0; }
+            if(!plan[pg]) plan[pg]=blankPage();
+            if(!plan[pg][slot(i)]) break;
+            if(k===0) bumped=true;
+            i++;
+          }
+          const p=slot(i);
+          if(p>=0&&p<per){ plan[pg][p]=d.id; placed++; }
+          i++;
+        }
+        if(bumped) moved.push(d.name+" → "+(at+1)+" was taken");
+        return pg*per+i;
+      }
+
+      /* TWO PASSES, AND THE ORDER MATTERS. Every design that was GIVEN a start
+         is laid down first, all of them, before any design that was not.
+         Otherwise a design left to flow would reach position 20 and take it
+         while the design actually asked for position 20 was still waiting its
+         turn further down the list — the typed number would lose to a blank
+         box, which is exactly backwards. */
+      const pinned=[], flowing=[];
+      mates.forEach(d=>{
+        const s=startOf(d.id,per);
+        if(s.bad&&bad.indexOf(s.bad)<0) bad.push(s.bad);
+        const n=Math.max(0,Math.round(planQty[d.id]||0))*cop;
+        if(!n) return;
+        (s.at==null?flowing:pinned).push({d:d,n:n,at:s.at});
       });
+      pinned.forEach(e=>lay(e.d,e.n,e.at));
+      let cur=0;                       // where the flowing ones carry on from
+      flowing.forEach(e=>{ cur=lay(e.d,e.n,cur); });
+
+      const notes=[];
+      if(bad.length) notes.push("ignored “"+bad.slice(0,4).join("”, “")+"”"+
+        (bad.length>4?" and more":"")+" — positions run 1 to "+(per*MAX_PLAN_PAGES));
+      if(moved.length) notes.push(moved.slice(0,3).join(" · ")+
+        (moved.length>3?" · …":"")+", so it went to the next free die-cut");
+      planNote=notes.join(" · ");
+
+      if(!placed){
+        if(!opts.quiet) toast("Give at least one design a quantity",{type:"warn"});
+        planPage=0;
+        return false;
+      }
       planPage=0;
       return true;
     }
     /* The plan as a flat list of cells for the renderer, with a per-design
        counter so each design's serials run through ITS OWN labels rather than
        counting positions on a page. */
-    function planCells(){
+    function planCells(opts){
       const now=new Date(), seen={};
+      const base=doc(), g=sheetGrid(base), per=Math.max(1,g.perPage);
+      const slot=orderSlot(base,g);
       const out=[];
-      plan.forEach(p=>p.forEach(id=>{
-        if(!id) return out.push(null);
-        const d=docs.find(x=>x.id===id);
-        if(!d) return out.push(null);
-        const n=seen[id]||0; seen[id]=n+1;
-        out.push({d,ctx:{index:n,now,prompts:runOpts.prompts,
-          serialStart:runOpts.serialStart}});
-      }));
+      plan.forEach(p=>{
+        /* WALKED IN PRINT ORDER, FILLED IN READING ORDER. composeHtml lays the
+           cells out left-to-right down the page, so the array it is handed has
+           to stay in reading order — but a design's serials must advance the
+           way the sheet actually prints, and on a bottom-up order that is a
+           different journey. Counting through orderSlot is what puts the
+           seventh number of the run on the die-cut the preview draws a 7 on. */
+        const page=new Array(per).fill(null);
+        for(let i=0;i<per;i++){
+          const pos=slot(i);
+          if(pos<0||pos>=per) continue;
+          const id=p[pos];
+          if(!id) continue;
+          const d=docs.find(x=>x.id===id);
+          if(!d) continue;
+          const n=seen[id]||0; seen[id]=n+1;
+          page[pos]={d,ctx:{index:n,now,prompts:runOpts.prompts,
+            serialStart:runOpts.serialStart}};
+        }
+        out.push.apply(out,page);
+      });
+      if(opts&&opts.raw) return out;
       return runOpts.reverse?out.slice().reverse():out;
     }
+    /* One page of the plan, carrying the WHOLE run's numbering — so page three
+       of a serialised job does not start counting at one again. */
+    const pageCells=(i)=>{
+      const per=perPage();
+      return planCells({raw:true}).slice(i*per,(i+1)*per);
+    };
     const planTotal=()=>plan.reduce((n,p)=>n+p.filter(Boolean).length,0);
     /* a stable colour per design, so a position is recognisable at thumbnail
        size without reading anything */
+    /* Colour by the order the design was ADDED to the run, not by its place in
+       the library: the first label you came in with is always the first colour,
+       whatever else happens to be cut to the same stock. */
     const hueOf=(id)=>{
-      const m=stockMates();
-      const i=m.findIndex(d=>d.id===id);
+      const list=(planUse&&planUse.length)?planUse:stockMates().map(m=>m.id);
+      const i=list.indexOf(id);
       return i<0?0:i%8;
     };
 
@@ -4845,6 +5591,16 @@
       const d=doc();
       const body=h("div",{class:"ls-pp"});
       const redraw=()=>{ body.innerHTML=""; build(); };
+      /* A redraw that does not steal the caret. The panel is rebuilt whole on
+         every change — the cheapest way to keep the numbered sheet, the page
+         strip and the totals agreeing — so the field that caused the rebuild
+         has to be found again afterwards, or the second click on a spinner
+         lands on an element that no longer exists. */
+      const redrawKeeping=(key)=>{
+        redraw();
+        const el=body.querySelector('[data-f="'+key+'"]');
+        if(el){ el.focus(); if(el.select) el.select(); }
+      };
 
       const num=(val,onCh,lo,hi,w)=>{
         const el=h("input",{class:"ls-pp-in",type:"number",step:"1",
@@ -4857,212 +5613,371 @@
         h("span",{class:"ls-pp-l",text:label}), el,
         hint?h("span",{class:"ls-pp-h",text:hint}):null,
       ].filter(Boolean));
-      const check=(label,val,onCh)=>{
-        const el=h("input",{type:"checkbox"}); el.checked=!!val;
-        el.addEventListener("change",()=>{ onCh(el.checked); redraw(); });
-        return h("label",{class:"ls-pp-chk"},[el,h("span",{text:label})]);
-      };
+
+      /* A BLANK LABEL CUT TO THIS EXACT STOCK. Cloned from the open design's
+         paper — size, page, margins, gaps, feed order — and nothing else: no
+         artwork, because it is a new label and not a copy of this one. Those
+         are precisely the fields sameStock() weighs, so the result is
+         guaranteed to be allowed on the sheet it was made for. */
+      function newMate(){
+        if(docs.length>=MAX_DOCS){
+          toast("That is the "+MAX_DOCS+"-template limit",{type:"warn"});
+          return null;
+        }
+        const b=doc();
+        const nd=cleanDoc({
+          name:"Label "+(docs.length+1),
+          w:b.w, h:b.h, shape:b.shape, radius:b.radius, mode:b.mode,
+          page:b.page, pageW:b.pageW, pageH:b.pageH, landscape:b.landscape,
+          mTop:b.mTop, mBottom:b.mBottom, mLeft:b.mLeft, mRight:b.mRight,
+          gapX:b.gapX, gapY:b.gapY, autoFit:b.autoFit,
+          rollW:b.rollW, across:b.across, rGapX:b.rGapX, rGapY:b.rGapY,
+          printOrder:b.printOrder, objects:[]});
+        stampUsed(nd);
+        docs.push(nd);
+        dirty=true;
+        return nd;
+      }
+
+      /* A BLANK LABEL IS NOT A LABEL YET. Making one and leaving the operator
+         staring at the print screen would put an empty sticker on the sheet and
+         call it done — so the new template is added to the run, the dialog
+         steps out of the way, and the designer opens on it. Pressing Print
+         again comes back to a run that still holds BOTH, because the new label
+         is on planUse and reopening only re-seeds when the open design is not. */
+      function startNewLabel(){
+        const nd=newMate();
+        if(!nd) return;
+        planUse.push(nd.id);
+        mo.close();
+        openDoc(docs.length-1);
+        toast("Design “"+nd.name+"”, then press Print again — it will be on the "+
+              "sheet with the one you started from",{type:"ok"});
+      }
 
       function build(){
         ensurePlan();
         const g=sheetGrid(d), per=perPage();
-        const mates=stockMates();
-        /* ⚠ null, not falsy. The ERASER is "" — a deliberate choice — and a
-           !brush test threw it away on the very next redraw, so a position
-           could never be emptied by clicking it. */
-        if(brush==null&&mates.length) brush=mates[0].id;
+        const mates=stockMates();      // what COULD share the sheet
+        const using=usedDocs();        // what actually is on the run
         const total=planTotal();
 
-        /* ---- the summary, across the top ---- */
+        /* ---- THE ANSWER, ACROSS THE TOP ----
+           Three numbers and the stock they are true of. "Free" is the one that
+           earns its place on a shared sheet: it is what the next design's start
+           box has left to aim at, and counting empty die-cuts by eye off an
+           84-up preview is exactly the job a screen should be doing. */
+        const used=(plan[planPage]||[]).filter(Boolean).length;
+        const stat=(n,l,cls)=>h("div",{class:"ls-pp-sum"+(cls?" "+cls:"")},[
+          h("b",{text:String(n)}), h("span",{text:l})]);
         body.appendChild(h("div",{class:"ls-pp-top"+(g.perPage?"":" bad")},[
-          h("div",{class:"ls-pp-sum"},[
-            h("b",{text:String(total)}),
-            h("span",{text:total===1?"label":"labels"}),
-          ]),
+          stat(total,total===1?"label":"labels"),
           h("div",{class:"ls-pp-arrow",text:"→"}),
-          h("div",{class:"ls-pp-sum"},[
-            h("b",{text:String(plan.length)}),
-            h("span",{text:d.mode==="roll"
-              ? (plan.length===1?"page":"pages")
-              : (plan.length===1?"sheet":"sheets")}),
-          ]),
+          stat(plan.length,d.mode==="roll"
+            ? (plan.length===1?"page":"pages")
+            : (plan.length===1?"sheet":"sheets")),
+          d.mode==="sheet"&&g.perPage
+            ? stat(per-used,"free on sheet","quiet")
+            : null,
           h("div",{class:"ls-pp-meta"},[
-            h("div",{text:sizeS(d.w,d.h)+(d.mode==="roll"?" · roll"
-              :" · "+per+" per "+d.page+" sheet")}),
+            h("div",{class:"ls-pp-chip"},[
+              ico("rect",12),
+              h("span",{text:sizeS(d.w,d.h)+(d.mode==="roll"?" · roll"
+                :" · "+per+" per "+d.page)}),
+            ]),
             h("div",{class:"ls-pp-h",text:d.mode==="roll"
               ? "A roll takes one label per page"
               : g.cols+" across × "+g.rows+" down"}),
           ]),
-        ]));
+        ].filter(Boolean)));
         if(!g.perPage) body.appendChild(h("div",{class:"ls-pp-warn"},
           "The label is bigger than the printable area. Fix the size or the "+
           "margins in Page setup — nothing will come out right."));
 
+        /* THREE COLUMNS: what you are deciding, what it looks like, and where
+           it lands. They are three different questions and they get three
+           different columns rather than one long scroll. */
         const main=h("div",{class:"ls-pp-main"});
         const side=h("div",{class:"ls-pp-side"});
+        const mid=h("div",{class:"ls-pp-mid"});
         const right=h("div",{class:"ls-pp-right"});
+        /* Every group of the screen is a card, so the eye can tell one decision
+           from the next without reading a word of it. */
+        const card=(...kids)=>{
+          const c=h("div",{class:"ls-pp-card"});
+          kids.flat().filter(Boolean).forEach(k=>c.appendChild(k));
+          return c;
+        };
 
-        /* ---- WHAT TO PRINT ---- */
-        side.appendChild(h("div",{class:"ls-pp-sec",text:"What to print"}));
-        if(mates.length<2) side.appendChild(h("div",{class:"ls-pp-note"},
-          "Only this design is cut to "+sizeS(d.w,d.h)+
-          (d.mode==="roll"?"":" on "+d.page)+". Another label of the same size "+
-          "would appear here and could share the run."));
-        const list=h("div",{class:"ls-pp-designs"});
-        mates.forEach(m=>{
-          const on=brush===m.id;
-          list.appendChild(h("div",{class:"ls-pp-d"+(on?" on":""),
-            "data-k":String(hueOf(m.id)),
-            title:"Click to pick “"+m.name+"”, then click positions to place it",
-            onclick:(e)=>{ if(e.target.closest&&e.target.closest("input")) return;
-              brush=m.id; redraw(); }},[
-            h("span",{class:"ls-pp-dot"}),
-            h("span",{class:"ls-pp-dn",text:m.name}),
-            num(planQty[m.id]||0,v=>{ planQty[m.id]=Math.max(0,Math.min(5000,Math.round(v)||0)); },
-              0,5000,64),
-          ]));
-        });
-        list.appendChild(h("div",{class:"ls-pp-d ls-pp-eraser"+(brush===""?" on":""),
-          title:"Pick the eraser, then click positions to empty them",
-          onclick:()=>{ brush=""; redraw(); }},[
-          h("span",{class:"ls-pp-dot"}),
-          h("span",{class:"ls-pp-dn",text:"Leave empty"}),
+        /* ---- WHAT TO PRINT, AND WHERE ---- */
+        const sideCard=card();
+        side.appendChild(sideCard);
+        sideCard.appendChild(h("div",{class:"ls-pp-sec"},[
+          h("span",{text:"What to print"}),
+          h("span",{class:"ls-pp-h",text:"how many of each, and where they start"}),
         ]));
-        side.appendChild(list);
-        side.appendChild(h("button",{class:"ls-pp-go",type:"button",
-          title:"Lay those quantities out across as many pages as they need",
+        const list=h("div",{class:"ls-pp-designs"});
+        using.forEach(m=>{
+          const mine=plan.reduce((n,p)=>n+p.filter(x=>x===m.id).length,0);
+          const row=h("div",{class:"ls-pp-d"+(mine?" live":""),
+            "data-k":String(hueOf(m.id)),
+            title:m.name+" — this is the colour it wears on the sheet alongside"},[
+            h("div",{class:"ls-pp-dtop"},[
+              h("span",{class:"ls-pp-dot"}),
+              h("span",{class:"ls-pp-dn",text:m.name}),
+              mine?h("span",{class:"ls-pp-dq",text:"×"+mine}):null,
+              (function(){
+                const q=num(planQty[m.id]||0,
+                  v=>{ planQty[m.id]=Math.max(0,Math.min(5000,Math.round(v)||0));
+                       arrangePlan({quiet:true}); redrawKeeping("q"+m.id); },0,5000,64);
+                q.setAttribute("data-f","q"+m.id);
+                q.title="How many of this design to print";
+                return q;
+              })(),
+              /* The label you came in with is the run; the ones you added are
+                 guests, and a guest you cannot show out is a trap. */
+              m.id===d.id?null:h("button",{class:"ls-pp-dx",type:"button",
+                title:"Take “"+m.name+"” off this run",
+                onclick:()=>{ planUse=planUse.filter(x=>x!==m.id);
+                  delete planQty[m.id]; delete planAt[m.id];
+                  arrangePlan({quiet:true}); redraw(); }},ico("close",11)),
+            ].filter(Boolean)),
+          ]);
+          /* WHERE THIS ONE STARTS. Its own die-cut, per design — that is the
+             whole point of a shared sheet. Only on a sheet: a roll has one
+             label per page, so there is no position to choose and a box
+             offering one would be a lie. */
+          if(d.mode==="sheet"&&per>1){
+            const el=h("input",{class:"ls-pp-in ls-pp-at",type:"number",
+              step:"1",min:"1",max:String(per),
+              placeholder:"next free",
+              title:"The die-cut this design begins on — read it off the "+
+                    "numbered sheet alongside. Leave it empty to carry on "+
+                    "from the design above."});
+            el.value=planAt[m.id]||"";
+            el.setAttribute("data-f","at"+m.id);
+            /* On CHANGE, not on input: re-laying the whole run between two
+               keystrokes of "12" would place it at 1 first, and the sheet
+               would jump somewhere the operator never asked for. */
+            el.addEventListener("change",()=>{
+              planAt[m.id]=el.value.trim();
+              arrangePlan({quiet:true}); redrawKeeping("at"+m.id);
+            });
+            row.appendChild(h("label",{class:"ls-pp-dpos"},[
+              h("span",{text:"starts at"}), el,
+            ]));
+          }
+          list.appendChild(row);
+        });
+        sideCard.appendChild(list);
+
+        /* ---- ADD ANOTHER LABEL ----
+           A second design joins the sheet only when it is asked for. The pick
+           list offers what is ALREADY cut to this stock, because those are the
+           only ones that can share the paper; if nothing is, one can be made
+           to fit here and now rather than sending the operator back to the
+           gallery to work out the margins by hand. */
+        if(d.mode!=="roll"||per>1){
+          const spare=mates.filter(m=>using.indexOf(m)<0);
+          if(!planAdding){
+            sideCard.appendChild(h("button",{class:"ls-pp-addl",type:"button",
+              title:spare.length
+                ? "Put another label of this same size on the sheet"
+                : "Nothing else is cut to "+sizeS(d.w,d.h)+" — this starts a new one",
+              /* NOTHING TO PICK FROM MEANS THERE IS NO PICKER. Opening a list
+                 whose only entry is "make one" is a question with one answer;
+                 go straight to the designer instead. */
+              onclick:()=>{ if(!spare.length) return startNewLabel();
+                planAdding=true; redraw(); }},[
+              ico("plus",14),
+              h("span",{text:spare.length?"Add another label":"Add another label — design it"}),
+            ]));
+          } else {
+            const pick=h("div",{class:"ls-pp-pick"});
+            pick.appendChild(h("div",{class:"ls-pp-h"},
+              spare.length
+                ? "Already cut to "+sizeS(d.w,d.h)+" — pick one to share the sheet:"
+                : "Nothing else is cut to "+sizeS(d.w,d.h)+" yet."));
+            spare.forEach(m=>{
+              const n=(m.objects||[]).length;
+              pick.appendChild(h("button",{class:"ls-pp-pk",type:"button",
+                onclick:()=>{ planUse.push(m.id); planAdding=false;
+                  arrangePlan({quiet:true}); redraw(); }},[
+                h("span",{class:"ls-pp-pkn",text:m.name}),
+                h("span",{class:"ls-pp-h",text:n?(n+" object"+(n===1?"":"s")):"empty"}),
+              ]));
+            });
+            pick.appendChild(h("button",{class:"ls-pp-pk new",type:"button",
+              title:"A blank label cut to exactly this stock — opens in the designer",
+              onclick:()=>{ planAdding=false; startNewLabel(); }},[
+              ico("newdoc",13),
+              h("span",{class:"ls-pp-pkn",text:"Create a new label this size…"}),
+            ]));
+            pick.appendChild(h("button",{class:"ls-pp-pkx",type:"button",
+              onclick:()=>{ planAdding=false; redraw(); },text:"Cancel"}));
+            sideCard.appendChild(pick);
+          }
+        }
+
+        if(d.mode==="sheet"&&per>1)
+          sideCard.appendChild(h("div",{class:"ls-pp-h"},
+            using.length>1
+              ? "Each design begins on the die-cut you give it and runs on from "+
+                "there. Leave one empty and it follows the design above. "+
+                "Positions carry on across sheets."
+              : "Leave the start empty to begin at die-cut 1, or type the first "+
+                "free one on a part-used sheet."));
+        if(planNote) sideCard.appendChild(h("div",{class:"ls-pp-flag",text:planNote}));
+
+        sideCard.appendChild(h("button",{class:"ls-pp-go",type:"button",
+          title:"Lay the run out again from the quantities and the starts typed above",
           onclick:()=>{ if(arrangePlan()) redraw(); }},[
           ico("grid",14), h("span",{text:"Arrange the pages"}),
         ]));
 
-        /* ---- HOW IT PRINTS ---- */
-        side.appendChild(h("div",{class:"ls-pp-sec",text:"How it prints"}));
-        side.appendChild(field("Copies of each",
-          num(Math.max(1,runOpts.copies==null?d.copies:runOpts.copies),
-            v=>{ runOpts.copies=Math.max(1,Math.min(500,Math.round(v)||1));
-                 d.copies=runOpts.copies; touch(); },1,500),
-          "used when the pages are arranged"));
-        if(d.mode==="sheet"&&per>1)
-          side.appendChild(field("Already used on the first sheet",
-            num(Math.min(per-1,skipFor()),
-              v=>{ runOpts.skip=Math.max(0,Math.min(per-1,Math.round(v)||0)); },0,per-1),
-            "left empty when the pages are arranged"));
+        /* A PROMPT IS NOT A PRINT SETTING. The design asks for it and cannot
+           render a truthful label without an answer, so it gets its own card
+           rather than being buried among the quantities. */
+        const prompts=promptsOf(d);
+        if(prompts.length){
+          const pc=card(h("div",{class:"ls-pp-sec"},[
+            h("span",{text:"The design asks for"}),
+            h("span",{class:"ls-pp-h",text:"filled in on every label of the run"}),
+          ]));
+          prompts.forEach(p=>{
+            if(runOpts.prompts[p.key]==null) runOpts.prompts[p.key]=p.def||"";
+            const el=h("input",{class:"ls-pp-in",type:"text",placeholder:p.def||""});
+            el.value=runOpts.prompts[p.key];
+            el.addEventListener("input",()=>{ runOpts.prompts[p.key]=el.value; });
+            pc.appendChild(field(p.key,el));
+          });
+          side.appendChild(pc);
+        }
+
+        /* The block of serial numbers this run eats, before it eats them.
+           Reading the first and the last back BEFORE the job goes out is the
+           difference between noticing an overlap and finding it on a carton
+           three weeks later. */
         if(d.objects.some(o=>o.src&&o.src.kind==="serial")){
-          const el=h("input",{class:"ls-pp-in",type:"text",
-            placeholder:"the design’s own start"});
-          el.value=runOpts.serialStart;
-          el.addEventListener("input",()=>{ runOpts.serialStart=el.value.replace(/\D/g,""); });
-          side.appendChild(field("Start the serial at",el,
-            "carry on from where the last run finished"));
-          /* the block of numbers this run eats, before it eats them */
           const own=plan.reduce((n,p)=>n+p.filter(x=>x===d.id).length,0);
           const sp=serialSpan(own);
-          if(sp) side.appendChild(h("div",{class:"ls-pp-span"},[
-            h("b",{text:sp.first}), h("span",{class:"ls-pp-arrow",text:"→"}),
-            h("b",{text:sp.last}),
-            h("span",{class:"ls-pp-h",
-              text:sp.count+" number"+(sp.count===1?"":"s")+" — used up for good"}),
-          ]));
+          if(sp) side.appendChild(card(
+            h("div",{class:"ls-pp-sec"},[
+              h("span",{text:"Serial numbers"}),
+              h("span",{class:"ls-pp-h",text:"used up for good"}),
+            ]),
+            h("div",{class:"ls-pp-span"},[
+              h("b",{text:sp.first}), h("span",{class:"ls-pp-arrow",text:"→"}),
+              h("b",{text:sp.last}),
+              h("span",{class:"ls-pp-h",text:sp.count+" number"+(sp.count===1?"":"s")}),
+            ])));
         }
-        const prompts=promptsOf(d);
-        prompts.forEach(p=>{
-          if(runOpts.prompts[p.key]==null) runOpts.prompts[p.key]=p.def||"";
-          const el=h("input",{class:"ls-pp-in",type:"text",placeholder:p.def||""});
-          el.value=runOpts.prompts[p.key];
-          el.addEventListener("input",()=>{ runOpts.prompts[p.key]=el.value; });
-          side.appendChild(field(p.key,el,"asked for by the design"));
-        });
-        /* PRINT ORDER. On a roll there is one row, so "across" and "down" are
-           the same journey and only the start corner does anything — offering
-           four identical-looking choices there would be a lie, so the two that
-           differ are the two that show. */
-        side.appendChild(field("Print order",
-          sel1(d.printOrder||"th",
-            (d.mode==="roll"?ORDERS.filter(o=>o.v==="th"||o.v==="bh"):ORDERS)
-              .map(o=>({v:o.v,l:o.l})),
-            v=>{ d.printOrder=v; touch(); redraw(); }),
-          (ORDERS.find(o=>o.v===(d.printOrder||"th"))||ORDERS[0]).d));
-        if(d.mode==="sheet")
-          side.appendChild(check("Print cut lines between labels",runOpts.cut,
-            v=>{runOpts.cut=v;}));
-        side.appendChild(check("Print in reverse order",runOpts.reverse,
-          v=>{runOpts.reverse=v;}));
 
         /* ---- WHAT IT WILL LOOK LIKE ----
            Two pictures, the same two the PO label wizard shows, because the
            question before a print run is always the same pair: is the sticker
            itself right, and does the sheet of them land where the die is. Both
            are rendered through the very functions that print — oneHtml and
-           sheetHtml — so a preview cannot flatter the output. */
-        right.appendChild(h("div",{class:"ls-pp-sec"},[
-          h("span",{text:"The label"}),
-          h("span",{class:"ls-pp-h",text:"one sticker, exactly as it prints"}),
-        ]));
+           composeHtml — so a preview cannot flatter the output. */
         {
           const ctx0={index:0,now:new Date(),prompts:runOpts.prompts,
             serialStart:runOpts.serialStart};
-          const k=Math.min(250/(d.w*PX_MM),190/(d.h*PX_MM),1.6);
-          right.appendChild(h("div",{class:"ls-pp-one"},[
-            h("div",{class:"wz-frame",
-              style:`width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
-              h("iframe",{srcdoc:oneHtml(d,ctx0),scrolling:"no","aria-hidden":"true",
-                tabindex:"-1",
-                style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${k.toFixed(4)});`+
-                      `transform-origin:top left`})),
-          ]));
-          right.appendChild(h("div",{class:"ls-pp-cap",text:sizeS(d.w,d.h)}));
+          const k=Math.min(360/(d.w*PX_MM),230/(d.h*PX_MM),2.4);
+          mid.appendChild(card(
+            h("div",{class:"ls-pp-sec"},[
+              h("span",{text:"The label"}),
+              h("span",{class:"ls-pp-h",text:"one sticker, exactly as it prints"}),
+            ]),
+            h("div",{class:"ls-pp-one"},[
+              h("div",{class:"wz-frame",
+                style:`width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
+                h("iframe",{srcdoc:oneHtml(d,ctx0),scrolling:"no","aria-hidden":"true",
+                  tabindex:"-1",
+                  style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${k.toFixed(4)});`+
+                        `transform-origin:top left`})),
+            ]),
+            h("div",{class:"ls-pp-cap",text:sizeS(d.w,d.h)})));
         }
 
-        /* the sheet, laid out, with the run numbered the way it will print */
+        /* THE SHEET, AS A BOARD OF ADDRESSES.
+           One tile per die-cut, laid out the way the stock is — as many across
+           as the sheet is — and numbered 1..n in PRINT order. It is a
+           schematic, not a scale drawing, and that is the point: these numbers
+           are what gets typed into "starts at", so they have to be readable at
+           a glance rather than faithful to a millimetre. The scale drawing is
+           the page thumbnail in the middle column, which stays honest. */
         if(g.perPage){
-          right.appendChild(h("div",{class:"ls-pp-sec"},[
+          const cells=pageCells(planPage);
+          const slotOf=orderSlot(d,g);
+          const sheetCard=card(h("div",{class:"ls-pp-sec"},[
             h("span",{text:d.mode==="roll"?"On the web":"On the sheet"}),
             h("span",{class:"ls-pp-h",text:"numbered in print order"}),
           ]));
-          const k=Math.min(300/(g.pgW*PX_MM),330/(g.pgH*PX_MM));
-          const wrap=h("div",{class:"ls-pp-sheet",
-            style:`width:${(g.pgW*PX_MM*k).toFixed(1)}px;height:${(g.pgH*PX_MM*k).toFixed(1)}px`});
-          wrap.appendChild(h("iframe",{
-            srcdoc:sheetHtml(d,
-              buildRun(d,{qty:Math.max(1,Math.min(per,total||per)),copies:1,
-                prompts:runOpts.prompts,serialStart:runOpts.serialStart}),
-              {onlyPage:0,skip:skipFor(),cut:runOpts.cut}),
-            scrolling:"no","aria-hidden":"true",tabindex:"-1",
-            style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k.toFixed(4)});`+
-                  `transform-origin:top left`}));
-          /* The numbers are drawn OVER the sheet, from the same orderSlot() the
-             printer uses — so the 7 on screen is the die-cut that gets label 7. */
-          const slotOf=orderSlot(d,g);
-          const roll=d.mode==="roll";
-          const padX=roll?Math.max(0,(g.pgW-(g.cols*d.w+(g.cols-1)*(+d.rGapX||0)))/2):d.mLeft;
-          const padY=roll?(+d.rGapY||0)/2:d.mTop;
-          const gx=roll?(+d.rGapX||0):d.gapX, gy=roll?0:d.gapY;
-          /* EVERY die-cut is numbered, not just the ones this run fills. The
-             question the numbers answer is "which way does the count run", and
-             a run of one would otherwise draw a single 1 and say nothing about
-             the order at all. The artwork underneath still shows only what
-             actually prints. */
+          right.appendChild(sheetCard);
+
+          /* A tile shows the real artwork while there is room to see it. Past
+             that many, every tile would be a separate live document rebuilt on
+             each keystroke, so a filled one falls back to its design's colour —
+             which is the same key the palette and the legend use. */
+          const ART_CAP=28;
+          const withArt=cells.filter(c=>c&&c.d).length<=ART_CAP;
+          const ar=Math.min(3.6,Math.max(1.15,d.w/Math.max(1,d.h)));
+          const tiles=h("div",{class:"ls-pp-tiles",
+            style:`grid-template-columns:repeat(${Math.max(1,g.cols)},minmax(0,1fr))`});
+          /* THE NUMBERS RUN ON ACROSS THE RUN. Sheet one is 1..65, sheet two
+             starts at 66 — a die-cut keeps one address for the whole job, which
+             is what makes "starts at 70" mean something without a page beside
+             it. Restarting at 1 on every sheet would make the same number name
+             a different piece of paper depending on which tab you were looking
+             at, and the start boxes would be quietly ambiguous. */
+          const base=planPage*per;
           for(let i=0;i<per;i++){
-            const p=slotOf(i+skipFor());
-            if(p<0||p>=per) continue;
-            const rr=Math.floor(p/Math.max(1,g.cols)), cc=p%Math.max(1,g.cols);
-            const x=(padX+cc*(d.w+gx))*PX_MM*k, y=(padY+rr*(d.h+gy))*PX_MM*k;
-            wrap.appendChild(h("div",{class:"ls-pp-num",
-              style:`left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;`+
-                    `width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
-              h("span",{text:String(i+1)})));
+            const p=slotOf(i);
+            const c=(p>=0&&p<per)?cells[p]:null;
+            const m=c&&c.d;
+            const t=h("div",{class:"ls-pp-t"+(m?" on":""),
+              "data-k":m?String(hueOf(m.id)):"",
+              style:"aspect-ratio:"+ar.toFixed(3),
+              title:"Position "+(base+i+1)+" — "+(m?m.name:"free")});
+            if(m&&withArt){
+              const tk=Math.min(66/(m.w*PX_MM),40/(m.h*PX_MM));
+              t.appendChild(h("div",{class:"ls-pp-tart"},
+                h("iframe",{srcdoc:oneHtml(m,c.ctx),scrolling:"no",
+                  "aria-hidden":"true",tabindex:"-1",
+                  style:`width:${m.w}mm;height:${m.h}mm;`+
+                        `transform:scale(${tk.toFixed(4)});transform-origin:top left`})));
+            }
+            t.appendChild(h("span",{class:"ls-pp-tn",text:String(base+i+1)}));
+            tiles.appendChild(t);
           }
-          right.appendChild(h("div",{class:"ls-pp-sheetwrap"},[wrap]));
-          right.appendChild(h("div",{class:"ls-pp-cap",
-            text:roll?(g.cols+" across a "+mmS(g.pgW)+" mm web · "+mmS(g.pgH)+" mm per feed")
-                     :(g.cols+" across × "+g.rows+" down = "+per+" per "+d.page+" sheet")}));
+          sheetCard.appendChild(h("div",{class:"ls-pp-board"},[tiles]));
+
+          /* THE KEY TO THE COLOURS. On a shared sheet the tiles are the only
+             thing saying which design is where, and a colour with no name
+             against it is a decoration rather than information. */
+          const onPage=[];
+          cells.forEach(c=>{ if(c&&c.d&&onPage.indexOf(c.d)<0) onPage.push(c.d); });
+          if(onPage.length>1){
+            sheetCard.appendChild(h("div",{class:"ls-pp-legend"},
+              onPage.map(m=>h("span",{class:"ls-pp-lg","data-k":String(hueOf(m.id))},[
+                h("i"), h("span",{text:m.name}),
+                h("b",{text:String(cells.filter(c=>c&&c.d===m).length)}),
+              ]))));
+          }
+          sheetCard.appendChild(h("div",{class:"ls-pp-cap",
+            text:(d.mode==="roll"
+                    ?(g.cols+" across a "+mmS(g.pgW)+" mm web · "+mmS(g.pgH)+" mm per feed")
+                    :(g.cols+" across × "+g.rows+" down = "+per+" per "+d.page+" sheet"))+
+                 (plan.length>1?" · page "+(planPage+1)+" of "+plan.length:"")}));
         }
 
         /* ---- THE PAGES ---- */
-        right.appendChild(h("div",{class:"ls-pp-sec"},[
+        const pagesCard=card(h("div",{class:"ls-pp-sec"},[
           h("span",{text:"The pages"}),
-          h("span",{class:"ls-pp-h",text:"every page of the run — click one to edit it"}),
+          h("span",{class:"ls-pp-h",
+            text:"every page of the run — click one to open it on the board"}),
         ]));
+        mid.appendChild(pagesCard);
         const strip=h("div",{class:"ls-pp-strip"});
         plan.forEach((page,i)=>{
           const mini=h("div",{class:"ls-pp-mini",
@@ -5090,81 +6005,34 @@
           onclick:()=>{ plan.push(blankPage()); planPage=plan.length-1; redraw(); }},[
           ico("plus",16), h("span",{text:"Add page"}),
         ]));
-        right.appendChild(strip);
+        pagesCard.appendChild(strip);
 
-        /* ---- THE PAGE BEING EDITED ---- */
+        /* WHAT IS LEFT OF THE PAGE EDITOR is what is not placement: emptying a
+           page and repeating one. Where a label goes is typed, not clicked, so
+           the grid of die-cuts you used to paint on is gone — the numbered
+           sheet above is now the only picture of the page, and it is a picture
+           of the real thing rather than a diagram of it. */
         const page=plan[planPage]||blankPage();
-        right.appendChild(h("div",{class:"ls-pp-sec"},[
-          h("span",{text:"Page "+(planPage+1)+" of "+plan.length}),
-          h("span",{class:"ls-pp-h",
-            text:"click a position to place “"+
-              ((docs.find(x=>x.id===brush)||{}).name||"nothing")+"”"}),
-        ]));
-        const grid=h("div",{class:"ls-pp-grid",
-          style:`grid-template-columns:repeat(${g.cols},1fr)`});
-        page.forEach((id,i)=>{
-          const m=id?docs.find(x=>x.id===id):null;
-          grid.appendChild(h("button",{class:"ls-pp-cell"+(m?" on":""),type:"button",
-            "data-k":m?String(hueOf(m.id)):"",
-            title:m?(m.name+" — click to replace, right-click to empty")
-                   :"Position "+(i+1)+" — empty",
-            onclick:()=>{ page[i]=brush||""; redraw(); },
-            oncontextmenu:(e)=>{ e.preventDefault(); page[i]=""; redraw(); }},[
-            h("span",{class:"ls-pp-cn",text:String(i+1)}),
-            m?h("span",{class:"ls-pp-cd",text:m.name}):null,
-          ].filter(Boolean)));
-        });
-        right.appendChild(grid);
-        right.appendChild(h("div",{class:"ls-pp-acts"},[
+        pagesCard.appendChild(h("div",{class:"ls-pp-acts"},[
           h("button",{class:"ls-pp-b",type:"button",
-            onclick:()=>{ for(let i=0;i<per;i++) page[i]=brush||""; redraw(); },
-            text:"Fill this page"}),
-          h("button",{class:"ls-pp-b",type:"button",
-            onclick:()=>{ for(let i=0;i<per;i++) if(!page[i]) page[i]=brush||""; redraw(); },
-            text:"Fill the gaps"}),
-          h("button",{class:"ls-pp-b",type:"button",
-            onclick:()=>{ plan[planPage]=blankPage(); redraw(); },
-            text:"Clear"}),
+            title:"Empty every position on this page",
+            onclick:()=>{ plan[planPage]=blankPage(); redraw(); }},[
+            ico("trash",12), h("span",{text:"Clear page "+(planPage+1)})]),
           h("button",{class:"ls-pp-b",type:"button",
             title:"Add a copy of this page after it",
             onclick:()=>{ plan.splice(planPage+1,0,page.slice());
-              planPage++; redraw(); },
-            text:"Duplicate page"}),
+              planPage++; redraw(); }},[
+            ico("copy",12), h("span",{text:"Duplicate page"})]),
         ]));
 
-        /* ---- what that page will actually look like ---- */
-        const cellsOne=page.map((id,i)=>{
-          if(!id) return null;
-          const m=docs.find(x=>x.id===id);
-          return m?{d:m,ctx:{index:i,now:new Date(),prompts:runOpts.prompts,
-            serialStart:runOpts.serialStart}}:null;
-        });
-        if(cellsOne.some(Boolean)){
-          const bw=300, bh=210;
-          const k2=Math.min(bw/(g.pgW*PX_MM),bh/(g.pgH*PX_MM));
-          right.appendChild(h("div",{class:"ls-pp-sec",text:"How that page prints"}));
-          right.appendChild(h("div",{class:"ls-pp-prev"},
-            h("div",{class:"wz-frame",
-              style:`width:${(g.pgW*PX_MM*k2).toFixed(1)}px;height:${(g.pgH*PX_MM*k2).toFixed(1)}px`},
-              h("iframe",{srcdoc:composeHtml(d,cellsOne,{cut:runOpts.cut}),
-                scrolling:"no","aria-hidden":"true",
-                style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k2.toFixed(4)});`+
-                  `transform-origin:top left`}))));
-        }
-
-        main.appendChild(side); main.appendChild(right);
+        main.appendChild(side); main.appendChild(mid); main.appendChild(right);
         body.appendChild(main);
       }
 
-      /* one page of the plan, on its own */
+      /* One page of the plan, on its own — numbered as part of the WHOLE run,
+         so reprinting page three does not hand out serials 1..n again. */
       function printOnly(i){
-        const page=plan[i]||[];
-        const cells=page.map((id,n)=>{
-          if(!id) return null;
-          const m=docs.find(x=>x.id===id);
-          return m?{d:m,ctx:{index:n,now:new Date(),prompts:runOpts.prompts,
-            serialStart:runOpts.serialStart}}:null;
-        });
+        const cells=pageCells(i);
         if(!cells.some(Boolean)) return toast("That page is empty",{type:"warn"});
         const w=window.open("","_blank");
         if(!w) return toast("Popup blocked — allow popups for this site to print",{type:"warn"});
@@ -5172,24 +6040,45 @@
         w.document.close();
       }
 
-      /* Opening the dialog on a run that was never arranged should not show an
-         empty sheet — fill it from the design's own quantity once. */
-      ensurePlan();
-      if(!planTotal()){
-        const mates=stockMates();
-        if(mates.length&&!Object.keys(planQty).length)
-          planQty[doc().id]=Math.max(1,runOpts.qty==null?doc().qty:runOpts.qty);
-        arrangePlan();
+      /* THE RUN OPENS ON ONE LABEL — the one you came in with. Re-seeded when
+         the open design is not on the list, which is what happens after
+         switching templates and pressing Print again: the previous run's guests
+         are not this run's business. */
+      if(!Array.isArray(planUse)||planUse.indexOf(doc().id)<0){
+        planUse=[doc().id];
+        planAdding=false;
       }
+      /* Opening the dialog on a run that was never arranged should not show an
+         empty sheet — fill it from the design's own quantity once.
+         Per DESIGN, not "is the run empty": coming back after designing a label
+         that was created from this screen, the run already holds the first
+         label's quantity, and a run-wide test would leave the new one on zero
+         with no hint as to why. */
+      ensurePlan();
+      if(planQty[doc().id]==null)
+        planQty[doc().id]=Math.max(1,runOpts.qty==null?doc().qty:runOpts.qty);
+      /* Re-lay when the OPEN design has nothing on the sheet, not merely when
+         the sheet is bare: the label just designed would otherwise sit at a
+         quantity of one with no position, behind a plan built before it
+         existed. */
+      const openHas=plan.reduce((n,p)=>n+p.filter(x=>x===doc().id).length,0);
+      if(!planTotal()||!openHas) arrangePlan({quiet:true});
       build();
-      const mo=modal({title:"Print", sub:doc().name+" — "+sizeS(doc().w,doc().h),
-        wide:true, body, foot:[
+      const mo=modal({title:"Print Layout", sub:doc().name+" — "+sizeS(doc().w,doc().h),
+        xwide:true, body, foot:[
         h("button",{class:"btn ghost",onclick:()=>{mo.close();paint();},text:"Cancel"}),
         h("button",{class:"btn",title:"Print a single label to check the alignment",
-          onclick:()=>doPrint({test:true}),text:"Test — one label"}),
-        h("button",{class:"btn primary",onclick:()=>{ if(doPrint()) mo.close(); },
-          text:"🖨  Print all pages"}),
+          onclick:()=>doPrint({test:true})},[
+          ico("print",14), h("span",{text:"Test — one label"})]),
+        h("button",{class:"btn primary",onclick:()=>{ if(doPrint()) mo.close(); }},[
+          ico("print",14), h("span",{text:"Print all pages"})]),
       ]});
+      /* The head badge is hung on afterwards rather than taught to modal(),
+         which every other dialog in the ERP shares — one screen wanting a
+         crest is not a reason to change the shell for all of them. */
+      mo.el.classList.add("ls-ppm");
+      const head=mo.el.querySelector(".modal-head");
+      if(head) head.insertBefore(h("div",{class:"ls-pp-crest"},ico("print",20)),head.firstChild);
     }
 
 
