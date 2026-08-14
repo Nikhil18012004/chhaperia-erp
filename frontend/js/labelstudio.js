@@ -1974,23 +1974,21 @@
        ============================================================ */
     const MAX_IMPORT=12*1024*1024;      // a design may carry placed pictures
     const LABEL_KIND="chhaperia-label";
-    /* ⚠ .json, AND IT MUST STAY .json. THIS WAS TRIED THE OTHER WAY.
+    /* THE EXTENSION IS .label — a label file, which is what it is.
 
-       This was written as ".btw" once, on the reasonable-sounding grounds that
-       .btw is what the plant files labels under. The result was an operator
-       double-clicking the download and getting BarTender error #3323, "not a
-       supported file type" — because a real .btw is Seagull's own closed
-       BINARY OLE container and no browser can write one. The extension was a
-       promise the bytes could not keep, and Windows kept handing the file to
-       the one application guaranteed to reject it.
+       Not .json: that is the shape of the bytes, not the kind of thing they
+       are, and it tells an operator nothing about what they are holding.
 
-       The name now matches the contents. Import does not care what a file is
-       called — it reads the bytes — so nothing is lost by being honest here.
+       Not .btw either, and this one was learned the hard way. A real .btw is
+       Seagull's own closed binary; naming our file .btw does not make
+       BarTender read it, it only makes Windows hand the file straight to the
+       one application certain to reject it — error #3323, "not a supported
+       file type". .label has no such association: double-click it and Windows
+       asks what to open it with, instead of confidently doing the wrong thing.
 
-       Getting real work into BarTender is the SERVER's job and always was: see
-       backend/services/bartenderService, which writes a CSV the operator's own
-       .btw template is already bound to and launches BarTender on it. */
-    const LABEL_EXT=".json";
+       Import never looks at the extension anyway; it reads the bytes. This
+       name is for the human in the downloads folder. */
+    const LABEL_EXT=".label";
 
     function downloadDoc(d){
       const payload={kind:LABEL_KIND, version:1,
@@ -2180,6 +2178,48 @@
        98.8 x 34.1 mm label as a square with two grey bars. The label sits
        centred and fills one axis, so the crop is pure arithmetic off the
        template's own aspect ratio — no pixel-hunting, nothing to tune. */
+    /* THE GREY HAS TO GO. BarTender renders into a SQUARE canvas and pads the
+       label out to it with flat grey. Cropping to the label's aspect takes off
+       the bars, but a rounded label still leaves four grey wedges where its
+       corners curve away — and those would print.
+
+       So after the crop, the grey is flood-filled away from each corner and
+       left transparent. FLOOD-FILLED, not matched globally: a label may
+       legitimately contain that same grey somewhere in its artwork, and a
+       blanket colour swap would punch holes in it. Only grey reachable from
+       outside the label is outside the label. */
+    function clearSurround(cx,w,h){
+      let img;
+      try{ img=cx.getImageData(0,0,w,h); }catch(e){ return; }   // tainted canvas
+      const d=img.data;
+      const at=(x,y)=>(y*w+x)*4;
+      const seed=[at(0,0),at(w-1,0),at(0,h-1),at(w-1,h-1)];
+      /* all four corners must agree, or this is not a letterboxed render */
+      const r0=d[seed[0]], g0=d[seed[0]+1], b0=d[seed[0]+2];
+      const near=(i,tol)=>Math.abs(d[i]-r0)<=tol&&Math.abs(d[i+1]-g0)<=tol&&
+                          Math.abs(d[i+2]-b0)<=tol;
+      for(const s of seed) if(!near(s,10)) return;
+      /* a white or near-white ground is the label itself on white stock —
+         clearing that would erase the label */
+      if(r0>235&&g0>235&&b0>235) return;
+      const seen=new Uint8Array(w*h);
+      const stack=[];
+      const push=(x,y)=>{
+        if(x<0||y<0||x>=w||y>=h) return;
+        const p=y*w+x;
+        if(seen[p]) return;
+        seen[p]=1;
+        if(!near(p*4,26)) return;
+        d[p*4+3]=0;
+        stack.push(p);
+      };
+      push(0,0); push(w-1,0); push(0,h-1); push(w-1,h-1);
+      while(stack.length){
+        const p=stack.pop(), x=p%w, y=(p-x)/w;
+        push(x+1,y); push(x-1,y); push(x,y+1); push(x,y-1);
+      }
+      cx.putImageData(img,0,0);
+    }
     function cropToLabel(img,wmm,hmm){
       const want=wmm/hmm, have=img.width/img.height;
       let sx=0, sy=0, sw=img.width, sh=img.height;
@@ -2190,11 +2230,11 @@
       const cx=cv.getContext("2d");
       if(!cx) return "";
       cx.drawImage(img,sx,sy,sw,sh,0,0,sw,sh);
-      /* PNG first for a crisp flat-colour label; JPEG only if PNG will not fit
-         under the per-picture cap. */
-      let url=cv.toDataURL("image/png");
-      if(url.length>MAX_IMG) url=cv.toDataURL("image/jpeg",0.9);
-      if(url.length>MAX_IMG) url=cv.toDataURL("image/jpeg",0.72);
+      clearSurround(cx,sw,sh);
+      /* PNG, and PNG only: the transparency just cut into the corners is the
+         whole point, and JPEG has none. If it will not fit under the cap the
+         picture is dropped rather than flattened back onto grey. */
+      const url=cv.toDataURL("image/png");
       return url.length<=MAX_IMG?url:"";
     }
 
@@ -2382,14 +2422,20 @@
           done(cleanDoc({
             name:btwName(fileName,hdr.title),
             w:hdr.w, h:hdr.h, mode:"sheet", autoFit:true,
-            shape:"round",
+            /* Square: BarTender's render already carries whatever corners the
+               label has, and rounding it again would shave them twice. */
+            shape:"rect",
             bgImage:data, bgFit:"fill",
-            /* THE ARTWORK BECOMES A TRACING GUIDE once there is real text on
-               top of it, or the words would be printed twice — once as type
-               and once as part of the picture underneath. Faint enough to line
-               things up against, and cleared in Page setup when you are done. */
-            bgOpacity:objects.length?28:100,
-            objects:objects,
+            /* IT ARRIVES LOOKING EXACTLY AS BarTender DRAWS IT — the render at
+               full strength, at the true size, and nothing laid over it.
+
+               The recovered fields come too, but HIDDEN. Showing them would
+               print every word twice, once as type and once as part of the
+               picture beneath, and dimming the picture to avoid that means the
+               label does not look like itself on arrival. So the label is
+               exact, and the text is waiting in Object Layers: show a field,
+               drag it over its printed twin, then clear the background. */
+            objects:objects.map(o=>Object.assign({},o,{hidden:true})),
           }),fields.length);
         });
       };
@@ -2413,11 +2459,10 @@
             {type:"ok"});
           /* An imported .btw arrives as ARTWORK, and nobody should find that
              out at the printer. Said separately so it is not lost in a count. */
-          if(btwText) toast(btwText+" text field"+(btwText===1?"":"s")+
-            " came out of BarTender and "+(btwText===1?"is":"are")+" editable. "+
-            "They are stacked down the label, not where BarTender had them \u2014 "+
-            "the original is underneath, faint, to line them up against. Clear "+
-            "it in Page setup when you are done.",
+          if(btwText) toast("Imported exactly as BarTender draws it. The "+
+            btwText+" text field"+(btwText===1?"":"s")+" BarTender stored "+
+            (btwText===1?"is":"are")+" here too, hidden \u2014 open Object Layers "+
+            "and show "+(btwText===1?"it":"one")+" to edit the wording.",
             {type:"info",title:"From BarTender",dur:11000});
           if(btwFlat) toast(btwFlat+" BarTender label"+(btwFlat===1?"":"s")+
             " came in at the right size, but no text could be read out "+
