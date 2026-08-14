@@ -4786,7 +4786,8 @@
        ============================================================ */
     let plan=[];          // [[docId|"" × perPage], …] — one page each, DERIVED
     let sel=null;         // the design whose numbers the panel is editing
-    let startAt={};       // docId → the 1-based die-cut it starts on
+    let inRun={};         // docId → ticked into this run, or left unprinted
+    let startAt={};       // docId → the 1-based PRINT-ORDER position it starts on
     let wantQty={};       // docId → how many labels of it to print
 
     const perPage=()=>Math.max(1,sheetGrid(doc()).perPage);
@@ -4803,19 +4804,30 @@
     const qtyOf=(id)=>Math.max(0,Math.min(5000,Math.round(+wantQty[id]||0)));
 
     /* THE LAYOUT.
-       Each design is dealt from its own start position and flows forward, page
-       after page, taking the next FREE die-cut whenever another design got
-       there first. Two designs naming the same position is not an error to
-       refuse — it is a sheet to fill — so the second lands after the first
-       instead of on top of it. */
+       Only the TICKED designs are dealt; an unticked one keeps its numbers
+       and prints nothing. Each is dealt from its own start position and flows
+       forward, page after page, taking the next FREE position whenever
+       another design got there first. Two designs naming the same position is
+       not an error to refuse — it is a sheet to fill — so the second lands
+       after the first instead of on top of it.
+
+       "Position" here means PRINT-ORDER position — the numbers drawn on the
+       sheet preview, which orderSlot() maps onto die-cuts. Start at 40 with
+       a top-down order and the run begins on the die-cut NUMBERED 40, partway
+       down the second column, not the 40th cell of reading order. The count
+       then walks the same path the printer does. */
     function layoutPlan(){
-      const per=perPage(), pages=[];
+      const d=doc(), g=sheetGrid(d), per=perPage();
+      const slotOf=orderSlot(d,g);
+      const pages=[];
       const cellAt=(n)=>{
         const pg=Math.floor(n/per);
         while(pages.length<=pg) pages.push(new Array(per).fill(""));
-        return [pg,n%per];
+        const s=slotOf(n%per);
+        return [pg,(s>=0&&s<per)?s:n%per];
       };
       stockMates().forEach(m=>{
+        if(!inRun[m.id]) return;
         let left=qtyOf(m.id);
         if(!left) return;
         let n=startOf(m.id)-1;
@@ -4832,28 +4844,32 @@
     const rebuildPlan=()=>{ plan=layoutPlan(); };
     /* The plan as a flat list of cells for the renderer, with a per-design
        counter so each design's serials run through ITS OWN labels rather than
-       counting positions on a page. */
+       counting positions on a page. The counter advances in PRINT ORDER — the
+       path the labels peel off in — not reading order, or a top-down run
+       would carry its serials sideways. Reverse is the CALLER's business:
+       this list is the layout, and print applies its own direction to it. */
     function planCells(){
+      const d=doc(), g=sheetGrid(d);
+      const slotOf=orderSlot(d,g);
       const now=new Date(), seen={};
       const out=[];
-      plan.forEach(p=>p.forEach(id=>{
-        if(!id) return out.push(null);
-        const d=docs.find(x=>x.id===id);
-        if(!d) return out.push(null);
-        const n=seen[id]||0; seen[id]=n+1;
-        out.push({d,ctx:{index:n,now,prompts:runOpts.prompts,
-          serialStart:runOpts.serialStart}});
-      }));
-      return runOpts.reverse?out.slice().reverse():out;
+      plan.forEach(p=>{
+        const cells=new Array(p.length).fill(null);
+        for(let k=0;k<p.length;k++){
+          const s=slotOf(k), ix=(s>=0&&s<p.length)?s:k;
+          const id=p[ix];
+          if(!id) continue;
+          const m=docs.find(x=>x.id===id);
+          if(!m) continue;
+          const n=seen[id]||0; seen[id]=n+1;
+          cells[ix]={d:m,ctx:{index:n,now,prompts:runOpts.prompts,
+            serialStart:runOpts.serialStart}};
+        }
+        out.push(...cells);
+      });
+      return out;
     }
     const planTotal=()=>plan.reduce((n,p)=>n+p.filter(Boolean).length,0);
-    /* a stable colour per design, so a position is recognisable at thumbnail
-       size without reading anything */
-    const hueOf=(id)=>{
-      const m=stockMates();
-      const i=m.findIndex(d=>d.id===id);
-      return i<0?0:i%8;
-    };
 
     /* ============================================================
        THE PRINT DIALOG — TWO STEPS
@@ -4910,14 +4926,6 @@
         el.addEventListener("change",()=>{ onCh(el.checked); redraw(); });
         return h("label",{class:"ls-pp-chk"},[el,h("span",{text:label})]);
       };
-      /* the cells of one page of the plan, ready for the renderer */
-      const cellsOf=(page)=>(page||[]).map((id,n)=>{
-        if(!id) return null;
-        const m=docs.find(x=>x.id===id);
-        return m?{d:m,ctx:{index:n,now:new Date(),prompts:runOpts.prompts,
-          serialStart:runOpts.serialStart}}:null;
-      });
-
       function build(){
         rebuildPlan();
         const g=sheetGrid(d), per=perPage();
@@ -4963,10 +4971,14 @@
         const side=h("div",{class:"ls-pp-side"});
         const right=h("div",{class:"ls-pp-right"});
 
-        /* ---- WHAT TO PRINT, AND WHERE IT STARTS ---- */
+        /* ---- WHAT TO PRINT, AND WHERE IT STARTS ----
+           The tick is the decision: ticked designs print together in one run,
+           each from its own position; an unticked one keeps its numbers and
+           prints nothing. Only designs cut to the same stock are offered at
+           all, so the tick can never mix label sizes. */
         side.appendChild(h("div",{class:"ls-pp-sec"},[
           h("span",{text:"What to print"}),
-          h("span",{class:"ls-pp-h",text:"and the position it starts on"}),
+          h("span",{class:"ls-pp-h",text:"tick to print · numbers follow the print order"}),
         ]));
         if(mates.length<2) side.appendChild(h("div",{class:"ls-pp-note"},
           "Only this design is cut to "+sizeS(d.w,d.h)+
@@ -4975,18 +4987,23 @@
         const list=h("div",{class:"ls-pp-designs"});
         mates.forEach(m=>{
           const on=sel===m.id;
+          const tick=h("input",{type:"checkbox",class:"ls-pp-tick",
+            title:inRun[m.id]?"Untick to leave “"+m.name+"” unprinted"
+                             :"Tick to print “"+m.name+"” in this run"});
+          tick.checked=!!inRun[m.id];
+          tick.addEventListener("change",()=>{ inRun[m.id]=tick.checked;
+            sel=m.id; redraw(); });
           const inp=keyed(num(startOf(m.id),v=>{
             startAt[m.id]=Math.max(1,Math.min(per,Math.round(v)||1));
             sel=m.id; redraw();
           },1,per,66),"start:"+m.id);
-          inp.title="The die-cut “"+m.name+"” starts on. 1 is the first "+
-            "position of the first sheet; everything before it is left empty.";
-          list.appendChild(h("div",{class:"ls-pp-d"+(on?" on":""),
-            "data-k":String(hueOf(m.id)),
+          inp.title="The position “"+m.name+"” starts on, counted in print "+
+            "order — the numbers on the sheet. Everything before it is left empty.";
+          list.appendChild(h("div",{class:"ls-pp-d"+(on?" on":"")+(inRun[m.id]?"":" off"),
             title:"Click to choose “"+m.name+"”, then set how many of it below",
             onclick:(e)=>{ if(e.target.closest&&e.target.closest("input")) return;
               sel=m.id; redraw(); }},[
-            h("span",{class:"ls-pp-dot"}),
+            tick,
             h("span",{class:"ls-pp-dn",text:m.name}),
             h("span",{class:"ls-pp-at",text:"from"}),
             inp,
@@ -5007,7 +5024,9 @@
                time is always run five hundred at a time */
             m.qty=Math.max(1,wantQty[m.id]||1); touch(); redraw();
           },0,5000),"qty:"+m.id),
-          mates.length>1
+          !inRun[m.id]
+            ? "kept, but not printed — “"+m.name+"” is unticked"
+            : mates.length>1
             ? "its own count — choose another design above to set that one’s"
             : "they flow on from position "+startOf(m.id)+
               ", onto as many sheets as they need"));
@@ -5088,7 +5107,7 @@
           const wrap=h("div",{class:"ls-pp-sheet",
             style:`width:${(g.pgW*PX_MM*k).toFixed(1)}px;height:${(g.pgH*PX_MM*k).toFixed(1)}px`});
           wrap.appendChild(h("iframe",{
-            srcdoc:composeHtml(d,cellsOf(plan[0]||blankPage()),{cut:runOpts.cut}),
+            srcdoc:composeHtml(d,planCells().slice(0,per),{cut:runOpts.cut}),
             scrolling:"no","aria-hidden":"true",tabindex:"-1",
             style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k.toFixed(4)});`+
                   `transform-origin:top left`}));
@@ -5143,6 +5162,11 @@
             (d.mode==="roll"?"page":"sheet")+(plan.length===1?"":"s")+
             " — exactly as it will print"}),
         ]));
+        /* The same cells the printer gets, in the same direction — a reversed
+           run previews reversed, because "exactly as it will print" is the
+           whole promise of this step. */
+        let cells=planCells();
+        if(runOpts.reverse) cells=cells.slice().reverse();
         /* A thousand-label run is a hundred iframes and a stalled browser, so
            the preview draws the first pages and SAYS that it stopped. Silence
            here would read as "that is the whole run". */
@@ -5150,11 +5174,12 @@
         const k=Math.min(250/(g.pgW*PX_MM),300/(g.pgH*PX_MM));
         const grid=h("div",{class:"ls-pp-pages"});
         for(let i=0;i<show;i++){
-          const used=(plan[i]||[]).filter(Boolean).length;
+          const slice=cells.slice(i*per,(i+1)*per);
+          const used=slice.filter(Boolean).length;
           grid.appendChild(h("div",{class:"ls-pp-pg"},[
             h("div",{class:"wz-frame",
               style:`width:${(g.pgW*PX_MM*k).toFixed(1)}px;height:${(g.pgH*PX_MM*k).toFixed(1)}px`},
-              h("iframe",{srcdoc:composeHtml(d,cellsOf(plan[i]),{cut:runOpts.cut}),
+              h("iframe",{srcdoc:composeHtml(d,slice,{cut:runOpts.cut}),
                 scrolling:"no","aria-hidden":"true",tabindex:"-1",
                 style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k.toFixed(4)});`+
                       `transform-origin:top left`})),
@@ -5171,7 +5196,9 @@
       }
 
       /* Opening on a design that has never been given a number should not show
-         an empty run — take the count it remembers. */
+         an empty run — tick it and take the count it remembers. The OTHER
+         designs start unticked: sharing the run is a choice, not a default. */
+      if(inRun[doc().id]==null) inRun[doc().id]=true;
       rebuildPlan();
       if(!planTotal()){
         const mates=stockMates();
@@ -5188,8 +5215,8 @@
       const bNext=h("button",{class:"btn primary",
         title:"See every page of the run before it goes to the printer",
         onclick:()=>{
-          if(!planTotal()) return toast("Give a design a number of labels to print",
-            {type:"warn"});
+          if(!planTotal()) return toast("Tick a design and give it a number of "+
+            "labels to print",{type:"warn"});
           goStep(1);
         },text:"Preview  ›"});
       const bPrint=h("button",{class:"btn primary",style:"display:none",
@@ -5217,10 +5244,11 @@
       /* THE PLAN IS THE RUN. There is no second path: the pages the preview
          drew and the pages that print come from the same list, through the
          same renderer, so there is nowhere for the two to drift apart. */
-      const cells=planCells();
+      let cells=planCells();
+      if(runOpts.reverse) cells=cells.slice().reverse();
       if(!cells.some(Boolean)){
-        toast("No labels are placed yet — give a design a number of labels to print",
-              {type:"warn"});
+        toast("No labels are placed yet — tick a design and give it a number "+
+              "of labels to print",{type:"warn"});
         return false; }
       const w=window.open("","_blank");
       if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"});
