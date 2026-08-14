@@ -1984,6 +1984,19 @@ canvas{display:block;width:100%}
   align-items:center;justify-content:center;border:1px solid transparent;border-radius:4px;
   background:transparent;color:var(--lsdim);cursor:pointer;padding:0}
 .ls-rfs:hover{background:var(--lssoft);border-color:var(--lssoft2);color:var(--lsblue)}
+/* ---- the way out, in the top-right corner ----
+   Given a word as well as an arrow, and set off by a rule from the size block,
+   because it is the one control on this screen somebody hunts for without
+   knowing the toolbar. The arrow is the shared "chev" glyph turned a quarter
+   turn anticlockwise — one icon, pointed whichever way a button needs it. */
+.ls-exit{display:flex;align-items:center;gap:4px;flex:0 0 auto;height:24px;
+  margin-left:2px;padding:0 9px 0 5px;border:1px solid transparent;border-radius:6px;
+  background:transparent;color:var(--lstx);font-family:inherit;font-size:12px;
+  font-weight:600;white-space:nowrap;cursor:pointer;transition:var(--tr)}
+.ls-exit::before{content:"";width:1px;height:16px;margin-right:5px;
+  background:var(--lsline)}
+.ls-exit svg{transform:rotate(90deg)}
+.ls-exit:hover{background:var(--lssoft);border-color:var(--lssoft2);color:var(--lsblue)}
 
 /* ---- the three shapes of ribbon button ---- */
 .ls-b{display:flex;align-items:center;justify-content:center;gap:3px;

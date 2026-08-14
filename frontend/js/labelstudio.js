@@ -44,11 +44,23 @@
 
    WHERE THE DESIGNS LIVE
    In the ERP's own settings document, on the server, exactly like
-   every other setting. Nothing is written to a local folder and
-   nothing is downloaded — the operator saves a template, and it
-   is there for them on any machine that signs in. Printing goes
-   through the browser's own print dialog, so the label printer
-   the plant already uses is the one that gets the job.
+   every other setting — the operator saves a template, and it is
+   there for them on any machine that signs in. That is the only
+   home a design has. A label can also be DOWNLOADED to a .json
+   file and IMPORTED back, which is how one travels to a backup or
+   arrives from another Chhaperia installation; an imported one is
+   a saved template like any other from the moment it lands.
+
+   ⚠ THAT FILE IS NOT A BarTender .btw AND CANNOT BE MADE INTO ONE.
+   BarTender's .btw is Seagull's closed binary format; a browser
+   cannot write it and BarTender rejects anything else outright
+   (error #3323, "not a supported file type"). Feeding BarTender
+   real work is what the SERVER-side bridge is for — see
+   backend/services/bartenderService: it writes a CSV the operator's
+   own .btw template is bound to, and starts BarTender on it.
+
+   Printing goes through the browser's own print dialog, so the
+   label printer the plant already uses is the one that gets the job.
    ============================================================ */
 (function (global) {
   "use strict";
@@ -1947,6 +1959,610 @@
       printDialog();
     }
 
+    /* ============================================================
+       A TEMPLATE AS A FILE — download and import
+
+       The designs live in the ERP's settings document and always
+       will; a file is not a second home for them, it is how one
+       TRAVELS — out to a backup or another installation, in from
+       a supplier who drew your label for you.
+
+       Everything that comes in goes through cleanDoc(), the same
+       gate the server's own settings pass, so a hand-edited or
+       corrupt file cannot put anything into the studio that the
+       studio could not have made itself.
+       ============================================================ */
+    const MAX_IMPORT=12*1024*1024;      // a design may carry placed pictures
+    const LABEL_KIND="chhaperia-label";
+    /* THE EXTENSION IS .label — a label file, which is what it is.
+
+       Not .json: that is the shape of the bytes, not the kind of thing they
+       are, and it tells an operator nothing about what they are holding.
+
+       Not .btw either, and this one was learned the hard way. A real .btw is
+       Seagull's own closed binary; naming our file .btw does not make
+       BarTender read it, it only makes Windows hand the file straight to the
+       one application certain to reject it — error #3323, "not a supported
+       file type". .label has no such association: double-click it and Windows
+       asks what to open it with, instead of confidently doing the wrong thing.
+
+       Import never looks at the extension anyway; it reads the bytes. This
+       name is for the human in the downloads folder. */
+    const LABEL_EXT=".label";
+
+    function downloadDoc(d){
+      const payload={kind:LABEL_KIND, version:1,
+        note:"Chhaperia Label Studio template. Import it from Label Studio — "+
+             "this is not a Seagull BarTender document.",
+        exported:new Date().toISOString(),
+        labels:[cleanDoc(JSON.parse(JSON.stringify(d)))]};
+      const name=String(d.name||"label").replace(/[^\w .()-]+/g,"_")
+        .replace(/\s+/g," ").trim().slice(0,60)||"label";
+      const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+      const url=URL.createObjectURL(blob);
+      const a=h("a",{href:url,download:name+LABEL_EXT,style:"display:none"});
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
+      toast("Saved “"+name+LABEL_EXT+"” — bring it back with Import. "+
+            "It is a Label Studio file, not a BarTender one.",
+            {type:"ok",title:"Downloaded",dur:6000});
+    }
+
+    /* A name nobody else in the library is already using, so two imports of the
+       same file do not leave two identically-named templates behind. */
+    function uniqueDocName(base){
+      const name=String(base||"Label").slice(0,60)||"Label";
+      if(!docs.some(d=>d.name===name)) return name;
+      for(let n=2;n<999;n++){
+        const t=(name+" "+n).slice(0,60);
+        if(!docs.some(d=>d.name===t)) return t;
+      }
+      return name;
+    }
+
+    /* One file may hold one label, a handful, or a whole settings dump — take
+       the labels out of whichever shape turned up. */
+    function labelsIn(json){
+      if(!json||typeof json!=="object") return [];
+      if(Array.isArray(json)) return json;
+      if(Array.isArray(json.labels)) return json.labels;
+      if(Array.isArray(json.labelDocs)) return json.labelDocs;
+      if(json.label&&typeof json.label==="object") return [json.label];
+      return [json];
+    }
+    /* cleanDoc() will happily turn {} into a valid empty label, so the shape has
+       to be checked BEFORE it — otherwise any .json at all imports as a blank
+       template and the operator is left wondering what they just added. */
+    const looksLikeLabel=(x)=>!!x&&typeof x==="object"&&!Array.isArray(x)&&
+      (typeof x.w==="number"||typeof x.h==="number"||Array.isArray(x.objects));
+
+    /* ---- WHAT KIND OF FILE IS THIS? FROM ITS BYTES. ----
+
+       ⚠ THE BYTES, NOT THE DECODED TEXT. FileReader.readAsText decodes UTF-8,
+       and D0 CF 11 E0 — the first four bytes of every OLE compound file, and
+       therefore of every BarTender .btw — is not valid UTF-8. It comes back as
+       U+FFFD replacement characters, so a signature test against the decoded
+       string CAN NEVER MATCH. That is why a genuine BarTender file was turned
+       away with the unhelpful "does not hold a label" instead of being named.
+
+       ⚠ AND THE BYTES, NOT THE EXTENSION. A label downloaded from this studio
+       may be sitting under the same three letters; only the content separates
+       them, so nothing here looks at the file name. */
+    const OLE_SIG=[0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1];   // older .btw
+    const ZIP_SIG=[0x50,0x4b,0x03,0x04];                       // newer .btw
+    const startsWith=(b,sig)=>{
+      if(!b||b.length<sig.length) return false;
+      for(let i=0;i<sig.length;i++) if(b[i]!==sig[i]) return false;
+      return true;
+    };
+    /* ⚠ THE ONE THAT ACTUALLY TURNS UP. A .btw is NOT an OLE blob — every file
+       checked out of this plant, BarTender 11.5 and 12.0 alike, opens with a
+       plain-ASCII banner:
+
+           \r\nBar Tender Format File\r\n(c) 1992 - 2026 Seagull Scientific...
+
+       Testing only for OLE and ZIP therefore called a real BarTender file
+       "text", JSON.parse threw on the banner, and the operator was told their
+       label "does not hold a label". This test goes FIRST because it is the
+       one that fires. OLE and ZIP stay behind it for versions that use them. */
+    const BTW_BANNER="Bar Tender Format File";
+    function isBtwText(bytes){
+      const n=Math.min(bytes.length,64);
+      let s="";
+      for(let i=0;i<n;i++) s+=String.fromCharCode(bytes[i]);
+      return s.replace(/^[\r\n\s]+/,"").indexOf(BTW_BANNER)===0;
+    }
+    function sniff(bytes){
+      if(isBtwText(bytes)) return "btw";
+      if(startsWith(bytes,OLE_SIG)||startsWith(bytes,ZIP_SIG)) return "btw";
+      /* Any other binary. A NUL byte early on is the giveaway, and no text
+         file that could hold a label has one. */
+      const n=Math.min(bytes.length,512);
+      for(let i=0;i<n;i++) if(bytes[i]===0) return "binary";
+      return "text";
+    }
+    /* UTF-8 first, then Windows-1252. A label hand-edited in Notepad on a
+       Hindi- or European-locale machine is not UTF-8, and throwing it away for
+       that would be refusing a perfectly good file over an encoding. */
+    function decode(bytes){
+      try{ return new TextDecoder("utf-8",{fatal:true}).decode(bytes); }
+      catch(e){
+        try{ return new TextDecoder("windows-1252").decode(bytes); }
+        catch(e2){ return ""; }
+      }
+    }
+    function whyNot(f,kind){
+      const nm="\u201c"+(f.name||"that file")+"\u201d";
+      if(kind==="btw")
+        return nm+" is a BarTender file, but nothing could be read out of it "+
+               "\u2014 no template size, or no artwork. Open it in BarTender and "+
+               "save it again, or rebuild the label here.";
+      if(kind==="binary")
+        return nm+" is a binary file, not a label Label Studio can read.";
+      return nm+" does not hold a label Label Studio can read.";
+    }
+
+    /* ============================================================
+       READING A BarTender .btw
+
+       It turns out a .btw is NOT the opaque OLE blob it was assumed to be.
+       Seagull writes a plain-text header first — checked against real files
+       from this plant, BarTender 11.5 and 12.0 both:
+
+         Bar Tender Format File
+         (c) 1992 - 2026 Seagull Scientific, LLC
+         ----------------------------------------------
+         Application: Version=12.0.0; Build=252359; ...
+         Document: CompatibleVersion=2022 and Higher; ...
+         Printer: Name=EPSON L11050 Series; ...
+         <Metadata>...<TemplateSize>98.8 x 34.1 mm</TemplateSize>
+                      <Title>BOX TEMPLATE</Title></Metadata>
+         ----------------------------------------------
+         <binary>
+
+       …and embedded in the binary is a PNG: BarTender's own render of the
+       label, letterboxed inside a square canvas on a grey ground.
+
+       So two of the three things a label needs are right there in the file —
+       ITS SIZE IN MILLIMETRES and A PICTURE OF IT. That is enough to bring the
+       label in: a template cut to the exact stock, carrying the artwork.
+
+       ⚠ WHAT THIS IS NOT. The text, barcodes and fields are objects in the
+       proprietary part of the file and are NOT recovered — what arrives is a
+       picture of them. It prints correctly and it is the right size, but to
+       make a field variable you re-draw it here on top. The toast says so
+       rather than letting anyone discover it at the printer. */
+    const PNG_SIG=[0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a];
+    const PNG_END=[0x49,0x45,0x4e,0x44,0xae,0x42,0x60,0x82];
+    const findSig=(b,sig,from)=>{
+      outer: for(let i=from;i+sig.length<=b.length;i++){
+        for(let j=0;j<sig.length;j++) if(b[i+j]!==sig[j]) continue outer;
+        return i;
+      }
+      return -1;
+    };
+    /* Every PNG in the file; the biggest is the label render, the small one is
+       a thumbnail of it. */
+    function pngsIn(bytes){
+      const out=[]; let from=0;
+      for(;;){
+        const s=findSig(bytes,PNG_SIG,from);
+        if(s<0) break;
+        const e=findSig(bytes,PNG_END,s);
+        if(e<0) break;
+        out.push({at:s,len:e+8-s});
+        from=e+8;
+      }
+      return out;
+    }
+    function btwHeader(bytes){
+      /* latin-1 by hand: the header is ASCII, and TextDecoder("windows-1252")
+         is not guaranteed everywhere. 8 KB is far past the second rule. */
+      let s="";
+      const n=Math.min(bytes.length,8192);
+      for(let i=0;i<n;i++) s+=String.fromCharCode(bytes[i]);
+      const grab=(re)=>{ const m=re.exec(s); return m?m[1].trim():""; };
+      const size=grab(/<TemplateSize>([^<]*)<\/TemplateSize>/);
+      const wh=/([\d.]+)\s*x\s*([\d.]+)\s*mm/i.exec(size);
+      return {
+        title:grab(/<Title>([^<]*)<\/Title>/),
+        w:wh?+wh[1]:0,
+        h:wh?+wh[2]:0,
+        app:grab(/<Application>([^<]*)<\/Application>/),
+      };
+    }
+
+    /* THE LETTERBOX. BarTender renders into a SQUARE canvas and pads the label
+       out to it with flat grey, so pasting the PNG in whole would import a
+       98.8 x 34.1 mm label as a square with two grey bars. The label sits
+       centred and fills one axis, so the crop is pure arithmetic off the
+       template's own aspect ratio — no pixel-hunting, nothing to tune. */
+    /* THE GREY HAS TO GO. BarTender renders into a SQUARE canvas and pads the
+       label out to it with flat grey. Cropping to the label's aspect takes off
+       the bars, but a rounded label still leaves four grey wedges where its
+       corners curve away — and those would print.
+
+       So after the crop, the grey is flood-filled away from each corner and
+       left transparent. FLOOD-FILLED, not matched globally: a label may
+       legitimately contain that same grey somewhere in its artwork, and a
+       blanket colour swap would punch holes in it. Only grey reachable from
+       outside the label is outside the label. */
+    function clearSurround(cx,w,h){
+      let img;
+      try{ img=cx.getImageData(0,0,w,h); }catch(e){ return; }   // tainted canvas
+      const d=img.data;
+      const at=(x,y)=>(y*w+x)*4;
+      const seed=[at(0,0),at(w-1,0),at(0,h-1),at(w-1,h-1)];
+      /* all four corners must agree, or this is not a letterboxed render */
+      const r0=d[seed[0]], g0=d[seed[0]+1], b0=d[seed[0]+2];
+      const near=(i,tol)=>Math.abs(d[i]-r0)<=tol&&Math.abs(d[i+1]-g0)<=tol&&
+                          Math.abs(d[i+2]-b0)<=tol;
+      for(const s of seed) if(!near(s,10)) return;
+      /* a white or near-white ground is the label itself on white stock —
+         clearing that would erase the label */
+      if(r0>235&&g0>235&&b0>235) return;
+      const seen=new Uint8Array(w*h);
+      const stack=[];
+      const push=(x,y)=>{
+        if(x<0||y<0||x>=w||y>=h) return;
+        const p=y*w+x;
+        if(seen[p]) return;
+        seen[p]=1;
+        if(!near(p*4,26)) return;
+        d[p*4+3]=0;
+        stack.push(p);
+      };
+      push(0,0); push(w-1,0); push(0,h-1); push(w-1,h-1);
+      while(stack.length){
+        const p=stack.pop(), x=p%w, y=(p-x)/w;
+        push(x+1,y); push(x-1,y); push(x,y+1); push(x,y-1);
+      }
+      cx.putImageData(img,0,0);
+    }
+    function cropToLabel(img,wmm,hmm){
+      const want=wmm/hmm, have=img.width/img.height;
+      let sx=0, sy=0, sw=img.width, sh=img.height;
+      if(have>want){ sw=Math.round(img.height*want); sx=Math.round((img.width-sw)/2); }
+      else if(have<want){ sh=Math.round(img.width/want); sy=Math.round((img.height-sh)/2); }
+      const cv=document.createElement("canvas");
+      cv.width=sw; cv.height=sh;
+      const cx=cv.getContext("2d");
+      if(!cx) return "";
+      cx.drawImage(img,sx,sy,sw,sh,0,0,sw,sh);
+      clearSurround(cx,sw,sh);
+      /* PNG, and PNG only: the transparency just cut into the corners is the
+         whole point, and JPEG has none. If it will not fit under the cap the
+         picture is dropped rather than flattened back onto grey. */
+      const url=cv.toDataURL("image/png");
+      return url.length<=MAX_IMG?url:"";
+    }
+
+    /* Hands a finished doc to its callback, or null if the file gives up
+       nothing usable. Asynchronous, because decoding a PNG is. */
+    /* ---- THE TEXT INSIDE A .btw ----
+
+       The artwork alone is a photograph of a label: right size, right look,
+       nothing you can change. The words are in there too, and they are worth
+       digging out — an operator who imports a box label wants to edit the type
+       code on it, not admire it.
+
+       WHERE THEY ARE. Past the header the file carries one zlib stream (0x78
+       0x9c and friends). Inflated it is BarTender's own binary record format —
+       undocumented, and not worth guessing at — but the text of every field
+       sits in it as a plain RTF blob in UTF-16, complete with the size,
+       weight and alignment it was typed at.
+
+       WHAT IS NOT IN REACH. Positions. The int32s around each blob are flags
+       and DPI figures, not coordinates; nothing in them reads as x/y in any
+       unit the label could be measured in. Rather than guess and quietly print
+       a field in the wrong place, the recovered text is stacked down the label
+       and the original artwork is left underneath at low opacity as a TRACING
+       GUIDE. Drag each line onto its place, then clear the background.
+
+       DecompressionStream is how a browser inflates; it is asynchronous, hence
+       the callback. Anything at all going wrong here falls back to the picture
+       on its own, which is always better than failing the import. */
+    function inflateZlib(bytes,done){
+      if(typeof DecompressionStream!=="function") return done(null);
+      try{
+        const ds=new DecompressionStream("deflate");
+        new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer()
+          .then(buf=>done(new Uint8Array(buf)))
+          .catch(()=>done(null));
+      }catch(e){ done(null); }
+    }
+    /* The first zlib stream that actually inflates. Only a handful of offsets
+       ever look like one, so this is cheap. */
+    function inflateFirst(bytes,done){
+      const at=[];
+      for(let i=0;i+1<bytes.length;i++){
+        if(bytes[i]===0x78&&(bytes[i+1]===0x01||bytes[i+1]===0x9c||bytes[i+1]===0xda))
+          at.push(i);
+        if(at.length>24) break;
+      }
+      let k=0;
+      (function next(){
+        if(k>=at.length) return done(null);
+        const off=at[k++];
+        inflateZlib(bytes.slice(off),(out)=>{
+          if(out&&out.length>1024) return done(out);
+          next();
+        });
+      })();
+    }
+
+    /* RTF down to the words. The font table, colour table and stylesheet are
+       GROUPS, not text — stripped by matching braces rather than by regex,
+       because "{\fonttbl{\f0 Calibri;}{\f1 Arial;}}" nests and a flat pattern
+       leaves "Calibri;Arial;" glued to the front of every label. */
+    function rtfText(rtf){
+      let s=String(rtf||"");
+      const drop=/\{\\(?:\*|fonttbl|colortbl|stylesheet|themedata|generator|info|listtable|listoverridetable|latentstyles|datastore)/;
+      for(;;){
+        const m=drop.exec(s);
+        if(!m) break;
+        let d=0,i=m.index;
+        for(;i<s.length;i++){
+          if(s[i]==="{") d++;
+          else if(s[i]==="}"){ d--; if(!d){ i++; break; } }
+        }
+        s=s.slice(0,m.index)+s.slice(i);
+      }
+      return s
+        .replace(/\\par[d]?\b/g,"\n")
+        .replace(/\\line\b/g,"\n")
+        .replace(/\\tab\b/g,"\t")
+        .replace(/\\'([0-9a-fA-F]{2})/g,(x,hh)=>String.fromCharCode(parseInt(hh,16)))
+        .replace(/\\u(-?\d+)\s?\??/g,(x,n)=>String.fromCharCode(+n<0?+n+65536:+n))
+        .replace(/\\[a-zA-Z]+-?\d*\s?/g,"")
+        .replace(/[{}]/g,"")
+        .split("\n").map(l=>l.replace(/[ \t]+/g," ").trim())
+        .filter(Boolean).join("\n").trim();
+    }
+
+    /* Every distinct field in the stream, in the order BarTender wrote them.
+       A field turns up twice — once for the template and once for the data
+       entry form — so the same words are taken only once. */
+    function fieldsIn(stream){
+      const s=(function(){
+        let out="";
+        /* UTF-16LE by hand: TextDecoder would be tidier but the stream is not
+           valid UTF-16 throughout and a fatal decode would throw it all away. */
+        for(let i=0;i+1<stream.length;i+=2)
+          out+=String.fromCharCode(stream[i]|(stream[i+1]<<8));
+        return out;
+      })();
+      const out=[], seen={};
+      let from=0;
+      for(;;){
+        const a=s.indexOf("{\\rtf",from);
+        if(a<0) break;
+        /* to the end of the RTF group */
+        let d=0,i=a;
+        for(;i<s.length;i++){
+          if(s[i]==="{") d++;
+          else if(s[i]==="}"){ d--; if(!d){ i++; break; } }
+        }
+        const blob=s.slice(a,i);
+        from=i;
+        const text=rtfText(blob);
+        if(!text||text.length>600) continue;
+        const key=text.toLowerCase();
+        if(seen[key]) continue;
+        seen[key]=1;
+        const al=/\\(qc|ql|qr|qj)\b/.exec(blob);
+        const fs2=/\\fs(\d+)/.exec(blob);
+        out.push({
+          text:text,
+          bold:/\\b\b(?!\w)/.test(blob),
+          italic:/\\i\b(?!\w)/.test(blob),
+          /* RTF sizes are HALF-points; the studio measures type in mm. */
+          mm:fs2?Math.max(1.5,Math.min(40,(+fs2[1]/2)*25.4/72)):4,
+          align:al?({qc:"center",ql:"left",qr:"right",qj:"justify"})[al[1]]:"left",
+        });
+        if(out.length>=24) break;
+      }
+      return out;
+    }
+
+    /* Stacked down the label with a small margin, each line given room in
+       proportion to its type size. Not where BarTender had them — see above —
+       but on the label, editable, and over a guide showing where to drag. */
+    function layoutFields(list,w,h){
+      if(!list.length) return [];
+      const mx=Math.max(1,w*0.04), my=Math.max(1,h*0.06);
+      const iw=w-mx*2, ih=h-my*2;
+      const weight=list.map(f=>Math.max(1,f.mm));
+      const total=weight.reduce((a,b)=>a+b,0);
+      let y=my;
+      return list.map((f,i)=>{
+        const bh=Math.max(2,ih*(weight[i]/total));
+        const o={ id:uid("o_"), type:"text", text:f.text,
+          x:+mx.toFixed(2), y:+y.toFixed(2), w:+iw.toFixed(2), h:+bh.toFixed(2),
+          size:+Math.min(f.mm,bh*0.8).toFixed(2),
+          bold:f.bold, italic:f.italic, align:f.align, valign:"middle",
+          font:"arial" };
+        y+=bh;
+        return o;
+      });
+    }
+
+    /* THE FILE NAME BEATS THE STORED TITLE. Every .btw checked out of this
+       plant — six of them, different labels, different colours — carries
+       <Title>BOX TEMPLATE</Title>, because each was made by "save as" from one
+       original and BarTender keeps the metadata of the file it was born from.
+       Importing six labels all called BOX TEMPLATE is technically faithful and
+       practically useless; the name on the file is the name the operator knows
+       it by. The stored title is the fallback, not the other way round. */
+    function btwName(fileName,title){
+      const base=String(fileName||"").replace(/\.[^.]*$/,"").trim();
+      return (base||title||"Imported label").slice(0,60);
+    }
+    function readBtw(bytes,done,fileName){
+      const hdr=btwHeader(bytes);
+      if(!hdr.w||!hdr.h) return done(null,0);
+      const pngs=pngsIn(bytes);
+      if(!pngs.length) return done(null,0);
+      const big=pngs.slice().sort((a,b)=>b.len-a.len)[0];
+      const blob=new Blob([bytes.slice(big.at,big.at+big.len)],{type:"image/png"});
+      const url=URL.createObjectURL(blob);
+      const img=new Image();
+      img.onload=()=>{
+        let data="";
+        try{ data=cropToLabel(img,hdr.w,hdr.h); }catch(e){ data=""; }
+        URL.revokeObjectURL(url);
+        /* Now go back for the words. The picture is already in hand, so if the
+           text cannot be recovered the import still succeeds — it just arrives
+           as artwork, which is what it used to do every time. */
+        inflateFirst(bytes,(stream)=>{
+          let fields=[];
+          try{ fields=stream?fieldsIn(stream):[]; }catch(e){ fields=[]; }
+          const objects=layoutFields(fields,hdr.w,hdr.h);
+          done(cleanDoc({
+            name:btwName(fileName,hdr.title),
+            w:hdr.w, h:hdr.h, mode:"sheet", autoFit:true,
+            /* Square: BarTender's render already carries whatever corners the
+               label has, and rounding it again would shave them twice. */
+            shape:"rect",
+            bgImage:data, bgFit:"fill",
+            /* IT ARRIVES LOOKING EXACTLY AS BarTender DRAWS IT — the render at
+               full strength, at the true size, and nothing laid over it.
+
+               The recovered fields come too, but HIDDEN. Showing them would
+               print every word twice, once as type and once as part of the
+               picture beneath, and dimming the picture to avoid that means the
+               label does not look like itself on arrival. So the label is
+               exact, and the text is waiting in Object Layers: show a field,
+               drag it over its printed twin, then clear the background. */
+            objects:objects.map(o=>Object.assign({},o,{hidden:true})),
+          }),fields.length);
+        });
+      };
+      img.onerror=()=>{ URL.revokeObjectURL(url); done(null,0); };
+      img.src=url;
+    }
+
+    function importFiles(files){
+      const list=[].slice.call(files||[]).filter(Boolean);
+      if(!list.length) return;
+      let added=0, skipped=0, full=false, fromBtw=0, btwText=0, btwFlat=0,
+          pending=list.length;
+      const why=[];
+      const finish=()=>{
+        if(--pending) return;
+        if(added){
+          docs=saveDocs(docs);
+          screen="gallery"; paint();
+          toast("Imported "+added+" label"+(added===1?"":"s")+
+            (skipped?" \u2014 "+skipped+" file"+(skipped===1?"":"s")+" skipped":""),
+            {type:"ok"});
+          /* An imported .btw arrives as ARTWORK, and nobody should find that
+             out at the printer. Said separately so it is not lost in a count. */
+          if(btwText) toast("Imported exactly as BarTender draws it. The "+
+            btwText+" text field"+(btwText===1?"":"s")+" BarTender stored "+
+            (btwText===1?"is":"are")+" here too, hidden \u2014 open Object Layers "+
+            "and show "+(btwText===1?"it":"one")+" to edit the wording.",
+            {type:"info",title:"From BarTender",dur:11000});
+          if(btwFlat) toast(btwFlat+" BarTender label"+(btwFlat===1?"":"s")+
+            " came in at the right size, but no text could be read out "+
+            (btwFlat===1?"of it":"of them")+" \u2014 what you have is the artwork.",
+            {type:"info",title:"From BarTender",dur:9000});
+        } else if(full){
+          toast("That is the "+MAX_DOCS+"-template limit \u2014 nothing imported",
+            {type:"warn"});
+        } else {
+          toast(why[0]||"Nothing to import.",
+            {type:"warn",title:"Could not import",dur:8000});
+        }
+      };
+      list.forEach(f=>{
+        if(f.size>MAX_IMPORT){
+          skipped++;
+          why.push("\u201c"+f.name+"\u201d is larger than 12 MB");
+          return finish();
+        }
+        const r=new FileReader();
+        r.onerror=()=>{
+          skipped++;
+          why.push("\u201c"+f.name+"\u201d could not be read");
+          finish();
+        };
+        r.onload=()=>{
+          const bytes=new Uint8Array(r.result||new ArrayBuffer(0));
+          const kind=sniff(bytes);
+          if(kind==="btw"){
+            /* A BarTender file: bring in its size and its artwork. */
+            return readBtw(bytes,(nd,nFields)=>{
+              if(!nd){ skipped++; why.push(whyNot(f,"btw")); return finish(); }
+              if(docs.length>=MAX_DOCS){ full=true; return finish(); }
+              nd.id=uid("d_");
+              nd.name=uniqueDocName(nd.name);
+              stampUsed(nd);
+              docs.push(nd); added++; fromBtw++;
+              if(nFields) btwText+=nFields; else btwFlat++;
+              finish();
+            },f.name);
+          }
+          if(kind!=="text"){ skipped++; why.push(whyNot(f,kind)); return finish(); }
+          /* A byte-order mark and stray whitespace both make JSON.parse throw
+             on a file that is otherwise perfectly good \u2014 Notepad and plenty
+             of export tools leave one behind. Trim before judging. */
+          const text=decode(bytes).replace(/^\uFEFF/,"").trim();
+          let json=null;
+          try{ json=JSON.parse(text); }
+          catch(e){ skipped++; why.push(whyNot(f,"text")); return finish(); }
+          const raw=labelsIn(json).filter(looksLikeLabel);
+          if(!raw.length){ skipped++; why.push(whyNot(f,"text")); return finish(); }
+          raw.forEach(x=>{
+            if(docs.length>=MAX_DOCS){ full=true; return; }
+            const nd=cleanDoc(x);
+            /* A fresh identity, always. An imported file carries the ids it was
+               saved with, and reusing one would have two templates answering to
+               the same name inside the run planner. */
+            nd.id=uid("d_");
+            nd.name=uniqueDocName(nd.name);
+            nd.objects.forEach(o=>{ o.id=uid("o_"); });
+            stampUsed(nd);
+            docs.push(nd); added++;
+          });
+          finish();
+        };
+        /* ArrayBuffer, not text: see sniff() above. */
+        r.readAsArrayBuffer(f);
+      });
+    }
+
+    /* One hidden input, reused: a fresh one per click litters the document, and
+       the same file picked twice in a row fires no change event unless the value
+       is cleared first. */
+    let importInput=null;
+    function askForFile(){
+      if(!importInput){
+        /* NO accept FILTER AT ALL. A label may arrive named .btw, .json, .txt,
+           .label or nothing whatever, and a filter that guesses wrong greys out
+           the very file the operator came to import — with no explanation, in a
+           dialog that cannot show one. Everything is offered; what it actually
+           holds is decided by reading it, and whyNot() explains any refusal in
+           words. */
+        importInput=h("input",{type:"file",multiple:"multiple",
+          style:"display:none"});
+        importInput.addEventListener("change",()=>{
+          /* ⚠ COPY THE LIST FIRST. input.files is LIVE, and clearing the value
+             empties it — do that before the reads and there is nothing left to
+             read by the time they run. */
+          const picked=[].slice.call(importInput.files||[]);
+          importInput.value="";
+          importFiles(picked);
+        });
+      }
+      /* ⚠ ON document.body, NOT the studio root. paint() empties the root on
+         every repaint — including the repaint at the end of an import — so an
+         input parked there is thrown away and the NEXT click opens nothing. */
+      if(!importInput.isConnected) document.body.appendChild(importInput);
+      importInput.click();
+    }
+
     function galleryPane(){
       const wrap=h("div",{class:"ls-gal"});
       const total=docs.length;
@@ -1962,6 +2578,11 @@
           h("div",{class:"ls-hero-a"},[
             h("button",{class:"btn primary",onclick:()=>newBlank(),
               title:"It asks what you are printing on first",text:"＋  New label"}),
+            h("button",{class:"btn",onclick:askForFile,
+              title:"Bring in a label downloaded from a Label Studio. Any file name "+
+                    "will do — the contents decide. One file may hold several. "+
+                    "BarTender .btw files cannot be read."},
+              [ico("open",14),h("span",{text:"Import label…"})]),
             opened?h("button",{class:"btn",onclick:()=>{screen="design";paint();},
               text:"← Back to “"+doc().name+"”"}):null,
           ].filter(Boolean)),
@@ -2107,6 +2728,10 @@
               c.id=uid("d_"); c.name=(d.name+" copy").slice(0,60);
               c.objects.forEach(o=>o.id=uid("o_"));
               docs.push(c); docs=saveDocs(docs); paint(); toast("Duplicated",{type:"ok"}); }},"⧉"),
+            h("button",{class:"mini",
+              title:"Download “"+d.name+"” as a "+LABEL_EXT+" file — for backup, or to "+
+                    "import into another Chhaperia ERP. BarTender cannot open it.",
+              onclick:(e)=>{ e.stopPropagation(); downloadDoc(d); }},"⤓"),
             h("button",{class:"mini danger",title:"Delete",onclick:(e)=>{ e.stopPropagation();
               confirm("Delete the template “"+d.name+"”? This cannot be undone.",
                 {title:"Delete template",danger:true}).then(ok=>{
@@ -2639,6 +3264,25 @@
         h("button",{class:"ls-rfs",type:"button",
           title:full?"Leave full screen  (Esc)":"Fill the screen with the designer",
           onclick:toggleFull},ico("full",14)),
+        /* THE WAY OUT, in the top-right corner where a way out belongs.
+           The designer is a room you walked into from the library, and a room
+           needs a door you can SEE. One existed — right-click a document tab
+           for "Close", or find "Browse all labels…" inside the Open menu — but
+           both are doors only somebody who already knows about them can find.
+
+           It asks nothing before leaving, because nothing is at risk: this
+           only changes which screen is drawn. The edits stay in `docs`, the
+           library card shows them, and opening the label again picks up
+           exactly where it left off. A confirmation here would be asking
+           permission for something that costs nothing. */
+        h("button",{class:"ls-exit",type:"button",
+          title:dirty
+            ? "Back to the label library — this design keeps its unsaved changes"
+            : "Back to the label library",
+          onclick:()=>{ screen="gallery"; paint(); }},[
+          ico("chev",14),
+          h("span",{text:"My Labels"}),
+        ]),
       ]);
     }
 
@@ -4670,6 +5314,25 @@
           d.mode==="roll"
             ? "The page becomes the label itself: "+d.w+" × "+d.h+" mm, no margins. This is what a Zebra or TSC printer expects."
             : "Labels are tiled across the page; the grid is worked out from the sizes below."));
+        /* PRINT ORDER lives here rather than on the print screen because it is
+           a fact about the stock, not about one run: a die-cut sheet is fed the
+           way it is fed. It decides which physical die-cut is number one, so it
+           is also what the numbered sheet on the print screen counts by — and
+           what "Start at position 7" therefore means.
+           On a roll there is one row, so "across" and "down" are the same
+           journey and only the start corner does anything; offering four
+           identical-looking choices there would be a lie. */
+        right.appendChild(fld("Print order",
+          sel1(d.printOrder||"th",
+            (d.mode==="roll"?ORDERS.filter(o=>o.v==="th"||o.v==="bh"):ORDERS)
+              .map(o=>({v:o.v,l:o.l})),
+            v=>{ d.printOrder=v; redraw(); }),
+          (ORDERS.find(o=>o.v===(d.printOrder||"th"))||ORDERS[0]).d));
+        right.appendChild(fld("Copies of each",
+          nInput(d.copies,v=>{d.copies=Math.max(1,Math.min(500,Math.round(v)||1));redraw();},1,1,500),
+          "How many stickers one label is worth — two drums off the same reel "+
+          "carry the same number, so a copy repeats the label rather than "+
+          "advancing it."));
         if(d.mode==="sheet"){
           right.appendChild(row(2,[
             fld("Page",sel1(d.page,PAGES.map(p=>({v:p.v,l:p.v==="custom"?"Custom":p.v})),
