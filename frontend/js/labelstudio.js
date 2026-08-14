@@ -1974,39 +1974,239 @@
        ============================================================ */
     const MAX_IMPORT=12*1024*1024;      // a design may carry placed pictures
     const LABEL_KIND="chhaperia-label";
-    /* THE EXTENSION IS .label — a label file, which is what it is.
+    /* Downloads used to be .label (bare JSON); they are .doc now — see
+       DOWNLOAD AS A WORD DOCUMENT below. Import still reads the old .label
+       files, because a year of backups does not stop being real when the
+       format moves on. Import never looks at the extension anyway; it reads
+       the bytes. */
 
-       Not .json: that is the shape of the bytes, not the kind of thing they
-       are, and it tells an operator nothing about what they are holding.
+    /* ============================================================
+       DOWNLOAD AS A WORD DOCUMENT
 
-       Not .btw either, and this one was learned the hard way. A real .btw is
-       Seagull's own closed binary; naming our file .btw does not make
-       BarTender read it, it only makes Windows hand the file straight to the
-       one application certain to reject it — error #3323, "not a supported
-       file type". .label has no such association: double-click it and Windows
-       asks what to open it with, instead of confidently doing the wrong thing.
+       The file a download hands over is a .doc — an MHT web archive,
+       which desktop Word has opened natively for twenty years. The
+       label is drawn in it at true size, the type as editable text,
+       barcodes and pictures as pictures, so the sticker can go on
+       being worked on in Word.
 
-       Import never looks at the extension anyway; it reads the bytes. This
-       name is for the human in the downloads folder. */
-    const LABEL_EXT=".label";
+       AND IT COMES BACK. The label's own JSON rides inside the same
+       file as its own MIME part, so importing the .doc into Label
+       Studio restores the design losslessly — one file is both the
+       Word copy and the backup. Editing the Word copy edits the Word
+       copy only; the part holds the design as it was downloaded.
+       ============================================================ */
+    const b64utf8=(s)=>btoa(unescape(encodeURIComponent(s)));
+    const b64wrap=(s)=>s.replace(/(.{76})/g,"$1\r\n");
+    /* An SVG string, rasterized to a PNG data-url at print-ish density.
+       Chrome rasterizes an <img> of an SVG data-url without tainting the
+       canvas, so toDataURL stays available. */
+    function svgToPng(svg,wmm,hmm,done){
+      const PXMM=8, W=Math.max(2,Math.round(wmm*PXMM)), H=Math.max(2,Math.round(hmm*PXMM));
+      const src="data:image/svg+xml;base64,"+b64utf8(
+        svg.replace(/style="[^"]*"/,"")
+           .replace("<svg",`<svg width="${W}" height="${H}"`));
+      const img=new Image();
+      img.onload=()=>{
+        try{
+          const cv=document.createElement("canvas");
+          cv.width=W; cv.height=H;
+          const cx=cv.getContext("2d");
+          cx.drawImage(img,0,0,W,H);
+          done(cv.toDataURL("image/png"));
+        }catch(e){ done(""); }
+      };
+      img.onerror=()=>done("");
+      img.src=src;
+    }
+    /* An ellipse needs no SVG round-trip — canvas draws it directly. */
+    function ellipsePng(o){
+      const PXMM=8, W=Math.max(2,Math.round(o.w*PXMM)), H=Math.max(2,Math.round(o.h*PXMM));
+      try{
+        const cv=document.createElement("canvas");
+        cv.width=W; cv.height=H;
+        const cx=cv.getContext("2d");
+        const sw=Math.max(0,(+o.strokeW||0)*PXMM);
+        cx.beginPath();
+        cx.ellipse(W/2,H/2,Math.max(1,W/2-sw/2-.5),Math.max(1,H/2-sw/2-.5),0,0,Math.PI*2);
+        if(o.fill){ cx.fillStyle=o.fill; cx.fill(); }
+        if(sw>0){ cx.lineWidth=sw; cx.strokeStyle=o.stroke||"#000"; cx.stroke(); }
+        return cv.toDataURL("image/png");
+      }catch(e){ return ""; }
+    }
+
+    /* The label as Word-safe HTML. Everything is absolutely positioned from
+       the PAGE origin — Word turns nested absolute boxes into a guess, and
+       one shared origin is the arrangement it honours. Text stays text;
+       barcodes, QR, ellipses and pictures become picture parts. */
+    function wordHtml(d,parts,rasters){
+      const X0=15, Y0=15;                         // the label's place on the page
+      const mmS2=(n)=>(+n).toFixed(2)+"mm";
+      const ctx0={index:0,now:new Date(),prompts:{}};
+      const abs=(x,y,w,hh)=>`position:absolute;left:${mmS2(X0+x)};top:${mmS2(Y0+y)};`+
+        `width:${mmS2(w)};height:${mmS2(hh)};`;
+      const out=[];
+      /* the die: the label's ground and outline, under everything */
+      out.push(`<div style="${abs(0,0,d.w,d.h)}background:${d.bg||"#fff"};`+
+        `border:0.2mm dashed #9aa0a6"></div>`);
+      if(d.bgImage){
+        const loc=addPart(parts,d.bgImage);
+        if(loc){
+          const cw=d.bgFit==="custom"&&d.bgW>0?d.bgW:d.w;
+          const ch=d.bgFit==="custom"&&d.bgH>0?d.bgH:d.h;
+          const cxx=d.bgFit==="custom"?d.bgX:0, cy=d.bgFit==="custom"?d.bgY:0;
+          out.push(`<img src="${loc}" style="${abs(cxx,cy,cw,ch)}">`);
+        }
+      }
+      d.objects.forEach(o=>{
+        if(o.hidden) return;
+        const val=srcValue(o,ctx0);
+        if(o.type==="text"){
+          const tc=o.tcase==="upper"?String(val).toUpperCase()
+                 :o.tcase==="lower"?String(val).toLowerCase()
+                 :o.tcase==="title"?String(val).replace(/\b\w/g,c=>c.toUpperCase())
+                 :String(val);
+          const pt=(o.size*72/25.4).toFixed(1);
+          const deco=[o.underline?"underline":"",o.strike?"line-through":""]
+            .filter(Boolean).join(" ");
+          out.push(`<div style="${abs(o.x,o.y,o.w,o.h)}`+
+            `font-family:'${(FONTS.find(f=>f.v===o.font)||FONTS[0]).l}';`+
+            `font-size:${pt}pt;line-height:${o.lineH||1.25};`+
+            `${o.bold?"font-weight:bold;":""}${o.italic?"font-style:italic;":""}`+
+            `${deco?"text-decoration:"+deco+";":""}color:${o.color};`+
+            `text-align:${o.align};${o.shade?"background:"+o.shade+";":""}`+
+            `${o.wrap===false?"white-space:nowrap;":""}`+
+            `${o.indentL?"padding-left:"+mmS2(o.indentL)+";":""}`+
+            `${o.indentR?"padding-right:"+mmS2(o.indentR)+";":""}`+
+            `">${esc(tc).replace(/\n/g,"<br>")}</div>`);
+          return;
+        }
+        if(o.type==="barcode"||o.type==="qr"){
+          const is2d=o.type==="qr"||o.sym==="qr";
+          const r=is2d?qrSvg(val,o.color,o.ecl):barcodeSvg(o.sym,val,o.color);
+          if(!r) return;
+          const capH=o.showText?Math.min(o.h*0.4,o.size*1.35+0.5):0;
+          const job={svg:r.svg,w:o.w,h:Math.max(1,o.h-capH)};
+          rasters.push(job);
+          out.push(()=>{
+            const loc=job.png?addPart(parts,job.png):"";
+            let s=loc?`<img src="${loc}" style="${abs(o.x,o.y,o.w,o.h-capH)}">`:"";
+            if(o.showText&&capH>0)
+              s+=`<div style="${abs(o.x,o.y+o.h-capH,o.w,capH)}text-align:center;`+
+                 `font-family:'${(FONTS.find(f=>f.v===o.font)||FONTS[0]).l}';`+
+                 `font-size:${(o.size*72/25.4).toFixed(1)}pt;letter-spacing:.06em;`+
+                 `color:${o.color}">${esc(r.text)}</div>`;
+            return s;
+          });
+          return;
+        }
+        if(o.type==="image"&&o.data){
+          const loc=addPart(parts,o.data);
+          if(loc) out.push(`<img src="${loc}" style="${abs(o.x,o.y,o.w,o.h)}">`);
+          return;
+        }
+        if(o.type==="line"){
+          out.push(`<div style="${abs(o.x,o.y,o.w,Math.max(o.strokeW,.2))}`+
+            `background:${o.stroke};font-size:1pt">&nbsp;</div>`);
+          return;
+        }
+        if(o.type==="ellipse"){
+          const png=ellipsePng(o);
+          const loc=png?addPart(parts,png):"";
+          if(loc) out.push(`<img src="${loc}" style="${abs(o.x,o.y,o.w,o.h)}">`);
+          return;
+        }
+        /* box */
+        out.push(`<div style="${abs(o.x,o.y,o.w,o.h)}`+
+          `${o.strokeW>0?"border:"+mmS2(o.strokeW)+" solid "+o.stroke+";":""}`+
+          `background:${o.fill||"transparent"};font-size:1pt">&nbsp;</div>`);
+      });
+      return out;
+    }
+    /* One image part per distinct picture. Word finds it by Content-Location. */
+    function addPart(parts,dataUrl){
+      const m=/^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl||"");
+      if(!m) return "";
+      const have=parts.find(p=>p.b64===m[2]);
+      if(have) return have.loc;
+      const ext=m[1]==="image/jpeg"?"jpg":m[1].replace("image/","").replace("+xml","");
+      const loc="file:///C:/chh-label/img"+(parts.length+1)+"."+ext;
+      parts.push({loc,type:m[1],b64:m[2]});
+      return loc;
+    }
 
     function downloadDoc(d){
+      const dd=cleanDoc(JSON.parse(JSON.stringify(d)));
       const payload={kind:LABEL_KIND, version:1,
-        note:"Chhaperia Label Studio template. Import it from Label Studio — "+
-             "this is not a Seagull BarTender document.",
+        note:"Chhaperia Label Studio template, embedded in its own Word copy. "+
+             "Import this .doc back into Label Studio to restore the design.",
         exported:new Date().toISOString(),
-        labels:[cleanDoc(JSON.parse(JSON.stringify(d)))]};
+        labels:[dd]};
       const name=String(d.name||"label").replace(/[^\w .()-]+/g,"_")
         .replace(/\s+/g," ").trim().slice(0,60)||"label";
-      const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-      const url=URL.createObjectURL(blob);
-      const a=h("a",{href:url,download:name+LABEL_EXT,style:"display:none"});
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
-      toast("Saved “"+name+LABEL_EXT+"” — bring it back with Import. "+
-            "It is a Label Studio file, not a BarTender one.",
-            {type:"ok",title:"Downloaded",dur:6000});
+      const parts=[], rasters=[];
+      const pieces=wordHtml(dd,parts,rasters);
+      /* rasterize every barcode/QR, then assemble — the deferred pieces close
+         over their jobs and read job.png once it exists */
+      let left=rasters.length;
+      const assemble=()=>{
+        const body=pieces.map(p=>typeof p==="function"?p():p).join("\n");
+        const spacer=`<div style="height:${(dd.h+22).toFixed(1)}mm;font-size:1pt">&nbsp;</div>`;
+        const cap=`<p style="font-family:Calibri,Arial;font-size:9pt;color:#666">`+
+          `${esc(dd.name)} — ${dd.w} × ${dd.h} mm · from Chhaperia Label Studio. `+
+          `This Word copy is for further design work; import this same file back `+
+          `into Label Studio to restore the original design.</p>`;
+        const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" `+
+          `xmlns:w="urn:schemas-microsoft-com:office:word" `+
+          `xmlns="http://www.w3.org/TR/REC-html40"><head>`+
+          `<meta http-equiv="Content-Type" content="text/html; charset=utf-8">`+
+          `<title>${esc(dd.name)}</title>`+
+          `<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View>`+
+          `<w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->`+
+          `<style>@page Section1{size:210mm 297mm;margin:12mm}`+
+          `div.Section1{page:Section1}</style></head>`+
+          `<body><div class="Section1">${body}\n${spacer}\n${cap}</div></body></html>`;
+        const B="----=_ChhaperiaLabelPart";
+        const mht=[
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/related; type="text/html"; boundary="${B}"`,
+          "","This is a Chhaperia Label Studio document in MHTML form. Open it in "+
+          "Microsoft Word, or import it back into Label Studio.","",
+          `--${B}`,
+          'Content-Type: text/html; charset="utf-8"',
+          "Content-Transfer-Encoding: base64",
+          "Content-Location: file:///C:/chh-label/label.htm","",
+          b64wrap(b64utf8(html)),"",
+        ];
+        parts.forEach(p=>{
+          mht.push(`--${B}`,
+            `Content-Type: ${p.type}`,
+            "Content-Transfer-Encoding: base64",
+            `Content-Location: ${p.loc}`,"",
+            b64wrap(p.b64),"");
+        });
+        mht.push(`--${B}`,
+          "Content-Type: application/x-chhaperia-label",
+          "Content-Transfer-Encoding: base64",
+          "Content-Location: file:///C:/chh-label/design.chhaperia","",
+          b64wrap(b64utf8(JSON.stringify(payload))),"",
+          `--${B}--`,"");
+        const blob=new Blob([mht.join("\r\n")],{type:"application/msword"});
+        const url=URL.createObjectURL(blob);
+        const a=h("a",{href:url,download:name+".doc",style:"display:none"});
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
+        toast("Saved “"+name+".doc” — opens in Microsoft Word for further "+
+              "design work, and imports straight back into Label Studio.",
+              {type:"ok",title:"Downloaded",dur:6000});
+      };
+      if(!left) return assemble();
+      rasters.forEach(job=>{
+        svgToPng(job.svg,job.w,job.h,(png)=>{
+          job.png=png;
+          if(!--left) assemble();
+        });
+      });
     }
 
     /* A name nobody else in the library is already using, so two imports of the
@@ -2164,13 +2364,113 @@
       for(let i=0;i<n;i++) s+=String.fromCharCode(bytes[i]);
       const grab=(re)=>{ const m=re.exec(s); return m?m[1].trim():""; };
       const size=grab(/<TemplateSize>([^<]*)<\/TemplateSize>/);
-      const wh=/([\d.]+)\s*x\s*([\d.]+)\s*mm/i.exec(size);
+      /* mm, cm or inches — a US-locale BarTender writes the size in inches,
+         and reading only mm turned those files away over a unit. */
+      const wh=/([\d.]+)\s*x\s*([\d.]+)\s*(mm|cm|in(?:ch(?:es)?)?|")/i.exec(size);
+      const k=wh?({mm:1,cm:10}[wh[3].toLowerCase()]||25.4):1;
       return {
         title:grab(/<Title>([^<]*)<\/Title>/),
-        w:wh?+wh[1]:0,
-        h:wh?+wh[2]:0,
+        w:wh?+wh[1]*k:0,
+        h:wh?+wh[2]*k:0,
         app:grab(/<Application>([^<]*)<\/Application>/),
       };
+    }
+
+    /* ---- THE SIZE, OUT OF THE BINARY ----
+       Older files (BarTender 9.x era — all of Seagull's own samples) carry no
+       <TemplateSize> at all; the dimensions live in the inflated stream as a
+       pair of int32 MILS (1/1000 inch) at the tail of a fixed-shape record:
+
+           [int32][0][a][a][b][b][W][H]      a,b small (margins/gaps in mils)
+
+       Measured across the 92 sample documents on this machine: the true size
+       is ALWAYS among the records this shape matches (7/7 on files whose very
+       name declares it, e.g. AIAG_B10_6.25x5) — alongside a constant pair of
+       phantom records (0.5×1 in and 0.5×0.5 in) that appear in EVERY file and
+       are preference defaults, not the label. Hence candidates, not an
+       answer: the caller picks the one that matches the artwork's own aspect
+       ratio, which the phantoms only win if the label really is that shape. */
+    function btwBinSize(stream){
+      if(!stream||stream.length<32) return [];
+      const dv=new DataView(stream.buffer,stream.byteOffset,stream.byteLength);
+      const i32=(i)=>dv.getInt32(i,true);
+      const out=[];
+      for(let i=0;i+32<=stream.length;i++){
+        if(i32(i+4)!==0) continue;
+        const a=i32(i+8), a2=i32(i+12), b=i32(i+16), b2=i32(i+20);
+        if(a!==a2||b!==b2||a<0||a>2000||b<0||b>2000) continue;
+        const w=i32(i+24), h=i32(i+28);
+        if(w<200||w>30000||h<200||h>30000) continue;
+        const wmm=+(w*0.0254).toFixed(2), hmm=+(h*0.0254).toFixed(2);
+        if(!out.some(c=>c.w===wmm&&c.h===hmm)) out.push({w:wmm,h:hmm});
+      }
+      return out;
+    }
+    /* Which candidate is the label? The one shaped like the artwork. */
+    function pickBinSize(cands,aspect){
+      if(!cands.length||!aspect) return null;
+      let best=null, bestD=Math.log(1.10);   // within 10% or it is not a match
+      cands.forEach(c=>{
+        const d=Math.abs(Math.log((c.w/c.h)/aspect));
+        /* ties go to the LARGER label: the phantom records are half-inch
+           squares, and a real half-inch label still beats them on distance */
+        if(d<bestD-1e-9||(Math.abs(d-bestD)<1e-9&&best&&c.w*c.h>best.w*best.h)){
+          best=c; bestD=d;
+        }
+      });
+      return best;
+    }
+
+    /* ---- WHERE THE LABEL SITS IN THE RENDER ----
+       The render is a square canvas; the label is the part that is not the
+       letterbox grey. Flood the corner colour inward and take the bounding
+       box of everything else. Returns null when the corners disagree or the
+       ground is white — the same tests clearSurround applies, because a
+       white ground IS the label and must not be measured away. */
+    function contentBox(img){
+      const w=img.width, h=img.height;
+      if(!w||!h) return null;
+      const cv=document.createElement("canvas");
+      cv.width=w; cv.height=h;
+      const cx=cv.getContext("2d");
+      if(!cx) return null;
+      cx.drawImage(img,0,0);
+      let d;
+      try{ d=cx.getImageData(0,0,w,h).data; }catch(e){ return null; }
+      const at=(x,y)=>(y*w+x)*4;
+      const c0=at(0,0);
+      const r0=d[c0], g0=d[c0+1], b0=d[c0+2];
+      const near=(i,tol)=>Math.abs(d[i]-r0)<=tol&&Math.abs(d[i+1]-g0)<=tol&&
+                          Math.abs(d[i+2]-b0)<=tol;
+      for(const s of [at(w-1,0),at(0,h-1),at(w-1,h-1)]) if(!near(s,10)) return null;
+      if(r0>235&&g0>235&&b0>235) return null;
+      const seen=new Uint8Array(w*h);
+      const stack=[];
+      const push=(x,y)=>{
+        if(x<0||y<0||x>=w||y>=h) return;
+        const p=y*w+x;
+        if(seen[p]) return;
+        seen[p]=1;
+        if(!near(p*4,26)) return;
+        stack.push(p);
+      };
+      push(0,0); push(w-1,0); push(0,h-1); push(w-1,h-1);
+      while(stack.length){
+        const p=stack.pop(), x=p%w, y=(p-x)/w;
+        push(x+1,y); push(x-1,y); push(x,y+1); push(x,y-1);
+      }
+      let x0=w, y0=h, x1=-1, y1=-1;
+      for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+        const p=y*w+x;
+        if(seen[p]&&near(p*4,26)) continue;   // surround
+        if(x<x0) x0=x; if(x>x1) x1=x;
+        if(y<y0) y0=y; if(y>y1) y1=y;
+      }
+      if(x1<x0||y1<y0) return null;
+      const bw=x1-x0+1, bh=y1-y0+1;
+      /* a sliver is noise, not a label */
+      if(bw<w*0.05||bh<h*0.05) return null;
+      return {x:x0,y:y0,w:bw,h:bh};
     }
 
     /* THE LETTERBOX. BarTender renders into a SQUARE canvas and pads the label
@@ -2220,11 +2520,17 @@
       }
       cx.putImageData(img,0,0);
     }
-    function cropToLabel(img,wmm,hmm){
-      const want=wmm/hmm, have=img.width/img.height;
+    function cropToLabel(img,wmm,hmm,box){
       let sx=0, sy=0, sw=img.width, sh=img.height;
-      if(have>want){ sw=Math.round(img.height*want); sx=Math.round((img.width-sw)/2); }
-      else if(have<want){ sh=Math.round(img.width/want); sy=Math.round((img.height-sh)/2); }
+      if(box){
+        /* the measured bounding box beats aspect arithmetic — it is where the
+           label actually is, not where a centred one would be */
+        sx=box.x; sy=box.y; sw=box.w; sh=box.h;
+      } else {
+        const want=wmm/hmm, have=img.width/img.height;
+        if(have>want){ sw=Math.round(img.height*want); sx=Math.round((img.width-sw)/2); }
+        else if(have<want){ sh=Math.round(img.width/want); sy=Math.round((img.height-sh)/2); }
+      }
       const cv=document.createElement("canvas");
       cv.width=sw; cv.height=sh;
       const cx=cv.getContext("2d");
@@ -2263,13 +2569,39 @@
        DecompressionStream is how a browser inflates; it is asynchronous, hence
        the callback. Anything at all going wrong here falls back to the picture
        on its own, which is always better than failing the import. */
+    /* ⚠ CHUNKED, AND IT KEEPS WHAT IT HAS. The zlib stream inside a .btw ends
+       long before the file does — the PNG render follows it — and Chrome's
+       DecompressionStream treats those trailing bytes as an ERROR after the
+       stream completes. Response.arrayBuffer() turns that error into nothing
+       at all, throwing away a perfectly inflated stream because of what came
+       AFTER it. Measured on Seagull's own sample documents: every one of them
+       inflates in node and came back null here. So the stream is read chunk
+       by chunk and an error at the tail returns the chunks in hand.
+
+       The cap is the other half: 12 MB of hostile input could legally inflate
+       to gigabytes and freeze the tab. Past 32 MB nothing in it can be a
+       label's text — stop reading and work with what arrived. */
     function inflateZlib(bytes,done){
       if(typeof DecompressionStream!=="function") return done(null);
       try{
         const ds=new DecompressionStream("deflate");
-        new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer()
-          .then(buf=>done(new Uint8Array(buf)))
-          .catch(()=>done(null));
+        const reader=new Blob([bytes]).stream().pipeThrough(ds).getReader();
+        const parts=[]; let total=0;
+        const CAP=32*1024*1024;
+        const finish=()=>{
+          if(!total) return done(null);
+          const out=new Uint8Array(total); let o=0;
+          parts.forEach(p=>{ out.set(p,o); o+=p.length; });
+          done(out);
+        };
+        (function pump(){
+          reader.read().then(({done:fin,value})=>{
+            if(value){ parts.push(value); total+=value.length;
+              if(total>CAP){ try{reader.cancel();}catch(e){} return finish(); } }
+            if(fin) return finish();
+            pump();
+          }).catch(finish);
+        })();
       }catch(e){ done(null); }
     }
     /* The first zlib stream that actually inflates. Only a handful of offsets
@@ -2323,17 +2655,28 @@
 
     /* Every distinct field in the stream, in the order BarTender wrote them.
        A field turns up twice — once for the template and once for the data
-       entry form — so the same words are taken only once. */
+       entry form — so the same words are taken only once.
+
+       ⚠ BOTH UTF-16 ALIGNMENTS. The RTF blobs are UTF-16LE, but nothing
+       guarantees they start on an even offset of the inflated stream — and in
+       Seagull's own sample documents most of them DON'T. Reading only the
+       even alignment silently lost the text of two files in three; both
+       phases are read and duplicates fall out through the same `seen` map. */
     function fieldsIn(stream){
+      const out=[], seen={};
+      fieldsInPhase(stream,0,out,seen);
+      fieldsInPhase(stream,1,out,seen);
+      return out;
+    }
+    function fieldsInPhase(stream,phase,out,seen){
       const s=(function(){
-        let out="";
+        let o="";
         /* UTF-16LE by hand: TextDecoder would be tidier but the stream is not
            valid UTF-16 throughout and a fatal decode would throw it all away. */
-        for(let i=0;i+1<stream.length;i+=2)
-          out+=String.fromCharCode(stream[i]|(stream[i+1]<<8));
-        return out;
+        for(let i=phase;i+1<stream.length;i+=2)
+          o+=String.fromCharCode(stream[i]|(stream[i+1]<<8));
+        return o;
       })();
-      const out=[], seen={};
       let from=0;
       for(;;){
         const a=s.indexOf("{\\rtf",from);
@@ -2363,7 +2706,6 @@
         });
         if(out.length>=24) break;
       }
-      return out;
     }
 
     /* Stacked down the label with a small margin, each line given room in
@@ -2399,29 +2741,50 @@
       const base=String(fileName||"").replace(/\.[^.]*$/,"").trim();
       return (base||title||"Imported label").slice(0,60);
     }
+    /* done(doc, nFields, sizeHow) — sizeHow is "header" | "binary" | "guessed",
+       so the caller can say out loud when the size is an estimate. */
     function readBtw(bytes,done,fileName){
       const hdr=btwHeader(bytes);
-      if(!hdr.w||!hdr.h) return done(null,0);
       const pngs=pngsIn(bytes);
-      if(!pngs.length) return done(null,0);
+      if(!pngs.length) return done(null,0,"");
       const big=pngs.slice().sort((a,b)=>b.len-a.len)[0];
       const blob=new Blob([bytes.slice(big.at,big.at+big.len)],{type:"image/png"});
       const url=URL.createObjectURL(blob);
       const img=new Image();
       img.onload=()=>{
-        let data="";
-        try{ data=cropToLabel(img,hdr.w,hdr.h); }catch(e){ data=""; }
-        URL.revokeObjectURL(url);
-        /* Now go back for the words. The picture is already in hand, so if the
-           text cannot be recovered the import still succeeds — it just arrives
-           as artwork, which is what it used to do every time. */
+        /* The words and the size come out of the same inflated stream, so it
+           is opened once, before anything is decided. */
         inflateFirst(bytes,(stream)=>{
           let fields=[];
           try{ fields=stream?fieldsIn(stream):[]; }catch(e){ fields=[]; }
-          const objects=layoutFields(fields,hdr.w,hdr.h);
+          let box=null;
+          try{ box=contentBox(img); }catch(e){ box=null; }
+
+          /* THE SIZE, in order of trust: the header names it outright (new
+             files); the binary carries it and the artwork's shape confirms
+             which record is real (old files — all of Seagull's samples);
+             failing both, the artwork's shape at a default width, said out
+             loud so the operator sets the truth in Page setup. */
+          let w=hdr.w, h=hdr.h, how="header";
+          if(!w||!h){
+            const aspect=box?box.w/box.h:0;
+            const pick=stream?pickBinSize(btwBinSize(stream),aspect):null;
+            if(pick){ w=pick.w; h=pick.h; how="binary"; }
+            else {
+              const a=aspect||(img.width&&img.height?img.width/img.height:1);
+              w=+(a>=1?100:100*a).toFixed(1);
+              h=+(a>=1?100/a:100).toFixed(1);
+              how="guessed";
+            }
+          }
+
+          let data="";
+          try{ data=cropToLabel(img,w,h,box); }catch(e){ data=""; }
+          URL.revokeObjectURL(url);
+          const objects=layoutFields(fields,w,h);
           done(cleanDoc({
             name:btwName(fileName,hdr.title),
-            w:hdr.w, h:hdr.h, mode:"sheet", autoFit:true,
+            w:w, h:h, mode:"sheet", autoFit:true,
             /* Square: BarTender's render already carries whatever corners the
                label has, and rounding it again would shave them twice. */
             shape:"rect",
@@ -2436,10 +2799,10 @@
                exact, and the text is waiting in Object Layers: show a field,
                drag it over its printed twin, then clear the background. */
             objects:objects.map(o=>Object.assign({},o,{hidden:true})),
-          }),fields.length);
+          }),fields.length,how);
         });
       };
-      img.onerror=()=>{ URL.revokeObjectURL(url); done(null,0); };
+      img.onerror=()=>{ URL.revokeObjectURL(url); done(null,0,""); };
       img.src=url;
     }
 
@@ -2447,7 +2810,7 @@
       const list=[].slice.call(files||[]).filter(Boolean);
       if(!list.length) return;
       let added=0, skipped=0, full=false, fromBtw=0, btwText=0, btwFlat=0,
-          pending=list.length;
+          btwGuessed=0, pending=list.length;
       const why=[];
       const finish=()=>{
         if(--pending) return;
@@ -2468,6 +2831,13 @@
             " came in at the right size, but no text could be read out "+
             (btwFlat===1?"of it":"of them")+" \u2014 what you have is the artwork.",
             {type:"info",title:"From BarTender",dur:9000});
+          /* A guessed size prints wrong until somebody fixes it \u2014 that must
+             never be discovered at the printer. */
+          if(btwGuessed) toast(btwGuessed+" label"+(btwGuessed===1?"":"s")+
+            " arrived with NO size stored \u2014 the shape is right but the "+
+            "millimetres are a guess. Open "+(btwGuessed===1?"it":"each")+
+            " and set the real size in Page setup before printing.",
+            {type:"warn",title:"Size is a guess",dur:12000});
         } else if(full){
           toast("That is the "+MAX_DOCS+"-template limit \u2014 nothing imported",
             {type:"warn"});
@@ -2493,7 +2863,7 @@
           const kind=sniff(bytes);
           if(kind==="btw"){
             /* A BarTender file: bring in its size and its artwork. */
-            return readBtw(bytes,(nd,nFields)=>{
+            return readBtw(bytes,(nd,nFields,how)=>{
               if(!nd){ skipped++; why.push(whyNot(f,"btw")); return finish(); }
               if(docs.length>=MAX_DOCS){ full=true; return finish(); }
               nd.id=uid("d_");
@@ -2501,6 +2871,7 @@
               stampUsed(nd);
               docs.push(nd); added++; fromBtw++;
               if(nFields) btwText+=nFields; else btwFlat++;
+              if(how==="guessed") btwGuessed++;
               finish();
             },f.name);
           }
@@ -2509,6 +2880,36 @@
              on a file that is otherwise perfectly good \u2014 Notepad and plenty
              of export tools leave one behind. Trim before judging. */
           const text=decode(bytes).replace(/^\uFEFF/,"").trim();
+          /* A WORD FILE THIS STUDIO WROTE. The .doc download is an MHT with
+             the label's own JSON riding inside as its own MIME part, so the
+             same file that opens in Word comes back in here losslessly \u2014
+             however much the Word copy was edited, THIS part is the design
+             as it was downloaded. */
+          if(/^(MIME-Version|From:|Content-Type:\s*multipart\/related)/i.test(text)){
+            const doc64=/Content-Type:\s*application\/x-chhaperia-label[^]*?\r?\n\r?\n([A-Za-z0-9+/=\r\n]+)/i.exec(text);
+            if(doc64){
+              let json2=null;
+              try{ json2=JSON.parse(decodeURIComponent(escape(atob(doc64[1].replace(/[\r\n]/g,""))))); }
+              catch(e){ json2=null; }
+              const raw2=labelsIn(json2).filter(looksLikeLabel);
+              if(raw2.length){
+                raw2.forEach(x=>{
+                  if(docs.length>=MAX_DOCS){ full=true; return; }
+                  const nd=cleanDoc(x);
+                  nd.id=uid("d_");
+                  nd.name=uniqueDocName(nd.name);
+                  nd.objects.forEach(o=>{ o.id=uid("o_"); });
+                  stampUsed(nd);
+                  docs.push(nd); added++;
+                });
+                return finish();
+              }
+            }
+            skipped++;
+            why.push("\u201C"+f.name+"\u201D is a Word/web-archive file, but not one this "+
+              "studio wrote \u2014 it carries no label data.");
+            return finish();
+          }
           let json=null;
           try{ json=JSON.parse(text); }
           catch(e){ skipped++; why.push(whyNot(f,"text")); return finish(); }
@@ -2579,9 +2980,9 @@
             h("button",{class:"btn primary",onclick:()=>newBlank(),
               title:"It asks what you are printing on first",text:"＋  New label"}),
             h("button",{class:"btn",onclick:askForFile,
-              title:"Bring in a label downloaded from a Label Studio. Any file name "+
-                    "will do — the contents decide. One file may hold several. "+
-                    "BarTender .btw files cannot be read."},
+              title:"Bring in a BarTender .btw (its size, artwork and text), a "+
+                    ".doc downloaded from here, or a .label file. Any file name "+
+                    "will do — the contents decide. One file may hold several."},
               [ico("open",14),h("span",{text:"Import label…"})]),
             opened?h("button",{class:"btn",onclick:()=>{screen="design";paint();},
               text:"← Back to “"+doc().name+"”"}):null,
@@ -2729,8 +3130,9 @@
               c.objects.forEach(o=>o.id=uid("o_"));
               docs.push(c); docs=saveDocs(docs); paint(); toast("Duplicated",{type:"ok"}); }},"⧉"),
             h("button",{class:"mini",
-              title:"Download “"+d.name+"” as a "+LABEL_EXT+" file — for backup, or to "+
-                    "import into another Chhaperia ERP. BarTender cannot open it.",
+              title:"Download “"+d.name+"” as a Word document (.doc) — open it in "+
+                    "Word for further design work, or import the same file back "+
+                    "here to restore the design.",
               onclick:(e)=>{ e.stopPropagation(); downloadDoc(d); }},"⤓"),
             h("button",{class:"mini danger",title:"Delete",onclick:(e)=>{ e.stopPropagation();
               confirm("Delete the template “"+d.name+"”? This cannot be undone.",
