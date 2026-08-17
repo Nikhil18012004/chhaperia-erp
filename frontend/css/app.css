@@ -1370,12 +1370,18 @@ canvas{display:block;width:100%}
 
 /* ---- month grid ---- */
 .cal-wrap{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
-.cal-head{display:grid;grid-template-columns:repeat(7,1fr);background:var(--panel-2);
+/* minmax(0,1fr), NOT 1fr: a bare 1fr floors each track at the cell's
+   min-content, and an entry pill carries a nowrap title — so seven day
+   columns insisted on ~210px each (1481px of grid) and .cal-wrap's
+   overflow:hidden quietly ate the last days of every week, on a desktop
+   as much as a tablet. Zeroing the floor lets the track shrink and hands
+   the truncation back to .cal-ev-t's ellipsis, where it belongs. */
+.cal-head{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:var(--panel-2);
   border-bottom:1px solid var(--line)}
 .cal-hd{padding:9px 10px;font-size:11px;font-weight:800;text-transform:uppercase;
-  letter-spacing:.06em;color:var(--text-mut)}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr)}
-.cal-cell{min-height:112px;padding:6px 7px 8px;border-right:1px solid var(--line);
+  letter-spacing:.06em;color:var(--text-mut);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.cal-cell{min-height:112px;min-width:0;padding:6px 7px 8px;border-right:1px solid var(--line);
   border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:4px;cursor:pointer;
   transition:background .15s}
 .cal-cell:nth-child(7n){border-right:none}
@@ -1385,7 +1391,7 @@ canvas{display:block;width:100%}
 .cal-cell.today{background:var(--accent-soft)}
 .cal-cell.today .cal-cell-n{background:var(--accent-grad);color:#fff;
   width:23px;height:23px;border-radius:50%;display:grid;place-items:center}
-.cal-cell-top{display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:23px}
+.cal-cell-top{display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:23px;min-width:0}
 .cal-cell-n{font-size:12px;font-weight:800;color:var(--text-dim);font-variant-numeric:tabular-nums}
 .cal-more{border:none;background:transparent;cursor:pointer;font-size:10.5px;font-weight:800;
   color:var(--text-mut);padding:1px 4px;border-radius:5px}
@@ -1633,6 +1639,37 @@ canvas{display:block;width:100%}
   .empty{padding:34px 16px}
   .empty .big{font-size:34px;margin-bottom:7px}
 }
+
+/* ---- TOUCH TARGETS -------------------------------------------------------
+   Sized for a mouse, these controls came out 23–27px tall, which a fingertip
+   misses. Everything a finger has to hit gets at least 34px on a touch-width
+   screen. Only the box grows — type size, colour and spacing are untouched,
+   so nothing about the density changes, and the pointer layouts above 900px
+   keep the compact sizes they were drawn at. */
+@media(max-width:900px){
+  .seg button{min-height:34px;padding:6px 14px}
+  .cal-chip{min-height:34px;padding:6px 12px}
+  .wa-btn{width:32px;height:32px;border-radius:9px;font-size:15px}
+  .cal-col-add,.cal-more{min-width:28px;min-height:28px}
+  /* inline record links sit in dense rows, so they get reach rather than
+     bulk: vertical padding on an inline box paints and taps outside the
+     line box without moving a single row — a 14px link taps like 24px */
+  .a-link{padding:5px 0}
+  /* the month grid's entry pills: 24px is the floor a fingertip can work
+     with, and a miss still lands on the day cell, which opens the day */
+  .cal-ev{min-height:24px}
+  /* a native checkbox renders 13px however the row around it is styled */
+  input[type=checkbox],input[type=radio]{width:20px;height:20px;flex:0 0 auto}
+  /* The carousel dots stay 7px — they are an indicator, and fattening them
+     would read as buttons. They get the reach instead of the size: an
+     invisible pad over each dot, and enough gap that two never overlap. */
+  .crm-car-dots{gap:16px}
+  .crm-car-dot{position:relative}
+  .crm-car-dot::after{content:"";position:absolute;inset:-11px -7px}
+}
+/* the Label Studio gallery's controls get the same treatment, but their base
+   rules live at the bottom of this file — the override sits after them, at the
+   very end, where source order cannot quietly undo it */
 
 
 /* ============================================================
@@ -2914,4 +2951,14 @@ select.ls-in{padding-left:3px;cursor:pointer}
 @media (max-width:900px){
   .ls-props-dlg,.ls-setup2{grid-template-columns:1fr;gap:14px}
   .ls-pcats{flex-direction:row;flex-wrap:wrap}
+}
+
+/* ---- TOUCH TARGETS, Label Studio gallery -------------------------------
+   The tail of the touch pass (see the block after the alert-drawer rules):
+   these controls' base sizes are declared above, so their finger-size
+   override must come after them or equal specificity hands the win back. */
+@media (max-width:900px){
+  .ls-gal-act .mini{width:32px;height:32px;border-radius:8px}
+  .ls-gal-print{height:32px;padding:0 12px}
+  .ls-rec-b{min-height:34px}
 }
