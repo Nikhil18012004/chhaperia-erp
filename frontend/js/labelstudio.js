@@ -1616,6 +1616,12 @@
        amber handles never went away again — the screen sat there saying you
        were editing the picture long after you had finished with it. */
     let bgEdit=false;
+    /* Templates whose "this arrived from BarTender as a picture" notice has
+       been waved away, by id. Deliberately NOT saved with the document: the
+       notice describes a state, and the state itself is the record — reopening
+       a label that is still a picture with its text hidden should say so
+       again, because it is still true. */
+    const impDismiss={};
     /* Which object is being typed on. The canvas leaves it out of the render
        because the editor is drawing it — see labelInner's ctx.skip. */
     let editingId=null;
@@ -1628,6 +1634,18 @@
 
     const root=h("div",{class:"ls"});
     host.appendChild(root);
+
+    /* The canvas hit box for an object, BY ID. Everything that reaches back for
+       a box goes through here. It used to be `skin.children[i]`, indexed by the
+       object's position in d.objects plus a fudge for the background box — a
+       mapping that was wrong whenever the two lists disagreed (it already
+       nudged the wrong box while the background was being adjusted) and that
+       broke outright once hidden objects stopped getting boxes at all. */
+    const hitFor=(o)=>{
+      if(!o||!o.id) return null;
+      const sk=root.querySelector(".ls-skin");
+      return sk?sk.querySelector('.ls-hit[data-oid="'+o.id+'"]'):null;
+    };
 
     /* A page can be navigated away from, and the router simply empties the
        view — so the warning has to be hung on the router. */
@@ -2624,11 +2642,17 @@
       })();
     }
 
-    /* RTF down to the words. The font table, colour table and stylesheet are
-       GROUPS, not text — stripped by matching braces rather than by regex,
-       because "{\fonttbl{\f0 Calibri;}{\f1 Arial;}}" nests and a flat pattern
-       leaves "Calibri;Arial;" glued to the front of every label. */
-    function rtfText(rtf){
+    /* The header groups off the front of an RTF blob. The font table, colour
+       table and stylesheet are GROUPS, not text — stripped by matching braces
+       rather than by regex, because "{\fonttbl{\f0 Calibri;}{\f1 Arial;}}"
+       nests and a flat pattern leaves "Calibri;Arial;" glued to the front of
+       every label.
+
+       What is left is the RUN: the words, and the \f and \cf that say which
+       entry of those tables the words were actually set in. Reading \cf out of
+       the whole blob instead would find the stylesheet's own Hyperlink colour
+       first and import black text as blue. */
+    function rtfStripGroups(rtf){
       let s=String(rtf||"");
       const drop=/\{\\(?:\*|fonttbl|colortbl|stylesheet|themedata|generator|info|listtable|listoverridetable|latentstyles|datastore)/;
       for(;;){
@@ -2641,7 +2665,11 @@
         }
         s=s.slice(0,m.index)+s.slice(i);
       }
-      return s
+      return s;
+    }
+    /* RTF down to the words. */
+    function rtfText(rtf){
+      return rtfStripGroups(rtf)
         .replace(/\\par[d]?\b/g,"\n")
         .replace(/\\line\b/g,"\n")
         .replace(/\\tab\b/g,"\t")
@@ -2651,6 +2679,94 @@
         .replace(/[{}]/g,"")
         .split("\n").map(l=>l.replace(/[ \t]+/g," ").trim())
         .filter(Boolean).join("\n").trim();
+    }
+
+    /* ---- WHAT THE RTF SAYS ABOUT THE TYPE ----
+       The blob carries more than the words. Its font table names the typeface,
+       its colour table gives the ink, and the run itself says which of each it
+       used — all of it plain, documented RTF rather than anything guessed at
+       out of BarTender's binary. It used to be thrown away: every imported
+       field arrived Arial and black no matter what it had been, which made
+       white-on-dark labels import invisible.
+
+       `{\fonttbl{\f0\fnil\fcharset0 Arial;}{\f1 Calibri;}}` — index to name. */
+    function rtfFontTable(rtf){
+      const out={};
+      const m=/\{\\fonttbl/.exec(rtf);
+      if(!m) return out;
+      let d=0,i=m.index,end=rtf.length;
+      for(;i<rtf.length;i++){
+        if(rtf[i]==="{") d++;
+        else if(rtf[i]==="}"){ d--; if(!d){ end=i; break; } }
+      }
+      const tbl=rtf.slice(m.index,end);
+      const re=/\\f(\d+)([^;{}]*);/g;
+      let x;
+      while((x=re.exec(tbl))){
+        /* the name is whatever is left once the control words are taken out */
+        const nm=x[2].replace(/\\[a-zA-Z]+-?\d*\s?/g,"").trim();
+        if(nm) out[x[1]]=nm;
+      }
+      return out;
+    }
+    /* `{\colortbl;\red255\green0\blue0;}` — 1-based, entry 0 is "auto". */
+    function rtfColorTable(rtf){
+      const out={};
+      const m=/\{\\colortbl/.exec(rtf);
+      if(!m) return out;
+      let d=0,i=m.index,end=rtf.length;
+      for(;i<rtf.length;i++){
+        if(rtf[i]==="{") d++;
+        else if(rtf[i]==="}"){ d--; if(!d){ end=i; break; } }
+      }
+      const hx=(n)=>("0"+Math.max(0,Math.min(255,+n||0)).toString(16)).slice(-2);
+      rtf.slice(m.index,end).split(";").forEach((part,idx)=>{
+        const r=/\\red(\d+)/.exec(part), g=/\\green(\d+)/.exec(part), b=/\\blue(\d+)/.exec(part);
+        if(r&&g&&b) out[idx]="#"+hx(r[1])+hx(g[1])+hx(b[1]);
+      });
+      return out;
+    }
+    /* BarTender's font names are Windows font names; this studio has six
+       families. Map by what the name CONTAINS, so "Arial Narrow", "Arial Black"
+       and "ArialMT" all land on Arial instead of silently becoming Times. */
+    function mapFont(name){
+      const n=String(name||"").toLowerCase();
+      if(!n) return "";
+      if(/courier|consol|mono/.test(n))            return "courier";
+      if(/impact|haettenschweiler/.test(n))        return "impact";
+      if(/georgia|book antiqua|palatino/.test(n))  return "georgia";
+      if(/times|roman|serif|garamond|cambria/.test(n)) return "times";
+      if(/calibri|candara|segoe|corbel/.test(n))   return "calibri";
+      if(/arial|helvetica|sans|tahoma|verdana|swiss/.test(n)) return "arial";
+      return "";
+    }
+
+    /* ⚠ NOT EVERY RTF BLOB IN THE FILE IS ON THE LABEL. A .btw carries
+       BarTender's own prototype objects — the blank Text, the blank Rich Text,
+       the data-entry form's specimen controls — and they are serialised with
+       the same RTF as the real fields. Measured on the 92 sample documents on
+       this machine: the one and only blob most of them yield is the prototype
+       "Sample Text", so importing "every RTF blob" put a field on the label
+       that had never been on the label.
+
+       These are Seagull's fixed defaults, not anything a plant typed, and no
+       real label says "Sample Prompt" or carries the input mask of a telephone
+       number. Matched whole, never as a substring, so a genuine field that
+       happens to contain one of these words survives. */
+    const BTW_BOILER=[
+      "sample text","sample prompt","sample","text","rich text","picture",
+      "value 1","value 2","text control","picture control",
+      "0123456789abcdefghijklmnopqrstuvwxyz","0123456789abc",
+      "(999) 000-0000;0;_","(???) ???-????","(___) ___-____",
+      "enter a multiple line description here if needed.",
+    ];
+    function isBtwBoilerplate(text){
+      const t=String(text||"").trim().toLowerCase();
+      if(!t) return true;
+      if(BTW_BOILER.indexOf(t)>=0) return true;
+      /* "Functions and Subs" and the VB event stubs are script, not artwork */
+      if(/^'/.test(t)||/^functions and subs$/.test(t)) return true;
+      return false;
     }
 
     /* Every distinct field in the stream, in the order BarTender wrote them.
@@ -2691,18 +2807,28 @@
         from=i;
         const text=rtfText(blob);
         if(!text||text.length>600) continue;
+        if(isBtwBoilerplate(text)) continue;
         const key=text.toLowerCase();
         if(seen[key]) continue;
         seen[key]=1;
         const al=/\\(qc|ql|qr|qj)\b/.exec(blob);
         const fs2=/\\fs(\d+)/.exec(blob);
+        /* The typeface and ink of the FIRST run — a field whose words change
+           font part-way is rare on a label, and one answer that is right about
+           the whole line beats a mixture nothing here can represent. */
+        const fonts=rtfFontTable(blob), cols=rtfColorTable(blob);
+        const body=rtfStripGroups(blob);
+        const fN=/\\f(\d+)/.exec(body), cN=/\\cf(\d+)/.exec(body);
         out.push({
           text:text,
           bold:/\\b\b(?!\w)/.test(blob),
           italic:/\\i\b(?!\w)/.test(blob),
+          underline:/\\ul\b(?!\w)/.test(blob),
           /* RTF sizes are HALF-points; the studio measures type in mm. */
           mm:fs2?Math.max(1.5,Math.min(40,(+fs2[1]/2)*25.4/72)):4,
           align:al?({qc:"center",ql:"left",qr:"right",qj:"justify"})[al[1]]:"left",
+          font:mapFont(fN?fonts[fN[1]]:(fonts[0]||fonts[1])),
+          color:(cN&&cols[+cN[1]])||"",
         });
         if(out.length>=24) break;
       }
@@ -2710,21 +2836,33 @@
 
     /* Stacked down the label with a small margin, each line given room in
        proportion to its type size. Not where BarTender had them — see above —
-       but on the label, editable, and over a guide showing where to drag. */
+       but on the label, editable, and over a guide showing where to drag.
+
+       ⚠ THE BOXES MUST FIT ON THE LABEL. The old floor of 2 mm a line meant 24
+       recovered fields needed 48 mm of room whatever the label was, so on
+       anything shallow the last fields were laid out BELOW the bottom edge,
+       where they are clipped out of the render and can only be reached by
+       hunting the layer list. The share of the height is the truth; the floor
+       is only there to stop a hairline, so it gives way when there is not
+       enough label to go round. */
     function layoutFields(list,w,h){
       if(!list.length) return [];
       const mx=Math.max(1,w*0.04), my=Math.max(1,h*0.06);
       const iw=w-mx*2, ih=h-my*2;
       const weight=list.map(f=>Math.max(1,f.mm));
       const total=weight.reduce((a,b)=>a+b,0);
+      const floor=Math.min(2,ih/list.length);
       let y=my;
       return list.map((f,i)=>{
-        const bh=Math.max(2,ih*(weight[i]/total));
+        const bh=Math.max(floor,ih*(weight[i]/total));
         const o={ id:uid("o_"), type:"text", text:f.text,
           x:+mx.toFixed(2), y:+y.toFixed(2), w:+iw.toFixed(2), h:+bh.toFixed(2),
           size:+Math.min(f.mm,bh*0.8).toFixed(2),
-          bold:f.bold, italic:f.italic, align:f.align, valign:"middle",
-          font:"arial" };
+          bold:f.bold, italic:f.italic, underline:f.underline,
+          align:f.align, valign:"middle",
+          /* what the RTF actually said, and only then a default */
+          font:f.font||"arial" };
+        if(f.color) o.color=f.color;
         y+=bh;
         return o;
       });
@@ -2795,9 +2933,14 @@
                The recovered fields come too, but HIDDEN. Showing them would
                print every word twice, once as type and once as part of the
                picture beneath, and dimming the picture to avoid that means the
-               label does not look like itself on arrival. So the label is
-               exact, and the text is waiting in Object Layers: show a field,
-               drag it over its printed twin, then clear the background. */
+               label does not look like itself on arrival.
+
+               That arrival state is deliberate and it is also a dead end, so
+               the DESIGNER offers the way out of it rather than leaving the
+               operator to find it: opening a label that is still a picture
+               with its text hidden puts a notice over the canvas with
+               "Make the text editable" and "Remove the artwork" on it.
+               See canvasPane's `trapped`. */
             objects:objects.map(o=>Object.assign({},o,{hidden:true})),
           }),fields.length,how);
         });
@@ -2822,10 +2965,11 @@
             {type:"ok"});
           /* An imported .btw arrives as ARTWORK, and nobody should find that
              out at the printer. Said separately so it is not lost in a count. */
-          if(btwText) toast("Imported exactly as BarTender draws it. The "+
+          if(btwText) toast("Imported exactly as BarTender draws it \u2014 as "+
+            "artwork, so the type in the picture cannot be restyled yet. The "+
             btwText+" text field"+(btwText===1?"":"s")+" BarTender stored "+
-            (btwText===1?"is":"are")+" here too, hidden \u2014 open Object Layers "+
-            "and show "+(btwText===1?"it":"one")+" to edit the wording.",
+            (btwText===1?"is":"are")+" here too. Open the label and press "+
+            "\u201cMake the text editable\u201d.",
             {type:"info",title:"From BarTender",dur:11000});
           if(btwFlat) toast(btwFlat+" BarTender label"+(btwFlat===1?"":"s")+
             " came in at the right size, but no text could be read out "+
@@ -3000,51 +3144,12 @@
         ]),
       ]));
 
-      /* ---- RECENT ----
-         A library of forty templates is a wall to read, and on any given day
-         you are working on two of them. The ones you touched last, first, big
-         enough to recognise by their artwork rather than their name — and
-         with Print on the face, because that is the errand. */
-      const rec=recentDocs().filter(x=>x.d.usedAt).slice(0,4);
-      if(rec.length){
-        wrap.appendChild(h("div",{class:"ls-sec"},[
-          h("div",{class:"ls-sec-h"},[
-            h("span",{class:"ls-lbl",text:"Pick up where you left off"}),
-            h("span",{class:"hint",style:"margin:0",
-              text:"Open it to edit, or print it without opening it at all."}),
-          ]),
-          h("div",{class:"ls-rec-row"},rec.map(({d,i})=>{
-            const rw=210, rh=112;
-            const rk=Math.min(rw/(d.w*PX_MM), rh/(d.h*PX_MM));
-            return h("div",{class:"ls-rec-c"+(i===di&&opened?" on":""),
-              role:"button",tabindex:"0",title:"Open “"+d.name+"”",
-              onclick:(e)=>{ if(e.target.closest&&e.target.closest(".ls-rec-b")) return;
-                openDoc(i); },
-              onkeydown:(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDoc(i); } }},[
-              h("div",{class:"ls-rec-pv",style:`height:${rh}px`},
-                h("div",{class:"wz-frame",
-                  style:`width:${(d.w*PX_MM*rk).toFixed(1)}px;height:${(d.h*PX_MM*rk).toFixed(1)}px`},
-                  h("iframe",{srcdoc:oneHtml(d,{index:0,now:new Date(),prompts:{}}),
-                    scrolling:"no","aria-hidden":"true",tabindex:"-1",
-                    style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${rk.toFixed(4)});`+
-                      `transform-origin:top left`}))),
-              h("div",{class:"ls-rec-n",text:d.name}),
-              h("div",{class:"ls-rec-t",text:usedAgo(d)+" · "+sizeS(d.w,d.h)+
-                " · "+(d.mode==="roll"?"roll":"sheet")}),
-              h("div",{class:"ls-rec-act"},[
-                h("button",{class:"ls-rec-b",type:"button",title:"Open in the designer",
-                  onclick:(e)=>{ e.stopPropagation(); openDoc(i); },text:"Open"}),
-                h("button",{class:"ls-rec-b go",type:"button",
-                  title:"Straight to the print dialog",
-                  onclick:(e)=>{ e.stopPropagation(); printFrom(i); }},
-                  [ico("print",13),h("span",{text:"Print"})]),
-              ]),
-            ]);
-          })),
-        ]));
-      }
-
-      /* ---- everything, searchable ---- */
+      /* ---- everything, searchable ----
+         There was a "Pick up where you left off" strip above this grid, showing
+         the four most recently used templates. It was removed on the user's
+         instruction: every card in it is ALSO in the grid below, so the screen
+         showed the same labels twice and the eye had to work out which list it
+         was reading. One library, once. */
       const q=galQuery.trim().toLowerCase();
       const hits=docs.map((d,i)=>({d,i})).filter(({d})=>
         !q||d.name.toLowerCase().indexOf(q)>=0||sizeS(d.w,d.h).indexOf(q)>=0);
@@ -3077,16 +3182,11 @@
         ].filter(Boolean)),
       ]));
 
+      /* No "New label" card leads this grid any more. The hero above already
+         carries a New label button in the same eyeline, and two doors to the
+         same room made the grid read as if one of its labels were a template
+         you could not open. The grid is the library and nothing else. */
       const grid=h("div",{class:"ls-gal-grid"});
-      grid.appendChild(h("button",{class:"ls-gal-card ls-gal-new",
-        title:"Start a new label — it will ask what you are printing on",
-        onclick:()=>newBlank()},[
-        h("div",{class:"ls-gal-pv ls-gal-blank"},h("div",{class:"ls-gal-plus",text:"＋"})),
-        h("div",{class:"ls-gal-n",text:"New label"}),
-        h("div",{class:"ls-gal-d",
-          text:"It asks what you are printing on — a roll, an A4 sheet, or your own size."}),
-        h("div",{class:"ls-gal-m",text:"Choose the size first"}),
-      ]));
 
       docs.forEach((d,i)=>{
         const tw=196, th=132;
@@ -4052,6 +4152,75 @@
       const d=doc();
       const pane=h("div",{class:"ls-canvas-wrap"});
       const k=PX_MM*zoom;
+
+      /* ---- A LABEL THAT ARRIVED FROM BarTender ----
+         It comes in as ARTWORK — BarTender's own render, with the words baked
+         into the picture — and the fields recovered from the file come with it
+         but hidden, because showing them would print every word twice. Faithful
+         on arrival, and completely inert: nothing in the picture can be
+         restyled, and the label's own background colour cannot be seen under
+         an opaque render. Operators reported that as "the imported label
+         cannot be edited", which is exactly what it is.
+
+         So the state says so, out loud and on the label, and carries the ways
+         out. No new field is stored for this: a label carrying a background
+         picture and NOTHING DRAWN OVER IT is a .btw that has not been taken
+         apart yet, and it stops advertising the moment it has. A label somebody
+         designed here always has objects on it, so it never qualifies.
+
+         Two shapes of it, because the two arrivals are genuinely different:
+         some .btw files give up their text and most give up none at all. Never
+         offer to "make the text editable" when there is no text — an operator
+         who presses that and sees nothing happen has been lied to. */
+      const hiddenText=d.objects.filter(o=>o.hidden&&o.type==="text");
+      const drawn=d.objects.filter(o=>!o.hidden);
+      const trapped=!!d.bgImage&&!impDismiss[d.id]&&!drawn.length;
+      if(trapped){
+        const n=hiddenText.length;
+        const acts=[];
+        if(n) acts.push(h("button",{class:"btn primary",
+          title:"Show the recovered text and fade the artwork to a tracing guide",
+          onclick:()=>{
+            hiddenText.forEach(o=>{ o.hidden=false; });
+            d.bgOpacity=25;
+            touch(); paint();
+            toast("The text is on the label now, stacked down it — BarTender "+
+              "does not record where each field sat. Drag each line onto its "+
+              "place over the faded artwork, then remove the artwork.",
+              {type:"info",title:"Now it is editable",dur:12000});
+          }},[ico("eye",14),h("span",{text:"Make the text editable"})]));
+        acts.push(h("button",{class:n?"btn":"btn primary",
+          title:"Delete the artwork and design on the bare label",
+          onclick:()=>{
+            d.bgImage=""; d.bgFit="cover"; d.bgOpacity=100;
+            d.bgX=0; d.bgY=0; d.bgW=0; d.bgH=0;
+            hiddenText.forEach(o=>{ o.hidden=false; });
+            touch(); paint();
+            toast("Artwork removed — the label is bare and yours to design on.",
+              {type:"ok"});
+          },text:"Remove the artwork"}));
+        acts.push(h("button",{class:"btn ghost",
+          title:"Leave it exactly as BarTender drew it",
+          onclick:()=>{ impDismiss[d.id]=1; paint(); },
+          text:"Keep it as a picture"}));
+        pane.appendChild(h("div",{class:"ls-imp"},[
+          h("div",{class:"ls-imp-t"},[
+            ico("open",14),
+            h("span",{text:"This label came in from BarTender as a picture"}),
+          ]),
+          h("div",{class:"ls-imp-s",text:
+            "What you see is BarTender's own artwork, so the type in it cannot be "+
+            "restyled and the label's own background colour is hidden underneath "+
+            "it. "+(n
+              ? "The "+n+" text field"+(n===1?"":"s")+" stored in the file "+
+                (n===1?"is":"are")+" here, waiting."
+              : "This file stored no text that could be read back, so the words "+
+                "are part of the picture. Remove it and lay the label out here, "+
+                "or print it exactly as it is.")}),
+          h("div",{class:"ls-imp-a"},acts),
+        ]));
+      }
+
       const stage=h("div",{class:"ls-stage"});
       const cv=h("div",{class:"ls-canvas"+(tool?" arm":""),tabindex:"0",
         style:`width:${(d.w*k).toFixed(1)}px;height:${(d.h*k).toFixed(1)}px;background:${d.bg};`+
@@ -4137,8 +4306,23 @@
         });
         skin.appendChild(bg);
       }
-      d.objects.forEach(o=>{
-        const el=h("div",{class:"ls-hit"+(isSel(o)?" on":""),
+      /* ⚠ HIDDEN OBJECTS GET NO HIT BOX. They are not drawn (labelInner filters
+         them), so a hit box for one is a rectangle you can click, select,
+         resize and format while NOTHING on the label ever changes — every
+         other reader of `hidden` filters it and this loop used not to.
+         It mattered most on an imported .btw, which arrived carrying its
+         recovered fields hidden and STACKED: the invisible boxes tiled the
+         whole label, so every click landed on a phantom, the font and colour
+         controls filled in for an object that could not draw, and the bare
+         click that reaches Label Properties — the only route to the background
+         colour — could not get through. That is the "I cannot change anything
+         on an imported label" report. Show the object to edit it. */
+      d.objects.filter(o=>!o.hidden).forEach(o=>{
+        /* Keyed by id, never by position: the hit boxes no longer march in
+           step with d.objects (hidden ones are missing) and the background
+           box may or may not sit in front of them. Everything that reaches
+           back for a box looks it up by this id. */
+        const el=h("div",{class:"ls-hit"+(isSel(o)?" on":""),"data-oid":o.id,
           style:`left:${(o.x*k).toFixed(1)}px;top:${(o.y*k).toFixed(1)}px;`+
             `width:${Math.max(3,o.w*k).toFixed(1)}px;height:${Math.max(3,o.h*k).toFixed(1)}px;`+
             (o.rot?`transform:rotate(${o.rot}deg);`:"")});
@@ -4362,12 +4546,8 @@
       function quickPaint(movers){
         const list=Array.isArray(movers)?movers:[movers];
         layer.innerHTML=labelInner(d,canvasCtx());
-        /* The hit boxes are in document order and the background box, if it is
-           showing, sits in front of them — so index by the OBJECT, not by a
-           count that shifts when the background appears. */
-        const base=(d.bgImage&&d.bgFit==="custom"&&bgEdit&&!tool)?1:0;
         list.forEach(o=>{
-          const hit=skin.children[base+d.objects.indexOf(o)];
+          const hit=hitFor(o);
           if(!hit) return;
           hit.style.left=(o.x*k).toFixed(1)+"px"; hit.style.top=(o.y*k).toFixed(1)+"px";
           hit.style.width=Math.max(3,o.w*k).toFixed(1)+"px";
@@ -4410,10 +4590,8 @@
               o.x<x1&&o.x+o.w>x0&&o.y<y1&&o.y+o.h>y0).map(o=>o.id);
             selIds=keep.concat(hit.filter(id=>keep.indexOf(id)<0));
             /* live: the hit boxes light up as the band passes over them */
-            [].forEach.call(skin.children,(el)=>{
-              const idx=[].indexOf.call(skin.children,el);
-              const ob=d.objects[idx-((d.bgImage&&d.bgFit==="custom"&&bgEdit&&!tool)?1:0)];
-              if(ob) el.classList.toggle("on",selIds.indexOf(ob.id)>=0);
+            [].forEach.call(skin.querySelectorAll(".ls-hit"),(el)=>{
+              el.classList.toggle("on",selIds.indexOf(el.getAttribute("data-oid"))>=0);
             });
           };
           const bup=()=>{
@@ -5014,6 +5192,17 @@
 
       b.appendChild(h("div",{class:"ls-ptype"},[
         ico(objIcon(o),15), h("span",{text:objKind(o)})]));
+      /* A HIDDEN object can still be selected from Object Layers, and every
+         field below it works — but the label will not change, because a hidden
+         object is not drawn. Left unsaid, that reads as "the controls are
+         broken". Say it, and put the fix in reach. */
+      if(o.hidden) b.appendChild(h("div",{class:"ls-phid"},[
+        h("span",{text:"Hidden — it is not drawn on the label and will not "+
+          "print, so changes here will not show until you bring it back."}),
+        h("button",{class:"btn",type:"button",
+          onclick:()=>{ selObjs().forEach(x=>{x.hidden=false;}); touch(); paint(); }},
+          [ico("eye",13),h("span",{text:"Show it"})]),
+      ]));
       /* With several picked, say so and say which one the fields below are
          reading — the panel edits ALL of them, but it has to show ONE. */
       if(selIds.length>1) b.appendChild(h("div",{class:"ls-pmulti"},
@@ -5243,6 +5432,15 @@
       const t=OBJ_TYPES.find(x=>x.v===o.type)||OBJ_TYPES[0];
       const cats=[];
       if(o.type==="text"||o.type==="barcode"||o.type==="qr") cats.push({v:"data",l:"Data source"});
+      /* ⚠ THE DIALOG USED TO HAVE NO FONT AT ALL. A text object offered exactly
+         "Data source" and "Size & position" — so anyone who reached it by
+         double-clicking a field (which is where a field that cannot be typed on
+         sends you) found a properties dialog that could not change the font,
+         the size, the weight or the colour, and reasonably concluded the label
+         was locked. The toolbar had these controls all along; this dialog is
+         the other half of the same object and must not disagree with it. */
+      if(o.type==="text") cats.push({v:"font",l:"Font & colour"});
+      if(o.type==="barcode"||o.type==="qr") cats.push({v:"font",l:"Caption text"});
       if(o.type==="barcode"||o.type==="qr") cats.push({v:"sym",l:"Symbology"});
       if(o.type==="image") cats.push({v:"pic",l:"Picture"});
       if(o.type==="box"||o.type==="ellipse") cats.push({v:"shape",l:"Shape"});
@@ -5262,12 +5460,11 @@
         const cv=root.querySelector(".ls-canvas");
         if(!cv) return;
         refreshCanvas();
-        const d=doc(), k=PX_MM*zoom;
-        const skin=root.querySelector(".ls-skin");
-        if(skin){ const hit=skin.children[d.objects.indexOf(o)];
-          if(hit){ hit.style.left=(o.x*k).toFixed(1)+"px"; hit.style.top=(o.y*k).toFixed(1)+"px";
-            hit.style.width=Math.max(3,o.w*k).toFixed(1)+"px";
-            hit.style.height=Math.max(3,o.h*k).toFixed(1)+"px"; } }
+        const k=PX_MM*zoom;
+        const hit=hitFor(o);
+        if(hit){ hit.style.left=(o.x*k).toFixed(1)+"px"; hit.style.top=(o.y*k).toFixed(1)+"px";
+          hit.style.width=Math.max(3,o.w*k).toFixed(1)+"px";
+          hit.style.height=Math.max(3,o.h*k).toFixed(1)+"px"; }
         const rd=root.querySelector(".ls-read");
         if(rd) rd.textContent=`X ${o.x.toFixed(1)}  Y ${o.y.toFixed(1)}  W ${o.w.toFixed(1)}  H ${o.h.toFixed(1)} mm`;
       }
@@ -5280,6 +5477,7 @@
       function drawPanel(){
         panel.innerHTML="";
         if(cat==="data")  panelData();
+        if(cat==="font")  panelFont();
         if(cat==="sym")   panelSym();
         if(cat==="pic")   panelPic();
         if(cat==="shape") panelShape();
@@ -5345,6 +5543,50 @@
         panel.appendChild(h("div",{class:enc?"ls-ok":"ls-bad",
           text:enc?"✓ Encodes — scanner-ready":"✕ This value cannot be encoded as "+
             ((SYMS.find(s=>s.v===o.sym)||{}).l||o.sym)}));
+      }
+      /* Type, and what colour it is. For a barcode or a QR code the same
+         fields describe the CAPTION — the human-readable line under the bars —
+         because that is the only type on those objects. */
+      function panelFont(){
+        const isT=o.type==="text";
+        panel.appendChild(h("div",{class:"wz-sec",
+          text:isT?"Typeface":"The line printed under the barcode"}));
+        if(!isT) panel.appendChild(chk("Print the value under the barcode",
+          o.showText,v=>{o.showText=v;live(true);drawPanel();}));
+        if(!isT&&!o.showText) return;
+        panel.appendChild(row(2,[
+          fld("Font",sel1(o.font,FONTS.map(f=>({v:f.v,l:f.l})),v=>{o.font=v;live(true);})),
+          fld("Size (mm)",nInput(o.size,
+            v=>{o.size=Math.min(120,Math.max(.6,v));live(true);},.5,.6,120)),
+        ]));
+        panel.appendChild(row(2,[
+          fld("Colour",cInput(o.color,v=>{o.color=v;live(true);})),
+          isT?fld("Highlight",cInput(o.shade,v=>{o.shade=v;live(true);drawPanel();},true),
+            "Leave it off for no highlight."):h("div"),
+        ]));
+        if(!isT) return;
+        panel.appendChild(h("div",{class:"ls-row",style:"grid-template-columns:repeat(4,1fr)"},[
+          chk("Bold",o.bold,v=>{o.bold=v;live(true);}),
+          chk("Italic",o.italic,v=>{o.italic=v;live(true);}),
+          chk("Underline",o.underline,v=>{o.underline=v;live(true);}),
+          chk("Strikethrough",o.strike,v=>{o.strike=v;live(true);}),
+        ]));
+        panel.appendChild(h("div",{class:"wz-sec",text:"How it sits in its box"}));
+        panel.appendChild(row(2,[
+          fld("Across",sel1(o.align,[{v:"left",l:"Left"},{v:"center",l:"Centred"},
+            {v:"right",l:"Right"},{v:"justify",l:"Justified"}],v=>{o.align=v;live(true);})),
+          fld("Down",sel1(o.valign,[{v:"start",l:"Top"},{v:"middle",l:"Middle"},
+            {v:"end",l:"Bottom"}],v=>{o.valign=v;live(true);})),
+        ]));
+        panel.appendChild(row(2,[
+          fld("Line spacing",nInput(o.lineH,
+            v=>{o.lineH=Math.min(3,Math.max(.8,v));live(true);},.05,.8,3),
+            "A multiple of the type size."),
+          fld("Capitals",sel1(o.tcase,[{v:"none",l:"As typed"},{v:"upper",l:"UPPER CASE"},
+            {v:"lower",l:"lower case"},{v:"title",l:"Title Case"}],v=>{o.tcase=v;live(true);}),
+            "Changes how it prints, not what you typed."),
+        ]));
+        panel.appendChild(chk("Wrap onto more than one line",o.wrap,v=>{o.wrap=v;live(true);}));
       }
       function panelPic(){
         panel.appendChild(h("div",{class:"wz-sec",text:"Picture"}));
