@@ -1701,8 +1701,13 @@
     let galStock="";                 // the stock a new blank label is cut to
     let full=false;                  // the designer, filling the screen
     let tool=null;                   // the armed toolbox tool, or null for the pointer
-    let showTools=true;              // the Tools panel, down the left
-    let showProps=true;              // Object Properties and Object Layers, down the right
+    /* Below 1040px (rail) and 780px (tools) these are not columns any more —
+       they open as sheets OVER the canvas, so they start closed. Opening the
+       studio with the label hidden behind a panel is the one thing the sheet
+       treatment must not do. The status-bar buttons toggle them either way.
+       Above those widths both are columns and both start open, as before. */
+    let showTools=global.innerWidth>780;   // the Tools panel, down the left
+    let showProps=global.innerWidth>1040;  // Object Properties and Object Layers, down the right
     let clip=null;                   // the clipboard — one object, cut or copied
     /* Adjusting the background picture is a MODE, entered and left on purpose.
        It used to be inferred from the fit being "custom", which meant the
@@ -1939,7 +1944,13 @@
       if(!root.isConnected) return;
       if(full||screen!=="design"){ root.style.height=""; return; }
       const top=root.getBoundingClientRect().top;
-      root.style.height=Math.max(520,Math.round(global.innerHeight-top-18))+"px";
+      /* 520 is a laptop's floor. On a phone the whole area between the
+         topbar and the bottom nav is around 420px, so the floor — not the
+         content — was what pushed the studio off the bottom of the screen.
+         Below 820px, where the shell moves the nav to the bottom, it drops
+         to a height a phone actually has. Wider than that, nothing moves. */
+      const floor=global.innerWidth<=820?300:520;
+      root.style.height=Math.max(floor,Math.round(global.innerHeight-top-18))+"px";
     }
     const onResize=()=>{
       if(!root.isConnected){ global.removeEventListener("resize",onResize); return; }
@@ -6261,10 +6272,14 @@
        flows forward from there onto as many pages as it needs.
 
        The layout is DERIVED — recomputed from those numbers on
-       every keystroke, never hand-edited and never stored. That is
-       the whole reason there is no page editor here: a plan you can
-       edit is a plan that can disagree with the numbers above it,
-       and then the preview and the printer tell different stories.
+       every keystroke, never stored. There is exactly ONE author of
+       the plan at any moment: normally the numbers above, or — when
+       the operator switches to ARRANGE BY HAND — a sheet they
+       compose by dragging, which the run then prints N copies of.
+       The two never coexist: hand mode ignores the numbers, and
+       leaving it re-derives from them. Either way the preview and
+       the printer read the same plan, so they cannot tell
+       different stories.
 
        Only designs cut to the SAME stock may share the run: same
        size, same page, same margins. The palette offers those and
@@ -6275,6 +6290,14 @@
     let inRun={};         // docId → ticked into this run, or left unprinted
     let startAt={};       // docId → the 1-based PRINT-ORDER position it starts on
     let wantQty={};       // docId → how many labels of it to print
+    /* ARRANGE BY HAND — null, or the one sheet the operator composed:
+       cells by DIE-CUT index (the same indexing plan pages use), and how many
+       copies of that sheet to print. Not saved with the design: an arrangement
+       answers "what goes on the sheet in the drawer today", not "what is this
+       label". A stock change makes the cell count wrong, so manualOk() drops
+       silently back to the derived layout rather than printing a stale map. */
+    let manual=null;      // {cells:[docId|"" × perPage], copies:n} | null
+    const manualOk=()=>!!(manual&&manual.cells&&manual.cells.length===perPage());
 
     const perPage=()=>Math.max(1,sheetGrid(doc()).perPage);
     const blankPage=()=>new Array(perPage()).fill("");
@@ -6304,6 +6327,16 @@
        then walks the same path the printer does. */
     function layoutPlan(){
       const d=doc(), g=sheetGrid(d), per=perPage();
+      /* Hand mode: the composed sheet IS the plan, repeated. Designs that
+         left the library since it was composed are dropped cell by cell —
+         a ghost id would render nothing and still count as a label. */
+      if(manualOk()){
+        const cells=manual.cells.map(id=>id&&docs.some(x=>x.id===id)?id:"");
+        const copies=Math.max(1,Math.min(500,Math.round(+manual.copies||1)));
+        const pages=[];
+        for(let c=0;c<copies;c++) pages.push(cells.slice());
+        return pages;
+      }
       const slotOf=orderSlot(d,g);
       const pages=[];
       const cellAt=(n)=>{
@@ -6465,9 +6498,12 @@
            each from its own position; an unticked one keeps its numbers and
            prints nothing. Only designs cut to the same stock are offered at
            all, so the tick can never mix label sizes. */
+        const hand=manualOk();
         side.appendChild(h("div",{class:"ls-pp-sec"},[
           h("span",{text:"What to print"}),
-          h("span",{class:"ls-pp-h",text:"tick to print · numbers follow the print order"}),
+          h("span",{class:"ls-pp-h",text:hand
+            ?"choose a design, then click the sheet to place it"
+            :"tick to print · numbers follow the print order"}),
         ]));
         if(mates.length<2) side.appendChild(h("div",{class:"ls-pp-note"},
           "Only this design is cut to "+sizeS(d.w,d.h)+
@@ -6476,6 +6512,19 @@
         const list=h("div",{class:"ls-pp-designs"});
         mates.forEach(m=>{
           const on=sel===m.id;
+          if(hand){
+            /* By hand, the sheet says what prints — the tick and the start
+               position would be a second voice, so neither is offered. The
+               row is a palette: pick it up, then put it down on a die-cut. */
+            const placed=plan[0]?plan[0].filter(x=>x===m.id).length:0;
+            list.appendChild(h("div",{class:"ls-pp-d"+(on?" on":"")+(placed?"":" off"),
+              title:"Choose “"+m.name+"”, then click a die-cut on the sheet to place it",
+              onclick:()=>{ sel=m.id; redraw(); }},[
+              h("span",{class:"ls-pp-dn",text:m.name}),
+              h("span",{class:"ls-pp-at",text:placed+" on the sheet"}),
+            ]));
+            return;
+          }
           const tick=h("input",{type:"checkbox",class:"ls-pp-tick",
             title:inRun[m.id]?"Untick to leave “"+m.name+"” unprinted"
                              :"Tick to print “"+m.name+"” in this run"});
@@ -6504,8 +6553,18 @@
         const m=docs.find(x=>x.id===sel)||d;
         side.appendChild(h("div",{class:"ls-pp-sec"},[
           h("span",{text:"How it prints"}),
-          h("span",{class:"ls-pp-h",text:"“"+m.name+"”"}),
+          h("span",{class:"ls-pp-h",text:hand?"the arranged sheet":"“"+m.name+"”"}),
         ]));
+        if(hand){
+          /* One number in hand mode: how many of the composed sheet. Per-design
+             counts are READ OFF the sheet, not asked for — asking would be the
+             second voice the mode exists to remove. */
+          side.appendChild(field((d.mode==="roll"?"Pages":"Sheets")+" to print",
+            keyed(num(Math.max(1,Math.min(500,Math.round(+manual.copies||1))),v=>{
+              manual.copies=Math.max(1,Math.min(500,Math.round(v)||1)); redraw();
+            },1,500),"copies"),
+            "every one an exact copy of the sheet on the right"));
+        }else
         side.appendChild(field("Number of labels to print",
           keyed(num(qtyOf(m.id),v=>{
             wantQty[m.id]=Math.max(0,Math.min(5000,Math.round(v)||0));
@@ -6613,11 +6672,27 @@
         }
 
         /* THE FIRST SHEET, as the plan actually lays it out — so the empty run
-           of positions before the start is visible rather than described. */
+           of positions before the start is visible rather than described.
+           ARRANGE BY HAND turns this same picture into the editor: the die-cut
+           boxes take clicks and drags, and what they write goes into
+           manual.cells — the very cells the plan, the preview and the printer
+           read. One picture, one plan. */
         if(g.perPage){
           right.appendChild(h("div",{class:"ls-pp-sec"},[
-            h("span",{text:d.mode==="roll"?"On the web":"On the first sheet"}),
-            h("span",{class:"ls-pp-h",text:"numbered in print order"}),
+            h("span",{text:hand?(d.mode==="roll"?"The web, arranged by hand"
+                                                :"The sheet, arranged by hand")
+                            :(d.mode==="roll"?"On the web":"On the first sheet")}),
+            h("span",{class:"ls-pp-h",text:hand
+              ?"click to place · drag to move · click a filled one to clear"
+              :"numbered in print order"}),
+            h("button",{class:"ls-pp-handbtn"+(hand?" on":""),type:"button",
+              title:hand
+                ?"Back to the automatic layout — the start positions and counts decide again"
+                :"Compose the sheet yourself — click and drag stickers onto the die-cuts",
+              onclick:()=>{
+                manual=hand?null:{cells:(plan[0]||blankPage()).slice(),copies:1};
+                redraw();
+              },text:hand?"↩ Automatic layout":"Arrange by hand"}),
           ]));
           const k=Math.min(300/(g.pgW*PX_MM),330/(g.pgH*PX_MM));
           const wrap=h("div",{class:"ls-pp-sheet",
@@ -6637,16 +6712,80 @@
           const padX=roll?Math.max(0,(g.pgW-(g.cols*d.w+(g.cols-1)*(+d.rGapX||0)))/2):d.mLeft;
           const padY=roll?(+d.rGapY||0)/2:d.mTop;
           const gx=roll?(+d.rGapX||0):d.gapX, gy=roll?0:d.gapY;
-          const from=startOf(sel||d.id);
+          const from=hand?0:startOf(sel||d.id);
+          const selDoc=docs.find(x=>x.id===sel);
           for(let i=0;i<per;i++){
             const p=slotOf(i);
             if(p<0||p>=per) continue;
             const rr=Math.floor(p/Math.max(1,g.cols)), cc=p%Math.max(1,g.cols);
             const x=(padX+cc*(d.w+gx))*PX_MM*k, y=(padY+rr*(d.h+gy))*PX_MM*k;
-            wrap.appendChild(h("div",{class:"ls-pp-num"+(i+1===from?" start":""),
+            const cellId=hand?(plan[0]&&plan[0][p])||"":"";
+            const box=h("div",{class:"ls-pp-num"+(i+1===from?" start":"")+
+              (hand?(cellId?" fill":" free"):""),
               style:`left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;`+
                     `width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
-              h("span",{text:String(i+1)})));
+              h("span",{text:String(i+1)}));
+            if(hand){
+              box.setAttribute("data-slot",String(p));
+              const nm=cellId?((docs.find(x=>x.id===cellId)||{}).name||""):"";
+              box.title=cellId
+                ?"“"+nm+"” — click to clear it, or drag it to another die-cut"
+                :(selDoc?"Click to place “"+selDoc.name+"” here":"");
+            }
+            wrap.appendChild(box);
+          }
+          /* The drag itself. Pointer events rather than HTML5 drag-and-drop,
+             because the die-cuts have to work under a finger as well as a
+             mouse. A press on a filled die-cut picks its sticker up; letting
+             go over another die-cut moves it (swapping with whatever was
+             there); letting go where it started — a plain click — clears it.
+             A click on an empty die-cut places the design chosen on the left.
+             Every branch writes manual.cells and redraws, so the iframe under
+             these boxes re-renders from the plan the printer will read. */
+          if(hand){
+            wrap.classList.add("hand");
+            let press=null;   // {slot,id,x,y,moved}
+            const boxAt=(e)=>{
+              const el=document.elementFromPoint(e.clientX,e.clientY);
+              return el&&el.closest?el.closest(".ls-pp-num[data-slot]"):null;
+            };
+            wrap.addEventListener("pointerdown",(e)=>{
+              const b=e.target.closest&&e.target.closest(".ls-pp-num[data-slot]");
+              if(!b) return;
+              const p=+b.getAttribute("data-slot");
+              press={slot:p,id:manual.cells[p]||"",x:e.clientX,y:e.clientY,moved:false};
+              if(press.id){
+                try{ wrap.setPointerCapture(e.pointerId); }catch{}
+                b.classList.add("drag");
+              }
+              e.preventDefault();
+            });
+            wrap.addEventListener("pointermove",(e)=>{
+              if(!press||!press.id) return;
+              /* a 5px leash: a click with a shaky hand stays a click */
+              if(!press.moved&&Math.hypot(e.clientX-press.x,e.clientY-press.y)<5) return;
+              press.moved=true;
+              const b=boxAt(e);
+              [].forEach.call(wrap.querySelectorAll(".ls-pp-num.over"),
+                (x)=>x.classList.remove("over"));
+              if(b&&+b.getAttribute("data-slot")!==press.slot) b.classList.add("over");
+            });
+            const settle=(e)=>{
+              if(!press) return;
+              const b=boxAt(e);
+              const t=b?+b.getAttribute("data-slot"):-1;
+              const c=manual.cells;
+              if(press.id&&press.moved){
+                if(t>=0&&t!==press.slot){ const was=c[t]||"";
+                  c[t]=press.id; c[press.slot]=was; }
+              }else if(t===press.slot){
+                if(press.id) c[press.slot]="";
+                else if(sel) c[press.slot]=sel;
+              }
+              press=null; redraw();
+            };
+            wrap.addEventListener("pointerup",settle);
+            wrap.addEventListener("pointercancel",()=>{ press=null; redraw(); });
           }
           right.appendChild(h("div",{class:"ls-pp-sheetwrap"},[wrap]));
           right.appendChild(h("div",{class:"ls-pp-cap",
@@ -6731,8 +6870,9 @@
       const bNext=h("button",{class:"btn primary",
         title:"See every page of the run before it goes to the printer",
         onclick:()=>{
-          if(!planTotal()) return toast("Tick a design and give it a number of "+
-            "labels to print",{type:"warn"});
+          if(!planTotal()) return toast(manualOk()
+            ?"The sheet is empty — click a die-cut to place a sticker on it"
+            :"Tick a design and give it a number of labels to print",{type:"warn"});
           goStep(1);
         },text:"Preview  ›"});
       const bPrint=h("button",{class:"btn primary",style:"display:none",
@@ -6763,8 +6903,10 @@
       let cells=planCells();
       if(runOpts.reverse) cells=cells.slice().reverse();
       if(!cells.some(Boolean)){
-        toast("No labels are placed yet — tick a design and give it a number "+
-              "of labels to print",{type:"warn"});
+        toast(manualOk()
+          ?"The sheet is empty — place a sticker on it before printing"
+          :"No labels are placed yet — tick a design and give it a number "+
+           "of labels to print",{type:"warn"});
         return false; }
       const w=window.open("","_blank");
       if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"});
