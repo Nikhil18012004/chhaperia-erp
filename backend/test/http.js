@@ -2021,6 +2021,56 @@ async function run() {
       fsr.title === 9 && fsr.body === 60 && fsr.para === 0, JSON.stringify(fsr));
   }
 
+  /* ============================================================
+     LABEL STUDIO TEMPLATES (settings.labelDocs)
+
+     ⚠ WHY THIS BLOCK EXISTS. The settings whitelist drops keys it does
+     not know about SILENTLY — the save returns 200 and the work is
+     gone. That has already cost one session: labelDocs itself was
+     invisible until it was added to the whitelist, while the UI
+     cheerfully reported "saved". Anything added to a label object
+     needs a test here that it SURVIVES the round trip, or the failure
+     is undetectable from the front end.
+     ============================================================ */
+  {
+    section("Label Studio templates round-trip");
+    const doc = (objects, extra) => Object.assign({
+      id: "d_test1", name: "Round trip", w: 100, h: 60, objects,
+    }, extra || {});
+    const put = async (objects, extra) => {
+      const r = await call("PATCH", "/settings", A, { labelDocs: [doc(objects, extra)] });
+      const list = (r.d && r.d.labelDocs) || [];
+      return list[0] || null;
+    };
+    const obj = (src) => ({ id: "o_a1", type: "text", x: 5, y: 5, w: 40, h: 8, text: "x", src });
+
+    const d1 = await put([obj({ kind: "fixed" })]);
+    ok("a label template comes back at all", !!d1 && d1.name === "Round trip", JSON.stringify(d1 && d1.name));
+    ok("its size survives", !!d1 && d1.w === 100 && d1.h === 60);
+
+    /* the new one: a field bound to the ERP */
+    const bound = await put([obj({ kind: "field", field: "product.name", def: "PVC Tape" })]);
+    const bs = bound && bound.objects[0].src;
+    ok("an ERP binding survives the save",
+      !!bs && bs.kind === "field" && bs.field === "product.name", JSON.stringify(bs));
+    ok("…and keeps the example it shows while unbound",
+      !!bs && bs.def === "PVC Tape", bs && bs.def);
+    const deep = await put([obj({ kind: "field", field: "batch.qc.grade" })]);
+    ok("a three-part binding is allowed",
+      deep.objects[0].src.field === "batch.qc.grade", deep.objects[0].src.field);
+
+    /* and the shapes that must NOT get through */
+    const badKind = await put([obj({ kind: "evil", field: "product.name" })]);
+    ok("an unknown source kind falls back to fixed",
+      badKind.objects[0].src.kind === "fixed", badKind.objects[0].src.kind);
+    const badField = await put([obj({ kind: "field", field: "__proto__.x" })]);
+    ok("a binding that is not a plain field path is dropped",
+      badField.objects[0].src.field === "", JSON.stringify(badField.objects[0].src.field));
+    const noDots = await put([obj({ kind: "field", field: "product" })]);
+    ok("a binding with no field on it is dropped",
+      noDots.objects[0].src.field === "", JSON.stringify(noDots.objects[0].src.field));
+  }
+
   section("Validation rejects bad input");
   ok("SO with empty lines → 400", (await call("POST", "/sales-orders", A, { customerId: cust, lines: [] })).status === 400);
   ok("delete unknown SO → 404", (await call("DELETE", "/sales-orders/SO-NOPE", A)).status === 404);

@@ -289,6 +289,15 @@
        the module that set it. */
     setLeaveGuard(fn){ this._leaveGuard = typeof fn==="function" ? fn : null; },
 
+    /* Back to the tab this one was reached from, in the state it was left in.
+       go() will note THIS tab on the way out, so back from there returns —
+       two tabs toggle rather than the trail dead-ending after one hop. */
+    back(){
+      const b=this._backTo;
+      if(b && M[b.id] && this.canAccess(b.id)) this.go(b.id, b.params);
+      else this.go(this.homeId());
+    },
+
     go(id, params){
       if(!M[id]){ id=this.homeId(); }
       if(!this.canAccess(id)){ id=this.homeId(); } // block hidden modules by hash/palette
@@ -306,6 +315,24 @@
         }
       }
       this._leaveGuard=null;
+      /* WHERE YOU CAME FROM, with the state it was in. A jump across tabs —
+         inventory to the ledger, the calendar to an order — remembers the tab
+         it left AND its params, so "back" lands on the screen as it was, not
+         a fresh copy of the module. Re-rendering the same tab is not a jump
+         and must not eat the trail. */
+      if(this.current && this.current!==id && M[this.current]){
+        /* …but not the one-shot params. openNew / create / openPending are
+           commands, not state — carried back, they would re-open a "New …"
+           dialog the user already dealt with. */
+        let bp=null;
+        if(this.params){
+          bp={...this.params};
+          delete bp.openNew; delete bp.create; delete bp.openPending;
+          delete bp.highlight;
+          if(!Object.keys(bp).length) bp=null;
+        }
+        this._backTo={id:this.current, params:bp};
+      }
       this.current=id; this.params=params||null;
       location.hash=id;
       // nav active state
@@ -313,9 +340,20 @@
       // auto accent
       if(this.autoAccent){ const meta=UI.NAV.find(n=>n.id===id); if(meta&&meta.accent){ document.documentElement.setAttribute("data-accent",meta.accent); } }
       else { document.documentElement.setAttribute("data-accent", this.accent); }
-      // crumbs
+      // crumbs — with the way back, when there is one
       const mod=M[id];
-      $("#crumbs").innerHTML=`<span>Chhaperia</span><span class="sep">/</span><span class="cur">${esc(mod.title)}</span>`;
+      const cr=$("#crumbs"); cr.innerHTML="";
+      const bk=this._backTo;
+      if(bk && M[bk.id] && this.canAccess(bk.id))
+        cr.appendChild(h("button",{class:"crumb-back",type:"button",
+          title:"Back to "+M[bk.id].title,
+          onclick:()=>this.back()},[
+          h("span",{class:"crumb-back-a",text:"‹"}),
+          h("span",{class:"crumb-back-t",text:M[bk.id].title}),
+        ]));
+      cr.appendChild(h("span",{class:"brandcrumb",text:"Chhaperia"}));
+      cr.appendChild(h("span",{class:"sep",text:"/"}));
+      cr.appendChild(h("span",{class:"cur",text:mod.title}));
       // render
       const view=$("#view"); view.innerHTML=""; view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in");
       try{ mod.render(view, params); }

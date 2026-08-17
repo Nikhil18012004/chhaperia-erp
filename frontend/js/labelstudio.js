@@ -761,6 +761,21 @@
   const IMG_RE=/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
   const uid=(p)=>p+Math.random().toString(36).slice(2,9);
 
+  /* WHERE A FIELD GETS ITS WORDS.
+       fixed   — typed here, the same on every label
+       date    — filled in when you print
+       serial  — counts up across the run
+       prompt  — asked for at the print step
+       field   — READ OUT OF THE ERP: "product.name", "batch.number".
+     The last one is what turns a template into a label the plant can print a
+     thousand different times without opening the designer. The designer knows
+     only the SHAPE of a binding; which fields exist, and what they are worth
+     for a given record, is the ERP's business and arrives through mount(). */
+  const SRC_KINDS=["fixed","date","serial","prompt","field"];
+  /* root.leaf, or root.leaf.leaf — deliberately strict, because this string is
+     the only thing standing between a template and an eval-shaped lookup. */
+  const FIELD_RE=/^[a-zA-Z][a-zA-Z0-9]{0,23}(\.[a-zA-Z][a-zA-Z0-9_]{0,23}){1,2}$/;
+
   /* PRINT ORDER — the four BarTender offers. "Top" and "bottom" are which end
      of the sheet label 1 sits at; "across" and "down" are which way the count
      runs from there. On a roll there is only one row, so the two directions
@@ -926,11 +941,17 @@
          would let you print something you had every reason to think was gone. */
       hidden:!!o.hidden};
     const s=o.src||{};
-    const kind=["fixed","date","serial","prompt"].indexOf(s.kind)>=0?s.kind:"fixed";
+    const kind=SRC_KINDS.indexOf(s.kind)>=0?s.kind:"fixed";
     r.src={kind, prefix:str(s.prefix,"",40), suffix:str(s.suffix,"",40),
       fmt:str(s.fmt,"DD.MM.YYYY",40),
       start:int(s.start,1,0,999999999), step:int(s.step,1,1,10000), pad:int(s.pad,0,0,12),
-      prompt:str(s.prompt,"",40), def:str(s.def,"",120)};
+      prompt:str(s.prompt,"",40), def:str(s.def,"",120),
+      /* An ERP binding: "product.name", "batch.number", "roll.length". Shape
+         checked here, MEANING checked nowhere — the field list belongs to the
+         ERP, not to the designer, and a binding whose field has since been
+         renamed must survive a save so it can be repaired rather than being
+         silently emptied on load. */
+      field:FIELD_RE.test(String(s.field||""))?String(s.field):""};
     if(t==="text"||t==="barcode"||t==="qr"){
       r.text=str(o.text,"",600);
       /* The fallback matches the DEFAULT, so a font that has gone missing from
@@ -1093,8 +1114,42 @@
       const key=s.prompt||"Value";
       v=(ctx.prompts&&ctx.prompts[key]!=null&&ctx.prompts[key]!=="")?String(ctx.prompts[key]):(s.def||"");
     }
+    else if(s.kind==="field") v=fieldValue(s,ctx);
     else v=o.text||"";
     return (s.prefix||"")+v+(s.suffix||"");
+  }
+  /* "product.name" against ctx.bind = {product:<record>, batch:<record>, …}.
+     The ROOT is what the print step was asked to choose; the rest is a walk
+     down that record.
+
+     ⚠ FALLS BACK TO THE EXAMPLE, NOT TO EMPTY. On the canvas there is no
+     chosen record at all, and a label that draws six blank boxes while you are
+     designing it is unreadable — you cannot see what you are laying out. So an
+     unbound field shows the example the field list gave for it (kept in
+     src.def, the same place a prompt keeps its default). The print step is
+     where a missing record becomes an error worth raising, and it says so
+     there rather than quietly printing the example. */
+  function fieldValue(s,ctx){
+    const path=String(s.field||"");
+    if(!FIELD_RE.test(path)) return s.def||"";
+    const bits=path.split(".");
+    let cur=ctx&&ctx.bind?ctx.bind[bits[0]]:null;
+    for(let i=1;i<bits.length&&cur!=null;i++)
+      cur=(typeof cur==="object")?cur[bits[i]]:null;
+    if(cur==null||cur==="") return s.def||"";
+    return String(cur);
+  }
+  /* Every ROOT a label binds to ("product", "batch", …), so the print step can
+     ask for one record of each — once, however many fields read it. */
+  function bindRootsOf(doc){
+    const seen=[];
+    (doc.objects||[]).forEach(o=>{
+      if(o.src&&o.src.kind==="field"&&FIELD_RE.test(String(o.src.field||""))){
+        const root=String(o.src.field).split(".")[0];
+        if(seen.indexOf(root)<0) seen.push(root);
+      }
+    });
+    return seen;
   }
   /* Every distinct prompt on the label, so the print step can ask for each
      one exactly once however many objects read it. */
@@ -1560,7 +1615,45 @@
      drawing, and everything else lives behind Properties or Page Setup,
      once each.
      ============================================================ */
-  function mount(host){
+  /* ---- THE ERP'S OFFER OF FIELDS ----
+     The designer deliberately knows nothing about tapes, batches or work
+     orders. What it knows is that SOMEBODY may be able to name some fields and
+     hand back a record. That somebody is mod-label-studio.js, which passes
+     this in; without it the studio is exactly what it was and simply does not
+     offer "from the ERP" as a source.
+
+       groups()          → [{root:"product", label:"Product",
+                             fields:[{v:"product.name", l:"Name", ex:"…"}]}]
+       records(root)     → [{id, label}]     what you may print this for
+       record(root,id)   → a plain object, or null
+
+     Kept as FUNCTIONS, not as data: the ERP's list changes under the designer
+     (a new product is added in another tab and the 15-second poll brings it
+     in), and a snapshot taken at mount would go stale on a screen that stays
+     open for an hour. */
+  let erpData=null;
+  const erpGroups=()=>{
+    if(!erpData||typeof erpData.groups!=="function") return [];
+    try{ const g=erpData.groups(); return Array.isArray(g)?g:[]; }catch(e){ return []; }
+  };
+  const erpRecords=(root)=>{
+    if(!erpData||typeof erpData.records!=="function") return [];
+    try{ const r=erpData.records(root); return Array.isArray(r)?r:[]; }catch(e){ return []; }
+  };
+  const erpRecord=(root,id)=>{
+    if(!erpData||typeof erpData.record!=="function") return null;
+    try{ return erpData.record(root,id)||null; }catch(e){ return null; }
+  };
+  const erpGroup=(root)=>erpGroups().find(g=>g.root===root)||null;
+  const erpFieldLabel=(path)=>{
+    const root=String(path||"").split(".")[0];
+    const g=erpGroup(root);
+    const f=g&&(g.fields||[]).find(x=>x.v===path);
+    return f?(g.label+" · "+f.l):path;
+  };
+
+  function mount(host,opts){
+    erpData=(opts&&opts.data)||null;
     let docs=loadDocs();
     /* The studio ALWAYS opens on the gallery of saved labels — the way
        BarTender opens on its documents. You choose what you are working on
@@ -1616,6 +1709,12 @@
        amber handles never went away again — the screen sat there saying you
        were editing the picture long after you had finished with it. */
     let bgEdit=false;
+    /* Templates whose "this arrived from BarTender as a picture" notice has
+       been waved away, by id. Deliberately NOT saved with the document: the
+       notice describes a state, and the state itself is the record — reopening
+       a label that is still a picture with its text hidden should say so
+       again, because it is still true. */
+    const impDismiss={};
     /* Which object is being typed on. The canvas leaves it out of the render
        because the editor is drawing it — see labelInner's ctx.skip. */
     let editingId=null;
@@ -1624,10 +1723,22 @@
        twice, and one of them adding it at the wrong moment would blank an
        object nobody was touching. */
     const canvasCtx=()=>({index:0,now:new Date(),
-      prompts:runOpts.prompts||{},skip:editingId});
+      prompts:runOpts.prompts||{},bind:bindRecords(),skip:editingId});
 
     const root=h("div",{class:"ls"});
     host.appendChild(root);
+
+    /* The canvas hit box for an object, BY ID. Everything that reaches back for
+       a box goes through here. It used to be `skin.children[i]`, indexed by the
+       object's position in d.objects plus a fudge for the background box — a
+       mapping that was wrong whenever the two lists disagreed (it already
+       nudged the wrong box while the background was being adjusted) and that
+       broke outright once hidden objects stopped getting boxes at all. */
+    const hitFor=(o)=>{
+      if(!o||!o.id) return null;
+      const sk=root.querySelector(".ls-skin");
+      return sk?sk.querySelector('.ls-hit[data-oid="'+o.id+'"]'):null;
+    };
 
     /* A page can be navigated away from, and the router simply empties the
        view — so the warning has to be hung on the router. */
@@ -1974,39 +2085,239 @@
        ============================================================ */
     const MAX_IMPORT=12*1024*1024;      // a design may carry placed pictures
     const LABEL_KIND="chhaperia-label";
-    /* THE EXTENSION IS .label — a label file, which is what it is.
+    /* Downloads used to be .label (bare JSON); they are .doc now — see
+       DOWNLOAD AS A WORD DOCUMENT below. Import still reads the old .label
+       files, because a year of backups does not stop being real when the
+       format moves on. Import never looks at the extension anyway; it reads
+       the bytes. */
 
-       Not .json: that is the shape of the bytes, not the kind of thing they
-       are, and it tells an operator nothing about what they are holding.
+    /* ============================================================
+       DOWNLOAD AS A WORD DOCUMENT
 
-       Not .btw either, and this one was learned the hard way. A real .btw is
-       Seagull's own closed binary; naming our file .btw does not make
-       BarTender read it, it only makes Windows hand the file straight to the
-       one application certain to reject it — error #3323, "not a supported
-       file type". .label has no such association: double-click it and Windows
-       asks what to open it with, instead of confidently doing the wrong thing.
+       The file a download hands over is a .doc — an MHT web archive,
+       which desktop Word has opened natively for twenty years. The
+       label is drawn in it at true size, the type as editable text,
+       barcodes and pictures as pictures, so the sticker can go on
+       being worked on in Word.
 
-       Import never looks at the extension anyway; it reads the bytes. This
-       name is for the human in the downloads folder. */
-    const LABEL_EXT=".label";
+       AND IT COMES BACK. The label's own JSON rides inside the same
+       file as its own MIME part, so importing the .doc into Label
+       Studio restores the design losslessly — one file is both the
+       Word copy and the backup. Editing the Word copy edits the Word
+       copy only; the part holds the design as it was downloaded.
+       ============================================================ */
+    const b64utf8=(s)=>btoa(unescape(encodeURIComponent(s)));
+    const b64wrap=(s)=>s.replace(/(.{76})/g,"$1\r\n");
+    /* An SVG string, rasterized to a PNG data-url at print-ish density.
+       Chrome rasterizes an <img> of an SVG data-url without tainting the
+       canvas, so toDataURL stays available. */
+    function svgToPng(svg,wmm,hmm,done){
+      const PXMM=8, W=Math.max(2,Math.round(wmm*PXMM)), H=Math.max(2,Math.round(hmm*PXMM));
+      const src="data:image/svg+xml;base64,"+b64utf8(
+        svg.replace(/style="[^"]*"/,"")
+           .replace("<svg",`<svg width="${W}" height="${H}"`));
+      const img=new Image();
+      img.onload=()=>{
+        try{
+          const cv=document.createElement("canvas");
+          cv.width=W; cv.height=H;
+          const cx=cv.getContext("2d");
+          cx.drawImage(img,0,0,W,H);
+          done(cv.toDataURL("image/png"));
+        }catch(e){ done(""); }
+      };
+      img.onerror=()=>done("");
+      img.src=src;
+    }
+    /* An ellipse needs no SVG round-trip — canvas draws it directly. */
+    function ellipsePng(o){
+      const PXMM=8, W=Math.max(2,Math.round(o.w*PXMM)), H=Math.max(2,Math.round(o.h*PXMM));
+      try{
+        const cv=document.createElement("canvas");
+        cv.width=W; cv.height=H;
+        const cx=cv.getContext("2d");
+        const sw=Math.max(0,(+o.strokeW||0)*PXMM);
+        cx.beginPath();
+        cx.ellipse(W/2,H/2,Math.max(1,W/2-sw/2-.5),Math.max(1,H/2-sw/2-.5),0,0,Math.PI*2);
+        if(o.fill){ cx.fillStyle=o.fill; cx.fill(); }
+        if(sw>0){ cx.lineWidth=sw; cx.strokeStyle=o.stroke||"#000"; cx.stroke(); }
+        return cv.toDataURL("image/png");
+      }catch(e){ return ""; }
+    }
+
+    /* The label as Word-safe HTML. Everything is absolutely positioned from
+       the PAGE origin — Word turns nested absolute boxes into a guess, and
+       one shared origin is the arrangement it honours. Text stays text;
+       barcodes, QR, ellipses and pictures become picture parts. */
+    function wordHtml(d,parts,rasters){
+      const X0=15, Y0=15;                         // the label's place on the page
+      const mmS2=(n)=>(+n).toFixed(2)+"mm";
+      const ctx0={index:0,now:new Date(),prompts:{}};
+      const abs=(x,y,w,hh)=>`position:absolute;left:${mmS2(X0+x)};top:${mmS2(Y0+y)};`+
+        `width:${mmS2(w)};height:${mmS2(hh)};`;
+      const out=[];
+      /* the die: the label's ground and outline, under everything */
+      out.push(`<div style="${abs(0,0,d.w,d.h)}background:${d.bg||"#fff"};`+
+        `border:0.2mm dashed #9aa0a6"></div>`);
+      if(d.bgImage){
+        const loc=addPart(parts,d.bgImage);
+        if(loc){
+          const cw=d.bgFit==="custom"&&d.bgW>0?d.bgW:d.w;
+          const ch=d.bgFit==="custom"&&d.bgH>0?d.bgH:d.h;
+          const cxx=d.bgFit==="custom"?d.bgX:0, cy=d.bgFit==="custom"?d.bgY:0;
+          out.push(`<img src="${loc}" style="${abs(cxx,cy,cw,ch)}">`);
+        }
+      }
+      d.objects.forEach(o=>{
+        if(o.hidden) return;
+        const val=srcValue(o,ctx0);
+        if(o.type==="text"){
+          const tc=o.tcase==="upper"?String(val).toUpperCase()
+                 :o.tcase==="lower"?String(val).toLowerCase()
+                 :o.tcase==="title"?String(val).replace(/\b\w/g,c=>c.toUpperCase())
+                 :String(val);
+          const pt=(o.size*72/25.4).toFixed(1);
+          const deco=[o.underline?"underline":"",o.strike?"line-through":""]
+            .filter(Boolean).join(" ");
+          out.push(`<div style="${abs(o.x,o.y,o.w,o.h)}`+
+            `font-family:'${(FONTS.find(f=>f.v===o.font)||FONTS[0]).l}';`+
+            `font-size:${pt}pt;line-height:${o.lineH||1.25};`+
+            `${o.bold?"font-weight:bold;":""}${o.italic?"font-style:italic;":""}`+
+            `${deco?"text-decoration:"+deco+";":""}color:${o.color};`+
+            `text-align:${o.align};${o.shade?"background:"+o.shade+";":""}`+
+            `${o.wrap===false?"white-space:nowrap;":""}`+
+            `${o.indentL?"padding-left:"+mmS2(o.indentL)+";":""}`+
+            `${o.indentR?"padding-right:"+mmS2(o.indentR)+";":""}`+
+            `">${esc(tc).replace(/\n/g,"<br>")}</div>`);
+          return;
+        }
+        if(o.type==="barcode"||o.type==="qr"){
+          const is2d=o.type==="qr"||o.sym==="qr";
+          const r=is2d?qrSvg(val,o.color,o.ecl):barcodeSvg(o.sym,val,o.color);
+          if(!r) return;
+          const capH=o.showText?Math.min(o.h*0.4,o.size*1.35+0.5):0;
+          const job={svg:r.svg,w:o.w,h:Math.max(1,o.h-capH)};
+          rasters.push(job);
+          out.push(()=>{
+            const loc=job.png?addPart(parts,job.png):"";
+            let s=loc?`<img src="${loc}" style="${abs(o.x,o.y,o.w,o.h-capH)}">`:"";
+            if(o.showText&&capH>0)
+              s+=`<div style="${abs(o.x,o.y+o.h-capH,o.w,capH)}text-align:center;`+
+                 `font-family:'${(FONTS.find(f=>f.v===o.font)||FONTS[0]).l}';`+
+                 `font-size:${(o.size*72/25.4).toFixed(1)}pt;letter-spacing:.06em;`+
+                 `color:${o.color}">${esc(r.text)}</div>`;
+            return s;
+          });
+          return;
+        }
+        if(o.type==="image"&&o.data){
+          const loc=addPart(parts,o.data);
+          if(loc) out.push(`<img src="${loc}" style="${abs(o.x,o.y,o.w,o.h)}">`);
+          return;
+        }
+        if(o.type==="line"){
+          out.push(`<div style="${abs(o.x,o.y,o.w,Math.max(o.strokeW,.2))}`+
+            `background:${o.stroke};font-size:1pt">&nbsp;</div>`);
+          return;
+        }
+        if(o.type==="ellipse"){
+          const png=ellipsePng(o);
+          const loc=png?addPart(parts,png):"";
+          if(loc) out.push(`<img src="${loc}" style="${abs(o.x,o.y,o.w,o.h)}">`);
+          return;
+        }
+        /* box */
+        out.push(`<div style="${abs(o.x,o.y,o.w,o.h)}`+
+          `${o.strokeW>0?"border:"+mmS2(o.strokeW)+" solid "+o.stroke+";":""}`+
+          `background:${o.fill||"transparent"};font-size:1pt">&nbsp;</div>`);
+      });
+      return out;
+    }
+    /* One image part per distinct picture. Word finds it by Content-Location. */
+    function addPart(parts,dataUrl){
+      const m=/^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl||"");
+      if(!m) return "";
+      const have=parts.find(p=>p.b64===m[2]);
+      if(have) return have.loc;
+      const ext=m[1]==="image/jpeg"?"jpg":m[1].replace("image/","").replace("+xml","");
+      const loc="file:///C:/chh-label/img"+(parts.length+1)+"."+ext;
+      parts.push({loc,type:m[1],b64:m[2]});
+      return loc;
+    }
 
     function downloadDoc(d){
+      const dd=cleanDoc(JSON.parse(JSON.stringify(d)));
       const payload={kind:LABEL_KIND, version:1,
-        note:"Chhaperia Label Studio template. Import it from Label Studio — "+
-             "this is not a Seagull BarTender document.",
+        note:"Chhaperia Label Studio template, embedded in its own Word copy. "+
+             "Import this .doc back into Label Studio to restore the design.",
         exported:new Date().toISOString(),
-        labels:[cleanDoc(JSON.parse(JSON.stringify(d)))]};
+        labels:[dd]};
       const name=String(d.name||"label").replace(/[^\w .()-]+/g,"_")
         .replace(/\s+/g," ").trim().slice(0,60)||"label";
-      const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-      const url=URL.createObjectURL(blob);
-      const a=h("a",{href:url,download:name+LABEL_EXT,style:"display:none"});
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
-      toast("Saved “"+name+LABEL_EXT+"” — bring it back with Import. "+
-            "It is a Label Studio file, not a BarTender one.",
-            {type:"ok",title:"Downloaded",dur:6000});
+      const parts=[], rasters=[];
+      const pieces=wordHtml(dd,parts,rasters);
+      /* rasterize every barcode/QR, then assemble — the deferred pieces close
+         over their jobs and read job.png once it exists */
+      let left=rasters.length;
+      const assemble=()=>{
+        const body=pieces.map(p=>typeof p==="function"?p():p).join("\n");
+        const spacer=`<div style="height:${(dd.h+22).toFixed(1)}mm;font-size:1pt">&nbsp;</div>`;
+        const cap=`<p style="font-family:Calibri,Arial;font-size:9pt;color:#666">`+
+          `${esc(dd.name)} — ${dd.w} × ${dd.h} mm · from Chhaperia Label Studio. `+
+          `This Word copy is for further design work; import this same file back `+
+          `into Label Studio to restore the original design.</p>`;
+        const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" `+
+          `xmlns:w="urn:schemas-microsoft-com:office:word" `+
+          `xmlns="http://www.w3.org/TR/REC-html40"><head>`+
+          `<meta http-equiv="Content-Type" content="text/html; charset=utf-8">`+
+          `<title>${esc(dd.name)}</title>`+
+          `<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View>`+
+          `<w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->`+
+          `<style>@page Section1{size:210mm 297mm;margin:12mm}`+
+          `div.Section1{page:Section1}</style></head>`+
+          `<body><div class="Section1">${body}\n${spacer}\n${cap}</div></body></html>`;
+        const B="----=_ChhaperiaLabelPart";
+        const mht=[
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/related; type="text/html"; boundary="${B}"`,
+          "","This is a Chhaperia Label Studio document in MHTML form. Open it in "+
+          "Microsoft Word, or import it back into Label Studio.","",
+          `--${B}`,
+          'Content-Type: text/html; charset="utf-8"',
+          "Content-Transfer-Encoding: base64",
+          "Content-Location: file:///C:/chh-label/label.htm","",
+          b64wrap(b64utf8(html)),"",
+        ];
+        parts.forEach(p=>{
+          mht.push(`--${B}`,
+            `Content-Type: ${p.type}`,
+            "Content-Transfer-Encoding: base64",
+            `Content-Location: ${p.loc}`,"",
+            b64wrap(p.b64),"");
+        });
+        mht.push(`--${B}`,
+          "Content-Type: application/x-chhaperia-label",
+          "Content-Transfer-Encoding: base64",
+          "Content-Location: file:///C:/chh-label/design.chhaperia","",
+          b64wrap(b64utf8(JSON.stringify(payload))),"",
+          `--${B}--`,"");
+        const blob=new Blob([mht.join("\r\n")],{type:"application/msword"});
+        const url=URL.createObjectURL(blob);
+        const a=h("a",{href:url,download:name+".doc",style:"display:none"});
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
+        toast("Saved “"+name+".doc” — opens in Microsoft Word for further "+
+              "design work, and imports straight back into Label Studio.",
+              {type:"ok",title:"Downloaded",dur:6000});
+      };
+      if(!left) return assemble();
+      rasters.forEach(job=>{
+        svgToPng(job.svg,job.w,job.h,(png)=>{
+          job.png=png;
+          if(!--left) assemble();
+        });
+      });
     }
 
     /* A name nobody else in the library is already using, so two imports of the
@@ -2164,13 +2475,113 @@
       for(let i=0;i<n;i++) s+=String.fromCharCode(bytes[i]);
       const grab=(re)=>{ const m=re.exec(s); return m?m[1].trim():""; };
       const size=grab(/<TemplateSize>([^<]*)<\/TemplateSize>/);
-      const wh=/([\d.]+)\s*x\s*([\d.]+)\s*mm/i.exec(size);
+      /* mm, cm or inches — a US-locale BarTender writes the size in inches,
+         and reading only mm turned those files away over a unit. */
+      const wh=/([\d.]+)\s*x\s*([\d.]+)\s*(mm|cm|in(?:ch(?:es)?)?|")/i.exec(size);
+      const k=wh?({mm:1,cm:10}[wh[3].toLowerCase()]||25.4):1;
       return {
         title:grab(/<Title>([^<]*)<\/Title>/),
-        w:wh?+wh[1]:0,
-        h:wh?+wh[2]:0,
+        w:wh?+wh[1]*k:0,
+        h:wh?+wh[2]*k:0,
         app:grab(/<Application>([^<]*)<\/Application>/),
       };
+    }
+
+    /* ---- THE SIZE, OUT OF THE BINARY ----
+       Older files (BarTender 9.x era — all of Seagull's own samples) carry no
+       <TemplateSize> at all; the dimensions live in the inflated stream as a
+       pair of int32 MILS (1/1000 inch) at the tail of a fixed-shape record:
+
+           [int32][0][a][a][b][b][W][H]      a,b small (margins/gaps in mils)
+
+       Measured across the 92 sample documents on this machine: the true size
+       is ALWAYS among the records this shape matches (7/7 on files whose very
+       name declares it, e.g. AIAG_B10_6.25x5) — alongside a constant pair of
+       phantom records (0.5×1 in and 0.5×0.5 in) that appear in EVERY file and
+       are preference defaults, not the label. Hence candidates, not an
+       answer: the caller picks the one that matches the artwork's own aspect
+       ratio, which the phantoms only win if the label really is that shape. */
+    function btwBinSize(stream){
+      if(!stream||stream.length<32) return [];
+      const dv=new DataView(stream.buffer,stream.byteOffset,stream.byteLength);
+      const i32=(i)=>dv.getInt32(i,true);
+      const out=[];
+      for(let i=0;i+32<=stream.length;i++){
+        if(i32(i+4)!==0) continue;
+        const a=i32(i+8), a2=i32(i+12), b=i32(i+16), b2=i32(i+20);
+        if(a!==a2||b!==b2||a<0||a>2000||b<0||b>2000) continue;
+        const w=i32(i+24), h=i32(i+28);
+        if(w<200||w>30000||h<200||h>30000) continue;
+        const wmm=+(w*0.0254).toFixed(2), hmm=+(h*0.0254).toFixed(2);
+        if(!out.some(c=>c.w===wmm&&c.h===hmm)) out.push({w:wmm,h:hmm});
+      }
+      return out;
+    }
+    /* Which candidate is the label? The one shaped like the artwork. */
+    function pickBinSize(cands,aspect){
+      if(!cands.length||!aspect) return null;
+      let best=null, bestD=Math.log(1.10);   // within 10% or it is not a match
+      cands.forEach(c=>{
+        const d=Math.abs(Math.log((c.w/c.h)/aspect));
+        /* ties go to the LARGER label: the phantom records are half-inch
+           squares, and a real half-inch label still beats them on distance */
+        if(d<bestD-1e-9||(Math.abs(d-bestD)<1e-9&&best&&c.w*c.h>best.w*best.h)){
+          best=c; bestD=d;
+        }
+      });
+      return best;
+    }
+
+    /* ---- WHERE THE LABEL SITS IN THE RENDER ----
+       The render is a square canvas; the label is the part that is not the
+       letterbox grey. Flood the corner colour inward and take the bounding
+       box of everything else. Returns null when the corners disagree or the
+       ground is white — the same tests clearSurround applies, because a
+       white ground IS the label and must not be measured away. */
+    function contentBox(img){
+      const w=img.width, h=img.height;
+      if(!w||!h) return null;
+      const cv=document.createElement("canvas");
+      cv.width=w; cv.height=h;
+      const cx=cv.getContext("2d");
+      if(!cx) return null;
+      cx.drawImage(img,0,0);
+      let d;
+      try{ d=cx.getImageData(0,0,w,h).data; }catch(e){ return null; }
+      const at=(x,y)=>(y*w+x)*4;
+      const c0=at(0,0);
+      const r0=d[c0], g0=d[c0+1], b0=d[c0+2];
+      const near=(i,tol)=>Math.abs(d[i]-r0)<=tol&&Math.abs(d[i+1]-g0)<=tol&&
+                          Math.abs(d[i+2]-b0)<=tol;
+      for(const s of [at(w-1,0),at(0,h-1),at(w-1,h-1)]) if(!near(s,10)) return null;
+      if(r0>235&&g0>235&&b0>235) return null;
+      const seen=new Uint8Array(w*h);
+      const stack=[];
+      const push=(x,y)=>{
+        if(x<0||y<0||x>=w||y>=h) return;
+        const p=y*w+x;
+        if(seen[p]) return;
+        seen[p]=1;
+        if(!near(p*4,26)) return;
+        stack.push(p);
+      };
+      push(0,0); push(w-1,0); push(0,h-1); push(w-1,h-1);
+      while(stack.length){
+        const p=stack.pop(), x=p%w, y=(p-x)/w;
+        push(x+1,y); push(x-1,y); push(x,y+1); push(x,y-1);
+      }
+      let x0=w, y0=h, x1=-1, y1=-1;
+      for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+        const p=y*w+x;
+        if(seen[p]&&near(p*4,26)) continue;   // surround
+        if(x<x0) x0=x; if(x>x1) x1=x;
+        if(y<y0) y0=y; if(y>y1) y1=y;
+      }
+      if(x1<x0||y1<y0) return null;
+      const bw=x1-x0+1, bh=y1-y0+1;
+      /* a sliver is noise, not a label */
+      if(bw<w*0.05||bh<h*0.05) return null;
+      return {x:x0,y:y0,w:bw,h:bh};
     }
 
     /* THE LETTERBOX. BarTender renders into a SQUARE canvas and pads the label
@@ -2220,11 +2631,17 @@
       }
       cx.putImageData(img,0,0);
     }
-    function cropToLabel(img,wmm,hmm){
-      const want=wmm/hmm, have=img.width/img.height;
+    function cropToLabel(img,wmm,hmm,box){
       let sx=0, sy=0, sw=img.width, sh=img.height;
-      if(have>want){ sw=Math.round(img.height*want); sx=Math.round((img.width-sw)/2); }
-      else if(have<want){ sh=Math.round(img.width/want); sy=Math.round((img.height-sh)/2); }
+      if(box){
+        /* the measured bounding box beats aspect arithmetic — it is where the
+           label actually is, not where a centred one would be */
+        sx=box.x; sy=box.y; sw=box.w; sh=box.h;
+      } else {
+        const want=wmm/hmm, have=img.width/img.height;
+        if(have>want){ sw=Math.round(img.height*want); sx=Math.round((img.width-sw)/2); }
+        else if(have<want){ sh=Math.round(img.width/want); sy=Math.round((img.height-sh)/2); }
+      }
       const cv=document.createElement("canvas");
       cv.width=sw; cv.height=sh;
       const cx=cv.getContext("2d");
@@ -2263,13 +2680,39 @@
        DecompressionStream is how a browser inflates; it is asynchronous, hence
        the callback. Anything at all going wrong here falls back to the picture
        on its own, which is always better than failing the import. */
+    /* ⚠ CHUNKED, AND IT KEEPS WHAT IT HAS. The zlib stream inside a .btw ends
+       long before the file does — the PNG render follows it — and Chrome's
+       DecompressionStream treats those trailing bytes as an ERROR after the
+       stream completes. Response.arrayBuffer() turns that error into nothing
+       at all, throwing away a perfectly inflated stream because of what came
+       AFTER it. Measured on Seagull's own sample documents: every one of them
+       inflates in node and came back null here. So the stream is read chunk
+       by chunk and an error at the tail returns the chunks in hand.
+
+       The cap is the other half: 12 MB of hostile input could legally inflate
+       to gigabytes and freeze the tab. Past 32 MB nothing in it can be a
+       label's text — stop reading and work with what arrived. */
     function inflateZlib(bytes,done){
       if(typeof DecompressionStream!=="function") return done(null);
       try{
         const ds=new DecompressionStream("deflate");
-        new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer()
-          .then(buf=>done(new Uint8Array(buf)))
-          .catch(()=>done(null));
+        const reader=new Blob([bytes]).stream().pipeThrough(ds).getReader();
+        const parts=[]; let total=0;
+        const CAP=32*1024*1024;
+        const finish=()=>{
+          if(!total) return done(null);
+          const out=new Uint8Array(total); let o=0;
+          parts.forEach(p=>{ out.set(p,o); o+=p.length; });
+          done(out);
+        };
+        (function pump(){
+          reader.read().then(({done:fin,value})=>{
+            if(value){ parts.push(value); total+=value.length;
+              if(total>CAP){ try{reader.cancel();}catch(e){} return finish(); } }
+            if(fin) return finish();
+            pump();
+          }).catch(finish);
+        })();
       }catch(e){ done(null); }
     }
     /* The first zlib stream that actually inflates. Only a handful of offsets
@@ -2292,11 +2735,17 @@
       })();
     }
 
-    /* RTF down to the words. The font table, colour table and stylesheet are
-       GROUPS, not text — stripped by matching braces rather than by regex,
-       because "{\fonttbl{\f0 Calibri;}{\f1 Arial;}}" nests and a flat pattern
-       leaves "Calibri;Arial;" glued to the front of every label. */
-    function rtfText(rtf){
+    /* The header groups off the front of an RTF blob. The font table, colour
+       table and stylesheet are GROUPS, not text — stripped by matching braces
+       rather than by regex, because "{\fonttbl{\f0 Calibri;}{\f1 Arial;}}"
+       nests and a flat pattern leaves "Calibri;Arial;" glued to the front of
+       every label.
+
+       What is left is the RUN: the words, and the \f and \cf that say which
+       entry of those tables the words were actually set in. Reading \cf out of
+       the whole blob instead would find the stylesheet's own Hyperlink colour
+       first and import black text as blue. */
+    function rtfStripGroups(rtf){
       let s=String(rtf||"");
       const drop=/\{\\(?:\*|fonttbl|colortbl|stylesheet|themedata|generator|info|listtable|listoverridetable|latentstyles|datastore)/;
       for(;;){
@@ -2309,7 +2758,11 @@
         }
         s=s.slice(0,m.index)+s.slice(i);
       }
-      return s
+      return s;
+    }
+    /* RTF down to the words. */
+    function rtfText(rtf){
+      return rtfStripGroups(rtf)
         .replace(/\\par[d]?\b/g,"\n")
         .replace(/\\line\b/g,"\n")
         .replace(/\\tab\b/g,"\t")
@@ -2321,19 +2774,118 @@
         .filter(Boolean).join("\n").trim();
     }
 
+    /* ---- WHAT THE RTF SAYS ABOUT THE TYPE ----
+       The blob carries more than the words. Its font table names the typeface,
+       its colour table gives the ink, and the run itself says which of each it
+       used — all of it plain, documented RTF rather than anything guessed at
+       out of BarTender's binary. It used to be thrown away: every imported
+       field arrived Arial and black no matter what it had been, which made
+       white-on-dark labels import invisible.
+
+       `{\fonttbl{\f0\fnil\fcharset0 Arial;}{\f1 Calibri;}}` — index to name. */
+    function rtfFontTable(rtf){
+      const out={};
+      const m=/\{\\fonttbl/.exec(rtf);
+      if(!m) return out;
+      let d=0,i=m.index,end=rtf.length;
+      for(;i<rtf.length;i++){
+        if(rtf[i]==="{") d++;
+        else if(rtf[i]==="}"){ d--; if(!d){ end=i; break; } }
+      }
+      const tbl=rtf.slice(m.index,end);
+      const re=/\\f(\d+)([^;{}]*);/g;
+      let x;
+      while((x=re.exec(tbl))){
+        /* the name is whatever is left once the control words are taken out */
+        const nm=x[2].replace(/\\[a-zA-Z]+-?\d*\s?/g,"").trim();
+        if(nm) out[x[1]]=nm;
+      }
+      return out;
+    }
+    /* `{\colortbl;\red255\green0\blue0;}` — 1-based, entry 0 is "auto". */
+    function rtfColorTable(rtf){
+      const out={};
+      const m=/\{\\colortbl/.exec(rtf);
+      if(!m) return out;
+      let d=0,i=m.index,end=rtf.length;
+      for(;i<rtf.length;i++){
+        if(rtf[i]==="{") d++;
+        else if(rtf[i]==="}"){ d--; if(!d){ end=i; break; } }
+      }
+      const hx=(n)=>("0"+Math.max(0,Math.min(255,+n||0)).toString(16)).slice(-2);
+      rtf.slice(m.index,end).split(";").forEach((part,idx)=>{
+        const r=/\\red(\d+)/.exec(part), g=/\\green(\d+)/.exec(part), b=/\\blue(\d+)/.exec(part);
+        if(r&&g&&b) out[idx]="#"+hx(r[1])+hx(g[1])+hx(b[1]);
+      });
+      return out;
+    }
+    /* BarTender's font names are Windows font names; this studio has six
+       families. Map by what the name CONTAINS, so "Arial Narrow", "Arial Black"
+       and "ArialMT" all land on Arial instead of silently becoming Times. */
+    function mapFont(name){
+      const n=String(name||"").toLowerCase();
+      if(!n) return "";
+      if(/courier|consol|mono/.test(n))            return "courier";
+      if(/impact|haettenschweiler/.test(n))        return "impact";
+      if(/georgia|book antiqua|palatino/.test(n))  return "georgia";
+      if(/times|roman|serif|garamond|cambria/.test(n)) return "times";
+      if(/calibri|candara|segoe|corbel/.test(n))   return "calibri";
+      if(/arial|helvetica|sans|tahoma|verdana|swiss/.test(n)) return "arial";
+      return "";
+    }
+
+    /* ⚠ NOT EVERY RTF BLOB IN THE FILE IS ON THE LABEL. A .btw carries
+       BarTender's own prototype objects — the blank Text, the blank Rich Text,
+       the data-entry form's specimen controls — and they are serialised with
+       the same RTF as the real fields. Measured on the 92 sample documents on
+       this machine: the one and only blob most of them yield is the prototype
+       "Sample Text", so importing "every RTF blob" put a field on the label
+       that had never been on the label.
+
+       These are Seagull's fixed defaults, not anything a plant typed, and no
+       real label says "Sample Prompt" or carries the input mask of a telephone
+       number. Matched whole, never as a substring, so a genuine field that
+       happens to contain one of these words survives. */
+    const BTW_BOILER=[
+      "sample text","sample prompt","sample","text","rich text","picture",
+      "value 1","value 2","text control","picture control",
+      "0123456789abcdefghijklmnopqrstuvwxyz","0123456789abc",
+      "(999) 000-0000;0;_","(???) ???-????","(___) ___-____",
+      "enter a multiple line description here if needed.",
+    ];
+    function isBtwBoilerplate(text){
+      const t=String(text||"").trim().toLowerCase();
+      if(!t) return true;
+      if(BTW_BOILER.indexOf(t)>=0) return true;
+      /* "Functions and Subs" and the VB event stubs are script, not artwork */
+      if(/^'/.test(t)||/^functions and subs$/.test(t)) return true;
+      return false;
+    }
+
     /* Every distinct field in the stream, in the order BarTender wrote them.
        A field turns up twice — once for the template and once for the data
-       entry form — so the same words are taken only once. */
+       entry form — so the same words are taken only once.
+
+       ⚠ BOTH UTF-16 ALIGNMENTS. The RTF blobs are UTF-16LE, but nothing
+       guarantees they start on an even offset of the inflated stream — and in
+       Seagull's own sample documents most of them DON'T. Reading only the
+       even alignment silently lost the text of two files in three; both
+       phases are read and duplicates fall out through the same `seen` map. */
     function fieldsIn(stream){
+      const out=[], seen={};
+      fieldsInPhase(stream,0,out,seen);
+      fieldsInPhase(stream,1,out,seen);
+      return out;
+    }
+    function fieldsInPhase(stream,phase,out,seen){
       const s=(function(){
-        let out="";
+        let o="";
         /* UTF-16LE by hand: TextDecoder would be tidier but the stream is not
            valid UTF-16 throughout and a fatal decode would throw it all away. */
-        for(let i=0;i+1<stream.length;i+=2)
-          out+=String.fromCharCode(stream[i]|(stream[i+1]<<8));
-        return out;
+        for(let i=phase;i+1<stream.length;i+=2)
+          o+=String.fromCharCode(stream[i]|(stream[i+1]<<8));
+        return o;
       })();
-      const out=[], seen={};
       let from=0;
       for(;;){
         const a=s.indexOf("{\\rtf",from);
@@ -2348,41 +2900,62 @@
         from=i;
         const text=rtfText(blob);
         if(!text||text.length>600) continue;
+        if(isBtwBoilerplate(text)) continue;
         const key=text.toLowerCase();
         if(seen[key]) continue;
         seen[key]=1;
         const al=/\\(qc|ql|qr|qj)\b/.exec(blob);
         const fs2=/\\fs(\d+)/.exec(blob);
+        /* The typeface and ink of the FIRST run — a field whose words change
+           font part-way is rare on a label, and one answer that is right about
+           the whole line beats a mixture nothing here can represent. */
+        const fonts=rtfFontTable(blob), cols=rtfColorTable(blob);
+        const body=rtfStripGroups(blob);
+        const fN=/\\f(\d+)/.exec(body), cN=/\\cf(\d+)/.exec(body);
         out.push({
           text:text,
           bold:/\\b\b(?!\w)/.test(blob),
           italic:/\\i\b(?!\w)/.test(blob),
+          underline:/\\ul\b(?!\w)/.test(blob),
           /* RTF sizes are HALF-points; the studio measures type in mm. */
           mm:fs2?Math.max(1.5,Math.min(40,(+fs2[1]/2)*25.4/72)):4,
           align:al?({qc:"center",ql:"left",qr:"right",qj:"justify"})[al[1]]:"left",
+          font:mapFont(fN?fonts[fN[1]]:(fonts[0]||fonts[1])),
+          color:(cN&&cols[+cN[1]])||"",
         });
         if(out.length>=24) break;
       }
-      return out;
     }
 
     /* Stacked down the label with a small margin, each line given room in
        proportion to its type size. Not where BarTender had them — see above —
-       but on the label, editable, and over a guide showing where to drag. */
+       but on the label, editable, and over a guide showing where to drag.
+
+       ⚠ THE BOXES MUST FIT ON THE LABEL. The old floor of 2 mm a line meant 24
+       recovered fields needed 48 mm of room whatever the label was, so on
+       anything shallow the last fields were laid out BELOW the bottom edge,
+       where they are clipped out of the render and can only be reached by
+       hunting the layer list. The share of the height is the truth; the floor
+       is only there to stop a hairline, so it gives way when there is not
+       enough label to go round. */
     function layoutFields(list,w,h){
       if(!list.length) return [];
       const mx=Math.max(1,w*0.04), my=Math.max(1,h*0.06);
       const iw=w-mx*2, ih=h-my*2;
       const weight=list.map(f=>Math.max(1,f.mm));
       const total=weight.reduce((a,b)=>a+b,0);
+      const floor=Math.min(2,ih/list.length);
       let y=my;
       return list.map((f,i)=>{
-        const bh=Math.max(2,ih*(weight[i]/total));
+        const bh=Math.max(floor,ih*(weight[i]/total));
         const o={ id:uid("o_"), type:"text", text:f.text,
           x:+mx.toFixed(2), y:+y.toFixed(2), w:+iw.toFixed(2), h:+bh.toFixed(2),
           size:+Math.min(f.mm,bh*0.8).toFixed(2),
-          bold:f.bold, italic:f.italic, align:f.align, valign:"middle",
-          font:"arial" };
+          bold:f.bold, italic:f.italic, underline:f.underline,
+          align:f.align, valign:"middle",
+          /* what the RTF actually said, and only then a default */
+          font:f.font||"arial" };
+        if(f.color) o.color=f.color;
         y+=bh;
         return o;
       });
@@ -2399,29 +2972,50 @@
       const base=String(fileName||"").replace(/\.[^.]*$/,"").trim();
       return (base||title||"Imported label").slice(0,60);
     }
+    /* done(doc, nFields, sizeHow) — sizeHow is "header" | "binary" | "guessed",
+       so the caller can say out loud when the size is an estimate. */
     function readBtw(bytes,done,fileName){
       const hdr=btwHeader(bytes);
-      if(!hdr.w||!hdr.h) return done(null,0);
       const pngs=pngsIn(bytes);
-      if(!pngs.length) return done(null,0);
+      if(!pngs.length) return done(null,0,"");
       const big=pngs.slice().sort((a,b)=>b.len-a.len)[0];
       const blob=new Blob([bytes.slice(big.at,big.at+big.len)],{type:"image/png"});
       const url=URL.createObjectURL(blob);
       const img=new Image();
       img.onload=()=>{
-        let data="";
-        try{ data=cropToLabel(img,hdr.w,hdr.h); }catch(e){ data=""; }
-        URL.revokeObjectURL(url);
-        /* Now go back for the words. The picture is already in hand, so if the
-           text cannot be recovered the import still succeeds — it just arrives
-           as artwork, which is what it used to do every time. */
+        /* The words and the size come out of the same inflated stream, so it
+           is opened once, before anything is decided. */
         inflateFirst(bytes,(stream)=>{
           let fields=[];
           try{ fields=stream?fieldsIn(stream):[]; }catch(e){ fields=[]; }
-          const objects=layoutFields(fields,hdr.w,hdr.h);
+          let box=null;
+          try{ box=contentBox(img); }catch(e){ box=null; }
+
+          /* THE SIZE, in order of trust: the header names it outright (new
+             files); the binary carries it and the artwork's shape confirms
+             which record is real (old files — all of Seagull's samples);
+             failing both, the artwork's shape at a default width, said out
+             loud so the operator sets the truth in Page setup. */
+          let w=hdr.w, h=hdr.h, how="header";
+          if(!w||!h){
+            const aspect=box?box.w/box.h:0;
+            const pick=stream?pickBinSize(btwBinSize(stream),aspect):null;
+            if(pick){ w=pick.w; h=pick.h; how="binary"; }
+            else {
+              const a=aspect||(img.width&&img.height?img.width/img.height:1);
+              w=+(a>=1?100:100*a).toFixed(1);
+              h=+(a>=1?100/a:100).toFixed(1);
+              how="guessed";
+            }
+          }
+
+          let data="";
+          try{ data=cropToLabel(img,w,h,box); }catch(e){ data=""; }
+          URL.revokeObjectURL(url);
+          const objects=layoutFields(fields,w,h);
           done(cleanDoc({
             name:btwName(fileName,hdr.title),
-            w:hdr.w, h:hdr.h, mode:"sheet", autoFit:true,
+            w:w, h:h, mode:"sheet", autoFit:true,
             /* Square: BarTender's render already carries whatever corners the
                label has, and rounding it again would shave them twice. */
             shape:"rect",
@@ -2432,14 +3026,19 @@
                The recovered fields come too, but HIDDEN. Showing them would
                print every word twice, once as type and once as part of the
                picture beneath, and dimming the picture to avoid that means the
-               label does not look like itself on arrival. So the label is
-               exact, and the text is waiting in Object Layers: show a field,
-               drag it over its printed twin, then clear the background. */
+               label does not look like itself on arrival.
+
+               That arrival state is deliberate and it is also a dead end, so
+               the DESIGNER offers the way out of it rather than leaving the
+               operator to find it: opening a label that is still a picture
+               with its text hidden puts a notice over the canvas with
+               "Make the text editable" and "Remove the artwork" on it.
+               See canvasPane's `trapped`. */
             objects:objects.map(o=>Object.assign({},o,{hidden:true})),
-          }),fields.length);
+          }),fields.length,how);
         });
       };
-      img.onerror=()=>{ URL.revokeObjectURL(url); done(null,0); };
+      img.onerror=()=>{ URL.revokeObjectURL(url); done(null,0,""); };
       img.src=url;
     }
 
@@ -2447,7 +3046,7 @@
       const list=[].slice.call(files||[]).filter(Boolean);
       if(!list.length) return;
       let added=0, skipped=0, full=false, fromBtw=0, btwText=0, btwFlat=0,
-          pending=list.length;
+          btwGuessed=0, pending=list.length;
       const why=[];
       const finish=()=>{
         if(--pending) return;
@@ -2459,15 +3058,23 @@
             {type:"ok"});
           /* An imported .btw arrives as ARTWORK, and nobody should find that
              out at the printer. Said separately so it is not lost in a count. */
-          if(btwText) toast("Imported exactly as BarTender draws it. The "+
+          if(btwText) toast("Imported exactly as BarTender draws it \u2014 as "+
+            "artwork, so the type in the picture cannot be restyled yet. The "+
             btwText+" text field"+(btwText===1?"":"s")+" BarTender stored "+
-            (btwText===1?"is":"are")+" here too, hidden \u2014 open Object Layers "+
-            "and show "+(btwText===1?"it":"one")+" to edit the wording.",
+            (btwText===1?"is":"are")+" here too. Open the label and press "+
+            "\u201cMake the text editable\u201d.",
             {type:"info",title:"From BarTender",dur:11000});
           if(btwFlat) toast(btwFlat+" BarTender label"+(btwFlat===1?"":"s")+
             " came in at the right size, but no text could be read out "+
             (btwFlat===1?"of it":"of them")+" \u2014 what you have is the artwork.",
             {type:"info",title:"From BarTender",dur:9000});
+          /* A guessed size prints wrong until somebody fixes it \u2014 that must
+             never be discovered at the printer. */
+          if(btwGuessed) toast(btwGuessed+" label"+(btwGuessed===1?"":"s")+
+            " arrived with NO size stored \u2014 the shape is right but the "+
+            "millimetres are a guess. Open "+(btwGuessed===1?"it":"each")+
+            " and set the real size in Page setup before printing.",
+            {type:"warn",title:"Size is a guess",dur:12000});
         } else if(full){
           toast("That is the "+MAX_DOCS+"-template limit \u2014 nothing imported",
             {type:"warn"});
@@ -2493,7 +3100,7 @@
           const kind=sniff(bytes);
           if(kind==="btw"){
             /* A BarTender file: bring in its size and its artwork. */
-            return readBtw(bytes,(nd,nFields)=>{
+            return readBtw(bytes,(nd,nFields,how)=>{
               if(!nd){ skipped++; why.push(whyNot(f,"btw")); return finish(); }
               if(docs.length>=MAX_DOCS){ full=true; return finish(); }
               nd.id=uid("d_");
@@ -2501,6 +3108,7 @@
               stampUsed(nd);
               docs.push(nd); added++; fromBtw++;
               if(nFields) btwText+=nFields; else btwFlat++;
+              if(how==="guessed") btwGuessed++;
               finish();
             },f.name);
           }
@@ -2509,6 +3117,36 @@
              on a file that is otherwise perfectly good \u2014 Notepad and plenty
              of export tools leave one behind. Trim before judging. */
           const text=decode(bytes).replace(/^\uFEFF/,"").trim();
+          /* A WORD FILE THIS STUDIO WROTE. The .doc download is an MHT with
+             the label's own JSON riding inside as its own MIME part, so the
+             same file that opens in Word comes back in here losslessly \u2014
+             however much the Word copy was edited, THIS part is the design
+             as it was downloaded. */
+          if(/^(MIME-Version|From:|Content-Type:\s*multipart\/related)/i.test(text)){
+            const doc64=/Content-Type:\s*application\/x-chhaperia-label[^]*?\r?\n\r?\n([A-Za-z0-9+/=\r\n]+)/i.exec(text);
+            if(doc64){
+              let json2=null;
+              try{ json2=JSON.parse(decodeURIComponent(escape(atob(doc64[1].replace(/[\r\n]/g,""))))); }
+              catch(e){ json2=null; }
+              const raw2=labelsIn(json2).filter(looksLikeLabel);
+              if(raw2.length){
+                raw2.forEach(x=>{
+                  if(docs.length>=MAX_DOCS){ full=true; return; }
+                  const nd=cleanDoc(x);
+                  nd.id=uid("d_");
+                  nd.name=uniqueDocName(nd.name);
+                  nd.objects.forEach(o=>{ o.id=uid("o_"); });
+                  stampUsed(nd);
+                  docs.push(nd); added++;
+                });
+                return finish();
+              }
+            }
+            skipped++;
+            why.push("\u201C"+f.name+"\u201D is a Word/web-archive file, but not one this "+
+              "studio wrote \u2014 it carries no label data.");
+            return finish();
+          }
           let json=null;
           try{ json=JSON.parse(text); }
           catch(e){ skipped++; why.push(whyNot(f,"text")); return finish(); }
@@ -2579,9 +3217,9 @@
             h("button",{class:"btn primary",onclick:()=>newBlank(),
               title:"It asks what you are printing on first",text:"＋  New label"}),
             h("button",{class:"btn",onclick:askForFile,
-              title:"Bring in a label downloaded from a Label Studio. Any file name "+
-                    "will do — the contents decide. One file may hold several. "+
-                    "BarTender .btw files cannot be read."},
+              title:"Bring in a BarTender .btw (its size, artwork and text), a "+
+                    ".doc downloaded from here, or a .label file. Any file name "+
+                    "will do — the contents decide. One file may hold several."},
               [ico("open",14),h("span",{text:"Import label…"})]),
             opened?h("button",{class:"btn",onclick:()=>{screen="design";paint();},
               text:"← Back to “"+doc().name+"”"}):null,
@@ -2599,51 +3237,12 @@
         ]),
       ]));
 
-      /* ---- RECENT ----
-         A library of forty templates is a wall to read, and on any given day
-         you are working on two of them. The ones you touched last, first, big
-         enough to recognise by their artwork rather than their name — and
-         with Print on the face, because that is the errand. */
-      const rec=recentDocs().filter(x=>x.d.usedAt).slice(0,4);
-      if(rec.length){
-        wrap.appendChild(h("div",{class:"ls-sec"},[
-          h("div",{class:"ls-sec-h"},[
-            h("span",{class:"ls-lbl",text:"Pick up where you left off"}),
-            h("span",{class:"hint",style:"margin:0",
-              text:"Open it to edit, or print it without opening it at all."}),
-          ]),
-          h("div",{class:"ls-rec-row"},rec.map(({d,i})=>{
-            const rw=210, rh=112;
-            const rk=Math.min(rw/(d.w*PX_MM), rh/(d.h*PX_MM));
-            return h("div",{class:"ls-rec-c"+(i===di&&opened?" on":""),
-              role:"button",tabindex:"0",title:"Open “"+d.name+"”",
-              onclick:(e)=>{ if(e.target.closest&&e.target.closest(".ls-rec-b")) return;
-                openDoc(i); },
-              onkeydown:(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDoc(i); } }},[
-              h("div",{class:"ls-rec-pv",style:`height:${rh}px`},
-                h("div",{class:"wz-frame",
-                  style:`width:${(d.w*PX_MM*rk).toFixed(1)}px;height:${(d.h*PX_MM*rk).toFixed(1)}px`},
-                  h("iframe",{srcdoc:oneHtml(d,{index:0,now:new Date(),prompts:{}}),
-                    scrolling:"no","aria-hidden":"true",tabindex:"-1",
-                    style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${rk.toFixed(4)});`+
-                      `transform-origin:top left`}))),
-              h("div",{class:"ls-rec-n",text:d.name}),
-              h("div",{class:"ls-rec-t",text:usedAgo(d)+" · "+sizeS(d.w,d.h)+
-                " · "+(d.mode==="roll"?"roll":"sheet")}),
-              h("div",{class:"ls-rec-act"},[
-                h("button",{class:"ls-rec-b",type:"button",title:"Open in the designer",
-                  onclick:(e)=>{ e.stopPropagation(); openDoc(i); },text:"Open"}),
-                h("button",{class:"ls-rec-b go",type:"button",
-                  title:"Straight to the print dialog",
-                  onclick:(e)=>{ e.stopPropagation(); printFrom(i); }},
-                  [ico("print",13),h("span",{text:"Print"})]),
-              ]),
-            ]);
-          })),
-        ]));
-      }
-
-      /* ---- everything, searchable ---- */
+      /* ---- everything, searchable ----
+         There was a "Pick up where you left off" strip above this grid, showing
+         the four most recently used templates. It was removed on the user's
+         instruction: every card in it is ALSO in the grid below, so the screen
+         showed the same labels twice and the eye had to work out which list it
+         was reading. One library, once. */
       const q=galQuery.trim().toLowerCase();
       const hits=docs.map((d,i)=>({d,i})).filter(({d})=>
         !q||d.name.toLowerCase().indexOf(q)>=0||sizeS(d.w,d.h).indexOf(q)>=0);
@@ -2676,16 +3275,11 @@
         ].filter(Boolean)),
       ]));
 
+      /* No "New label" card leads this grid any more. The hero above already
+         carries a New label button in the same eyeline, and two doors to the
+         same room made the grid read as if one of its labels were a template
+         you could not open. The grid is the library and nothing else. */
       const grid=h("div",{class:"ls-gal-grid"});
-      grid.appendChild(h("button",{class:"ls-gal-card ls-gal-new",
-        title:"Start a new label — it will ask what you are printing on",
-        onclick:()=>newBlank()},[
-        h("div",{class:"ls-gal-pv ls-gal-blank"},h("div",{class:"ls-gal-plus",text:"＋"})),
-        h("div",{class:"ls-gal-n",text:"New label"}),
-        h("div",{class:"ls-gal-d",
-          text:"It asks what you are printing on — a roll, an A4 sheet, or your own size."}),
-        h("div",{class:"ls-gal-m",text:"Choose the size first"}),
-      ]));
 
       docs.forEach((d,i)=>{
         const tw=196, th=132;
@@ -2729,8 +3323,9 @@
               c.objects.forEach(o=>o.id=uid("o_"));
               docs.push(c); docs=saveDocs(docs); paint(); toast("Duplicated",{type:"ok"}); }},"⧉"),
             h("button",{class:"mini",
-              title:"Download “"+d.name+"” as a "+LABEL_EXT+" file — for backup, or to "+
-                    "import into another Chhaperia ERP. BarTender cannot open it.",
+              title:"Download “"+d.name+"” as a Word document (.doc) — open it in "+
+                    "Word for further design work, or import the same file back "+
+                    "here to restore the design.",
               onclick:(e)=>{ e.stopPropagation(); downloadDoc(d); }},"⤓"),
             h("button",{class:"mini danger",title:"Delete",onclick:(e)=>{ e.stopPropagation();
               confirm("Delete the template “"+d.name+"”? This cannot be undone.",
@@ -3650,6 +4245,75 @@
       const d=doc();
       const pane=h("div",{class:"ls-canvas-wrap"});
       const k=PX_MM*zoom;
+
+      /* ---- A LABEL THAT ARRIVED FROM BarTender ----
+         It comes in as ARTWORK — BarTender's own render, with the words baked
+         into the picture — and the fields recovered from the file come with it
+         but hidden, because showing them would print every word twice. Faithful
+         on arrival, and completely inert: nothing in the picture can be
+         restyled, and the label's own background colour cannot be seen under
+         an opaque render. Operators reported that as "the imported label
+         cannot be edited", which is exactly what it is.
+
+         So the state says so, out loud and on the label, and carries the ways
+         out. No new field is stored for this: a label carrying a background
+         picture and NOTHING DRAWN OVER IT is a .btw that has not been taken
+         apart yet, and it stops advertising the moment it has. A label somebody
+         designed here always has objects on it, so it never qualifies.
+
+         Two shapes of it, because the two arrivals are genuinely different:
+         some .btw files give up their text and most give up none at all. Never
+         offer to "make the text editable" when there is no text — an operator
+         who presses that and sees nothing happen has been lied to. */
+      const hiddenText=d.objects.filter(o=>o.hidden&&o.type==="text");
+      const drawn=d.objects.filter(o=>!o.hidden);
+      const trapped=!!d.bgImage&&!impDismiss[d.id]&&!drawn.length;
+      if(trapped){
+        const n=hiddenText.length;
+        const acts=[];
+        if(n) acts.push(h("button",{class:"btn primary",
+          title:"Show the recovered text and fade the artwork to a tracing guide",
+          onclick:()=>{
+            hiddenText.forEach(o=>{ o.hidden=false; });
+            d.bgOpacity=25;
+            touch(); paint();
+            toast("The text is on the label now, stacked down it — BarTender "+
+              "does not record where each field sat. Drag each line onto its "+
+              "place over the faded artwork, then remove the artwork.",
+              {type:"info",title:"Now it is editable",dur:12000});
+          }},[ico("eye",14),h("span",{text:"Make the text editable"})]));
+        acts.push(h("button",{class:n?"btn":"btn primary",
+          title:"Delete the artwork and design on the bare label",
+          onclick:()=>{
+            d.bgImage=""; d.bgFit="cover"; d.bgOpacity=100;
+            d.bgX=0; d.bgY=0; d.bgW=0; d.bgH=0;
+            hiddenText.forEach(o=>{ o.hidden=false; });
+            touch(); paint();
+            toast("Artwork removed — the label is bare and yours to design on.",
+              {type:"ok"});
+          },text:"Remove the artwork"}));
+        acts.push(h("button",{class:"btn ghost",
+          title:"Leave it exactly as BarTender drew it",
+          onclick:()=>{ impDismiss[d.id]=1; paint(); },
+          text:"Keep it as a picture"}));
+        pane.appendChild(h("div",{class:"ls-imp"},[
+          h("div",{class:"ls-imp-t"},[
+            ico("open",14),
+            h("span",{text:"This label came in from BarTender as a picture"}),
+          ]),
+          h("div",{class:"ls-imp-s",text:
+            "What you see is BarTender's own artwork, so the type in it cannot be "+
+            "restyled and the label's own background colour is hidden underneath "+
+            "it. "+(n
+              ? "The "+n+" text field"+(n===1?"":"s")+" stored in the file "+
+                (n===1?"is":"are")+" here, waiting."
+              : "This file stored no text that could be read back, so the words "+
+                "are part of the picture. Remove it and lay the label out here, "+
+                "or print it exactly as it is.")}),
+          h("div",{class:"ls-imp-a"},acts),
+        ]));
+      }
+
       const stage=h("div",{class:"ls-stage"});
       const cv=h("div",{class:"ls-canvas"+(tool?" arm":""),tabindex:"0",
         style:`width:${(d.w*k).toFixed(1)}px;height:${(d.h*k).toFixed(1)}px;background:${d.bg};`+
@@ -3735,8 +4399,23 @@
         });
         skin.appendChild(bg);
       }
-      d.objects.forEach(o=>{
-        const el=h("div",{class:"ls-hit"+(isSel(o)?" on":""),
+      /* ⚠ HIDDEN OBJECTS GET NO HIT BOX. They are not drawn (labelInner filters
+         them), so a hit box for one is a rectangle you can click, select,
+         resize and format while NOTHING on the label ever changes — every
+         other reader of `hidden` filters it and this loop used not to.
+         It mattered most on an imported .btw, which arrived carrying its
+         recovered fields hidden and STACKED: the invisible boxes tiled the
+         whole label, so every click landed on a phantom, the font and colour
+         controls filled in for an object that could not draw, and the bare
+         click that reaches Label Properties — the only route to the background
+         colour — could not get through. That is the "I cannot change anything
+         on an imported label" report. Show the object to edit it. */
+      d.objects.filter(o=>!o.hidden).forEach(o=>{
+        /* Keyed by id, never by position: the hit boxes no longer march in
+           step with d.objects (hidden ones are missing) and the background
+           box may or may not sit in front of them. Everything that reaches
+           back for a box looks it up by this id. */
+        const el=h("div",{class:"ls-hit"+(isSel(o)?" on":""),"data-oid":o.id,
           style:`left:${(o.x*k).toFixed(1)}px;top:${(o.y*k).toFixed(1)}px;`+
             `width:${Math.max(3,o.w*k).toFixed(1)}px;height:${Math.max(3,o.h*k).toFixed(1)}px;`+
             (o.rot?`transform:rotate(${o.rot}deg);`:"")});
@@ -3960,12 +4639,8 @@
       function quickPaint(movers){
         const list=Array.isArray(movers)?movers:[movers];
         layer.innerHTML=labelInner(d,canvasCtx());
-        /* The hit boxes are in document order and the background box, if it is
-           showing, sits in front of them — so index by the OBJECT, not by a
-           count that shifts when the background appears. */
-        const base=(d.bgImage&&d.bgFit==="custom"&&bgEdit&&!tool)?1:0;
         list.forEach(o=>{
-          const hit=skin.children[base+d.objects.indexOf(o)];
+          const hit=hitFor(o);
           if(!hit) return;
           hit.style.left=(o.x*k).toFixed(1)+"px"; hit.style.top=(o.y*k).toFixed(1)+"px";
           hit.style.width=Math.max(3,o.w*k).toFixed(1)+"px";
@@ -4008,10 +4683,8 @@
               o.x<x1&&o.x+o.w>x0&&o.y<y1&&o.y+o.h>y0).map(o=>o.id);
             selIds=keep.concat(hit.filter(id=>keep.indexOf(id)<0));
             /* live: the hit boxes light up as the band passes over them */
-            [].forEach.call(skin.children,(el)=>{
-              const idx=[].indexOf.call(skin.children,el);
-              const ob=d.objects[idx-((d.bgImage&&d.bgFit==="custom"&&bgEdit&&!tool)?1:0)];
-              if(ob) el.classList.toggle("on",selIds.indexOf(ob.id)>=0);
+            [].forEach.call(skin.querySelectorAll(".ls-hit"),(el)=>{
+              el.classList.toggle("on",selIds.indexOf(el.getAttribute("data-oid"))>=0);
             });
           };
           const bup=()=>{
@@ -4497,9 +5170,29 @@
         ()=>{ d.bgImage=""; d.bgFit="cover"; d.bgX=0; d.bgY=0; d.bgW=0; d.bgH=0;
               d.bgOpacity=100; bgEdit=false; })
         .forEach(el=>b.appendChild(el));
+      /* ---- THE RULE OF THE BACKGROUND ----
+         STATIC VISUALS ONLY: the ground colour, a border, the company logo,
+         decorative artwork. Never the product name, the batch, a barcode or
+         anything else that differs between two labels off the same reel.
+
+         It is not a style preference, it is the whole difference between a
+         template and a photograph. Anything baked into this picture cannot be
+         restyled, cannot be corrected, cannot be bound to the ERP and cannot
+         be read by a scanner that needs the value rather than a picture of it
+         — which is exactly how an imported BarTender label arrives, and
+         exactly why it could not be edited. Said HERE, at the moment somebody
+         is about to choose a picture, because that is the moment the mistake
+         gets made. */
+      b.appendChild(h("div",{class:"ls-phint"},
+        !d.bgImage
+          ? "Static artwork only — the ground, a border, your logo. Keep the "+
+            "product name, batch, dates and barcodes as objects on top, where "+
+            "they can be restyled and read from the ERP."
+          : "Remember: anything printed INTO this picture — a name, a batch, a "+
+            "barcode — cannot be edited, bound or scanned as a value. Those "+
+            "belong on top of it as objects."));
       if(!d.bgImage){
-        b.appendChild(h("div",{class:"ls-phint"},
-          "A pre-printed sleeve, a watermark, or artwork the fields sit on top of. It prints with the label."));
+        /* nothing more to set until there is a picture */
       } else {
         b.appendChild(fR("Fit",psel(d.bgFit,[
           {v:"cover",  l:"Fill the label"},
@@ -4612,6 +5305,17 @@
 
       b.appendChild(h("div",{class:"ls-ptype"},[
         ico(objIcon(o),15), h("span",{text:objKind(o)})]));
+      /* A HIDDEN object can still be selected from Object Layers, and every
+         field below it works — but the label will not change, because a hidden
+         object is not drawn. Left unsaid, that reads as "the controls are
+         broken". Say it, and put the fix in reach. */
+      if(o.hidden) b.appendChild(h("div",{class:"ls-phid"},[
+        h("span",{text:"Hidden — it is not drawn on the label and will not "+
+          "print, so changes here will not show until you bring it back."}),
+        h("button",{class:"btn",type:"button",
+          onclick:()=>{ selObjs().forEach(x=>{x.hidden=false;}); touch(); paint(); }},
+          [ico("eye",13),h("span",{text:"Show it"})]),
+      ]));
       /* With several picked, say so and say which one the fields below are
          reading — the panel edits ALL of them, but it has to show ONE. */
       if(selIds.length>1) b.appendChild(h("div",{class:"ls-pmulti"},
@@ -4628,6 +5332,7 @@
             title:"Open the data source",onclick:()=>propsDialog(),
             text:(o.src.kind==="serial"?"Serial number"
                  :o.src.kind==="date"  ?"Date / time"
+                 :o.src.kind==="field" ?erpFieldLabel(o.src.field)
                  :"Ask at print: "+(o.src.prompt||"—"))+" — edit…"})));
       }
 
@@ -4841,6 +5546,15 @@
       const t=OBJ_TYPES.find(x=>x.v===o.type)||OBJ_TYPES[0];
       const cats=[];
       if(o.type==="text"||o.type==="barcode"||o.type==="qr") cats.push({v:"data",l:"Data source"});
+      /* ⚠ THE DIALOG USED TO HAVE NO FONT AT ALL. A text object offered exactly
+         "Data source" and "Size & position" — so anyone who reached it by
+         double-clicking a field (which is where a field that cannot be typed on
+         sends you) found a properties dialog that could not change the font,
+         the size, the weight or the colour, and reasonably concluded the label
+         was locked. The toolbar had these controls all along; this dialog is
+         the other half of the same object and must not disagree with it. */
+      if(o.type==="text") cats.push({v:"font",l:"Font & colour"});
+      if(o.type==="barcode"||o.type==="qr") cats.push({v:"font",l:"Caption text"});
       if(o.type==="barcode"||o.type==="qr") cats.push({v:"sym",l:"Symbology"});
       if(o.type==="image") cats.push({v:"pic",l:"Picture"});
       if(o.type==="box"||o.type==="ellipse") cats.push({v:"shape",l:"Shape"});
@@ -4860,12 +5574,11 @@
         const cv=root.querySelector(".ls-canvas");
         if(!cv) return;
         refreshCanvas();
-        const d=doc(), k=PX_MM*zoom;
-        const skin=root.querySelector(".ls-skin");
-        if(skin){ const hit=skin.children[d.objects.indexOf(o)];
-          if(hit){ hit.style.left=(o.x*k).toFixed(1)+"px"; hit.style.top=(o.y*k).toFixed(1)+"px";
-            hit.style.width=Math.max(3,o.w*k).toFixed(1)+"px";
-            hit.style.height=Math.max(3,o.h*k).toFixed(1)+"px"; } }
+        const k=PX_MM*zoom;
+        const hit=hitFor(o);
+        if(hit){ hit.style.left=(o.x*k).toFixed(1)+"px"; hit.style.top=(o.y*k).toFixed(1)+"px";
+          hit.style.width=Math.max(3,o.w*k).toFixed(1)+"px";
+          hit.style.height=Math.max(3,o.h*k).toFixed(1)+"px"; }
         const rd=root.querySelector(".ls-read");
         if(rd) rd.textContent=`X ${o.x.toFixed(1)}  Y ${o.y.toFixed(1)}  W ${o.w.toFixed(1)}  H ${o.h.toFixed(1)} mm`;
       }
@@ -4878,6 +5591,7 @@
       function drawPanel(){
         panel.innerHTML="";
         if(cat==="data")  panelData();
+        if(cat==="font")  panelFont();
         if(cat==="sym")   panelSym();
         if(cat==="pic")   panelPic();
         if(cat==="shape") panelShape();
@@ -4887,12 +5601,20 @@
 
       function panelData(){
         panel.appendChild(h("div",{class:"wz-sec",text:"What this field says"}));
-        panel.appendChild(fld("Comes from",sel1(o.src.kind,[
+        const kinds=[
           {v:"fixed", l:"Fixed text — the same on every label"},
           {v:"date",  l:"Date / time — filled in when you print"},
           {v:"serial",l:"Serial number — counts up across the run"},
           {v:"prompt",l:"Ask me at print time"},
-        ],v=>{o.src.kind=v;live(true);drawPanel();})));
+        ];
+        /* Only offered when the ERP actually handed over a field list — an
+           empty "From the ERP" that leads to an empty dropdown is worse than
+           not offering it. */
+        if(erpGroups().length) kinds.push(
+          {v:"field", l:"From the ERP — product, batch, supplier…"});
+        panel.appendChild(fld("Comes from",sel1(o.src.kind,kinds,
+          v=>{o.src.kind=v;live(true);drawPanel();})));
+        if(o.src.kind==="field") panelBind();
         if(o.src.kind==="fixed")
           panel.appendChild(fld(o.type==="text"?"Text":"Barcode value",
             taInput(o.text,v=>{o.text=v;live(false);},
@@ -4943,6 +5665,92 @@
         panel.appendChild(h("div",{class:enc?"ls-ok":"ls-bad",
           text:enc?"✓ Encodes — scanner-ready":"✕ This value cannot be encoded as "+
             ((SYMS.find(s=>s.v===o.sym)||{}).l||o.sym)}));
+      }
+      /* ---- WHICH ERP FIELD ----
+         Two lists rather than one long one: the thing (Product, Batch,
+         Supplier) and then the field on it. A single flat list of every field
+         in the ERP is a wall of forty rows that all look alike, and the root
+         is the part that decides what the print step will ask for. */
+      function panelBind(){
+        const groups=erpGroups();
+        const cur=String(o.src.field||"");
+        let root=cur?cur.split(".")[0]:"";
+        if(!groups.some(g=>g.root===root)) root=groups[0]?groups[0].root:"";
+        const g=groups.find(x=>x.root===root)||{fields:[]};
+
+        const setField=(path)=>{
+          o.src.field=path;
+          /* The example travels with the binding, into src.def — the same slot
+             a prompt keeps its default in. It is what the CANVAS draws while
+             no record is chosen, so the label is readable as you lay it out
+             instead of a column of empty boxes. */
+          const f=(g.fields||[]).find(x=>x.v===path);
+          o.src.def=f&&f.ex?String(f.ex).slice(0,120):"";
+          live(true); drawPanel();
+        };
+
+        panel.appendChild(fld("Read it from",
+          sel1(root,groups.map(x=>({v:x.root,l:x.label})),(v)=>{
+            const ng=groups.find(x=>x.root===v);
+            setField(ng&&ng.fields[0]?ng.fields[0].v:"");
+          }),
+          "What the label is about. The print step asks you which one."));
+        panel.appendChild(fld("Field",
+          sel1(cur||((g.fields[0]||{}).v||""),
+            (g.fields||[]).map(f=>({v:f.v,l:f.l})), setField)));
+
+        const ex=o.src.def||"";
+        panel.appendChild(h("div",{class:"ls-bindex"},[
+          h("span",{class:"ls-bindex-l",text:"On the label"}),
+          h("b",{text:(o.src.prefix||"")+(ex||"—")+(o.src.suffix||"")}),
+          h("span",{class:"ls-bindex-h",
+            text:"an example — the real value is filled in when you print"}),
+        ]));
+      }
+
+      /* Type, and what colour it is. For a barcode or a QR code the same
+         fields describe the CAPTION — the human-readable line under the bars —
+         because that is the only type on those objects. */
+      function panelFont(){
+        const isT=o.type==="text";
+        panel.appendChild(h("div",{class:"wz-sec",
+          text:isT?"Typeface":"The line printed under the barcode"}));
+        if(!isT) panel.appendChild(chk("Print the value under the barcode",
+          o.showText,v=>{o.showText=v;live(true);drawPanel();}));
+        if(!isT&&!o.showText) return;
+        panel.appendChild(row(2,[
+          fld("Font",sel1(o.font,FONTS.map(f=>({v:f.v,l:f.l})),v=>{o.font=v;live(true);})),
+          fld("Size (mm)",nInput(o.size,
+            v=>{o.size=Math.min(120,Math.max(.6,v));live(true);},.5,.6,120)),
+        ]));
+        panel.appendChild(row(2,[
+          fld("Colour",cInput(o.color,v=>{o.color=v;live(true);})),
+          isT?fld("Highlight",cInput(o.shade,v=>{o.shade=v;live(true);drawPanel();},true),
+            "Leave it off for no highlight."):h("div"),
+        ]));
+        if(!isT) return;
+        panel.appendChild(h("div",{class:"ls-row",style:"grid-template-columns:repeat(4,1fr)"},[
+          chk("Bold",o.bold,v=>{o.bold=v;live(true);}),
+          chk("Italic",o.italic,v=>{o.italic=v;live(true);}),
+          chk("Underline",o.underline,v=>{o.underline=v;live(true);}),
+          chk("Strikethrough",o.strike,v=>{o.strike=v;live(true);}),
+        ]));
+        panel.appendChild(h("div",{class:"wz-sec",text:"How it sits in its box"}));
+        panel.appendChild(row(2,[
+          fld("Across",sel1(o.align,[{v:"left",l:"Left"},{v:"center",l:"Centred"},
+            {v:"right",l:"Right"},{v:"justify",l:"Justified"}],v=>{o.align=v;live(true);})),
+          fld("Down",sel1(o.valign,[{v:"start",l:"Top"},{v:"middle",l:"Middle"},
+            {v:"end",l:"Bottom"}],v=>{o.valign=v;live(true);})),
+        ]));
+        panel.appendChild(row(2,[
+          fld("Line spacing",nInput(o.lineH,
+            v=>{o.lineH=Math.min(3,Math.max(.8,v));live(true);},.05,.8,3),
+            "A multiple of the type size."),
+          fld("Capitals",sel1(o.tcase,[{v:"none",l:"As typed"},{v:"upper",l:"UPPER CASE"},
+            {v:"lower",l:"lower case"},{v:"title",l:"Title Case"}],v=>{o.tcase=v;live(true);}),
+            "Changes how it prints, not what you typed."),
+        ]));
+        panel.appendChild(chk("Wrap onto more than one line",o.wrap,v=>{o.wrap=v;live(true);}));
       }
       function panelPic(){
         panel.appendChild(h("div",{class:"wz-sec",text:"Picture"}));
@@ -5395,17 +6203,32 @@
     }
 
     /* ---- WHAT THIS RUN IS, as against what the design says ----
-       Quantity and copies are remembered on the design, because a label that
-       is always printed 24-up is always printed 24-up. Everything else here
-       belongs to THIS run and nothing else: which serial it carries on from
-       and what the prompts were answered with. Neither is a fact about the
-       design, and writing them into it would be writing down a guess.
+       How many to print is remembered on the design, because a label that is
+       always run five hundred at a time is always run five hundred at a time.
+       Everything else here belongs to THIS run and nothing else: which serial
+       it carries on from, and what the prompts were answered with. Neither is
+       a fact about the design, and writing them into it would be writing down
+       a guess.
 
-       WHERE THE RUN STARTS IS NOT HERE ANY MORE. A part-used sheet used to be
-       one number for the whole job, which could only ever describe a job with
-       one design on it. It now lives per design, in planAt — see arrangePlan. */
-    let runOpts={qty:null,copies:null,serialStart:"",prompts:{},
-                 cut:false,reverse:false};
+       WHERE IT STARTS is deliberately NOT remembered. It describes the sheet
+       in the drawer this morning — how much of it somebody already used — and
+       that is true for one run and false for the next. */
+    let runOpts={serialStart:"",prompts:{},bind:{},cut:false,reverse:false};
+
+    /* runOpts.bind holds the CHOSEN IDS ("product" → "FG-TAPE-18"); a render
+       context wants the RECORDS. Resolved fresh on every context, never
+       cached: the 15-second poll can bring in an edited product while the
+       print dialog is open, and a label that printed yesterday's name because
+       something was memoised is the exact bug this feature must not have.
+       A function declaration, because canvasCtx is defined far above here. */
+    function bindRecords(){
+      const out={};
+      Object.keys(runOpts.bind||{}).forEach(root=>{
+        const id=runOpts.bind[root];
+        if(id) out[root]=erpRecord(root,id);
+      });
+      return out;
+    }
 
     /* THE SERIALS A RUN WILL CONSUME.
        A serialised run eats a block of numbers that can never be handed out
@@ -5418,239 +6241,168 @@
       const o=d.objects.find(x=>x.src&&x.src.kind==="serial"&&!x.hidden);
       if(!o||!count) return null;
       const mk=(i)=>srcValue(o,{index:i,now:new Date(),
-        prompts:runOpts.prompts,serialStart:runOpts.serialStart});
+        prompts:runOpts.prompts,bind:bindRecords(),serialStart:runOpts.serialStart});
       return {first:mk(0), last:mk(count-1), count:count};
     }
 
     /* ============================================================
-       PRINT — A PAGE PLANNER
+       PRINT — A RUN, LAID OUT
 
-       One screen, no tabs, and the thing you are deciding is always
-       on it: THE PAGES. Every page of the run is a thumbnail in a
-       strip along the top; click one and it opens below as a grid
-       of die-cut positions you can click.
+       Two numbers per design and nothing else: WHERE on the sheet
+       it starts, and HOW MANY of it to print. Both sit on the
+       design they belong to, so a run that mixes two labels carries
+       two of each and neither can be read as the other's.
 
-       It is one model, not two. A plain run of 50 of one design and
-       a hand-mixed sheet are the same object — a list of pages,
-       each a list of positions — so there is no "simple mode" to
-       leave and no "advanced mode" to find.
+       THE SHEET IN THE DRAWER IS USUALLY PART-USED. Thirty-nine of
+       the eighty-four are already peeled off, so the run has to
+       begin at position forty or it prints onto backing paper and
+       the sheet is thrown away. Naming the START POSITION is how
+       that is said, and everything else follows from it: the count
+       flows forward from there onto as many pages as it needs.
 
-       WHERE EACH DESIGN GOES IS TYPED, NOT PAINTED. Every die-cut on
-       the sheet preview carries the number it prints in, and those
-       are the numbers the operator writes against a design: "1-8, 12"
-       puts that label on those nine die-cuts and nowhere else. A
-       design with no positions typed simply flows, filling whatever
-       the hand-placed ones left.
+       The layout is DERIVED — recomputed from those numbers on
+       every keystroke, never hand-edited and never stored. That is
+       the whole reason there is no page editor here: a plan you can
+       edit is a plan that can disagree with the numbers above it,
+       and then the preview and the printer tell different stories.
 
        Only designs cut to the SAME stock may share the run: same
        size, same page, same margins. The palette offers those and
        nothing else, so a mismatch cannot reach the printer.
        ============================================================ */
-    let plan=[];          // [[docId|"" × perPage], …] — one entry per page
-    let planPage=0;       // the page being looked at
-    let planQty={};       // docId → how many, for Arrange
-    let planAt={};        // docId → the die-cut IT starts on, as typed text
-    let planNote="";      // what Arrange had to bend, said out loud
-    /* WHICH DESIGNS ARE ON THIS RUN, in the order they were put there. The run
-       opens holding ONLY the label you came in with — every other template cut
-       to the same stock is a candidate, not a participant, and is added by
-       hand. A sheet quietly filling itself with every label of that size is
-       not a convenience, it is a printed mistake. */
-    let planUse=null;
-    let planAdding=false; // the "add another label" picker, open or shut
-
-    /* POSITIONS RUN ON ACROSS THE WHOLE RUN. A 65-up sheet numbers 1..65, and
-       sheet two carries straight on at 66 — so a die-cut has ONE address for
-       the length of the job and "starts at 70" needs no page number beside it.
-       Returned 0-based; page and slot are worked out from it by division. */
-    const MAX_PLAN_PAGES=50;
-    function startOf(id,per){
-      const raw=String(planAt[id]==null?"":planAt[id]).trim();
-      if(!raw) return {at:null, bad:""};
-      if(!/^\d+$/.test(raw)) return {at:null, bad:raw};
-      const n=+raw;
-      /* Refused, not clamped: silently turning 9000 into the last die-cut puts
-         labels somewhere nobody asked for. */
-      if(n<1||n>per*MAX_PLAN_PAGES) return {at:null, bad:raw};
-      return {at:n-1, bad:""};
-    }
+    let plan=[];          // [[docId|"" × perPage], …] — one page each, DERIVED
+    let sel=null;         // the design whose numbers the panel is editing
+    let inRun={};         // docId → ticked into this run, or left unprinted
+    let startAt={};       // docId → the 1-based PRINT-ORDER position it starts on
+    let wantQty={};       // docId → how many labels of it to print
 
     const perPage=()=>Math.max(1,sheetGrid(doc()).perPage);
     const blankPage=()=>new Array(perPage()).fill("");
-    /* Every design cut the same way as the open one — the only ones that MAY
-       share a page with it. Candidates for the run, not members of it. */
+    /* Every design cut the same way as the open one — the only ones that may
+       share a page with it. */
     const stockMates=()=>docs.filter(d=>sameStock(d,doc()));
-    /* The ones actually on the run, in the order they were added. Anything
-       deleted or re-sized out of the stock since drops out on its own. */
-    const usedDocs=()=>(planUse||[]).map(id=>docs.find(x=>x.id===id))
-      .filter(m=>m&&sameStock(m,doc()));
 
-    /* The plan always has at least one page, and every page is exactly as long
-       as the stock has die-cuts — the label size can change under it. */
-    function ensurePlan(){
-      const per=perPage();
-      if(!plan.length) plan=[blankPage()];
-      plan.forEach(p=>{ while(p.length<per) p.push(""); if(p.length>per) p.length=per; });
-      if(planPage>=plan.length) planPage=plan.length-1;
-      if(planPage<0) planPage=0;
-    }
-    /* BUILD THE PAGES — EVERY DESIGN FROM ITS OWN STARTING DIE-CUT.
+    /* A start beyond the last die-cut is not a start at all, so it clamps to
+       the sheet rather than quietly printing nothing. */
+    /* 5000 is cleanDoc's own cap on qty — the number the design remembers —
+       so what a run can ask for and what the design can keep agree. */
+    const startOf=(id)=>Math.max(1,Math.min(perPage(),Math.round(+startAt[id]||1)));
+    const qtyOf=(id)=>Math.max(0,Math.min(5000,Math.round(+wantQty[id]||0)));
 
-       Each design in the palette carries two numbers: how many, and which
-       position it begins on. It is laid down from that die-cut onwards, one
-       after another, and it steps over anything an earlier design already
-       occupies rather than printing over it. A design left without a start
-       simply carries on from where the previous one finished, which is what
-       an operator means by "and then the rest".
+    /* THE LAYOUT.
+       Only the TICKED designs are dealt; an unticked one keeps its numbers
+       and prints nothing. Each is dealt from its own start position and flows
+       forward, page after page, taking the next FREE position whenever
+       another design got there first. Two designs naming the same position is
+       not an error to refuse — it is a sheet to fill — so the second lands
+       after the first instead of on top of it.
 
-       This is per DESIGN, not per run: two labels on one sheet is the ordinary
-       case here — 40 of Alpha from die-cut 1 and 44 of Bravo from die-cut 41 —
-       and a single run-wide start could never express it.
-
-       ⚠ THE WALK IS IN PRINT ORDER, not reading order. "Position 7" means the
-       die-cut the sheet preview draws a 7 on, and on a bottom-up or
-       column-wise order that is not the seventh cell of the page. orderSlot is
-       the only thing that knows which one it is, and it is the very function
-       the preview numbers with — so the number typed and the number printed
-       cannot come apart. */
-    function arrangePlan(opts){
-      opts=opts||{};
-      const d0=doc(), g=sheetGrid(d0), per=perPage();
-      const slot=orderSlot(d0,g);
-      const cop=Math.max(1,runOpts.copies==null?d0.copies:runOpts.copies);
-      const mates=usedDocs();
-      planNote="";
-      plan=[blankPage()];
-
-      const bad=[], moved=[];
-      let placed=0;
-
-      /* Lay one design down from a given address, stepping over anything
-         already there and opening fresh sheets as it needs them. Returns where
-         it finished, so the next design without a start of its own can carry
-         straight on. */
-      function lay(d,n,at){
-        let pg=Math.floor(at/per), i=at%per;
-        while(plan.length<=pg) plan.push(blankPage());
-        let bumped=false;
-        for(let k=0;k<n;k++){
-          for(;;){
-            if(i>=per){ pg++; i=0; }
-            if(!plan[pg]) plan[pg]=blankPage();
-            if(!plan[pg][slot(i)]) break;
-            if(k===0) bumped=true;
-            i++;
-          }
-          const p=slot(i);
-          if(p>=0&&p<per){ plan[pg][p]=d.id; placed++; }
-          i++;
+       "Position" here means PRINT-ORDER position — the numbers drawn on the
+       sheet preview, which orderSlot() maps onto die-cuts. Start at 40 with
+       a top-down order and the run begins on the die-cut NUMBERED 40, partway
+       down the second column, not the 40th cell of reading order. The count
+       then walks the same path the printer does. */
+    function layoutPlan(){
+      const d=doc(), g=sheetGrid(d), per=perPage();
+      const slotOf=orderSlot(d,g);
+      const pages=[];
+      const cellAt=(n)=>{
+        const pg=Math.floor(n/per);
+        while(pages.length<=pg) pages.push(new Array(per).fill(""));
+        const s=slotOf(n%per);
+        return [pg,(s>=0&&s<per)?s:n%per];
+      };
+      stockMates().forEach(m=>{
+        if(!inRun[m.id]) return;
+        let left=qtyOf(m.id);
+        if(!left) return;
+        let n=startOf(m.id)-1;
+        /* The count is capped, but a mistake in the free-cell search must not
+           be able to spin the browser — so the walk is bounded too. */
+        for(let guard=0; left>0 && guard<400000; guard++, n++){
+          const [pg,ix]=cellAt(n);
+          if(pages[pg][ix]) continue;
+          pages[pg][ix]=m.id; left--;
         }
-        if(bumped) moved.push(d.name+" → "+(at+1)+" was taken");
-        return pg*per+i;
-      }
-
-      /* TWO PASSES, AND THE ORDER MATTERS. Every design that was GIVEN a start
-         is laid down first, all of them, before any design that was not.
-         Otherwise a design left to flow would reach position 20 and take it
-         while the design actually asked for position 20 was still waiting its
-         turn further down the list — the typed number would lose to a blank
-         box, which is exactly backwards. */
-      const pinned=[], flowing=[];
-      mates.forEach(d=>{
-        const s=startOf(d.id,per);
-        if(s.bad&&bad.indexOf(s.bad)<0) bad.push(s.bad);
-        const n=Math.max(0,Math.round(planQty[d.id]||0))*cop;
-        if(!n) return;
-        (s.at==null?flowing:pinned).push({d:d,n:n,at:s.at});
       });
-      pinned.forEach(e=>lay(e.d,e.n,e.at));
-      let cur=0;                       // where the flowing ones carry on from
-      flowing.forEach(e=>{ cur=lay(e.d,e.n,cur); });
-
-      const notes=[];
-      if(bad.length) notes.push("ignored “"+bad.slice(0,4).join("”, “")+"”"+
-        (bad.length>4?" and more":"")+" — positions run 1 to "+(per*MAX_PLAN_PAGES));
-      if(moved.length) notes.push(moved.slice(0,3).join(" · ")+
-        (moved.length>3?" · …":"")+", so it went to the next free die-cut");
-      planNote=notes.join(" · ");
-
-      if(!placed){
-        if(!opts.quiet) toast("Give at least one design a quantity",{type:"warn"});
-        planPage=0;
-        return false;
-      }
-      planPage=0;
-      return true;
+      return pages.length?pages:[blankPage()];
     }
+    const rebuildPlan=()=>{ plan=layoutPlan(); };
     /* The plan as a flat list of cells for the renderer, with a per-design
        counter so each design's serials run through ITS OWN labels rather than
-       counting positions on a page. */
-    function planCells(opts){
-      const now=new Date(), seen={};
-      const base=doc(), g=sheetGrid(base), per=Math.max(1,g.perPage);
-      const slot=orderSlot(base,g);
+       counting positions on a page. The counter advances in PRINT ORDER — the
+       path the labels peel off in — not reading order, or a top-down run
+       would carry its serials sideways. Reverse is the CALLER's business:
+       this list is the layout, and print applies its own direction to it. */
+    function planCells(){
+      const d=doc(), g=sheetGrid(d);
+      const slotOf=orderSlot(d,g);
+      /* One clock and one set of records for the whole run: every label on the
+         sheet must carry the same date and the same product, not whatever the
+         ERP said by the time the renderer reached cell 84. */
+      const now=new Date(), seen={}, bound=bindRecords();
       const out=[];
       plan.forEach(p=>{
-        /* WALKED IN PRINT ORDER, FILLED IN READING ORDER. composeHtml lays the
-           cells out left-to-right down the page, so the array it is handed has
-           to stay in reading order — but a design's serials must advance the
-           way the sheet actually prints, and on a bottom-up order that is a
-           different journey. Counting through orderSlot is what puts the
-           seventh number of the run on the die-cut the preview draws a 7 on. */
-        const page=new Array(per).fill(null);
-        for(let i=0;i<per;i++){
-          const pos=slot(i);
-          if(pos<0||pos>=per) continue;
-          const id=p[pos];
+        const cells=new Array(p.length).fill(null);
+        for(let k=0;k<p.length;k++){
+          const s=slotOf(k), ix=(s>=0&&s<p.length)?s:k;
+          const id=p[ix];
           if(!id) continue;
-          const d=docs.find(x=>x.id===id);
-          if(!d) continue;
+          const m=docs.find(x=>x.id===id);
+          if(!m) continue;
           const n=seen[id]||0; seen[id]=n+1;
-          page[pos]={d,ctx:{index:n,now,prompts:runOpts.prompts,
-            serialStart:runOpts.serialStart}};
+          cells[ix]={d:m,ctx:{index:n,now,prompts:runOpts.prompts,
+            bind:bound,serialStart:runOpts.serialStart}};
         }
-        out.push.apply(out,page);
+        out.push(...cells);
       });
-      if(opts&&opts.raw) return out;
-      return runOpts.reverse?out.slice().reverse():out;
+      return out;
     }
-    /* One page of the plan, carrying the WHOLE run's numbering — so page three
-       of a serialised job does not start counting at one again. */
-    const pageCells=(i)=>{
-      const per=perPage();
-      return planCells({raw:true}).slice(i*per,(i+1)*per);
-    };
     const planTotal=()=>plan.reduce((n,p)=>n+p.filter(Boolean).length,0);
-    /* a stable colour per design, so a position is recognisable at thumbnail
-       size without reading anything */
-    /* Colour by the order the design was ADDED to the run, not by its place in
-       the library: the first label you came in with is always the first colour,
-       whatever else happens to be cut to the same stock. */
-    const hueOf=(id)=>{
-      const list=(planUse&&planUse.length)?planUse:stockMates().map(m=>m.id);
-      const i=list.indexOf(id);
-      return i<0?0:i%8;
-    };
 
+    /* ============================================================
+       THE PRINT DIALOG — TWO STEPS
+
+       SET IT UP, then LOOK AT IT. Print sits on the far side of the
+       preview and nowhere else, because the sheet in the drawer is
+       part-used and expensive: one look at where the labels
+       actually land is the thing that stops a run going onto
+       backing paper.
+
+       Everything the operator decides is on the first step — no
+       page strip, no grid of positions, no second mode to find.
+       Two numbers per design produce the layout; the second step
+       shows the layout they produced.
+       ============================================================ */
     function printDialog(){
       const d=doc();
       const body=h("div",{class:"ls-pp"});
-      const redraw=()=>{ body.innerHTML=""; build(); };
-      /* A redraw that does not steal the caret. The panel is rebuilt whole on
-         every change — the cheapest way to keep the numbered sheet, the page
-         strip and the totals agreeing — so the field that caused the rebuild
-         has to be found again afterwards, or the second click on a spinner
-         lands on an element that no longer exists. */
-      const redrawKeeping=(key)=>{
-        redraw();
-        const el=body.querySelector('[data-f="'+key+'"]');
-        if(el){ el.focus(); if(el.select) el.select(); }
+      let step=0;   // 0 = set the run up, 1 = every page of it
+      let dir=1;    // which way the pane slides in
+
+      /* A redraw rebuilds every input, so whichever one was being typed in
+         would lose focus and take the caret with it. Each carries a stable
+         key and the redraw hands focus back to the same one. */
+      let focusKey=null;
+      const keyed=(el,key)=>{
+        el.setAttribute("data-fk",key);
+        el.addEventListener("focus",()=>{ focusKey=key; });
+        return el;
       };
+      const redraw=()=>{
+        body.innerHTML=""; build();
+        if(!focusKey) return;
+        const el=body.querySelector('[data-fk="'+focusKey+'"]');
+        if(el) try{ el.focus(); if(el.select) el.select(); }catch{}
+      };
+      const goStep=(n)=>{ dir=n>step?1:-1; step=n; focusKey=null; redraw(); syncFoot(); };
 
       const num=(val,onCh,lo,hi,w)=>{
         const el=h("input",{class:"ls-pp-in",type:"number",step:"1",
           min:String(lo),max:String(hi),style:w?("width:"+w+"px"):""});
         el.value=String(val);
+        /* "change", not "input": committing on blur or Enter is what makes a
+           two-digit number typeable when the commit redraws the dialog. */
         el.addEventListener("change",()=>onCh(+el.value));
         return el;
       };
@@ -5658,517 +6410,361 @@
         h("span",{class:"ls-pp-l",text:label}), el,
         hint?h("span",{class:"ls-pp-h",text:hint}):null,
       ].filter(Boolean));
-
-      /* A BLANK LABEL CUT TO THIS EXACT STOCK. Cloned from the open design's
-         paper — size, page, margins, gaps, feed order — and nothing else: no
-         artwork, because it is a new label and not a copy of this one. Those
-         are precisely the fields sameStock() weighs, so the result is
-         guaranteed to be allowed on the sheet it was made for. */
-      function newMate(){
-        if(docs.length>=MAX_DOCS){
-          toast("That is the "+MAX_DOCS+"-template limit",{type:"warn"});
-          return null;
-        }
-        const b=doc();
-        const nd=cleanDoc({
-          name:"Label "+(docs.length+1),
-          w:b.w, h:b.h, shape:b.shape, radius:b.radius, mode:b.mode,
-          page:b.page, pageW:b.pageW, pageH:b.pageH, landscape:b.landscape,
-          mTop:b.mTop, mBottom:b.mBottom, mLeft:b.mLeft, mRight:b.mRight,
-          gapX:b.gapX, gapY:b.gapY, autoFit:b.autoFit,
-          rollW:b.rollW, across:b.across, rGapX:b.rGapX, rGapY:b.rGapY,
-          printOrder:b.printOrder, objects:[]});
-        stampUsed(nd);
-        docs.push(nd);
-        dirty=true;
-        return nd;
-      }
-
-      /* A BLANK LABEL IS NOT A LABEL YET. Making one and leaving the operator
-         staring at the print screen would put an empty sticker on the sheet and
-         call it done — so the new template is added to the run, the dialog
-         steps out of the way, and the designer opens on it. Pressing Print
-         again comes back to a run that still holds BOTH, because the new label
-         is on planUse and reopening only re-seeds when the open design is not. */
-      function startNewLabel(){
-        const nd=newMate();
-        if(!nd) return;
-        planUse.push(nd.id);
-        mo.close();
-        openDoc(docs.length-1);
-        toast("Design “"+nd.name+"”, then press Print again — it will be on the "+
-              "sheet with the one you started from",{type:"ok"});
-      }
-
+      const check=(label,val,onCh)=>{
+        const el=h("input",{type:"checkbox"}); el.checked=!!val;
+        el.addEventListener("change",()=>{ onCh(el.checked); redraw(); });
+        return h("label",{class:"ls-pp-chk"},[el,h("span",{text:label})]);
+      };
       function build(){
-        ensurePlan();
+        rebuildPlan();
         const g=sheetGrid(d), per=perPage();
-        const mates=stockMates();      // what COULD share the sheet
-        const using=usedDocs();        // what actually is on the run
+        const mates=stockMates();
+        if(sel==null&&mates.length) sel=mates[0].id;
         const total=planTotal();
 
-        /* ---- THE ANSWER, ACROSS THE TOP ----
-           Three numbers and the stock they are true of. "Free" is the one that
-           earns its place on a shared sheet: it is what the next design's start
-           box has left to aim at, and counting empty die-cuts by eye off an
-           84-up preview is exactly the job a screen should be doing. */
-        const used=(plan[planPage]||[]).filter(Boolean).length;
-        const stat=(n,l,cls)=>h("div",{class:"ls-pp-sum"+(cls?" "+cls:"")},[
-          h("b",{text:String(n)}), h("span",{text:l})]);
+        /* ---- the summary, across the top of both steps ---- */
         body.appendChild(h("div",{class:"ls-pp-top"+(g.perPage?"":" bad")},[
-          stat(total,total===1?"label":"labels"),
+          h("div",{class:"ls-pp-sum"},[
+            h("b",{text:String(total)}),
+            h("span",{text:total===1?"label":"labels"}),
+          ]),
           h("div",{class:"ls-pp-arrow",text:"→"}),
-          stat(plan.length,d.mode==="roll"
-            ? (plan.length===1?"page":"pages")
-            : (plan.length===1?"sheet":"sheets")),
-          d.mode==="sheet"&&g.perPage
-            ? stat(per-used,"free on sheet","quiet")
-            : null,
+          h("div",{class:"ls-pp-sum"},[
+            h("b",{text:String(plan.length)}),
+            h("span",{text:d.mode==="roll"
+              ? (plan.length===1?"page":"pages")
+              : (plan.length===1?"sheet":"sheets")}),
+          ]),
           h("div",{class:"ls-pp-meta"},[
-            h("div",{class:"ls-pp-chip"},[
-              ico("rect",12),
-              h("span",{text:sizeS(d.w,d.h)+(d.mode==="roll"?" · roll"
-                :" · "+per+" per "+d.page)}),
-            ]),
+            h("div",{text:sizeS(d.w,d.h)+(d.mode==="roll"?" · roll"
+              :" · "+per+" per "+d.page+" sheet")}),
             h("div",{class:"ls-pp-h",text:d.mode==="roll"
               ? "A roll takes one label per page"
               : g.cols+" across × "+g.rows+" down"}),
           ]),
-        ].filter(Boolean)));
+        ]));
         if(!g.perPage) body.appendChild(h("div",{class:"ls-pp-warn"},
           "The label is bigger than the printable area. Fix the size or the "+
           "margins in Page setup — nothing will come out right."));
 
-        /* THREE COLUMNS: what you are deciding, what it looks like, and where
-           it lands. They are three different questions and they get three
-           different columns rather than one long scroll. */
+        const pane=h("div",{class:"ls-pp-pane "+(dir<0?"from-left":"from-right")});
+        (step===0?buildSetup:buildPreview)(pane,g,per,mates,total);
+        body.appendChild(pane);
+      }
+
+      /* ============================================================
+         STEP 1 — SET THE RUN UP
+         ============================================================ */
+      function buildSetup(pane,g,per,mates,total){
         const main=h("div",{class:"ls-pp-main"});
         const side=h("div",{class:"ls-pp-side"});
-        const mid=h("div",{class:"ls-pp-mid"});
         const right=h("div",{class:"ls-pp-right"});
-        /* Every group of the screen is a card, so the eye can tell one decision
-           from the next without reading a word of it. */
-        const card=(...kids)=>{
-          const c=h("div",{class:"ls-pp-card"});
-          kids.flat().filter(Boolean).forEach(k=>c.appendChild(k));
-          return c;
-        };
 
-        /* ---- WHAT TO PRINT, AND WHERE ---- */
-        const sideCard=card();
-        side.appendChild(sideCard);
-        sideCard.appendChild(h("div",{class:"ls-pp-sec"},[
+        /* ---- WHAT TO PRINT, AND WHERE IT STARTS ----
+           The tick is the decision: ticked designs print together in one run,
+           each from its own position; an unticked one keeps its numbers and
+           prints nothing. Only designs cut to the same stock are offered at
+           all, so the tick can never mix label sizes. */
+        side.appendChild(h("div",{class:"ls-pp-sec"},[
           h("span",{text:"What to print"}),
-          h("span",{class:"ls-pp-h",text:"how many of each, and where they start"}),
+          h("span",{class:"ls-pp-h",text:"tick to print · numbers follow the print order"}),
         ]));
+        if(mates.length<2) side.appendChild(h("div",{class:"ls-pp-note"},
+          "Only this design is cut to "+sizeS(d.w,d.h)+
+          (d.mode==="roll"?"":" on "+d.page)+". Another label of the same size "+
+          "would appear here and could share the run."));
         const list=h("div",{class:"ls-pp-designs"});
-        using.forEach(m=>{
-          const mine=plan.reduce((n,p)=>n+p.filter(x=>x===m.id).length,0);
-          const row=h("div",{class:"ls-pp-d"+(mine?" live":""),
-            "data-k":String(hueOf(m.id)),
-            title:m.name+" — this is the colour it wears on the sheet alongside"},[
-            h("div",{class:"ls-pp-dtop"},[
-              h("span",{class:"ls-pp-dot"}),
-              h("span",{class:"ls-pp-dn",text:m.name}),
-              mine?h("span",{class:"ls-pp-dq",text:"×"+mine}):null,
-              (function(){
-                const q=num(planQty[m.id]||0,
-                  v=>{ planQty[m.id]=Math.max(0,Math.min(5000,Math.round(v)||0));
-                       arrangePlan({quiet:true}); redrawKeeping("q"+m.id); },0,5000,64);
-                q.setAttribute("data-f","q"+m.id);
-                q.title="How many of this design to print";
-                return q;
-              })(),
-              /* The label you came in with is the run; the ones you added are
-                 guests, and a guest you cannot show out is a trap. */
-              m.id===d.id?null:h("button",{class:"ls-pp-dx",type:"button",
-                title:"Take “"+m.name+"” off this run",
-                onclick:()=>{ planUse=planUse.filter(x=>x!==m.id);
-                  delete planQty[m.id]; delete planAt[m.id];
-                  arrangePlan({quiet:true}); redraw(); }},ico("close",11)),
-            ].filter(Boolean)),
-          ]);
-          /* WHERE THIS ONE STARTS. Its own die-cut, per design — that is the
-             whole point of a shared sheet. Only on a sheet: a roll has one
-             label per page, so there is no position to choose and a box
-             offering one would be a lie. */
-          if(d.mode==="sheet"&&per>1){
-            const el=h("input",{class:"ls-pp-in ls-pp-at",type:"number",
-              step:"1",min:"1",max:String(per),
-              placeholder:"next free",
-              title:"The die-cut this design begins on — read it off the "+
-                    "numbered sheet alongside. Leave it empty to carry on "+
-                    "from the design above."});
-            el.value=planAt[m.id]||"";
-            el.setAttribute("data-f","at"+m.id);
-            /* On CHANGE, not on input: re-laying the whole run between two
-               keystrokes of "12" would place it at 1 first, and the sheet
-               would jump somewhere the operator never asked for. */
-            el.addEventListener("change",()=>{
-              planAt[m.id]=el.value.trim();
-              arrangePlan({quiet:true}); redrawKeeping("at"+m.id);
-            });
-            row.appendChild(h("label",{class:"ls-pp-dpos"},[
-              h("span",{text:"starts at"}), el,
-            ]));
-          }
-          list.appendChild(row);
-        });
-        sideCard.appendChild(list);
-
-        /* ---- ADD ANOTHER LABEL ----
-           A second design joins the sheet only when it is asked for. The pick
-           list offers what is ALREADY cut to this stock, because those are the
-           only ones that can share the paper; if nothing is, one can be made
-           to fit here and now rather than sending the operator back to the
-           gallery to work out the margins by hand. */
-        if(d.mode!=="roll"||per>1){
-          const spare=mates.filter(m=>using.indexOf(m)<0);
-          if(!planAdding){
-            sideCard.appendChild(h("button",{class:"ls-pp-addl",type:"button",
-              title:spare.length
-                ? "Put another label of this same size on the sheet"
-                : "Nothing else is cut to "+sizeS(d.w,d.h)+" — this starts a new one",
-              /* NOTHING TO PICK FROM MEANS THERE IS NO PICKER. Opening a list
-                 whose only entry is "make one" is a question with one answer;
-                 go straight to the designer instead. */
-              onclick:()=>{ if(!spare.length) return startNewLabel();
-                planAdding=true; redraw(); }},[
-              ico("plus",14),
-              h("span",{text:spare.length?"Add another label":"Add another label — design it"}),
-            ]));
-          } else {
-            const pick=h("div",{class:"ls-pp-pick"});
-            pick.appendChild(h("div",{class:"ls-pp-h"},
-              spare.length
-                ? "Already cut to "+sizeS(d.w,d.h)+" — pick one to share the sheet:"
-                : "Nothing else is cut to "+sizeS(d.w,d.h)+" yet."));
-            spare.forEach(m=>{
-              const n=(m.objects||[]).length;
-              pick.appendChild(h("button",{class:"ls-pp-pk",type:"button",
-                onclick:()=>{ planUse.push(m.id); planAdding=false;
-                  arrangePlan({quiet:true}); redraw(); }},[
-                h("span",{class:"ls-pp-pkn",text:m.name}),
-                h("span",{class:"ls-pp-h",text:n?(n+" object"+(n===1?"":"s")):"empty"}),
-              ]));
-            });
-            pick.appendChild(h("button",{class:"ls-pp-pk new",type:"button",
-              title:"A blank label cut to exactly this stock — opens in the designer",
-              onclick:()=>{ planAdding=false; startNewLabel(); }},[
-              ico("newdoc",13),
-              h("span",{class:"ls-pp-pkn",text:"Create a new label this size…"}),
-            ]));
-            pick.appendChild(h("button",{class:"ls-pp-pkx",type:"button",
-              onclick:()=>{ planAdding=false; redraw(); },text:"Cancel"}));
-            sideCard.appendChild(pick);
-          }
-        }
-
-        if(d.mode==="sheet"&&per>1)
-          sideCard.appendChild(h("div",{class:"ls-pp-h"},
-            using.length>1
-              ? "Each design begins on the die-cut you give it and runs on from "+
-                "there. Leave one empty and it follows the design above. "+
-                "Positions carry on across sheets."
-              : "Leave the start empty to begin at die-cut 1, or type the first "+
-                "free one on a part-used sheet."));
-        if(planNote) sideCard.appendChild(h("div",{class:"ls-pp-flag",text:planNote}));
-
-        sideCard.appendChild(h("button",{class:"ls-pp-go",type:"button",
-          title:"Lay the run out again from the quantities and the starts typed above",
-          onclick:()=>{ if(arrangePlan()) redraw(); }},[
-          ico("grid",14), h("span",{text:"Arrange the pages"}),
-        ]));
-
-        /* A PROMPT IS NOT A PRINT SETTING. The design asks for it and cannot
-           render a truthful label without an answer, so it gets its own card
-           rather than being buried among the quantities. */
-        const prompts=promptsOf(d);
-        if(prompts.length){
-          const pc=card(h("div",{class:"ls-pp-sec"},[
-            h("span",{text:"The design asks for"}),
-            h("span",{class:"ls-pp-h",text:"filled in on every label of the run"}),
+        mates.forEach(m=>{
+          const on=sel===m.id;
+          const tick=h("input",{type:"checkbox",class:"ls-pp-tick",
+            title:inRun[m.id]?"Untick to leave “"+m.name+"” unprinted"
+                             :"Tick to print “"+m.name+"” in this run"});
+          tick.checked=!!inRun[m.id];
+          tick.addEventListener("change",()=>{ inRun[m.id]=tick.checked;
+            sel=m.id; redraw(); });
+          const inp=keyed(num(startOf(m.id),v=>{
+            startAt[m.id]=Math.max(1,Math.min(per,Math.round(v)||1));
+            sel=m.id; redraw();
+          },1,per,66),"start:"+m.id);
+          inp.title="The position “"+m.name+"” starts on, counted in print "+
+            "order — the numbers on the sheet. Everything before it is left empty.";
+          list.appendChild(h("div",{class:"ls-pp-d"+(on?" on":"")+(inRun[m.id]?"":" off"),
+            title:"Click to choose “"+m.name+"”, then set how many of it below",
+            onclick:(e)=>{ if(e.target.closest&&e.target.closest("input")) return;
+              sel=m.id; redraw(); }},[
+            tick,
+            h("span",{class:"ls-pp-dn",text:m.name}),
+            h("span",{class:"ls-pp-at",text:"from"}),
+            inp,
           ]));
-          prompts.forEach(p=>{
-            if(runOpts.prompts[p.key]==null) runOpts.prompts[p.key]=p.def||"";
-            const el=h("input",{class:"ls-pp-in",type:"text",placeholder:p.def||""});
-            el.value=runOpts.prompts[p.key];
-            el.addEventListener("input",()=>{ runOpts.prompts[p.key]=el.value; });
-            pc.appendChild(field(p.key,el));
-          });
-          side.appendChild(pc);
-        }
+        });
+        side.appendChild(list);
 
-        /* The block of serial numbers this run eats, before it eats them.
-           Reading the first and the last back BEFORE the job goes out is the
-           difference between noticing an overlap and finding it on a carton
-           three weeks later. */
+        /* ---- HOW MANY, FOR THE ONE THAT IS CHOSEN ---- */
+        const m=docs.find(x=>x.id===sel)||d;
+        side.appendChild(h("div",{class:"ls-pp-sec"},[
+          h("span",{text:"How it prints"}),
+          h("span",{class:"ls-pp-h",text:"“"+m.name+"”"}),
+        ]));
+        side.appendChild(field("Number of labels to print",
+          keyed(num(qtyOf(m.id),v=>{
+            wantQty[m.id]=Math.max(0,Math.min(5000,Math.round(v)||0));
+            /* remembered on the design: a label always run five hundred at a
+               time is always run five hundred at a time */
+            m.qty=Math.max(1,wantQty[m.id]||1); touch(); redraw();
+          },0,5000),"qty:"+m.id),
+          !inRun[m.id]
+            ? "kept, but not printed — “"+m.name+"” is unticked"
+            : mates.length>1
+            ? "its own count — choose another design above to set that one’s"
+            : "they flow on from position "+startOf(m.id)+
+              ", onto as many sheets as they need"));
+
         if(d.objects.some(o=>o.src&&o.src.kind==="serial")){
+          const el=keyed(h("input",{class:"ls-pp-in",type:"text",
+            placeholder:"the design’s own start"}),"serial");
+          el.value=runOpts.serialStart;
+          el.addEventListener("input",()=>{ runOpts.serialStart=el.value.replace(/\D/g,""); });
+          side.appendChild(field("Start the serial at",el,
+            "carry on from where the last run finished"));
+          /* the block of numbers this run eats, before it eats them */
           const own=plan.reduce((n,p)=>n+p.filter(x=>x===d.id).length,0);
           const sp=serialSpan(own);
-          if(sp) side.appendChild(card(
-            h("div",{class:"ls-pp-sec"},[
-              h("span",{text:"Serial numbers"}),
-              h("span",{class:"ls-pp-h",text:"used up for good"}),
-            ]),
-            h("div",{class:"ls-pp-span"},[
-              h("b",{text:sp.first}), h("span",{class:"ls-pp-arrow",text:"→"}),
-              h("b",{text:sp.last}),
-              h("span",{class:"ls-pp-h",text:sp.count+" number"+(sp.count===1?"":"s")}),
-            ])));
+          if(sp) side.appendChild(h("div",{class:"ls-pp-span"},[
+            h("b",{text:sp.first}), h("span",{class:"ls-pp-arrow",text:"→"}),
+            h("b",{text:sp.last}),
+            h("span",{class:"ls-pp-h",
+              text:sp.count+" number"+(sp.count===1?"":"s")+" — used up for good"}),
+          ]));
         }
+        /* ---- WHAT THIS RUN IS FOR ----
+           A label bound to the ERP is not finished until somebody says WHICH
+           product, WHICH batch. Asked once per root however many fields read
+           it, exactly like a prompt — and asked FIRST, because it is the
+           question the whole run hangs on.
+
+           Left unanswered the run still prints, carrying the examples. That
+           would be a lie on a carton, so an unanswered root says so here and
+           the preview shows what it will actually print. */
+        bindRootsOf(d).forEach(rootName=>{
+          const g=erpGroup(rootName);
+          const recs=erpRecords(rootName);
+          const el=keyed(h("select",{class:"ls-pp-in"}),"bind:"+rootName);
+          el.appendChild(h("option",{value:""},"— choose —"));
+          recs.forEach(r=>el.appendChild(h("option",{value:r.id},r.label)));
+          el.value=runOpts.bind[rootName]||"";
+          el.addEventListener("change",()=>{
+            runOpts.bind[rootName]=el.value; redraw();
+          });
+          side.appendChild(field(g?g.label:rootName,el,
+            recs.length
+              ? (runOpts.bind[rootName]
+                  ? "every field reading it fills in from this"
+                  : "⚠ not chosen — those fields will print their example")
+              : "⚠ nothing to choose — no "+(g?g.label.toLowerCase():rootName)+
+                " exists in the ERP yet"));
+        });
+        const prompts=promptsOf(d);
+        prompts.forEach(p=>{
+          if(runOpts.prompts[p.key]==null) runOpts.prompts[p.key]=p.def||"";
+          const el=keyed(h("input",{class:"ls-pp-in",type:"text",placeholder:p.def||""}),
+            "prompt:"+p.key);
+          el.value=runOpts.prompts[p.key];
+          el.addEventListener("input",()=>{ runOpts.prompts[p.key]=el.value; });
+          side.appendChild(field(p.key,el,"asked for by the design"));
+        });
+        /* PRINT ORDER. On a roll there is one row, so "across" and "down" are
+           the same journey and only the start corner does anything — offering
+           four identical-looking choices there would be a lie, so the two that
+           differ are the two that show. */
+        side.appendChild(field("Print order",
+          sel1(d.printOrder||"th",
+            (d.mode==="roll"?ORDERS.filter(o=>o.v==="th"||o.v==="bh"):ORDERS)
+              .map(o=>({v:o.v,l:o.l})),
+            v=>{ d.printOrder=v; touch(); redraw(); }),
+          (ORDERS.find(o=>o.v===(d.printOrder||"th"))||ORDERS[0]).d));
+        if(d.mode==="sheet")
+          side.appendChild(check("Print cut lines between labels",runOpts.cut,
+            v=>{runOpts.cut=v;}));
+        side.appendChild(check("Print in reverse order",runOpts.reverse,
+          v=>{runOpts.reverse=v;}));
 
         /* ---- WHAT IT WILL LOOK LIKE ----
-           Two pictures, the same two the PO label wizard shows, because the
-           question before a print run is always the same pair: is the sticker
-           itself right, and does the sheet of them land where the die is. Both
-           are rendered through the very functions that print — oneHtml and
-           composeHtml — so a preview cannot flatter the output. */
+           Two pictures: the sticker itself, and the first sheet of them with
+           every die-cut numbered. Both are rendered through the very functions
+           that print, so a preview cannot flatter the output. */
+        right.appendChild(h("div",{class:"ls-pp-sec"},[
+          h("span",{text:"The label"}),
+          h("span",{class:"ls-pp-h",text:"one sticker, exactly as it prints"}),
+        ]));
         {
           const ctx0={index:0,now:new Date(),prompts:runOpts.prompts,
-            serialStart:runOpts.serialStart};
-          const k=Math.min(360/(d.w*PX_MM),230/(d.h*PX_MM),2.4);
-          mid.appendChild(card(
-            h("div",{class:"ls-pp-sec"},[
-              h("span",{text:"The label"}),
-              h("span",{class:"ls-pp-h",text:"one sticker, exactly as it prints"}),
-            ]),
-            h("div",{class:"ls-pp-one"},[
-              h("div",{class:"wz-frame",
-                style:`width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
-                h("iframe",{srcdoc:oneHtml(d,ctx0),scrolling:"no","aria-hidden":"true",
-                  tabindex:"-1",
-                  style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${k.toFixed(4)});`+
-                        `transform-origin:top left`})),
-            ]),
-            h("div",{class:"ls-pp-cap",text:sizeS(d.w,d.h)})));
+            bind:bindRecords(),serialStart:runOpts.serialStart};
+          const k=Math.min(250/(d.w*PX_MM),190/(d.h*PX_MM),1.6);
+          right.appendChild(h("div",{class:"ls-pp-one"},[
+            h("div",{class:"wz-frame",
+              style:`width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
+              h("iframe",{srcdoc:oneHtml(d,ctx0),scrolling:"no","aria-hidden":"true",
+                tabindex:"-1",
+                style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${k.toFixed(4)});`+
+                      `transform-origin:top left`})),
+          ]));
+          right.appendChild(h("div",{class:"ls-pp-cap",text:sizeS(d.w,d.h)}));
         }
 
-        /* THE SHEET, AS A BOARD OF ADDRESSES.
-           One tile per die-cut, laid out the way the stock is — as many across
-           as the sheet is — and numbered 1..n in PRINT order. It is a
-           schematic, not a scale drawing, and that is the point: these numbers
-           are what gets typed into "starts at", so they have to be readable at
-           a glance rather than faithful to a millimetre. The scale drawing is
-           the page thumbnail in the middle column, which stays honest. */
+        /* THE FIRST SHEET, as the plan actually lays it out — so the empty run
+           of positions before the start is visible rather than described. */
         if(g.perPage){
-          const cells=pageCells(planPage);
-          const slotOf=orderSlot(d,g);
-          const sheetCard=card(h("div",{class:"ls-pp-sec"},[
-            h("span",{text:d.mode==="roll"?"On the web":"On the sheet"}),
+          right.appendChild(h("div",{class:"ls-pp-sec"},[
+            h("span",{text:d.mode==="roll"?"On the web":"On the first sheet"}),
             h("span",{class:"ls-pp-h",text:"numbered in print order"}),
           ]));
-          right.appendChild(sheetCard);
-
-          /* A tile shows the real artwork while there is room to see it. Past
-             that many, every tile would be a separate live document rebuilt on
-             each keystroke, so a filled one falls back to its design's colour —
-             which is the same key the palette and the legend use. */
-          const ART_CAP=28;
-          const withArt=cells.filter(c=>c&&c.d).length<=ART_CAP;
-          const ar=Math.min(3.6,Math.max(1.15,d.w/Math.max(1,d.h)));
-          const tiles=h("div",{class:"ls-pp-tiles",
-            style:`grid-template-columns:repeat(${Math.max(1,g.cols)},minmax(0,1fr))`});
-          /* THE NUMBERS RUN ON ACROSS THE RUN. Sheet one is 1..65, sheet two
-             starts at 66 — a die-cut keeps one address for the whole job, which
-             is what makes "starts at 70" mean something without a page beside
-             it. Restarting at 1 on every sheet would make the same number name
-             a different piece of paper depending on which tab you were looking
-             at, and the start boxes would be quietly ambiguous. */
-          const base=planPage*per;
+          const k=Math.min(300/(g.pgW*PX_MM),330/(g.pgH*PX_MM));
+          const wrap=h("div",{class:"ls-pp-sheet",
+            style:`width:${(g.pgW*PX_MM*k).toFixed(1)}px;height:${(g.pgH*PX_MM*k).toFixed(1)}px`});
+          wrap.appendChild(h("iframe",{
+            srcdoc:composeHtml(d,planCells().slice(0,per),{cut:runOpts.cut}),
+            scrolling:"no","aria-hidden":"true",tabindex:"-1",
+            style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k.toFixed(4)});`+
+                  `transform-origin:top left`}));
+          /* The numbers are drawn OVER the sheet, from the same orderSlot() the
+             printer uses — so the 7 on screen is the die-cut that gets label 7.
+             EVERY die-cut is numbered, not just the ones this run fills: the
+             question they answer is "which way does the count run", and a run
+             of one would otherwise draw a single 1 and say nothing at all. */
+          const slotOf=orderSlot(d,g);
+          const roll=d.mode==="roll";
+          const padX=roll?Math.max(0,(g.pgW-(g.cols*d.w+(g.cols-1)*(+d.rGapX||0)))/2):d.mLeft;
+          const padY=roll?(+d.rGapY||0)/2:d.mTop;
+          const gx=roll?(+d.rGapX||0):d.gapX, gy=roll?0:d.gapY;
+          const from=startOf(sel||d.id);
           for(let i=0;i<per;i++){
             const p=slotOf(i);
-            const c=(p>=0&&p<per)?cells[p]:null;
-            const m=c&&c.d;
-            const t=h("div",{class:"ls-pp-t"+(m?" on":""),
-              "data-k":m?String(hueOf(m.id)):"",
-              style:"aspect-ratio:"+ar.toFixed(3),
-              title:"Position "+(base+i+1)+" — "+(m?m.name:"free")});
-            if(m&&withArt){
-              const tk=Math.min(66/(m.w*PX_MM),40/(m.h*PX_MM));
-              t.appendChild(h("div",{class:"ls-pp-tart"},
-                h("iframe",{srcdoc:oneHtml(m,c.ctx),scrolling:"no",
-                  "aria-hidden":"true",tabindex:"-1",
-                  style:`width:${m.w}mm;height:${m.h}mm;`+
-                        `transform:scale(${tk.toFixed(4)});transform-origin:top left`})));
-            }
-            t.appendChild(h("span",{class:"ls-pp-tn",text:String(base+i+1)}));
-            tiles.appendChild(t);
+            if(p<0||p>=per) continue;
+            const rr=Math.floor(p/Math.max(1,g.cols)), cc=p%Math.max(1,g.cols);
+            const x=(padX+cc*(d.w+gx))*PX_MM*k, y=(padY+rr*(d.h+gy))*PX_MM*k;
+            wrap.appendChild(h("div",{class:"ls-pp-num"+(i+1===from?" start":""),
+              style:`left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;`+
+                    `width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
+              h("span",{text:String(i+1)})));
           }
-          sheetCard.appendChild(h("div",{class:"ls-pp-board"},[tiles]));
-
-          /* THE KEY TO THE COLOURS. On a shared sheet the tiles are the only
-             thing saying which design is where, and a colour with no name
-             against it is a decoration rather than information. */
-          const onPage=[];
-          cells.forEach(c=>{ if(c&&c.d&&onPage.indexOf(c.d)<0) onPage.push(c.d); });
-          if(onPage.length>1){
-            sheetCard.appendChild(h("div",{class:"ls-pp-legend"},
-              onPage.map(m=>h("span",{class:"ls-pp-lg","data-k":String(hueOf(m.id))},[
-                h("i"), h("span",{text:m.name}),
-                h("b",{text:String(cells.filter(c=>c&&c.d===m).length)}),
-              ]))));
-          }
-          sheetCard.appendChild(h("div",{class:"ls-pp-cap",
-            text:(d.mode==="roll"
-                    ?(g.cols+" across a "+mmS(g.pgW)+" mm web · "+mmS(g.pgH)+" mm per feed")
-                    :(g.cols+" across × "+g.rows+" down = "+per+" per "+d.page+" sheet"))+
-                 (plan.length>1?" · page "+(planPage+1)+" of "+plan.length:"")}));
+          right.appendChild(h("div",{class:"ls-pp-sheetwrap"},[wrap]));
+          right.appendChild(h("div",{class:"ls-pp-cap",
+            text:roll?(g.cols+" across a "+mmS(g.pgW)+" mm web · "+mmS(g.pgH)+" mm per feed")
+                     :(g.cols+" across × "+g.rows+" down = "+per+" per "+d.page+" sheet"+
+                       (from>1?" · starting at "+from:""))}));
         }
 
-        /* ---- THE PAGES ---- */
-        const pagesCard=card(h("div",{class:"ls-pp-sec"},[
-          h("span",{text:"The pages"}),
-          h("span",{class:"ls-pp-h",
-            text:"every page of the run — click one to open it on the board"}),
+        main.appendChild(side); main.appendChild(right);
+        pane.appendChild(main);
+      }
+
+      /* ============================================================
+         STEP 2 — EVERY PAGE OF THE RUN
+         Drawn through composeHtml, the function that prints, so what
+         is on this step is what comes out of the printer.
+         ============================================================ */
+      function buildPreview(pane,g,per,mates,total){
+        if(!total||!g.perPage){
+          pane.appendChild(h("div",{class:"ls-pp-note"},
+            "Nothing is placed yet — go back and give a design a number of "+
+            "labels to print."));
+          return;
+        }
+        pane.appendChild(h("div",{class:"ls-pp-sec"},[
+          h("span",{text:"The run"}),
+          h("span",{class:"ls-pp-h",text:total+" label"+(total===1?"":"s")+
+            " across "+plan.length+" "+
+            (d.mode==="roll"?"page":"sheet")+(plan.length===1?"":"s")+
+            " — exactly as it will print"}),
         ]));
-        mid.appendChild(pagesCard);
-        const strip=h("div",{class:"ls-pp-strip"});
-        plan.forEach((page,i)=>{
-          const mini=h("div",{class:"ls-pp-mini",
-            style:`grid-template-columns:repeat(${g.cols},1fr)`});
-          page.forEach(id=>mini.appendChild(h("i",{class:id?"on":"",
-            "data-k":id?String(hueOf(id)):""})));
-          strip.appendChild(h("div",{class:"ls-pp-page"+(i===planPage?" on":""),
-            title:"Page "+(i+1)+" — "+page.filter(Boolean).length+" of "+per+" used",
-            onclick:()=>{ planPage=i; redraw(); }},[
-            mini,
-            h("div",{class:"ls-pp-pn"},[
-              h("span",{text:"Page "+(i+1)}),
-              h("div",{class:"sp"}),
-              h("button",{class:"ls-pp-x",type:"button",title:"Print only this page",
-                onclick:(e)=>{ e.stopPropagation(); printOnly(i); }},ico("print",11)),
-              plan.length>1?h("button",{class:"ls-pp-x",type:"button",title:"Remove this page",
-                onclick:(e)=>{ e.stopPropagation(); plan.splice(i,1);
-                  if(planPage>=plan.length) planPage=plan.length-1; redraw(); }},
-                ico("close",11)):null,
-            ].filter(Boolean)),
+        /* The same cells the printer gets, in the same direction — a reversed
+           run previews reversed, because "exactly as it will print" is the
+           whole promise of this step. */
+        let cells=planCells();
+        if(runOpts.reverse) cells=cells.slice().reverse();
+        /* A thousand-label run is a hundred iframes and a stalled browser, so
+           the preview draws the first pages and SAYS that it stopped. Silence
+           here would read as "that is the whole run". */
+        const CAP=12, show=Math.min(plan.length,CAP);
+        const k=Math.min(250/(g.pgW*PX_MM),300/(g.pgH*PX_MM));
+        const grid=h("div",{class:"ls-pp-pages"});
+        for(let i=0;i<show;i++){
+          const slice=cells.slice(i*per,(i+1)*per);
+          const used=slice.filter(Boolean).length;
+          grid.appendChild(h("div",{class:"ls-pp-pg"},[
+            h("div",{class:"wz-frame",
+              style:`width:${(g.pgW*PX_MM*k).toFixed(1)}px;height:${(g.pgH*PX_MM*k).toFixed(1)}px`},
+              h("iframe",{srcdoc:composeHtml(d,slice,{cut:runOpts.cut}),
+                scrolling:"no","aria-hidden":"true",tabindex:"-1",
+                style:`width:${g.pgW}mm;height:${g.pgH}mm;transform:scale(${k.toFixed(4)});`+
+                      `transform-origin:top left`})),
+            h("div",{class:"ls-pp-cap"},[
+              h("b",{text:(d.mode==="roll"?"Page ":"Sheet ")+(i+1)}),
+              h("span",{text:" · "+used+" of "+per+" used"}),
+            ]),
           ]));
-        });
-        strip.appendChild(h("button",{class:"ls-pp-add",type:"button",
-          title:"Add an empty page",
-          onclick:()=>{ plan.push(blankPage()); planPage=plan.length-1; redraw(); }},[
-          ico("plus",16), h("span",{text:"Add page"}),
-        ]));
-        pagesCard.appendChild(strip);
-
-        /* WHAT IS LEFT OF THE PAGE EDITOR is what is not placement: emptying a
-           page and repeating one. Where a label goes is typed, not clicked, so
-           the grid of die-cuts you used to paint on is gone — the numbered
-           sheet above is now the only picture of the page, and it is a picture
-           of the real thing rather than a diagram of it. */
-        const page=plan[planPage]||blankPage();
-        pagesCard.appendChild(h("div",{class:"ls-pp-acts"},[
-          h("button",{class:"ls-pp-b",type:"button",
-            title:"Empty every position on this page",
-            onclick:()=>{ plan[planPage]=blankPage(); redraw(); }},[
-            ico("trash",12), h("span",{text:"Clear page "+(planPage+1)})]),
-          h("button",{class:"ls-pp-b",type:"button",
-            title:"Add a copy of this page after it",
-            onclick:()=>{ plan.splice(planPage+1,0,page.slice());
-              planPage++; redraw(); }},[
-            ico("copy",12), h("span",{text:"Duplicate page"})]),
-        ]));
-
-        main.appendChild(side); main.appendChild(mid); main.appendChild(right);
-        body.appendChild(main);
+        }
+        pane.appendChild(grid);
+        if(plan.length>show) pane.appendChild(h("div",{class:"ls-pp-note"},
+          "Showing the first "+show+" of "+plan.length+" "+
+          (d.mode==="roll"?"pages":"sheets")+" — all "+plan.length+" will print."));
       }
 
-      /* One page of the plan, on its own — numbered as part of the WHOLE run,
-         so reprinting page three does not hand out serials 1..n again. */
-      function printOnly(i){
-        const cells=pageCells(i);
-        if(!cells.some(Boolean)) return toast("That page is empty",{type:"warn"});
-        const w=window.open("","_blank");
-        if(!w) return toast("Popup blocked — allow popups for this site to print",{type:"warn"});
-        w.document.write(composeHtml(doc(),cells,{print:true,cut:!!runOpts.cut}));
-        w.document.close();
+      /* Opening on a design that has never been given a number should not show
+         an empty run — tick it and take the count it remembers. The OTHER
+         designs start unticked: sharing the run is a choice, not a default. */
+      if(inRun[doc().id]==null) inRun[doc().id]=true;
+      rebuildPlan();
+      if(!planTotal()){
+        const mates=stockMates();
+        if(mates.length&&!Object.keys(wantQty).length)
+          wantQty[doc().id]=Math.max(1,doc().qty||1);
+        rebuildPlan();
       }
-
-      /* THE RUN OPENS ON ONE LABEL — the one you came in with. Re-seeded when
-         the open design is not on the list, which is what happens after
-         switching templates and pressing Print again: the previous run's guests
-         are not this run's business. */
-      if(!Array.isArray(planUse)||planUse.indexOf(doc().id)<0){
-        planUse=[doc().id];
-        planAdding=false;
-      }
-      /* Opening the dialog on a run that was never arranged should not show an
-         empty sheet — fill it from the design's own quantity once.
-         Per DESIGN, not "is the run empty": coming back after designing a label
-         that was created from this screen, the run already holds the first
-         label's quantity, and a run-wide test would leave the new one on zero
-         with no hint as to why. */
-      ensurePlan();
-      if(planQty[doc().id]==null)
-        planQty[doc().id]=Math.max(1,runOpts.qty==null?doc().qty:runOpts.qty);
-      /* Re-lay when the OPEN design has nothing on the sheet, not merely when
-         the sheet is bare: the label just designed would otherwise sit at a
-         quantity of one with no position, behind a plan built before it
-         existed. */
-      const openHas=plan.reduce((n,p)=>n+p.filter(x=>x===doc().id).length,0);
-      if(!planTotal()||!openHas) arrangePlan({quiet:true});
       build();
-      const mo=modal({title:"Print Layout", sub:doc().name+" — "+sizeS(doc().w,doc().h),
-        xwide:true, body, foot:[
-        h("button",{class:"btn ghost",onclick:()=>{mo.close();paint();},text:"Cancel"}),
-        h("button",{class:"btn",title:"Print a single label to check the alignment",
-          onclick:()=>doPrint({test:true})},[
-          ico("print",14), h("span",{text:"Test — one label"})]),
-        h("button",{class:"btn primary",onclick:()=>{ if(doPrint()) mo.close(); }},[
-          ico("print",14), h("span",{text:"Print all pages"})]),
-      ]});
-      /* The head badge is hung on afterwards rather than taught to modal(),
-         which every other dialog in the ERP shares — one screen wanting a
-         crest is not a reason to change the shell for all of them. */
-      mo.el.classList.add("ls-ppm");
-      const head=mo.el.querySelector(".modal-head");
-      if(head) head.insertBefore(h("div",{class:"ls-pp-crest"},ico("print",20)),head.firstChild);
+
+      const bCancel=h("button",{class:"btn ghost",
+        onclick:()=>{mo.close();paint();},text:"Cancel"});
+      const bBack=h("button",{class:"btn ghost",style:"display:none",
+        onclick:()=>goStep(0),text:"‹  Back"});
+      const bNext=h("button",{class:"btn primary",
+        title:"See every page of the run before it goes to the printer",
+        onclick:()=>{
+          if(!planTotal()) return toast("Tick a design and give it a number of "+
+            "labels to print",{type:"warn"});
+          goStep(1);
+        },text:"Preview  ›"});
+      const bPrint=h("button",{class:"btn primary",style:"display:none",
+        onclick:()=>{ if(doPrint()) mo.close(); },text:"🖨  Print"});
+      function syncFoot(){
+        bNext.style.display  = step?"none":"";
+        bBack.style.display  = step?"":"none";
+        bPrint.style.display = step?"":"none";
+      }
+      const mo=modal({title:"Print", sub:doc().name+" — "+sizeS(doc().w,doc().h),
+        wide:true, body, foot:[bCancel,bBack,bNext,bPrint]});
     }
 
 
 
 
-    /* opts.test — one label, on a fresh sheet, at position one. It ignores the
-       quantity, the copies, the range and the part-used skip on purpose: the
-       job of a test print is to answer "is the paper lined up", and every one
-       of those settings only gets in the way of that question. */
-    function doPrint(opts){
-      opts=opts||{};
+    /* The run that the preview just showed, sent to the printer. */
+    function doPrint(){
       const d=doc();
       const g=sheetGrid(d);
       if(!g.perPage){
         toast("The label is bigger than the page — fix it in Page setup first",{type:"warn"});
         return false; }
 
-      /* A TEST PRINT is one label of the design that is open, on a fresh
-         sheet, at position one. It ignores the plan on purpose: the question
-         it answers is "is the paper lined up", and the plan only gets in the
-         way of that. */
-      if(opts.test){
-        if(!d.objects.some(o=>!o.hidden)){
-          toast("This label has nothing on it to test",{type:"warn"});
-          return false; }
-        const wt=window.open("","_blank");
-        if(!wt){ toast("Popup blocked — allow popups for this site to print",{type:"warn"});
-          return false; }
-        wt.document.write(sheetHtml(d,
-          buildRun(d,{qty:1,copies:1,prompts:runOpts.prompts,
-                      serialStart:runOpts.serialStart}),
-          {print:true,skip:0,cut:!!runOpts.cut}));
-        wt.document.close();
-        toast("One test label sent — check it against the stock",{type:"ok"});
-        return true;
-      }
-
-      /* THE PLAN IS THE RUN. There is no second path: a plain run of fifty of
-         one design and a hand-mixed sheet are the same list of pages, so they
-         print through the same renderer and there is nowhere for the two to
-         drift apart. */
-      const cells=planCells();
+      /* THE PLAN IS THE RUN. There is no second path: the pages the preview
+         drew and the pages that print come from the same list, through the
+         same renderer, so there is nowhere for the two to drift apart. */
+      let cells=planCells();
+      if(runOpts.reverse) cells=cells.slice().reverse();
       if(!cells.some(Boolean)){
-        toast("No labels are placed yet — give a design a quantity and press "+
-              "Arrange the pages",{type:"warn"});
+        toast("No labels are placed yet — tick a design and give it a number "+
+              "of labels to print",{type:"warn"});
         return false; }
       const w=window.open("","_blank");
       if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"});
