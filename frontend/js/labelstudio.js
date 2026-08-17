@@ -761,6 +761,21 @@
   const IMG_RE=/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
   const uid=(p)=>p+Math.random().toString(36).slice(2,9);
 
+  /* WHERE A FIELD GETS ITS WORDS.
+       fixed   — typed here, the same on every label
+       date    — filled in when you print
+       serial  — counts up across the run
+       prompt  — asked for at the print step
+       field   — READ OUT OF THE ERP: "product.name", "batch.number".
+     The last one is what turns a template into a label the plant can print a
+     thousand different times without opening the designer. The designer knows
+     only the SHAPE of a binding; which fields exist, and what they are worth
+     for a given record, is the ERP's business and arrives through mount(). */
+  const SRC_KINDS=["fixed","date","serial","prompt","field"];
+  /* root.leaf, or root.leaf.leaf — deliberately strict, because this string is
+     the only thing standing between a template and an eval-shaped lookup. */
+  const FIELD_RE=/^[a-zA-Z][a-zA-Z0-9]{0,23}(\.[a-zA-Z][a-zA-Z0-9_]{0,23}){1,2}$/;
+
   /* PRINT ORDER — the four BarTender offers. "Top" and "bottom" are which end
      of the sheet label 1 sits at; "across" and "down" are which way the count
      runs from there. On a roll there is only one row, so the two directions
@@ -926,11 +941,17 @@
          would let you print something you had every reason to think was gone. */
       hidden:!!o.hidden};
     const s=o.src||{};
-    const kind=["fixed","date","serial","prompt"].indexOf(s.kind)>=0?s.kind:"fixed";
+    const kind=SRC_KINDS.indexOf(s.kind)>=0?s.kind:"fixed";
     r.src={kind, prefix:str(s.prefix,"",40), suffix:str(s.suffix,"",40),
       fmt:str(s.fmt,"DD.MM.YYYY",40),
       start:int(s.start,1,0,999999999), step:int(s.step,1,1,10000), pad:int(s.pad,0,0,12),
-      prompt:str(s.prompt,"",40), def:str(s.def,"",120)};
+      prompt:str(s.prompt,"",40), def:str(s.def,"",120),
+      /* An ERP binding: "product.name", "batch.number", "roll.length". Shape
+         checked here, MEANING checked nowhere — the field list belongs to the
+         ERP, not to the designer, and a binding whose field has since been
+         renamed must survive a save so it can be repaired rather than being
+         silently emptied on load. */
+      field:FIELD_RE.test(String(s.field||""))?String(s.field):""};
     if(t==="text"||t==="barcode"||t==="qr"){
       r.text=str(o.text,"",600);
       /* The fallback matches the DEFAULT, so a font that has gone missing from
@@ -1093,8 +1114,42 @@
       const key=s.prompt||"Value";
       v=(ctx.prompts&&ctx.prompts[key]!=null&&ctx.prompts[key]!=="")?String(ctx.prompts[key]):(s.def||"");
     }
+    else if(s.kind==="field") v=fieldValue(s,ctx);
     else v=o.text||"";
     return (s.prefix||"")+v+(s.suffix||"");
+  }
+  /* "product.name" against ctx.bind = {product:<record>, batch:<record>, …}.
+     The ROOT is what the print step was asked to choose; the rest is a walk
+     down that record.
+
+     ⚠ FALLS BACK TO THE EXAMPLE, NOT TO EMPTY. On the canvas there is no
+     chosen record at all, and a label that draws six blank boxes while you are
+     designing it is unreadable — you cannot see what you are laying out. So an
+     unbound field shows the example the field list gave for it (kept in
+     src.def, the same place a prompt keeps its default). The print step is
+     where a missing record becomes an error worth raising, and it says so
+     there rather than quietly printing the example. */
+  function fieldValue(s,ctx){
+    const path=String(s.field||"");
+    if(!FIELD_RE.test(path)) return s.def||"";
+    const bits=path.split(".");
+    let cur=ctx&&ctx.bind?ctx.bind[bits[0]]:null;
+    for(let i=1;i<bits.length&&cur!=null;i++)
+      cur=(typeof cur==="object")?cur[bits[i]]:null;
+    if(cur==null||cur==="") return s.def||"";
+    return String(cur);
+  }
+  /* Every ROOT a label binds to ("product", "batch", …), so the print step can
+     ask for one record of each — once, however many fields read it. */
+  function bindRootsOf(doc){
+    const seen=[];
+    (doc.objects||[]).forEach(o=>{
+      if(o.src&&o.src.kind==="field"&&FIELD_RE.test(String(o.src.field||""))){
+        const root=String(o.src.field).split(".")[0];
+        if(seen.indexOf(root)<0) seen.push(root);
+      }
+    });
+    return seen;
   }
   /* Every distinct prompt on the label, so the print step can ask for each
      one exactly once however many objects read it. */
@@ -1560,7 +1615,45 @@
      drawing, and everything else lives behind Properties or Page Setup,
      once each.
      ============================================================ */
-  function mount(host){
+  /* ---- THE ERP'S OFFER OF FIELDS ----
+     The designer deliberately knows nothing about tapes, batches or work
+     orders. What it knows is that SOMEBODY may be able to name some fields and
+     hand back a record. That somebody is mod-label-studio.js, which passes
+     this in; without it the studio is exactly what it was and simply does not
+     offer "from the ERP" as a source.
+
+       groups()          → [{root:"product", label:"Product",
+                             fields:[{v:"product.name", l:"Name", ex:"…"}]}]
+       records(root)     → [{id, label}]     what you may print this for
+       record(root,id)   → a plain object, or null
+
+     Kept as FUNCTIONS, not as data: the ERP's list changes under the designer
+     (a new product is added in another tab and the 15-second poll brings it
+     in), and a snapshot taken at mount would go stale on a screen that stays
+     open for an hour. */
+  let erpData=null;
+  const erpGroups=()=>{
+    if(!erpData||typeof erpData.groups!=="function") return [];
+    try{ const g=erpData.groups(); return Array.isArray(g)?g:[]; }catch(e){ return []; }
+  };
+  const erpRecords=(root)=>{
+    if(!erpData||typeof erpData.records!=="function") return [];
+    try{ const r=erpData.records(root); return Array.isArray(r)?r:[]; }catch(e){ return []; }
+  };
+  const erpRecord=(root,id)=>{
+    if(!erpData||typeof erpData.record!=="function") return null;
+    try{ return erpData.record(root,id)||null; }catch(e){ return null; }
+  };
+  const erpGroup=(root)=>erpGroups().find(g=>g.root===root)||null;
+  const erpFieldLabel=(path)=>{
+    const root=String(path||"").split(".")[0];
+    const g=erpGroup(root);
+    const f=g&&(g.fields||[]).find(x=>x.v===path);
+    return f?(g.label+" · "+f.l):path;
+  };
+
+  function mount(host,opts){
+    erpData=(opts&&opts.data)||null;
     let docs=loadDocs();
     /* The studio ALWAYS opens on the gallery of saved labels — the way
        BarTender opens on its documents. You choose what you are working on
@@ -1630,7 +1723,7 @@
        twice, and one of them adding it at the wrong moment would blank an
        object nobody was touching. */
     const canvasCtx=()=>({index:0,now:new Date(),
-      prompts:runOpts.prompts||{},skip:editingId});
+      prompts:runOpts.prompts||{},bind:bindRecords(),skip:editingId});
 
     const root=h("div",{class:"ls"});
     host.appendChild(root);
@@ -5077,9 +5170,29 @@
         ()=>{ d.bgImage=""; d.bgFit="cover"; d.bgX=0; d.bgY=0; d.bgW=0; d.bgH=0;
               d.bgOpacity=100; bgEdit=false; })
         .forEach(el=>b.appendChild(el));
+      /* ---- THE RULE OF THE BACKGROUND ----
+         STATIC VISUALS ONLY: the ground colour, a border, the company logo,
+         decorative artwork. Never the product name, the batch, a barcode or
+         anything else that differs between two labels off the same reel.
+
+         It is not a style preference, it is the whole difference between a
+         template and a photograph. Anything baked into this picture cannot be
+         restyled, cannot be corrected, cannot be bound to the ERP and cannot
+         be read by a scanner that needs the value rather than a picture of it
+         — which is exactly how an imported BarTender label arrives, and
+         exactly why it could not be edited. Said HERE, at the moment somebody
+         is about to choose a picture, because that is the moment the mistake
+         gets made. */
+      b.appendChild(h("div",{class:"ls-phint"},
+        !d.bgImage
+          ? "Static artwork only — the ground, a border, your logo. Keep the "+
+            "product name, batch, dates and barcodes as objects on top, where "+
+            "they can be restyled and read from the ERP."
+          : "Remember: anything printed INTO this picture — a name, a batch, a "+
+            "barcode — cannot be edited, bound or scanned as a value. Those "+
+            "belong on top of it as objects."));
       if(!d.bgImage){
-        b.appendChild(h("div",{class:"ls-phint"},
-          "A pre-printed sleeve, a watermark, or artwork the fields sit on top of. It prints with the label."));
+        /* nothing more to set until there is a picture */
       } else {
         b.appendChild(fR("Fit",psel(d.bgFit,[
           {v:"cover",  l:"Fill the label"},
@@ -5219,6 +5332,7 @@
             title:"Open the data source",onclick:()=>propsDialog(),
             text:(o.src.kind==="serial"?"Serial number"
                  :o.src.kind==="date"  ?"Date / time"
+                 :o.src.kind==="field" ?erpFieldLabel(o.src.field)
                  :"Ask at print: "+(o.src.prompt||"—"))+" — edit…"})));
       }
 
@@ -5487,12 +5601,20 @@
 
       function panelData(){
         panel.appendChild(h("div",{class:"wz-sec",text:"What this field says"}));
-        panel.appendChild(fld("Comes from",sel1(o.src.kind,[
+        const kinds=[
           {v:"fixed", l:"Fixed text — the same on every label"},
           {v:"date",  l:"Date / time — filled in when you print"},
           {v:"serial",l:"Serial number — counts up across the run"},
           {v:"prompt",l:"Ask me at print time"},
-        ],v=>{o.src.kind=v;live(true);drawPanel();})));
+        ];
+        /* Only offered when the ERP actually handed over a field list — an
+           empty "From the ERP" that leads to an empty dropdown is worse than
+           not offering it. */
+        if(erpGroups().length) kinds.push(
+          {v:"field", l:"From the ERP — product, batch, supplier…"});
+        panel.appendChild(fld("Comes from",sel1(o.src.kind,kinds,
+          v=>{o.src.kind=v;live(true);drawPanel();})));
+        if(o.src.kind==="field") panelBind();
         if(o.src.kind==="fixed")
           panel.appendChild(fld(o.type==="text"?"Text":"Barcode value",
             taInput(o.text,v=>{o.text=v;live(false);},
@@ -5544,6 +5666,48 @@
           text:enc?"✓ Encodes — scanner-ready":"✕ This value cannot be encoded as "+
             ((SYMS.find(s=>s.v===o.sym)||{}).l||o.sym)}));
       }
+      /* ---- WHICH ERP FIELD ----
+         Two lists rather than one long one: the thing (Product, Batch,
+         Supplier) and then the field on it. A single flat list of every field
+         in the ERP is a wall of forty rows that all look alike, and the root
+         is the part that decides what the print step will ask for. */
+      function panelBind(){
+        const groups=erpGroups();
+        const cur=String(o.src.field||"");
+        let root=cur?cur.split(".")[0]:"";
+        if(!groups.some(g=>g.root===root)) root=groups[0]?groups[0].root:"";
+        const g=groups.find(x=>x.root===root)||{fields:[]};
+
+        const setField=(path)=>{
+          o.src.field=path;
+          /* The example travels with the binding, into src.def — the same slot
+             a prompt keeps its default in. It is what the CANVAS draws while
+             no record is chosen, so the label is readable as you lay it out
+             instead of a column of empty boxes. */
+          const f=(g.fields||[]).find(x=>x.v===path);
+          o.src.def=f&&f.ex?String(f.ex).slice(0,120):"";
+          live(true); drawPanel();
+        };
+
+        panel.appendChild(fld("Read it from",
+          sel1(root,groups.map(x=>({v:x.root,l:x.label})),(v)=>{
+            const ng=groups.find(x=>x.root===v);
+            setField(ng&&ng.fields[0]?ng.fields[0].v:"");
+          }),
+          "What the label is about. The print step asks you which one."));
+        panel.appendChild(fld("Field",
+          sel1(cur||((g.fields[0]||{}).v||""),
+            (g.fields||[]).map(f=>({v:f.v,l:f.l})), setField)));
+
+        const ex=o.src.def||"";
+        panel.appendChild(h("div",{class:"ls-bindex"},[
+          h("span",{class:"ls-bindex-l",text:"On the label"}),
+          h("b",{text:(o.src.prefix||"")+(ex||"—")+(o.src.suffix||"")}),
+          h("span",{class:"ls-bindex-h",
+            text:"an example — the real value is filled in when you print"}),
+        ]));
+      }
+
       /* Type, and what colour it is. For a barcode or a QR code the same
          fields describe the CAPTION — the human-readable line under the bars —
          because that is the only type on those objects. */
@@ -6049,7 +6213,22 @@
        WHERE IT STARTS is deliberately NOT remembered. It describes the sheet
        in the drawer this morning — how much of it somebody already used — and
        that is true for one run and false for the next. */
-    let runOpts={serialStart:"",prompts:{},cut:false,reverse:false};
+    let runOpts={serialStart:"",prompts:{},bind:{},cut:false,reverse:false};
+
+    /* runOpts.bind holds the CHOSEN IDS ("product" → "FG-TAPE-18"); a render
+       context wants the RECORDS. Resolved fresh on every context, never
+       cached: the 15-second poll can bring in an edited product while the
+       print dialog is open, and a label that printed yesterday's name because
+       something was memoised is the exact bug this feature must not have.
+       A function declaration, because canvasCtx is defined far above here. */
+    function bindRecords(){
+      const out={};
+      Object.keys(runOpts.bind||{}).forEach(root=>{
+        const id=runOpts.bind[root];
+        if(id) out[root]=erpRecord(root,id);
+      });
+      return out;
+    }
 
     /* THE SERIALS A RUN WILL CONSUME.
        A serialised run eats a block of numbers that can never be handed out
@@ -6062,7 +6241,7 @@
       const o=d.objects.find(x=>x.src&&x.src.kind==="serial"&&!x.hidden);
       if(!o||!count) return null;
       const mk=(i)=>srcValue(o,{index:i,now:new Date(),
-        prompts:runOpts.prompts,serialStart:runOpts.serialStart});
+        prompts:runOpts.prompts,bind:bindRecords(),serialStart:runOpts.serialStart});
       return {first:mk(0), last:mk(count-1), count:count};
     }
 
@@ -6158,7 +6337,10 @@
     function planCells(){
       const d=doc(), g=sheetGrid(d);
       const slotOf=orderSlot(d,g);
-      const now=new Date(), seen={};
+      /* One clock and one set of records for the whole run: every label on the
+         sheet must carry the same date and the same product, not whatever the
+         ERP said by the time the renderer reached cell 84. */
+      const now=new Date(), seen={}, bound=bindRecords();
       const out=[];
       plan.forEach(p=>{
         const cells=new Array(p.length).fill(null);
@@ -6170,7 +6352,7 @@
           if(!m) continue;
           const n=seen[id]||0; seen[id]=n+1;
           cells[ix]={d:m,ctx:{index:n,now,prompts:runOpts.prompts,
-            serialStart:runOpts.serialStart}};
+            bind:bound,serialStart:runOpts.serialStart}};
         }
         out.push(...cells);
       });
@@ -6355,6 +6537,33 @@
               text:sp.count+" number"+(sp.count===1?"":"s")+" — used up for good"}),
           ]));
         }
+        /* ---- WHAT THIS RUN IS FOR ----
+           A label bound to the ERP is not finished until somebody says WHICH
+           product, WHICH batch. Asked once per root however many fields read
+           it, exactly like a prompt — and asked FIRST, because it is the
+           question the whole run hangs on.
+
+           Left unanswered the run still prints, carrying the examples. That
+           would be a lie on a carton, so an unanswered root says so here and
+           the preview shows what it will actually print. */
+        bindRootsOf(d).forEach(rootName=>{
+          const g=erpGroup(rootName);
+          const recs=erpRecords(rootName);
+          const el=keyed(h("select",{class:"ls-pp-in"}),"bind:"+rootName);
+          el.appendChild(h("option",{value:""},"— choose —"));
+          recs.forEach(r=>el.appendChild(h("option",{value:r.id},r.label)));
+          el.value=runOpts.bind[rootName]||"";
+          el.addEventListener("change",()=>{
+            runOpts.bind[rootName]=el.value; redraw();
+          });
+          side.appendChild(field(g?g.label:rootName,el,
+            recs.length
+              ? (runOpts.bind[rootName]
+                  ? "every field reading it fills in from this"
+                  : "⚠ not chosen — those fields will print their example")
+              : "⚠ nothing to choose — no "+(g?g.label.toLowerCase():rootName)+
+                " exists in the ERP yet"));
+        });
         const prompts=promptsOf(d);
         prompts.forEach(p=>{
           if(runOpts.prompts[p.key]==null) runOpts.prompts[p.key]=p.def||"";
@@ -6390,7 +6599,7 @@
         ]));
         {
           const ctx0={index:0,now:new Date(),prompts:runOpts.prompts,
-            serialStart:runOpts.serialStart};
+            bind:bindRecords(),serialStart:runOpts.serialStart};
           const k=Math.min(250/(d.w*PX_MM),190/(d.h*PX_MM),1.6);
           right.appendChild(h("div",{class:"ls-pp-one"},[
             h("div",{class:"wz-frame",
