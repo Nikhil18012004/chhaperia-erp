@@ -53,3 +53,10 @@ data/demo-manifest.json
 data/bartender/
 run-local.cmd
 backups/
+
+# Machine-to-machine data exchange (tools/erp-export.js, tools/erp-import.js).
+# These files ARE the live business data — costs, prices, customers, suppliers,
+# staff pay. This repository is public, and git keeps deleted content forever,
+# so the exchange folder is carried across by hand (shared drive, USB) and
+# never committed.
+data/exchange/

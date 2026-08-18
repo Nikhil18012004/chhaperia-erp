@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node backend/src/server.js",
+    "export-data": "node tools/erp-export.js",
+    "import-data": "node tools/erp-import.js",
     "test": "npm test --prefix backend",
     "postinstall": "npm install --prefix backend --omit=dev"
   }
