@@ -238,6 +238,15 @@ function updateSettings(doc) {
     const LS_SYMS = ["code128", "code39", "ean13", "itf", "qr"];
     const LS_FONTS = ["arial", "times", "georgia", "calibri", "courier", "impact"];
     const LS_PAGES = ["A4", "A5", "A6", "A3", "Letter", "Legal", "custom"];
+    // where a field gets its words. "field" reads it out of the ERP at print
+    // time — MUST stay in step with SRC_KINDS in frontend/js/labelstudio.js,
+    // because a kind missing from here is silently downgraded to "fixed" and
+    // the binding is gone with no error anywhere.
+    const LS_SRC = ["fixed", "date", "serial", "prompt", "field"];
+    // "product.name" / "batch.number". Shape only: which fields exist is the
+    // frontend's catalogue, and a binding whose field was renamed must SURVIVE
+    // a save so it can be repaired, not be quietly blanked here.
+    const LS_FIELD = /^[a-zA-Z][a-zA-Z0-9]{0,23}(\.[a-zA-Z][a-zA-Z0-9_]{0,23}){1,2}$/;
 
     const cleanObj = (o, W, H) => {
       if (!o || typeof o !== "object" || Array.isArray(o)) return null;
@@ -253,11 +262,12 @@ function updateSettings(doc) {
       };
       const s = (o.src && typeof o.src === "object") ? o.src : {};
       r.src = {
-        kind: one(["fixed", "date", "serial", "prompt"], s.kind, "fixed"),
+        kind: one(LS_SRC, s.kind, "fixed"),
         prefix: tx(s.prefix, "", 40), suffix: tx(s.suffix, "", 40),
         fmt: tx(s.fmt, "DD.MM.YYYY", 40),
         start: iv(s.start, 1, 0, 999999999), step: iv(s.step, 1, 1, 10000), pad: iv(s.pad, 0, 0, 12),
         prompt: tx(s.prompt, "", 40), def: tx(s.def, "", 120),
+        field: LS_FIELD.test(String(s.field || "")) ? String(s.field) : "",
       };
       if (t === "text" || t === "barcode" || t === "qr") {
         r.text = tx(o.text, "", 600);
