@@ -141,7 +141,7 @@ function evaluate(values, spec, params) {
 /* ============================================================
    PRODUCTS (lab master)
    ============================================================ */
-function listProducts() { return repo.getState().labProducts || []; }
+async function listProducts() { return (await repo.getState()).labProducts || []; }
 
 function normalizeProduct(p) {
   p = p || {};
@@ -168,34 +168,34 @@ function normalizeProduct(p) {
   };
 }
 
-function createProduct(p) {
+async function createProduct(p) {
   const prod = normalizeProduct(p);
-  if (!prod.id) prod.id = nextId(listProducts(), "LP-");
-  else if (repo.getLabProduct(prod.id)) throw err("Product " + prod.id + " already exists", 409);
-  return repo.putLabProduct(prod);
+  if (!prod.id) prod.id = nextId(await listProducts(), "LP-");
+  else if (await repo.getLabProduct(prod.id)) throw err("Product " + prod.id + " already exists", 409);
+  return await repo.putLabProduct(prod);
 }
-function updateProduct(id, patch) {
-  const existing = repo.getLabProduct(id);
+async function updateProduct(id, patch) {
+  const existing = await repo.getLabProduct(id);
   if (!existing) throw err("Product not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
-  return repo.putLabProduct(normalizeProduct(merged));
+  return await repo.putLabProduct(normalizeProduct(merged));
 }
-function deleteProduct(id) {
-  if (!repo.getLabProduct(id)) throw err("Product not found", 404);
-  return repo.deleteLabProduct(id);
+async function deleteProduct(id) {
+  if (!await repo.getLabProduct(id)) throw err("Product not found", 404);
+  return await repo.deleteLabProduct(id);
 }
 /** Set only the (hidden) spec for a product — admin flow, kept out of report entry. */
-function setProductSpec(id, spec) {
-  const existing = repo.getLabProduct(id);
+async function setProductSpec(id, spec) {
+  const existing = await repo.getLabProduct(id);
   if (!existing) throw err("Product not found", 404);
   existing.spec = spec && typeof spec === "object" ? spec : {};
-  return repo.putLabProduct(existing);
+  return await repo.putLabProduct(existing);
 }
 
 /* ============================================================
    REPORTS
    ============================================================ */
-function listReports() { return repo.getState().labReports || []; }
+async function listReports() { return (await repo.getState()).labReports || []; }
 
 /* A batch is measured TWICE: once on the floor as it is produced, and again
    by the lab incharge after slitting. Both sets live on the same report and
@@ -215,9 +215,9 @@ function sourceForUser(user) {
   return user.role === "lab" ? "lab" : null;   // admin/office may write either
 }
 
-function buildReport(body, existing, user) {
+async function buildReport(body, existing, user) {
   body = body || {};
-  const product = repo.getLabProduct(body.productId);
+  const product = await repo.getLabProduct(body.productId);
   if (!product) throw err("Unknown product " + (body.productId || ""), 400);
   // Prefer the report's own type toggles (the entry form can override the
   // product's derived flags); fall back to the product's flags.
@@ -258,7 +258,7 @@ function buildReport(body, existing, user) {
   const graded = hasLab ? labGraded : prodGraded;
 
   return {
-    id: base.id || body.id || nextId(listReports(), "LR-", 4),
+    id: base.id || body.id || nextId(await listReports(), "LR-", 4),
     productId: product.id,
     productCode: product.code,
     productName: product.name,
@@ -292,22 +292,22 @@ function buildReport(body, existing, user) {
 }
 
 /** Find an existing report for the same batch/lot so the two stages merge. */
-function findByRef(productId, refNo, reports) {
+async function findByRef(productId, refNo, reports) {
   const ref = String(refNo || "").trim();
   if (!ref) return null;
-  return (reports || listReports())
+  return (reports || await listReports())
     .find((r) => r.productId === productId && String(r.refNo || "").trim() === ref) || null;
 }
 
-function createReport(body, user) {
+async function createReport(body, user) {
   // Second stage of the SAME batch updates the first report instead of
   // creating a duplicate certificate for it.
-  const existing = findByRef((body || {}).productId, (body || {}).refNo);
-  if (existing) return repo.putLabReport(buildReport(Object.assign({}, body, { id: existing.id }), existing, user));
-  return repo.putLabReport(buildReport(body, null, user));
+  const existing = await findByRef((body || {}).productId, (body || {}).refNo);
+  if (existing) return await repo.putLabReport(await buildReport(Object.assign({}, body, { id: existing.id }), existing, user));
+  return await repo.putLabReport(await buildReport(body, null, user));
 }
-function updateReport(id, patch, user) {
-  const existing = repo.getLabReport(id);
+async function updateReport(id, patch, user) {
+  const existing = await repo.getLabReport(id);
   if (!existing) throw err("Report not found", 404);
   patch = patch || {};
   // merge so a partial patch (e.g. just assignee) keeps productId/refNo
@@ -322,11 +322,11 @@ function updateReport(id, patch, user) {
   if (!patch.prodValues) delete merged.prodValues;
   if (!patch.labValues) delete merged.labValues;
   if (!patch.values) delete merged.values;
-  return repo.putLabReport(buildReport(merged, existing, user));
+  return await repo.putLabReport(await buildReport(merged, existing, user));
 }
-function deleteReport(id) {
-  if (!repo.getLabReport(id)) throw err("Report not found", 404);
-  return repo.deleteLabReport(id);
+async function deleteReport(id) {
+  if (!await repo.getLabReport(id)) throw err("Report not found", 404);
+  return await repo.deleteLabReport(id);
 }
 
 /* ============================================================
@@ -342,10 +342,10 @@ function batchNoOf(woId) {
 }
 
 /** The lab product that tests a given inventory item. */
-function productForItem(itemId, products) {
+async function productForItem(itemId, products) {
   const id = String(itemId || "");
   if (!id) return null;
-  const list = products || listProducts();
+  const list = products || await listProducts();
   return list.find((p) => p.itemId && String(p.itemId) === id)
     // the import links every product to its item; this is the belt-and-braces
     // path for a product added by hand, whose code is the item id less "FG-"
@@ -354,11 +354,11 @@ function productForItem(itemId, products) {
 }
 
 /** The certificate covering a work order, however it was referenced. */
-function reportForWO(wo, reports, product) {
+async function reportForWO(wo, reports, product) {
   const id = String((wo && wo.id) || "");
   if (!id) return null;
   const bn = batchNoOf(id);
-  const list = reports || listReports();
+  const list = reports || await listReports();
   return list.find((r) => String(r.woId || "") === id)
     || list.find((r) => (!product || r.productId === product.id)
       && [id, bn].indexOf(String(r.refNo || "").trim()) >= 0)
@@ -376,13 +376,13 @@ function hasCoatingStage(wo) {
  *           prodComplete, labComplete, missingProd, missingLab, coating }.
  * `data` is an already-loaded state (avoids a second full read).
  */
-function labStatusForWO(wo, data) {
+async function labStatusForWO(wo, data) {
   data = data || {};
-  const products = data.labProducts || listProducts();
-  const reports = data.labReports || listReports();
-  const product = productForItem(wo && wo.itemId, products);
+  const products = data.labProducts || await listProducts();
+  const reports = data.labReports || await listReports();
+  const product = await productForItem(wo && wo.itemId, products);
   const params = product ? paramsForProduct(product) : [];
-  const report = product ? reportForWO(wo, reports, product) : reportForWO(wo, reports, null);
+  const report = product ? await reportForWO(wo, reports, product) : await reportForWO(wo, reports, null);
   const prodValues = (report && report.prodValues) || {};
   const labValues = (report && report.labValues) || {};
   return {
@@ -412,8 +412,8 @@ function labStatusForWO(wo, data) {
    counts too — the point is that the batch HAS been measured, not
    who held the micrometer.
    ============================================================ */
-function coatingGate(wo, data) {
-  const st = labStatusForWO(wo, data);
+async function coatingGate(wo, data) {
+  const st = await labStatusForWO(wo, data);
   if (!st.product) {
     // nothing in the lab master tests this product — there is no certificate
     // to demand, and refusing the stage would strand the job on the floor
@@ -445,11 +445,11 @@ function coatingGate(wo, data) {
    `values` is the set to record once the caller's own writes have
    gone through — validated here, saved by the caller.
    ============================================================ */
-function finishedStockGate(itemId, body, data) {
+async function finishedStockGate(itemId, body, data) {
   body = body || {}; data = data || {};
-  const products = data.labProducts || listProducts();
-  const reports = data.labReports || listReports();
-  const product = productForItem(itemId, products);
+  const products = data.labProducts || await listProducts();
+  const reports = data.labReports || await listReports();
+  const product = await productForItem(itemId, products);
   const params = product ? paramsForProduct(product) : [];
   const base = { required: !!(product && params.length), product, params };
   // nothing in the lab master tests this product — there is no certificate to ask for
@@ -461,7 +461,7 @@ function finishedStockGate(itemId, body, data) {
       message: "Enter the batch / lot number this stock was made on — its lab report is filed against it.",
     });
   }
-  const existing = findByRef(product.id, refNo, reports);
+  const existing = await findByRef(product.id, refNo, reports);
   const already = existing
     && (setComplete(existing.prodValues, params) || setComplete(existing.labValues, params));
   if (already) return Object.assign({ ok: true, reason: "already-measured", refNo, reportId: existing.id }, base);
@@ -485,15 +485,15 @@ function finishedStockGate(itemId, body, data) {
  * `stage` says what is outstanding: "production" (the floor has not
  * measured a coated batch yet) or "lab" (the incharge's own reading).
  */
-function pendingLabWork(data) {
+async function pendingLabWork(data) {
   data = data || {};
   const wos = data.workorders || [];
   const out = [];
-  wos.forEach((wo) => {
-    if (!wo || wo.dispatched) return;
-    const st = labStatusForWO(wo, data);
-    if (!st.product || !st.params.length) return;
-    if (st.labComplete) return;                       // the lab is done with it
+  for (const wo of wos) {
+    if (!wo || wo.dispatched) continue;
+    const st = await labStatusForWO(wo, data);
+    if (!st.product || !st.params.length) continue;
+    if (st.labComplete) continue;                     // the lab is done with it
     out.push(Object.assign({}, st, {
       date: wo.date || null,
       due: wo.due || null,
@@ -504,7 +504,7 @@ function pendingLabWork(data) {
       // the floor still owes its reading on a coating job that has not been measured
       stage: st.coating && !st.prodComplete ? "production" : "lab",
     }));
-  });
+  }
   return out.sort((a, b) => String(b.woId).localeCompare(String(a.woId)));
 }
 
@@ -628,10 +628,11 @@ const SEED = [
   ["BITUMINISED COTTON TAPE", "CH-BCT-40 (DOUBLE SIDE)", "0.4", "Other"],
 ];
 
-function ensureLab() {
-  if (!repo.labProductsEmpty()) return { changed: false, products: listProducts().length };
-  SEED.forEach(([name, code, thickness, series], i) => {
-    repo.putLabProduct({
+async function ensureLab() {
+  if (!await repo.labProductsEmpty()) return { changed: false, products: (await listProducts()).length };
+  for (let i = 0; i < SEED.length; i++) {
+    const [name, code, thickness, series] = SEED[i];
+    await repo.putLabProduct({
       id: "LP-" + String(i + 1).padStart(3, "0"),
       name, code, thickness, series,
       flags: deriveFlags(name),
@@ -639,7 +640,7 @@ function ensureLab() {
       spec: {},
       active: true,
     });
-  });
+  }
   return { changed: true, products: SEED.length };
 }
 

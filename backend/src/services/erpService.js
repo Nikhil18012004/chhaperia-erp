@@ -20,23 +20,23 @@ let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
 
 /** Load the full dataset; seed automatically on first run. */
-function getState() {
-  if (repo.isEmpty()) {
-    repo.saveState(buildSeed());
+async function getState() {
+  if (await repo.isEmpty()) {
+    await repo.saveState(buildSeed());
   }
-  return repo.getState();
+  return await repo.getState();
 }
 
 /** One-time (idempotent) migration: attach stage
     routes to work orders. Runs at boot and after any bulk save so
     imported/restored data is always stage-ready. Never wipes data. */
-function ensureStageModel() {
-  if (repo.isEmpty()) repo.saveState(buildSeed());
-  const data = repo.getState();
+async function ensureStageModel() {
+  if (await repo.isEmpty()) await repo.saveState(buildSeed());
+  const data = await repo.getState();
   const res = S.ensureStageModel(data);
   if (res.changed || !(data.settings && data.settings._stageModel)) {
     data.settings = Object.assign({}, data.settings, { _stageModel: 1 });
-    repo.saveState(data);
+    await repo.saveState(data);
   }
   return res;
 }
@@ -46,9 +46,9 @@ function ensureStageModel() {
     Leads are (re)built from the deterministic generator but re-pointed
     at the CURRENT customers/products so every reference stays valid.
     Populate-if-empty only — never clobbers existing leads. */
-function ensureCrm() {
-  if (repo.isEmpty()) repo.saveState(buildSeed());
-  const data = repo.getState();
+async function ensureCrm() {
+  if (await repo.isEmpty()) await repo.saveState(buildSeed());
+  const data = await repo.getState();
   if ((data.leads || []).length > 0) return { changed: false, count: data.leads.length };
 
   const itemById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
@@ -66,14 +66,14 @@ function ensureCrm() {
   });
 
   data.leads = leads;
-  repo.saveState(data);
+  await repo.saveState(data);
   return { changed: true, count: leads.length };
 }
 
 /** Persist the entire dataset (the frontend saves wholesale). Validates
     shape + referential integrity so a malformed backup/restore can't quietly
     persist orphan movements or non-array collections. */
-function saveState(data) {
+async function saveState(data) {
   if (!data || typeof data !== "object") throw err("Invalid dataset", 400);
   const arrays = ["items", "movements", "warehouses", "categories", "suppliers",
     "customers", "purchaseorders", "salesorders", "workorders", "leads", "grns"];
@@ -89,7 +89,7 @@ function saveState(data) {
   if (orphan) throw err(`Movement ${orphan.id || ""} references unknown item ${orphan.itemId}`, 400);
   // keep any newly-introduced work orders / products stage-ready
   S.ensureStageModel(data);
-  return repo.saveState(data);
+  return await repo.saveState(data);
 }
 
 /** Patch the UI settings document — whitelist known keys, coerce types, and
@@ -100,10 +100,10 @@ const STICKER_FIELD_KEYS = ["product", "supplier", "grade", "dateOfReceipt", "gr
   "invoiceNo", "qty", "thickness", "gsm", "inspectedBy", "status"];
 const STICKER_PAGES = ["A3", "A4", "A5", "A6", "Letter", "Legal", "custom"];
 
-function updateSettings(doc) {
+async function updateSettings(doc) {
   doc = doc || {};
   if (typeof doc !== "object" || Array.isArray(doc)) throw err("Settings must be an object", 400);
-  const clean = Object.assign({}, repo.getSettings() || {});
+  const clean = Object.assign({}, await repo.getSettings() || {});
   if (doc.theme != null) clean.theme = doc.theme === "light" ? "light" : "dark";
   if (doc.accent != null) clean.accent = String(doc.accent).slice(0, 20);
   if ("autoAccent" in doc) clean.autoAccent = !!doc.autoAccent;
@@ -345,12 +345,12 @@ function updateSettings(doc) {
       };
     });
   }
-  return repo.updateSettings(clean);
+  return await repo.updateSettings(clean);
 }
 
 /** Wipe and regenerate the deterministic demo dataset. */
-function reset() {
-  return repo.saveState(buildSeed());
+async function reset() {
+  return await repo.saveState(buildSeed());
 }
 
 function todayISO() {
@@ -367,9 +367,9 @@ function err(msg, status) { const e = new Error(msg); e.status = status || 400; 
 
 /** Create or update one stock item. Partial fields are merged over the
     existing row (so a PATCH never nulls out omitted columns). */
-function upsertItem(item) {
+async function upsertItem(item) {
   if (!item || !item.id) throw err("Item id is required", 400);
-  const existing = repo.getItem(item.id);
+  const existing = await repo.getItem(item.id);
   if (!existing && !item.name) throw err("New item needs a name", 400);
   const merged = existing ? Object.assign({}, existing, item) : Object.assign({}, item);
   // coerce numeric columns so a stringy "42" never lands in a REAL column
@@ -377,18 +377,18 @@ function upsertItem(item) {
     if (merged[k] != null && merged[k] !== "") merged[k] = +merged[k] || 0;
   });
   // fail fast on a bad category instead of leaking a raw FK-violation 500
-  if (merged.cat && !repo.categoryExists(merged.cat)) throw err("Unknown category " + merged.cat, 400);
-  return repo.putItem(merged);
+  if (merged.cat && !await repo.categoryExists(merged.cat)) throw err("Unknown category " + merged.cat, 400);
+  return await repo.putItem(merged);
 }
 
 const MOVE_TYPES = ["OPEN", "GRN", "ISSUE", "PROD", "SALE", "ADJ", "RET", "SCRAP", "XFER"];
 
 /** Append one stock movement (manual receipt / adjustment). */
-function addMovement(m) {
+async function addMovement(m) {
   if (!m || !m.itemId || !m.type) throw err("Movement needs itemId and type", 400);
   if (m.qty == null || isNaN(+m.qty)) throw err("Movement needs a numeric qty", 400);
   if (!MOVE_TYPES.includes(m.type)) throw err("Invalid movement type '" + m.type + "'", 400);
-  const mvItem = repo.getItem(m.itemId);
+  const mvItem = await repo.getItem(m.itemId);
   if (!mvItem) throw err("Unknown item " + m.itemId, 400);
   // WIP items are stage-engine plumbing — a receipt into one silently hides
   // the stock from every work order (which consumes the RAW material).
@@ -403,19 +403,19 @@ function addMovement(m) {
   if (m.rate != null && m.rate !== "") m.rate = +m.rate || 0;
   if (!m.id) m.id = mvId();
   if (!m.date) m.date = todayISO();
-  repo.addMovement(m);
+  await repo.addMovement(m);
   return { ok: true, id: m.id };
 }
 
 /* GRN numbers run in an April–March fiscal-year series: GRN/26-27/0001.
    Issued here, inside the receive path, so both receiving screens share one
    sequence and two browsers can never mint the same number. */
-function nextGrnNo(dateISO) {
+async function nextGrnNo(dateISO) {
   const [y, m] = String(dateISO).split("-").map(Number);
   const startYY = (m >= 4 ? y : y - 1) % 100;
   const fy = String(startYY).padStart(2, "0") + "-" + String((startYY + 1) % 100).padStart(2, "0");
   let max = 0;
-  repo.getGrns().forEach((g) => {
+  (await repo.getGrns()).forEach((g) => {
     const match = new RegExp("^GRN/" + fy + "/(\\d+)$").exec(String(g.id || ""));
     if (match) max = Math.max(max, +match[1]);
   });
@@ -431,15 +431,24 @@ const strOr = (v, n) => (v == null ? "" : String(v).slice(0, n || 80));
     to a real person. Only the ACCEPTED quantity (received − rejected) posts
     to stock and advances the order — a rejected lot goes back on the truck,
     so the line stays owed; the rejection lives on the GRN for the debit note. */
-function receivePurchaseOrder(poId, body, user) {
+async function receivePurchaseOrder(poId, body, user) {
   body = body || {};
-  const po = repo.getPurchaseOrder(poId);
+  const po = await repo.getPurchaseOrder(poId);
   if (!po) throw err("Purchase order not found", 404);
   const wh = body.wh || "WH-PNY";
   const date = body.date || todayISO();
   const by = (user && user.username) || body.by || "user";
   const moves = [];
   const grnLines = [];
+  /* Every material this receipt touches, read ONCE up front. The loop below
+     is a forEach callback and so cannot await; turning it into a for…of
+     would rewrite forty lines of receipt arithmetic to change nothing about
+     what they compute. Reading ahead leaves that arithmetic untouched. */
+  const itemById = {};
+  for (const { i } of (body.lines || [])) {
+    const l = po.lines[i];
+    if (l && !(l.itemId in itemById)) itemById[l.itemId] = await repo.getItem(l.itemId);
+  }
   (body.lines || []).forEach(({ i, qty, rejected }) => {
     const l = po.lines[i];
     if (!l) return;
@@ -451,7 +460,7 @@ function receivePurchaseOrder(poId, body, user) {
     if (rej < 0) rej = 0;
     if (rej > rq) rej = rq;
     const acc = +(rq - rej).toFixed(3);
-    const item = repo.getItem(l.itemId) || {};
+    const item = itemById[l.itemId] || {};
     const from = l.uom || item.uom;
     let stockQty = acc;
     let note = "Goods receipt vs PO";
@@ -485,16 +494,16 @@ function receivePurchaseOrder(poId, body, user) {
   });
   if (!grnLines.length) throw err("No quantity to receive", 400);
   const grn = {
-    id: nextGrnNo(date), date, poId: po.id, poDate: po.date || "",
+    id: await nextGrnNo(date), date, poId: po.id, poDate: po.date || "",
     supplierId: po.supplierId, company: po.company || "", wh, by, status: "Posted",
     invNo: strOr(body.invNo), invDate: strOr(body.invDate, 20),
     vehicle: strOr(body.vehicle, 20), lrNo: strOr(body.lrNo, 40),
     remarks: strOr(body.remarks, 500), lines: grnLines,
   };
-  if (moves.length) repo.addMovements(moves);
-  repo.putGrn(grn);
+  if (moves.length) await repo.addMovements(moves);
+  await repo.putGrn(grn);
   po.status = po.lines.every((l) => (l.recd || 0) >= l.qty - 0.0001) ? "Received" : "Partially Received";
-  repo.putPurchaseOrder(po);
+  await repo.putPurchaseOrder(po);
   return { ok: true, posted: moves.length, grn, po: { id: po.id, status: po.status, lines: po.lines } };
 }
 
@@ -510,57 +519,57 @@ function nextId(list, prefix) {
 function num(v) { return v == null || v === "" || isNaN(+v) ? 0 : +v; }
 
 /* ---- Purchase orders (create / update / delete) ---- */
-function createPurchaseOrder(po) {
+async function createPurchaseOrder(po) {
   po = po || {};
   if (!Array.isArray(po.lines) || !po.lines.length) throw err("A purchase order needs at least one line", 400);
-  if (!po.id) po.id = nextId(repo.getState().purchaseorders, "PO-");
-  else if (repo.getPurchaseOrder(po.id)) throw err("Purchase order " + po.id + " already exists", 409);
+  if (!po.id) po.id = nextId((await repo.getState()).purchaseorders, "PO-");
+  else if (await repo.getPurchaseOrder(po.id)) throw err("Purchase order " + po.id + " already exists", 409);
   po.date = po.date || todayISO();
   po.status = po.status || "Open";
   po.value = num(po.value) || po.lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0);
-  return repo.putPurchaseOrder(po);
+  return await repo.putPurchaseOrder(po);
 }
-function updatePurchaseOrder(id, patch) {
-  const existing = repo.getPurchaseOrder(id);
+async function updatePurchaseOrder(id, patch) {
+  const existing = await repo.getPurchaseOrder(id);
   if (!existing) throw err("Purchase order not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A purchase order needs at least one line", 400);
-  return repo.putPurchaseOrder(merged);
+  return await repo.putPurchaseOrder(merged);
 }
-function deletePurchaseOrder(id) {
-  if (!repo.getPurchaseOrder(id)) throw err("Purchase order not found", 404);
-  return repo.deletePurchaseOrder(id);
+async function deletePurchaseOrder(id) {
+  if (!await repo.getPurchaseOrder(id)) throw err("Purchase order not found", 404);
+  return await repo.deletePurchaseOrder(id);
 }
 
 /* ---- Sales orders (create / update / delete) ---- */
-function createSalesOrder(so) {
+async function createSalesOrder(so) {
   so = so || {};
   if (!Array.isArray(so.lines) || !so.lines.length) throw err("A sales order needs at least one line", 400);
-  if (!so.id) so.id = nextId(repo.getState().salesorders, "SO-");
-  else if (repo.getSalesOrder(so.id)) throw err("Sales order " + so.id + " already exists", 409);
+  if (!so.id) so.id = nextId((await repo.getState()).salesorders, "SO-");
+  else if (await repo.getSalesOrder(so.id)) throw err("Sales order " + so.id + " already exists", 409);
   so.date = so.date || todayISO();
   so.status = so.status || "Confirmed";
   so.priority = so.priority || "Normal";
   so.value = num(so.value) || so.lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0);
-  return repo.putSalesOrder(so);
+  return await repo.putSalesOrder(so);
 }
-function updateSalesOrder(id, patch) {
-  const existing = repo.getSalesOrder(id);
+async function updateSalesOrder(id, patch) {
+  const existing = await repo.getSalesOrder(id);
   if (!existing) throw err("Sales order not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A sales order needs at least one line", 400);
-  return repo.putSalesOrder(merged);
+  return await repo.putSalesOrder(merged);
 }
-function deleteSalesOrder(id) {
-  if (!repo.getSalesOrder(id)) throw err("Sales order not found", 404);
-  return repo.deleteSalesOrder(id);
+async function deleteSalesOrder(id) {
+  if (!await repo.getSalesOrder(id)) throw err("Sales order not found", 404);
+  return await repo.deleteSalesOrder(id);
 }
 /** Dispatch a sales order: post SALE (outbound) movements for every line and
     mark it Dispatched — in one shot, server-side (mirrors receivePurchaseOrder).
     `user` is the actor from the auth token. */
-function dispatchSalesOrder(soId, body, user) {
+async function dispatchSalesOrder(soId, body, user) {
   body = body || {};
-  const so = repo.getSalesOrder(soId);
+  const so = await repo.getSalesOrder(soId);
   if (!so) throw err("Sales order not found", 404);
   if (so.status === "Dispatched") throw err("Sales order already dispatched", 400);
   const date = body.date || todayISO();
@@ -570,16 +579,16 @@ function dispatchSalesOrder(soId, body, user) {
     id: mvId(), date, itemId: l.itemId, wh, type: "SALE",
     qty: -Math.abs(num(l.qty)), rate: l.rate || 0, ref: so.id, note: "Dispatch vs SO", by,
   }));
-  if (moves.length) repo.addMovements(moves);
+  if (moves.length) await repo.addMovements(moves);
   so.status = "Dispatched";
-  repo.putSalesOrder(so);
+  await repo.putSalesOrder(so);
   return { ok: true, posted: moves.length, so: { id: so.id, status: so.status } };
 }
 
 /* ---- BOM (save recipe / delete) ---- */
-function saveBom(itemId, bom) {
+async function saveBom(itemId, bom) {
   if (!itemId) throw err("BOM needs a product id", 400);
-  if (!repo.getItem(itemId)) throw err("Unknown product " + itemId, 400);
+  if (!await repo.getItem(itemId)) throw err("Unknown product " + itemId, 400);
   bom = bom || {};
   if (!Array.isArray(bom.lines) || !bom.lines.length) throw err("A BOM needs at least one component", 400);
   // Normalise to the rich line shape and KEEP it. Flattening to [id, qty]
@@ -601,89 +610,89 @@ function saveBom(itemId, bom) {
       lines: BC.normalize(a.lines).filter((l) => (l.id || (l.options && l.options.length)) && l.qty > 0),
     })).filter((a) => a.lines.length);
   }
-  return repo.putBom(itemId, out);
+  return await repo.putBom(itemId, out);
 }
-function deleteBom(itemId) {
-  if (!repo.getBom(itemId)) throw err("No BOM for " + itemId, 404);
-  return repo.deleteBom(itemId);
+async function deleteBom(itemId) {
+  if (!await repo.getBom(itemId)) throw err("No BOM for " + itemId, 404);
+  return await repo.deleteBom(itemId);
 }
 
 /* ---- CRM leads (create / update / delete) ---- */
-function createLead(lead) {
+async function createLead(lead) {
   lead = lead || {};
   if (!lead.company) throw err("A lead needs a company", 400);
-  if (!lead.id) lead.id = nextId(repo.getState().leads, "LD-");
-  else if (repo.getLead(lead.id)) throw err("Lead " + lead.id + " already exists", 409);
+  if (!lead.id) lead.id = nextId((await repo.getState()).leads, "LD-");
+  else if (await repo.getLead(lead.id)) throw err("Lead " + lead.id + " already exists", 409);
   lead.stage = lead.stage || "New";
   lead.created = lead.created || todayISO();
   if (!Array.isArray(lead.activities)) lead.activities = [];
-  return repo.putLead(lead);
+  return await repo.putLead(lead);
 }
-function updateLead(id, patch) {
-  const existing = repo.getLead(id);
+async function updateLead(id, patch) {
+  const existing = await repo.getLead(id);
   if (!existing) throw err("Lead not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!merged.company) throw err("A lead needs a company", 400);
-  return repo.putLead(merged);
+  return await repo.putLead(merged);
 }
-function deleteLead(id) {
-  if (!repo.getLead(id)) throw err("Lead not found", 404);
-  return repo.deleteLead(id);
+async function deleteLead(id) {
+  if (!await repo.getLead(id)) throw err("Lead not found", 404);
+  return await repo.deleteLead(id);
 }
 
 /* ---- Customer upsert (CRM Won→customer conversion) ---- */
-function upsertCustomer(cust) {
+async function upsertCustomer(cust) {
   if (!cust || !cust.id || !cust.name) throw err("Customer needs an id and name", 400);
-  return repo.putCustomer(cust);
+  return await repo.putCustomer(cust);
 }
-function updateCustomer(id, patch) {
-  const existing = repo.getCustomer(id);
+async function updateCustomer(id, patch) {
+  const existing = await repo.getCustomer(id);
   if (!existing) throw err("Customer not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!merged.name) throw err("Customer needs a name", 400);
-  return repo.putCustomer(merged);
+  return await repo.putCustomer(merged);
 }
-function deleteCustomer(id) {
-  if (!repo.getCustomer(id)) throw err("Customer not found", 404);
-  const st = repo.getState();
+async function deleteCustomer(id) {
+  if (!await repo.getCustomer(id)) throw err("Customer not found", 404);
+  const st = await repo.getState();
   const sos = (st.salesorders || []).filter((s) => s.customerId === id).length;
   const leads = (st.leads || []).filter((l) => l.customerId === id).length;
   if (sos) throw err(`Cannot delete: ${sos} sales order(s) reference this customer. Delete or re-point them first.`, 400);
   if (leads) throw err(`Cannot delete: ${leads} CRM lead(s) reference this customer. Delete or re-point them first.`, 400);
-  return repo.deleteCustomer(id);
+  return await repo.deleteCustomer(id);
 }
 
 /* ---- Suppliers (create / update / delete) ---- */
-function createSupplier(s) {
+async function createSupplier(s) {
   s = s || {};
   if (!s.name) throw err("Supplier needs a name", 400);
-  if (!s.id) s.id = nextId(repo.getState().suppliers, "SUP-");
-  else if (repo.getSupplier(s.id)) throw err("Supplier " + s.id + " already exists", 409);
-  return repo.putSupplier(s);
+  if (!s.id) s.id = nextId((await repo.getState()).suppliers, "SUP-");
+  else if (await repo.getSupplier(s.id)) throw err("Supplier " + s.id + " already exists", 409);
+  return await repo.putSupplier(s);
 }
-function updateSupplier(id, patch) {
-  const existing = repo.getSupplier(id);
+async function updateSupplier(id, patch) {
+  const existing = await repo.getSupplier(id);
   if (!existing) throw err("Supplier not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!merged.name) throw err("Supplier needs a name", 400);
-  return repo.putSupplier(merged);
+  return await repo.putSupplier(merged);
 }
-function deleteSupplier(id) {
-  if (!repo.getSupplier(id)) throw err("Supplier not found", 404);
-  const st = repo.getState();
+async function deleteSupplier(id) {
+  if (!await repo.getSupplier(id)) throw err("Supplier not found", 404);
+  const st = await repo.getState();
   const pos = (st.purchaseorders || []).filter((p) => p.supplierId === id).length;
   const items = (st.items || []).filter((i) => i.supplierId === id).length;
   if (pos) throw err(`Cannot delete: ${pos} purchase order(s) reference this supplier. Delete or re-point them first.`, 400);
   if (items) throw err(`Cannot delete: ${items} item(s) name this supplier as their source. Re-point them first.`, 400);
-  return repo.deleteSupplier(id);
+  return await repo.deleteSupplier(id);
 }
 
 /* Populate-if-empty: the two billing entities every PO/SO invoices under.
    Cable Material's identifiers come from its own printed invoice template;
    International's GSTIN is pending from the user (Settings → Invoice
    Companies shows a warning until it is filled in). */
-function ensureCompanies() {
-  const org = repo.getOrg() || {};
+async function ensureCompanies() {
+  const org = await repo.getOrg() || {};
   if (Array.isArray(org.companies) && org.companies.length) return { changed: false, count: org.companies.length };
   const ADDRESS = "Sy. No. 18, K.G. Kuntanahalli, Kasaba Hobli, Doddaballapur Taluk, Bangalore Rural District - 561203, Karnataka, India";
   const TAGLINE = "Material Science Meets Global Demand";
@@ -703,15 +712,15 @@ function ensureCompanies() {
   ];
   org.tagline = org.tagline || TAGLINE;
   org.gst = org.companies[0].gstin;      // legacy single-entity fields follow the primary company
-  repo.putOrg(org);
+  await repo.putOrg(org);
   return { changed: true, count: org.companies.length };
 }
 
 /* ---- Org / company profile (invoice entities live in org.companies[]) ---- */
-function updateOrg(patch) {
+async function updateOrg(patch) {
   patch = patch || {};
   if (typeof patch !== "object" || Array.isArray(patch)) throw err("Org patch must be an object", 400);
-  const merged = Object.assign({}, repo.getOrg() || {}, patch);
+  const merged = Object.assign({}, await repo.getOrg() || {}, patch);
   if (Array.isArray(patch.companies)) {
     merged.companies = patch.companies.map((c) => ({
       key: String(c.key || "").trim() || "CO",
@@ -738,17 +747,17 @@ function updateOrg(patch) {
       terms: Array.isArray(c.terms) ? c.terms.map(String) : [],
     })).filter((c) => c.name);
   }
-  return repo.putOrg(merged);
+  return await repo.putOrg(merged);
 }
 
 /* ---- Warehouses: master-data edits (rename etc.) ---- */
-function updateWarehouse(id, patch) {
-  const existing = repo.getWarehouse(id);
+async function updateWarehouse(id, patch) {
+  const existing = await repo.getWarehouse(id);
   if (!existing) throw err("Warehouse not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   merged.name = String(merged.name || "").trim();
   if (!merged.name) throw err("Warehouse needs a name", 400);
-  return repo.putWarehouse(merged);
+  return await repo.putWarehouse(merged);
 }
 
 /* ---- Appointments (calendar diary entries) ----
@@ -757,66 +766,66 @@ function updateWarehouse(id, patch) {
    the notes) is optional and rides in the doc. The calendar's other entries are
    derived from POs, SOs, work orders and leads and never land in this table. */
 const APPT_KINDS = ["Meeting", "Call", "Site Visit", "Sample Follow-up", "Payment Follow-up", "Reminder"];
-function createAppointment(a) {
+async function createAppointment(a) {
   a = a || {};
   if (!a.title) throw err("An appointment needs a title", 400);
   if (!a.date) throw err("An appointment needs a date", 400);
   if (a.kind && !APPT_KINDS.includes(a.kind)) throw err("Unknown appointment kind " + a.kind, 400);
-  if (!a.id) a.id = nextId(repo.getState().appointments, "AP-");
-  else if (repo.getAppointment(a.id)) throw err("Appointment " + a.id + " already exists", 409);
+  if (!a.id) a.id = nextId((await repo.getState()).appointments, "AP-");
+  else if (await repo.getAppointment(a.id)) throw err("Appointment " + a.id + " already exists", 409);
   a.kind = a.kind || "Meeting";
   a.created = a.created || todayISO();
   if (a.done == null) a.done = false;
-  return repo.putAppointment(a);
+  return await repo.putAppointment(a);
 }
-function updateAppointment(id, patch) {
-  const existing = repo.getAppointment(id);
+async function updateAppointment(id, patch) {
+  const existing = await repo.getAppointment(id);
   if (!existing) throw err("Appointment not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!merged.title) throw err("An appointment needs a title", 400);
   if (!merged.date) throw err("An appointment needs a date", 400);
   if (merged.kind && !APPT_KINDS.includes(merged.kind)) throw err("Unknown appointment kind " + merged.kind, 400);
-  return repo.putAppointment(merged);
+  return await repo.putAppointment(merged);
 }
-function deleteAppointment(id) {
-  if (!repo.getAppointment(id)) throw err("Appointment not found", 404);
-  return repo.deleteAppointment(id);
+async function deleteAppointment(id) {
+  if (!await repo.getAppointment(id)) throw err("Appointment not found", 404);
+  return await repo.deleteAppointment(id);
 }
 
 /* ---- Transporters (dispatch providers) ---- */
-function createTransporter(t) {
+async function createTransporter(t) {
   t = t || {};
   if (!t.name) throw err("Transporter needs a name", 400);
-  if (!t.id) t.id = nextId(repo.getState().transporters, "TR-");
-  else if (repo.getTransporter(t.id)) throw err("Transporter " + t.id + " already exists", 409);
+  if (!t.id) t.id = nextId((await repo.getState()).transporters, "TR-");
+  else if (await repo.getTransporter(t.id)) throw err("Transporter " + t.id + " already exists", 409);
   if (t.active == null) t.active = true;
-  return repo.putTransporter(t);
+  return await repo.putTransporter(t);
 }
-function updateTransporter(id, patch) {
-  const existing = repo.getTransporter(id);
+async function updateTransporter(id, patch) {
+  const existing = await repo.getTransporter(id);
   if (!existing) throw err("Transporter not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!merged.name) throw err("Transporter needs a name", 400);
-  return repo.putTransporter(merged);
+  return await repo.putTransporter(merged);
 }
-function deleteTransporter(id) {
-  if (!repo.getTransporter(id)) throw err("Transporter not found", 404);
-  return repo.deleteTransporter(id);
+async function deleteTransporter(id) {
+  if (!await repo.getTransporter(id)) throw err("Transporter not found", 404);
+  return await repo.deleteTransporter(id);
 }
 /** No-op. The demo transport agencies were removed on request (2026-08-05);
  *  the dispatch directory now starts empty and is filled by the user only. */
-function ensureDispatch() {
-  return { changed: false, count: (repo.getState().transporters || []).length };
+async function ensureDispatch() {
+  return { changed: false, count: ((await repo.getState()).transporters || []).length };
 }
 
 /* ---- Deletes for item / work order ---- */
-function deleteItem(id) {
-  if (!repo.getItem(id)) throw err("Item not found", 404);
-  return repo.deleteItem(id);
+async function deleteItem(id) {
+  if (!await repo.getItem(id)) throw err("Item not found", 404);
+  return await repo.deleteItem(id);
 }
-function deleteWorkOrder(id) {
-  if (!repo.getWorkOrder(id)) throw err("Work order not found", 404);
-  return repo.deleteWorkOrder(id);
+async function deleteWorkOrder(id) {
+  if (!await repo.getWorkOrder(id)) throw err("Work order not found", 404);
+  return await repo.deleteWorkOrder(id);
 }
 
 module.exports = { getState, saveState, updateSettings, reset, ensureStageModel, ensureCrm,

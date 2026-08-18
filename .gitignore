@@ -51,3 +51,4 @@ data/demo-manifest.json
 .env
 .env.local
 data/bartender/
+run-local.cmd

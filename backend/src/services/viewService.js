@@ -23,9 +23,9 @@ function lineToArea(line) {
   return "other";
 }
 
-function fullState() {
-  if (repo.isEmpty()) repo.saveState(buildSeed());
-  return repo.getState();
+async function fullState() {
+  if (await repo.isEmpty()) await repo.saveState(buildSeed());
+  return await repo.getState();
 }
 
 /* ---- ADMIN / OFFICE: full data (office could be trimmed later) ----
@@ -59,17 +59,17 @@ function redactItemQc(i) {
 }
 /* Which jobs still owe a measurement. Computed here, from the unredacted
    products, so every role reads the same list off one calculation. */
-function labPendingFor(d) {
-  try { return LAB.pendingLabWork(d); } catch { return []; }
+async function labPendingFor(d) {
+  try { return await LAB.pendingLabWork(d); } catch { return []; }
 }
-function grnTestPendingFor(d) {
-  try { return GT.pendingTests(d); } catch { return []; }
+async function grnTestPendingFor(d) {
+  try { return await GT.pendingTests(d); } catch { return []; }
 }
 
-function stateForOfficer(user) {
-  const d = fullState();
+async function stateForOfficer(user) {
+  const d = await fullState();
   const isAdmin = user && user.role === "admin";
-  const pending = labPendingFor(d);
+  const pending = await labPendingFor(d);
   if (Array.isArray(d.labProducts)) {
     d.labProducts = isAdmin
       ? d.labProducts.map((p) => Object.assign({}, p, { specKeys: LAB.specKeys(p) }))
@@ -79,12 +79,12 @@ function stateForOfficer(user) {
   // limits exist — it is office who books goods in against them
   if (!isAdmin && Array.isArray(d.items)) d.items = d.items.map(redactItemQc);
   d.labPending = pending;
-  d.grnTestPending = grnTestPendingFor(d);
+  d.grnTestPending = await grnTestPendingFor(d);
   /* Failed lots waiting on the admin's ruling — approve the rejection and the
      lot is quarantined, decline it and it stands as good stock. Office sees the
      list too (it is their delivery and their debit note), but only admin may
      rule; the route enforces that. */
-  d.grnQcDecisions = (() => { try { return GT.pendingDecisions(d); } catch { return []; } })();
+  try { d.grnQcDecisions = await GT.pendingDecisions(d); } catch { d.grnQcDecisions = []; }
   return d;
 }
 
@@ -102,8 +102,8 @@ function stateForOfficer(user) {
    this payload and it only feeds the occasional "Add to Finished Stock"
    picker, so the floor does not need it resent after every Start/Finish tap.
    Everything that a stage action can actually change is still included. */
-function stateForSupervisor(area, username, opts) {
-  const d = fullState();
+async function stateForSupervisor(area, username, opts) {
+  const d = await fullState();
   const itemById = Object.fromEntries(d.items.map((i) => [i.id, i]));
   const custById = Object.fromEntries((d.customers || []).map((c) => [c.id, c]));
   // the one label for a store, used by the job sheets and the stock feeds below
@@ -174,10 +174,10 @@ function stateForSupervisor(area, username, opts) {
     });
   }
 
-  const myWOs = (d.workorders || [])
+  const myWOs = await Promise.all((d.workorders || [])
     .map((wo) => ({ wo, route: routeOf(wo) }))
     .filter(({ route }) => involved(route))
-    .map(({ wo, route }) => {
+    .map(async ({ wo, route }) => {
       const it = itemById[wo.itemId] || {};
       const idx = Math.min(Math.max(wo.stageIdx || 0, 0), route.length - 1);
       const cur = route[idx];
@@ -240,8 +240,8 @@ function stateForSupervisor(area, username, opts) {
            limits — the floor must not be able to grade its own reading by eye)
            and what has been measured so far. Null for a job that never touches
            the coating floor, so no other panel grows a lab form. */
-        lab: LAB.hasCoatingStage({ route }) ? (() => {
-          const st = LAB.labStatusForWO(wo, d);
+        lab: LAB.hasCoatingStage({ route }) ? await (async () => {
+          const st = await LAB.labStatusForWO(wo, d);
           return {
             batchNo: st.batchNo,
             product: st.product,
@@ -258,7 +258,7 @@ function stateForSupervisor(area, username, opts) {
         // recipe for THIS area's stage (quantities only)
         materials: stageMaterials(wo, myStage),
       };
-    });
+    }));
 
   // stock QUANTITIES only (raw + finished), no valuation
   // WIP is not stocked any more (a stage hands its output straight to the next
@@ -386,8 +386,8 @@ function stateForSupervisor(area, username, opts) {
    limits themselves — grading is server-side, so the person
    entering measurements must not see the thresholds.
    ============================================================ */
-function stateForLab() {
-  const d = fullState();
+async function stateForLab() {
+  const d = await fullState();
   return {
     role: "lab",
     org: d.org,
@@ -418,7 +418,7 @@ function stateForLab() {
       ["result", "results"].forEach((k) => { delete out[k]; });
       return out;
     }),
-    grnTestPending: grnTestPendingFor(d),
+    grnTestPending: await grnTestPendingFor(d),
     labProducts: (d.labProducts || []).map(redactSpec),
     /* The person taking the measurements is never shown the VERDICT either —
        the same reason the spec limits are withheld from them. A reading whose
@@ -433,17 +433,17 @@ function stateForLab() {
       return out;
     }),
     // the incharge's own worklist: every job still owing a reading
-    labPending: labPendingFor(d),
+    labPending: await labPendingFor(d),
     generatedAt: new Date().toISOString(),
   };
 }
 
 /** Top-level dispatcher by user. */
-function stateForUser(user, opts) {
+async function stateForUser(user, opts) {
   if (!user) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
-  if (user.role === "supervisor") return stateForSupervisor(user.area || "all", user.username, opts);
-  if (user.role === "lab") return stateForLab();
-  return stateForOfficer(user); // admin + office (office gets no lab spec values)
+  if (user.role === "supervisor") return await stateForSupervisor(user.area || "all", user.username, opts);
+  if (user.role === "lab") return await stateForLab();
+  return await stateForOfficer(user); // admin + office (office gets no lab spec values)
 }
 
 module.exports = { stateForUser, stateForSupervisor, stateForOfficer, stateForLab, lineToArea };

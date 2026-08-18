@@ -11,9 +11,11 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 
-// point the DB at a temp file BEFORE the connection module loads
-const TMP = path.join(os.tmpdir(), "chh-smoke-" + process.pid + "-" + Date.now() + ".db");
-process.env.CHHAPERIA_DB_FILE = TMP;
+/* A scratch DATABASE on the configured MySQL server, named for this run and
+   dropped at the end — the same isolation the throwaway .db file used to
+   give, one level up. Set BEFORE the connection module loads. */
+const SCRATCH = "chh_smoke_" + process.pid + "_" + Date.now();
+process.env.CHHAPERIA_DB_NAME = SCRATCH;
 process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
 
 const repo = require("../src/db/repository");
@@ -28,7 +30,11 @@ function ok(name, cond, extra) {
 }
 function section(t) { console.log("\n" + t); }
 function throws(fn) { try { fn(); return false; } catch { return true; } }
+/* The service calls are async now: a rejection is not a throw to try/catch,
+   so the old helper would wave every failing call straight through. */
+async function throwsAsync(fn) { try { await fn(); return false; } catch { return true; } }
 
+async function main() {
 try {
   section("Seed integrity (pure generator)");
   const seed = buildSeed();
@@ -38,45 +44,45 @@ try {
   ok("every movement references a real item", seed.movements.every((m) => ids.has(m.itemId)));
 
   section("State load (auto-seeds on empty)");
-  const state = erp.getState();
+  const state = await erp.getState();
   ok("getState seeds & returns items", Array.isArray(state.items) && state.items.length > 0, "items=" + state.items.length);
   ok("getState returns purchaseorders", Array.isArray(state.purchaseorders));
 
   section("Granular: upsertItem");
-  const created = erp.upsertItem({ id: "RM-SMOKE", name: "Smoke Test Foil", cat: "RM", uom: "KG", cost: 42, reorder: 5, thickness: 0.05 });
+  const created = await erp.upsertItem({ id: "RM-SMOKE", name: "Smoke Test Foil", cat: "RM", uom: "KG", cost: 42, reorder: 5, thickness: 0.05 });
   ok("item created with promoted cost", created && created.cost === 42);
   ok("item keeps extra doc field (thickness)", created && created.thickness === 0.05);
-  const updated = erp.upsertItem({ id: "RM-SMOKE", name: "Smoke Test Foil v2", cat: "RM", uom: "KG", cost: 50 });
-  ok("item update overwrites cost", repo.getItem("RM-SMOKE").cost === 50);
-  ok("item update rename applied", repo.getItem("RM-SMOKE").name === "Smoke Test Foil v2");
-  ok("upsertItem rejects missing id", throws(() => erp.upsertItem({ name: "no id" })));
+  const updated = await erp.upsertItem({ id: "RM-SMOKE", name: "Smoke Test Foil v2", cat: "RM", uom: "KG", cost: 50 });
+  ok("item update overwrites cost", (await repo.getItem("RM-SMOKE")).cost === 50);
+  ok("item update rename applied", (await repo.getItem("RM-SMOKE")).name === "Smoke Test Foil v2");
+  ok("upsertItem rejects missing id", await throwsAsync(async () => await erp.upsertItem({ name: "no id" })));
 
   section("Granular: addMovement");
-  const before = repo.getState().movements.length;
-  const mv = erp.addMovement({ itemId: "RM-SMOKE", wh: "WH-PNY", type: "GRN", qty: 100, rate: 50, note: "smoke" });
+  const before = (await repo.getState()).movements.length;
+  const mv = await erp.addMovement({ itemId: "RM-SMOKE", wh: "WH-PNY", type: "GRN", qty: 100, rate: 50, note: "smoke" });
   ok("addMovement returns an id", mv && mv.ok && !!mv.id);
-  ok("movement count increased by 1", repo.getState().movements.length === before + 1);
-  ok("addMovement rejects no itemId", throws(() => erp.addMovement({ type: "GRN", qty: 1 })));
-  ok("addMovement rejects non-numeric qty", throws(() => erp.addMovement({ itemId: "RM-SMOKE", type: "GRN", qty: "abc" })));
+  ok("movement count increased by 1", (await repo.getState()).movements.length === before + 1);
+  ok("addMovement rejects no itemId", await throwsAsync(async () => await erp.addMovement({ type: "GRN", qty: 1 })));
+  ok("addMovement rejects non-numeric qty", await throwsAsync(async () => await erp.addMovement({ itemId: "RM-SMOKE", type: "GRN", qty: "abc" })));
 
   section("Granular: receivePurchaseOrder");
-  const openPO = repo.getState().purchaseorders.find((p) => p.status !== "Received" && (p.lines || []).length);
+  const openPO = (await repo.getState()).purchaseorders.find((p) => p.status !== "Received" && (p.lines || []).length);
   if (!openPO) { ok("an open PO exists to receive", false, "none found in seed"); }
   else {
     const line0 = openPO.lines[0];
     const want = Math.max(1, Math.round((line0.qty - (line0.recd || 0)) / 2));
-    const r = erp.receivePurchaseOrder(openPO.id, { wh: "WH-PNY", lines: [{ i: 0, qty: want }] });
+    const r = await erp.receivePurchaseOrder(openPO.id, { wh: "WH-PNY", lines: [{ i: 0, qty: want }] });
     ok("receive posts >=1 movement", r && r.posted >= 1);
-    const after = repo.getPurchaseOrder(openPO.id);
+    const after = await repo.getPurchaseOrder(openPO.id);
     ok("PO line recd advanced", (after.lines[0].recd || 0) >= want - 0.01);
     ok("PO status is Partially/Received", ["Partially Received", "Received"].includes(after.status), after.status);
-    ok("receive unknown PO 404s", throws(() => erp.receivePurchaseOrder("PO-NOPE", { lines: [{ i: 0, qty: 1 }] })));
+    ok("receive unknown PO 404s", await throwsAsync(async () => await erp.receivePurchaseOrder("PO-NOPE", { lines: [{ i: 0, qty: 1 }] })));
   }
 
   section("Reset");
-  const reseed = erp.reset();
+  const reseed = await erp.reset();
   ok("reset returns a fresh dataset", Array.isArray(reseed.items) && reseed.items.length > 0);
-  ok("reset dropped the smoke item", !repo.getItem("RM-SMOKE"));
+  ok("reset dropped the smoke item", !await repo.getItem("RM-SMOKE"));
 
   /* ============================================================
      BOM production maths (frontend/js/bomcalc.js — shared with the UI).
@@ -167,40 +173,40 @@ try {
     const hr = require("../src/services/hrService");
     const year = String(new Date().getFullYear());
     const W = "W-EL-TEST";
-    repo.putWorker({ id: W, name: "Earned Leave Tester", dept: "coating", dailyRate: 500, active: true });
+    await repo.putWorker({ id: W, name: "Earned Leave Tester", dept: "coating", dailyRate: 500, active: true });
     // ensure an "earned" type exists to measure against
-    repo.putLeaveType({ id: "ELT", name: "Earned Leave (test)", quota: 12, accrual: "earned", paid: true });
-    const entitledFor = () => (hr.leaveBalances(W).find((b) => b.type === "ELT") || {}).entitled;
-    const present = (date) => repo.putAttendance({ workerId: W, date, status: "P" });
+    await repo.putLeaveType({ id: "ELT", name: "Earned Leave (test)", quota: 12, accrual: "earned", paid: true });
+    const entitledFor = async () => ((await hr.leaveBalances(W)).find((b) => b.type === "ELT") || {}).entitled;
+    const present = async (date) => await repo.putAttendance({ workerId: W, date, status: "P" });
 
-    ok("no attendance ⇒ 0 days earned", entitledFor() === 0);
+    ok("no attendance ⇒ 0 days earned", await entitledFor() === 0);
 
     // a single month, worked many times over, is still worth exactly one day
-    ["-01-05", "-01-06", "-01-07", "-01-08", "-01-09"].forEach((d) => present(year + d));
-    ok("five days inside ONE month earn 1 day (not 5, and not 0)", entitledFor() === 1,
-      "got " + entitledFor());
+    for (const d of ["-01-05", "-01-06", "-01-07", "-01-08", "-01-09"]) await present(year + d);
+    ok("five days inside ONE month earn 1 day (not 5, and not 0)", await entitledFor() === 1,
+      "got " + await entitledFor());
 
     // a second month adds exactly one more, however few days are worked in it
-    present(year + "-02-11");
-    ok("one day worked in a SECOND month earns the 2nd day", entitledFor() === 2,
-      "got " + entitledFor());
+    await present(year + "-02-11");
+    ok("one day worked in a SECOND month earns the 2nd day", await entitledFor() === 2,
+      "got " + await entitledFor());
 
     // half days still count the month; absences and leave do not create one
-    repo.putAttendance({ workerId: W, date: year + "-03-02", status: "HD" });
-    ok("a half day still earns its month", entitledFor() === 3, "got " + entitledFor());
-    repo.putAttendance({ workerId: W, date: year + "-04-02", status: "A" });
-    ok("an ABSENT month earns nothing", entitledFor() === 3, "got " + entitledFor());
+    await repo.putAttendance({ workerId: W, date: year + "-03-02", status: "HD" });
+    ok("a half day still earns its month", await entitledFor() === 3, "got " + await entitledFor());
+    await repo.putAttendance({ workerId: W, date: year + "-04-02", status: "A" });
+    ok("an ABSENT month earns nothing", await entitledFor() === 3, "got " + await entitledFor());
     // ...but working any other day of that same month does earn it
-    present(year + "-04-20");
-    ok("working later in that month still earns it", entitledFor() === 4, "got " + entitledFor());
+    await present(year + "-04-20");
+    ok("working later in that month still earns it", await entitledFor() === 4, "got " + await entitledFor());
 
     // twelve worked months = twelve days, which is the annual figure
-    ["-05", "-06", "-07", "-08", "-09", "-10", "-11", "-12"].forEach((m) => present(year + m + "-15"));
-    ok("a full year of work earns 12 days", entitledFor() === 12, "got " + entitledFor());
+    for (const m of ["-05", "-06", "-07", "-08", "-09", "-10", "-11", "-12"]) await present(year + m + "-15");
+    ok("a full year of work earns 12 days", await entitledFor() === 12, "got " + await entitledFor());
 
     // last year's attendance must not leak into this year's balance
-    present(String(+year - 1) + "-06-10");
-    ok("last year's work does not inflate this year", entitledFor() === 12, "got " + entitledFor());
+    await present(String(+year - 1) + "-06-10");
+    ok("last year's work does not inflate this year", await entitledFor() === 12, "got " + await entitledFor());
   }
 
   /* ============================================================
@@ -216,7 +222,7 @@ try {
   {
     const production = require("../src/services/productionService");
     const coating = { username: "coating1", role: "supervisor", area: "coating" };
-    const st = repo.getState();
+    const st = await repo.getState();
     const fgAny = (st.items || []).find((i) => i.cat === "FG");
     const wo = {
       id: "WO-LEGACY-1", date: "2026-08-01", itemId: fgAny.id, qty: 10,
@@ -226,34 +232,34 @@ try {
         { key: "slitting", name: "Slitting", area: "slitting", seq: 2, status: "Pending", posted: false },
       ],
     };
-    repo.putWorkOrder(wo);
-    const movesBefore = (repo.getState().movements || []).length;
+    await repo.putWorkOrder(wo);
+    const movesBefore = ((await repo.getState()).movements || []).length;
 
     ok("a store is refused if it is not a real warehouse",
-      throws(() => production.setWipStore(coating, wo.id, { wh: "WH-NOWHERE" })));
+      await throwsAsync(async () => await production.setWipStore(coating, wo.id, { wh: "WH-NOWHERE" })));
     ok("and refused if none is named",
-      throws(() => production.setWipStore(coating, wo.id, {})));
+      await throwsAsync(async () => await production.setWipStore(coating, wo.id, {})));
 
-    production.setWipStore(coating, wo.id, { wh: "WH-WIP" });
-    const filled = repo.getWorkOrder(wo.id);
+    await production.setWipStore(coating, wo.id, { wh: "WH-WIP" });
+    const filled = await repo.getWorkOrder(wo.id);
     ok("the blank is filled in on the stage that made the roll",
       filled.route[0].outWh === "WH-WIP" && filled.route[0].outWhBy === "coating1",
       filled.route[0].outWh + " by " + filled.route[0].outWhBy);
     ok("recording it books nothing into that store",
-      (repo.getState().movements || []).length === movesBefore,
-      movesBefore + " → " + (repo.getState().movements || []).length);
+      ((await repo.getState()).movements || []).length === movesBefore,
+      movesBefore + " → " + ((await repo.getState()).movements || []).length);
     ok("and it cannot be rewritten afterwards",
-      throws(() => production.setWipStore(coating, wo.id, { wh: "WH-QC" })));
-    ok("the first answer still stands", repo.getWorkOrder(wo.id).route[0].outWh === "WH-WIP");
+      await throwsAsync(async () => await production.setWipStore(coating, wo.id, { wh: "WH-QC" })));
+    ok("the first answer still stands", (await repo.getWorkOrder(wo.id)).route[0].outWh === "WH-WIP");
 
     // a stage still on the machines has nothing to say yet — the gate on
     // completing coating is where that one is captured
     const open = Object.assign({}, wo, { id: "WO-LEGACY-2",
       route: [{ key: "rmprod", name: "RM Production", area: "coating", seq: 1, status: "In Production" },
         { key: "slitting", name: "Slitting", area: "slitting", seq: 2, status: "Pending" }] });
-    repo.putWorkOrder(open);
+    await repo.putWorkOrder(open);
     ok("a coating stage that has not finished is not asked yet",
-      throws(() => production.setWipStore(coating, open.id, { wh: "WH-WIP" })));
+      await throwsAsync(async () => await production.setWipStore(coating, open.id, { wh: "WH-WIP" })));
   }
 
   section("Full-state save round-trips every collection (the Excel import path)");
@@ -262,7 +268,7 @@ try {
        collection saveState forgets is dropped without a word — the import says
        "59 rows saved", the reload brings back none of them and the section
        looks empty. Round-trip one row of each and demand it survives. */
-    const st = repo.getState();
+    const st = await repo.getState();
     st.transporters = (st.transporters || []).concat(
       [{ id: "TR-SMOKE", name: "Smoke Carrier", city: "Bengaluru", rating: "B", active: false }]);
     st.labProducts = (st.labProducts || []).concat([{ id: "LP-SMOKE", code: "SMOKE", name: "Smoke Lab Product" }]);
@@ -273,9 +279,9 @@ try {
       [{ id: "EMP-SMOKE", name: "Smoke Worker", dept: "Coating", payType: "daily", dailyRate: 700, active: false }]);
     st.hrAttendance = (st.hrAttendance || []).concat(
       [{ id: "EMP-SMOKE:2026-08-06", workerId: "EMP-SMOKE", date: "2026-08-06", status: "P", hours: 8 }]);
-    erp.saveState(st);
+    await erp.saveState(st);
 
-    const back = repo.getState();
+    const back = await repo.getState();
     const tr = (back.transporters || []).find((t) => t.id === "TR-SMOKE");
     ok("an imported transporter survives a full-state save", !!tr);
     // the dispatch sheet is full of INACTIVE rows; false must come back as false
@@ -291,22 +297,22 @@ try {
 
     // NEGATIVE 1: dropping a row from the payload must really delete it —
     // otherwise "save" is a merge and a deletion would silently come back.
-    const pruned = repo.getState();
+    const pruned = await repo.getState();
     pruned.transporters = pruned.transporters.filter((t) => t.id !== "TR-SMOKE");
-    erp.saveState(pruned);
+    await erp.saveState(pruned);
     ok("removing a transporter from the payload deletes it",
-      !repo.getState().transporters.some((t) => t.id === "TR-SMOKE"));
+      !(await repo.getState()).transporters.some((t) => t.id === "TR-SMOKE"));
 
     // NEGATIVE 2: a payload that never mentions the collection must leave it
     // alone. buildSeed() carries no transporters/lab/HR keys, so an unguarded
     // wipe would make every reset and boot-time migration erase them.
-    repo.putTransporter({ id: "TR-KEEP", name: "Survives a seed-shaped save", active: true });
-    const lean = repo.getState();
+    await repo.putTransporter({ id: "TR-KEEP", name: "Survives a seed-shaped save", active: true });
+    const lean = await repo.getState();
     delete lean.transporters;
     delete lean.labProducts;
     delete lean.hrWorkers;
-    erp.saveState(lean);
-    const afterLean = repo.getState();
+    await erp.saveState(lean);
+    const afterLean = await repo.getState();
     ok("a payload with no transporters key leaves the table untouched",
       afterLean.transporters.some((t) => t.id === "TR-KEEP"), "n=" + afterLean.transporters.length);
     ok("same for lab products and workers",
@@ -324,7 +330,7 @@ try {
     global.window = global;
     require("../../frontend/js/csvio.js");
 
-    const base = repo.getState();
+    const base = await repo.getState();
     const anItem = base.items.find((i) => i.cat === "RM") || base.items[0];
     const anFg = base.items.find((i) => i.cat === "FG") || base.items[0];
     const noBom = (base.items.find((i) => i.cat === "FG" && !base.boms[i.id]) || {}).id;
@@ -362,9 +368,9 @@ try {
       ? Object.keys(state[ent.path] || {}).map((id) => Object.assign({ itemId: id }, state[ent.path][id]))
       : state[ent.path] || []);
 
-    Object.keys(CSVIO.ENTITIES).forEach((key) => {
+    for (const key of Object.keys(CSVIO.ENTITIES)) {
       const ent = CSVIO.ENTITIES[key];
-      global.ENG = { data: repo.getState() };
+      global.ENG = { data: await repo.getState() };
       const header = ent.cols.map((c) => c.label);
       const row = ent.cols.map((c) => cellFor(key, c));
 
@@ -372,21 +378,21 @@ try {
 
       let diff;
       try { diff = CSVIO.buildDiff(key, [header, row]); }
-      catch (e) { ok(key + ": the sheet can be read", false, e.message); return; }
+      catch (e) { ok(key + ": the sheet can be read", false, e.message); continue; }
       // an id that already exists is an update — both mean "the user gave us this row"
       const landed = diff.add.concat(diff.update);
       ok(key + ": the row is queued to write", landed.length === 1 && !diff.errors.length,
         "add=" + diff.add.length + " upd=" + diff.update.length + " err=" + JSON.stringify(diff.errors));
-      if (!landed.length) return;
+      if (!landed.length) continue;
 
       const id = landed[0].id;
       CSVIO.apply(diff);
-      try { erp.saveState(ENG.data); }
-      catch (e) { ok(key + ": the save is accepted", false, e.message); return; }
+      try { await erp.saveState(ENG.data); }
+      catch (e) { ok(key + ": the save is accepted", false, e.message); continue; }
 
-      const got = recordsOf(repo.getState(), ent).find((r) => String(r[ent.idKey]) === String(id));
+      const got = recordsOf(await repo.getState(), ent).find((r) => String(r[ent.idKey]) === String(id));
       ok(key + ": the row is still there after a reload", !!got, ent.idKey + "=" + id);
-      if (!got) return;
+      if (!got) continue;
 
       /* Only the columns the section's own template ships (ent.form) are the
          user's to set. Everything else — a work order's status and progress,
@@ -405,7 +411,7 @@ try {
         if (String(v == null ? "" : v) !== want) lost.push(c.k + "=" + JSON.stringify(v));
       });
       ok(key + ": every column the user filled in came back verbatim", lost.length === 0, lost.join(", "));
-    });
+    }
   }
 
   /* ---------- exchange rates: Google's printed figure, and only Google -------
@@ -536,9 +542,21 @@ try {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));
 } finally {
-  try { closeDb(); } catch {}
-  try { fs.rmSync(TMP, { force: true }); fs.rmSync(TMP + "-wal", { force: true }); fs.rmSync(TMP + "-shm", { force: true }); } catch {}
+  /* drop the scratch database, then close the pool */
+  try {
+    const mysql = require("../node_modules/mysql2/promise");
+    const cfg = require("../src/db/connection").readConfig();
+    const c = await mysql.createConnection({ host: cfg.host, port: cfg.port,
+      user: cfg.user, password: cfg.password });
+    await c.query("DROP DATABASE IF EXISTS `" + SCRATCH + "`");
+    await c.end();
+  } catch { /* leaving a scratch db behind is untidy, not fatal */ }
+  try { await closeDb(); } catch {}
 }
 
-console.log("\n" + (fail === 0 ? "PASS" : "FAIL") + " — " + pass + " passed, " + fail + " failed\n");
-process.exit(fail === 0 ? 0 : 1);
+}
+
+main().then(() => {
+  console.log("\n" + (fail === 0 ? "PASS" : "FAIL") + " — " + pass + " passed, " + fail + " failed\n");
+  process.exit(fail === 0 ? 0 : 1);
+});

@@ -47,9 +47,9 @@ function clearAuthCookie(res) {
   res.cookie(COOKIE_NAME, "", { httpOnly: true, sameSite: "strict", secure: auth.IS_PROD, maxAge: 0, path: "/" });
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const token = getToken(req);
-  const user = auth.userFromToken(token);
+  const user = await auth.userFromToken(token);
   if (!user) return res.status(401).json({ error: "Not authenticated" });
   req.user = user;
   /* Sliding session — every authenticated request pushes the expiry back out
@@ -103,13 +103,13 @@ const pruneTimer = setInterval(() => {
 if (pruneTimer.unref) pruneTimer.unref();
 
 /* ---- auth endpoints ---- */
-router.post("/login", (req, res, next) => {
+router.post("/login", async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     const key = limiterKey(req, username);
     const wait = lockSecondsLeft(key);
     if (wait) return res.status(429).json({ error: "Too many failed attempts. Try again in about " + Math.ceil(wait / 60) + " min." });
-    const result = auth.login(username, password);
+    const result = await auth.login(username, password);
     if (!result) { noteFail(key); return res.status(401).json({ error: "Invalid username or password" }); }
     failMap.delete(key); // reset on success
     setAuthCookie(res, result.token);
@@ -120,22 +120,22 @@ router.post("/login", (req, res, next) => {
 // Logout ends THIS sign-in only — its own session id is revoked and the
 // cookie cleared. The same account signed in on another machine is left
 // alone, because one login is routinely shared across the floor.
-router.post("/logout", (req, res) => {
+router.post("/logout", async (req, res) => {
   const token = getToken(req);
-  const user = auth.userFromToken(token);
+  const user = await auth.userFromToken(token);
   if (user) {
     const payload = auth.verifyToken(token);
-    try { auth.revokeSession(user.id, payload && payload.sid); } catch {}
+    try { await auth.revokeSession(user.id, payload && payload.sid); } catch {}
   }
   clearAuthCookie(res);
   res.json({ ok: true });
 });
 
 // Self-service password change; rotates the session so other devices drop.
-router.post("/change-password", requireAuth, (req, res, next) => {
+router.post("/change-password", requireAuth, async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body || {};
-    const result = auth.changePassword(req.user.id, currentPassword, newPassword);
+    const result = await auth.changePassword(req.user.id, currentPassword, newPassword);
     setAuthCookie(res, result.token);
     res.json(result);
   } catch (e) { next(e); }
@@ -144,23 +144,23 @@ router.post("/change-password", requireAuth, (req, res, next) => {
 router.get("/me", requireAuth, (req, res) => res.json({ user: req.user }));
 
 /* ---- user management (admin only) ---- */
-router.get("/users", requireAuth, requireRole("admin"), (req, res, next) => {
-  try { res.json({ users: auth.listUsers() }); } catch (e) { next(e); }
+router.get("/users", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.json({ users: await auth.listUsers() }); } catch (e) { next(e); }
 });
 
-router.post("/users", requireAuth, requireRole("admin"), (req, res, next) => {
-  try { res.status(201).json({ user: auth.createUserAccount(req.body || {}) }); } catch (e) { next(e); }
+router.post("/users", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.status(201).json({ user: await auth.createUserAccount(req.body || {}) }); } catch (e) { next(e); }
 });
 
-router.patch("/users/:id", requireAuth, requireRole("admin"), (req, res, next) => {
-  try { res.json({ user: auth.updateUserAccount(req.params.id, req.body || {}) }); } catch (e) { next(e); }
+router.patch("/users/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.json({ user: await auth.updateUserAccount(req.params.id, req.body || {}) }); } catch (e) { next(e); }
 });
 
-router.delete("/users/:id", requireAuth, requireRole("admin"), (req, res, next) => {
+router.delete("/users/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
   try {
     if (req.params.id === "U-ADMIN") return res.status(400).json({ error: "Cannot delete the primary admin" });
     if (req.user.id === req.params.id) return res.status(400).json({ error: "Cannot delete your own account" });
-    res.json({ deleted: auth.deleteUser(req.params.id) });
+    res.json({ deleted: await auth.deleteUser(req.params.id) });
   } catch (e) { next(e); }
 });
 

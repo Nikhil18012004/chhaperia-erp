@@ -10,13 +10,20 @@
     "seed": "node src/seed/run-seed.js",
     "test": "node test/smoke.js && node test/http.js",
     "test:smoke": "node test/smoke.js",
-    "test:http": "node test/http.js"
+    "test:http": "node test/http.js",
+    "test:ui": "node test/ui-boot.js && node test/ui-print.js"
   },
   "dependencies": {
-    "better-sqlite3": "^12.0.0",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "mysql2": "^3.23.3"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "acorn": "^8.18.0",
+    "acorn-walk": "^8.3.5",
+    "better-sqlite3": "^12.0.0",
+    "jsdom": "^30.0.1"
   }
 }

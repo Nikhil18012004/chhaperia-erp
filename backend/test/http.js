@@ -12,14 +12,15 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 
-// point the DB at a temp file + a test port BEFORE anything loads
-const TMP = path.join(os.tmpdir(), "chh-http-" + process.pid + "-" + Date.now() + ".db");
-process.env.CHHAPERIA_DB_FILE = TMP;
+/* A scratch DATABASE on the configured MySQL server for this run, dropped at
+   the end. Set BEFORE the server module loads. */
+const SCRATCH = "chh_http_" + process.pid + "_" + Date.now();
+process.env.CHHAPERIA_DB_NAME = SCRATCH;
 process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
 process.env.PORT = "0"; // ask the OS for a free port
 process.env.CHHAPERIA_BARTENDER_NOLAUNCH = "1"; // never pop the label app open mid-test
 
-const { server } = require("../src/server");
+const { server, ready } = require("../src/server");
 const { closeDb } = require("../src/db/connection");
 
 let pass = 0, fail = 0;
@@ -38,6 +39,10 @@ function waitListening() {
 
 async function run() {
   await waitListening();
+  /* listening is not enough any more: the schema, the migrations and the
+     seeded accounts all land in boot(), after the socket opens. Asking
+     before ready would find a server with no users to log in as. */
+  await ready;
   const base = "http://127.0.0.1:" + server.address().port + "/api";
 
   async function call(method, pathname, token, body) {
@@ -87,7 +92,7 @@ async function run() {
 
   section("Granular Trade endpoints");
   const st = (await call("GET", "/state", A)).d;
-  const cust = st.customers[0].id, fg = st.items.find((i) => i.cat === "FG").id, sup = st.suppliers[0].id, rm = st.items.find((i) => i.cat !== "FG").id;
+  const cust = st.customers[0].id, fg = st.items.find((i) => i.cat === "FG").id, sup = st.suppliers[0].id, rm = st.items.find((i) => i.cat === "RM").id;
   const so = (await call("POST", "/sales-orders", A, { customerId: cust, lines: [{ itemId: fg, qty: 12, rate: 100 }] })).d;
   ok("create SO 201 with computed value", so.id && so.value === 1200, JSON.stringify(so).slice(0, 60));
   ok("update SO priority", (await call("PATCH", "/sales-orders/" + so.id, A, { priority: "Urgent" })).d.priority === "Urgent");
@@ -835,15 +840,15 @@ async function run() {
       (post.movements || []).some((m) => m.itemId === rm && m.wh === holdWh.id
         && m.type === "XFER" && m.ref === gF.id), "ref " + gF.id);
     ok("the quarantine store is recognised as a held store",
-      GTsvc.heldWarehouseIds(post).indexOf(holdWh.id) >= 0, JSON.stringify(GTsvc.heldWarehouseIds(post)));
+      (await GTsvc.heldWarehouseIds(post)).indexOf(holdWh.id) >= 0, JSON.stringify(await GTsvc.heldWarehouseIds(post)));
     const availAll = (post.movements || []).filter((m) => m.itemId === rm)
       .reduce((s, m) => s + (+m.qty || 0), 0);
-    const availProd = PRsvc.onHandMap(post)[rm] || 0;
+    const availProd = (await PRsvc.onHandMap(post))[rm] || 0;
     ok("quarantined stock is EXCLUDED from what production may draw",
       Math.abs(availAll - availProd - 40) < 0.001,
       "ledger " + availAll.toFixed(2) + " vs available " + availProd.toFixed(2) + " (40 held)");
     const itemsById = Object.fromEntries((post.items || []).map((i) => [i.id, i]));
-    const picked = Ssvc.issuingWarehouse(rm, itemsById, post.movements, GTsvc.heldWarehouseIds(post));
+    const picked = Ssvc.issuingWarehouse(rm, itemsById, post.movements, await GTsvc.heldWarehouseIds(post));
     ok("an issue is never posted against the quarantine store", picked !== holdWh.id, "picked " + picked);
     ok("…while the ledger itself still shows the lot — it was held, not lost",
       Math.abs(((post.movements || []).filter((m) => m.itemId === rm && m.wh === holdWh.id)
@@ -880,7 +885,7 @@ async function run() {
     await call("DELETE", "/purchase-orders/" + poR.id, A);
 
     // ---- the seeder gives every purchasable material a real starting list ----
-    const seeded = GTsvc.ensureItemQc();
+    const seeded = await GTsvc.ensureItemQc();
     ok("the seeder covers every purchasable material", seeded.items > 0
       && seeded.changed >= 0, JSON.stringify(seeded));
     ok("a mica paper is checked on its dielectric strength, a paste is not",
@@ -2084,10 +2089,18 @@ async function run() {
 
 run()
   .catch((e) => { fail++; console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e)); })
-  .finally(() => {
+  .finally(async () => {
     try { server.close(); } catch {}
-    try { closeDb(); } catch {}
-    try { fs.rmSync(TMP, { force: true }); fs.rmSync(TMP + "-wal", { force: true }); fs.rmSync(TMP + "-shm", { force: true }); } catch {}
+    try { await closeDb(); } catch {}
+    /* drop this run's scratch database */
+    try {
+      const mysql = require("../node_modules/mysql2/promise");
+      const cfg = require("../src/db/connection").readConfig();
+      const c = await mysql.createConnection({ host: cfg.host, port: cfg.port,
+        user: cfg.user, password: cfg.password });
+      await c.query("DROP DATABASE IF EXISTS `" + SCRATCH + "`");
+      await c.end();
+    } catch { /* untidy, not fatal */ }
     console.log("\n" + (fail === 0 ? "PASS" : "FAIL") + " — " + pass + " passed, " + fail + " failed\n");
     process.exit(fail === 0 ? 0 : 1);
   });

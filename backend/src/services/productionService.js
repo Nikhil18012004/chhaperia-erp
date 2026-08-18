@@ -33,9 +33,9 @@ function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (
 const r2 = (n) => Math.round((+n || 0) * 100) / 100;
 const r3 = (n) => Math.round((+n || 0) * 1000) / 1000;
 
-function fullState() {
-  if (repo.isEmpty()) repo.saveState(buildSeed());
-  return repo.getState();
+async function fullState() {
+  if (await repo.isEmpty()) await repo.saveState(buildSeed());
+  return await repo.getState();
 }
 
 function todayISO() {
@@ -58,17 +58,17 @@ function withRoute(wo, data) {
    advance — move a work order's CURRENT stage.
    action: start | pause | complete | dispatch
    ============================================================ */
-function advance(user, woId, action, opts) {
+async function advance(user, woId, action, opts) {
   if (!user) throw err("Not authenticated", 401);
   opts = opts || {};
   const isOffice = user.role === "admin" || user.role === "office";
   if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
   if (!ACTIONS.includes(action)) throw err("Invalid action '" + action + "'", 400);
 
-  const data = fullState();                       // read-only context (items, boms)
+  const data = await fullState();                       // read-only context (items, boms)
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
 
-  const found = repo.getWorkOrder(woId);
+  const found = await repo.getWorkOrder(woId);
   if (!found || !found.id) throw err("Work order not found", 404);
   const wo = withRoute(found, data);
 
@@ -113,7 +113,7 @@ function advance(user, woId, action, opts) {
        stage be closed and the job handed on. Enforced here rather than in
        the browser, so no panel and no direct API call can walk past it. */
     if (stage.area === "coating") {
-      const gate = LAB.coatingGate(wo, data);
+      const gate = await LAB.coatingGate(wo, data);
       if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
     }
     /* WHERE THE COATED ROLL IS PUT DOWN.
@@ -144,8 +144,8 @@ function advance(user, woId, action, opts) {
       const runQ = wo.runQty != null ? wo.runQty : wo.qty;
       const plan = S.computeStagePlan(wo.itemId, runQ, data, wo.materialChoices, wo.plan);
       if (plan && plan[stage.key]) {
-        const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements, GT.heldWarehouseIds(data));
-        if (moves.length) repo.addMovements(moves);
+        const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements, await GT.heldWarehouseIds(data));
+        if (moves.length) await repo.addMovements(moves);
       }
       stage.posted = true;
     }
@@ -162,7 +162,7 @@ function advance(user, woId, action, opts) {
   wo.progress = calcProgress(route);
   wo.status = S.rollupStatus(wo);   // reports Partial while quantity is owed
   wo.updatedBy = by; wo.updatedAt = now;
-  repo.putWorkOrder(wo);
+  await repo.putWorkOrder(wo);
 
   return summarize(wo, data);
 }
@@ -181,13 +181,13 @@ function advance(user, woId, action, opts) {
    Like the gate itself, this records a LOCATION and posts no movement:
    nothing is booked into the store named.
    ============================================================ */
-function setWipStore(user, woId, body) {
+async function setWipStore(user, woId, body) {
   if (!user) throw err("Not authenticated", 401);
   const isOffice = user.role === "admin" || user.role === "office";
   if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
-  const found = repo.getWorkOrder(woId);
+  const data = await fullState();
+  const found = await repo.getWorkOrder(woId);
   if (!found || !found.id) throw err("Work order not found", 404);
   const wo = withRoute(found, data);
 
@@ -210,7 +210,7 @@ function setWipStore(user, woId, body) {
   const now = new Date().toISOString();
   stage.outWh = wh.id; stage.outWhBy = user.username; stage.outWhAt = now;
   wo.updatedBy = user.username; wo.updatedAt = now;
-  repo.putWorkOrder(wo);
+  await repo.putWorkOrder(wo);
   return summarize(wo, data);
 }
 
@@ -220,11 +220,11 @@ function setWipStore(user, woId, body) {
    order until somebody resumes THIS one, which issues it there and then.
    That is why the check and the issue happen together, in one step.
    ============================================================ */
-function resumeWorkOrder(user, id, body) {
+async function resumeWorkOrder(user, id, body) {
   if (!user) throw err("Not authenticated", 401);
   if (user.role !== "admin" && user.role !== "office") throw err("Only the office can resume a pending order", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
   const wo = (data.workorders || []).find((w) => w.id === id);
   if (!wo) throw err("Work order not found", 404);
   if (wo.dispatched) throw err("This order has been dispatched", 400);
@@ -241,7 +241,7 @@ function resumeWorkOrder(user, id, body) {
   if (!item) throw err("Unknown product", 400);
 
   // how much of the balance the store can cover NOW
-  const cap = maxMakeable(data, item, wo.materialChoices);
+  const cap = await maxMakeable(data, item, wo.materialChoices);
   const want = body.qty != null ? +body.qty : pending;
   if (!(want > 0)) throw err("Enter a valid quantity", 400);
   if (want > pending + 1e-6) throw err("Only " + pending + " is pending on this order", 400);
@@ -253,7 +253,7 @@ function resumeWorkOrder(user, id, body) {
   const take = Math.round(Math.min(want, Math.max(0, canDo)) * 1000) / 1000;
   if (!(take > 1e-6)) {
     const e = err("The store still has nothing this job can be made from.", 409);
-    e.shortage = shortageFor(data, item, want, wo.materialChoices);
+    e.shortage = await shortageFor(data, item, want, wo.materialChoices);
     e.canMake = 0;
     throw e;
   }
@@ -264,19 +264,22 @@ function resumeWorkOrder(user, id, body) {
   const stagePlan = S.computeStagePlan(wo.itemId, take, data, wo.materialChoices, net);
   const moves = [];
   if (stagePlan) {
-    (wo.route || []).forEach((r) => {
-      if (!stagePlan[r.key]) return;
-      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements, GT.heldWarehouseIds(data))
-        .forEach((m) => moves.push(m));
-    });
+    /* Read once, before the loop: the held-warehouse list does not vary by
+       route step, and it is a database round trip per step if left inside. */
+    const held = await GT.heldWarehouseIds(data);
+    for (const r of (wo.route || [])) {
+      if (!stagePlan[r.key]) continue;
+      for (const m of S.stageMovements(stagePlan, r.key, wo, itemsById, user.username,
+        todayISO(), data.movements, held)) moves.push(m);
+    }
   }
-  if (moves.length) repo.addMovements(moves);
+  if (moves.length) await repo.addMovements(moves);
 
   wo.completedQty = Math.round(((+wo.completedQty || 0) + (+wo.runQty || 0)) * 1000) / 1000;
   wo.runQty = take;
   wo.pendingQty = Math.round((pending - take) * 1000) / 1000;
   if (wo.pendingQty <= 1e-6) { wo.pendingQty = 0; delete wo.shortage; delete wo.pendingSince; }
-  else { wo.shortage = shortageFor(data, item, wo.pendingQty, wo.materialChoices); wo.pendingSince = todayISO(); }
+  else { wo.shortage = await shortageFor(data, item, wo.pendingQty, wo.materialChoices); wo.pendingSince = todayISO(); }
   /* The route runs again for this portion, so its timestamps are cleared —
      but the time the floor spent on the LAST run is real and must not vanish
      with them. Bank each stage's elapsed time and the number of runs, so the
@@ -295,7 +298,7 @@ function resumeWorkOrder(user, id, body) {
   wo.resumedBy = user.username; wo.resumedAt = new Date().toISOString();
   wo.progress = 0;
   wo.status = S.rollupStatus(wo);
-  repo.putWorkOrder(wo);
+  await repo.putWorkOrder(wo);
   return summarize(wo, data);
 }
 
@@ -305,12 +308,12 @@ function resumeWorkOrder(user, id, body) {
    same permissions. The loop belongs on this side of the wire. Each pass goes
    through the ordinary advance(), so not one stage rule is duplicated or
    skipped, and a stage that refuses still throws exactly as it would alone. */
-function advanceAll(user, woId, opts) {
+async function advanceAll(user, woId, opts) {
   let wo = null, lastIdx = -1;
   for (let pass = 0; pass < 12; pass++) {
     // the coating stage in the run still has to say where it put the roll —
     // driving every stage at once does not excuse the job from the gate
-    wo = advance(user, woId, "complete", opts);
+    wo = await advance(user, woId, "complete", opts);
     if (wo.status === "Completed" || wo.status === "Dispatched") break;
     // a route that stops moving would otherwise spin until the cap
     if (wo.stageIdx === lastIdx) break;
@@ -332,11 +335,11 @@ function advanceAll(user, woId, opts) {
    must carry a value: a half-filled sheet would open the very gap
    the coating gate exists to close.
    ============================================================ */
-function labWOFor(user, woId, data) {
+async function labWOFor(user, woId, data) {
   if (!user) throw err("Not authenticated", 401);
   const isOffice = user.role === "admin" || user.role === "office";
   if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
-  const found = repo.getWorkOrder(woId);
+  const found = await repo.getWorkOrder(woId);
   if (!found || !found.id) throw err("Work order not found", 404);
   const wo = withRoute(found, data);
   if (!isOffice) {
@@ -355,10 +358,10 @@ function labWOFor(user, woId, data) {
 }
 
 /** What the floor has to measure for this job, and what it has measured so far. */
-function labSheet(user, woId) {
-  const data = fullState();
-  const wo = labWOFor(user, woId, data);
-  const st = LAB.labStatusForWO(wo, data);
+async function labSheet(user, woId) {
+  const data = await fullState();
+  const wo = await labWOFor(user, woId, data);
+  const st = await LAB.labStatusForWO(wo, data);
   return Object.assign({}, st, {
     qty: wo.qty, runQty: wo.runQty != null ? wo.runQty : wo.qty,
     // the floor's own reading is what it is asked for; the lab's is shown as context
@@ -366,11 +369,11 @@ function labSheet(user, woId) {
   });
 }
 
-function recordLabReading(user, woId, body) {
+async function recordLabReading(user, woId, body) {
   body = body || {};
-  const data = fullState();
-  const wo = labWOFor(user, woId, data);
-  const st = LAB.labStatusForWO(wo, data);
+  const data = await fullState();
+  const wo = await labWOFor(user, woId, data);
+  const st = await LAB.labStatusForWO(wo, data);
   if (!st.product) throw err("No lab product is linked to " + (wo.itemId || "this product") + " — the office must link one before a reading can be recorded", 400);
   if (!st.params.length) throw err("No test parameters are defined for " + (st.product.code || st.product.name) + " — set its spec in Lab Reports → Products first", 400);
 
@@ -391,9 +394,9 @@ function recordLabReading(user, woId, body) {
   };
   if (payload.remarks === undefined) delete payload.remarks;
   const saved = st.reportId
-    ? LAB.updateReport(st.reportId, payload, user)
-    : LAB.createReport(payload, user);
-  return { workOrder: wo.id, report: saved, status: LAB.labStatusForWO(wo, fullState()) };
+    ? await LAB.updateReport(st.reportId, payload, user)
+    : await LAB.createReport(payload, user);
+  return { workOrder: wo.id, report: saved, status: await LAB.labStatusForWO(wo, await fullState()) };
 }
 
 /* ============================================================
@@ -405,11 +408,11 @@ function recordLabReading(user, woId, body) {
    produce ourselves simply starts a stage earlier: the work order is routed
    through its owner's RM production so the missing material gets made first
    (see stageService.routeStagesFor). */
-function assertMaterialsAvailable(data, item, qty, materialChoices) {
+async function assertMaterialsAvailable(data, item, qty, materialChoices) {
   const bom = (data.boms || {})[item.id];
   if (!bom) return;
   if (S.productOwner(item.id, data)) return;        // made in-house → route, don't block
-  const onHand = onHandMap(data);                   // quarantined lots excluded
+  const onHand = await onHandMap(data);                   // quarantined lots excluded
   const need = {};
   BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}).forEach(([rid, per]) => {
     need[rid] = (need[rid] || 0) + (per * qty) / (bom.yield || 1);
@@ -467,11 +470,11 @@ function perUnitNeed(data, item, materialChoices) {
    issue is posted against. Held stock that still counted as available would
    let a work order be raised on material nobody is allowed to touch, and then
    fail at the machine. */
-function heldWhSet(data) {
-  return new Set(GT.heldWarehouseIds(data));
+async function heldWhSet(data) {
+  return new Set(await GT.heldWarehouseIds(data));
 }
-function onHandMap(data) {
-  const held = heldWhSet(data);
+async function onHandMap(data) {
+  const held = await heldWhSet(data);
   const onHand = {};
   (data.movements || []).forEach((mv) => {
     if (mv.wh && held.has(mv.wh)) return;
@@ -482,10 +485,10 @@ function onHandMap(data) {
 
 /* How much of `item` the store can actually make right now. Infinity when the
    recipe is unknown or needs nothing — never a fabricated ceiling. */
-function maxMakeable(data, item, materialChoices) {
+async function maxMakeable(data, item, materialChoices) {
   const per = perUnitNeed(data, item, materialChoices);
   if (!per) return Infinity;
-  const onHand = onHandMap(data);
+  const onHand = await onHandMap(data);
   let cap = Infinity;
   Object.keys(per).forEach((rid) => {
     const p = per[rid];
@@ -497,10 +500,10 @@ function maxMakeable(data, item, materialChoices) {
 
 /* What the store is short of to make `qty` — the list the office is warned
    with before the order is raised anyway. */
-function shortageFor(data, item, qty, materialChoices) {
+async function shortageFor(data, item, qty, materialChoices) {
   const per = perUnitNeed(data, item, materialChoices);
   if (!per) return [];
-  const onHand = onHandMap(data);
+  const onHand = await onHandMap(data);
   return Object.keys(per)
     .map((rid) => {
       const need = per[rid] * qty, have = onHand[rid] || 0;
@@ -514,11 +517,11 @@ function shortageFor(data, item, qty, materialChoices) {
 
 /** What raising this order would mean — used by the New Work Order form to
     warn BEFORE anything is written. Never mutates. */
-function previewWorkOrder(user, body) {
+async function previewWorkOrder(user, body) {
   if (!user) throw err("Not authenticated", 401);
   if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
   const item = (data.items || []).find((i) => i.id === body.itemId);
   if (!item) throw err("Unknown product", 400);
   const qty = +body.qty;
@@ -528,13 +531,13 @@ function previewWorkOrder(user, body) {
     fgQty: body.fgQty, wipQty: body.wipQty,
   });
   const makeQty = plan.makeQty || 0;
-  const cap = maxMakeable(data, item, body.materialChoices);
+  const cap = await maxMakeable(data, item, body.materialChoices);
   const canMake = Math.max(0, Math.min(makeQty, isFinite(cap) ? Math.floor(cap * 1000) / 1000 : makeQty));
   const pending = Math.round((makeQty - canMake) * 1000) / 1000;
   return {
     qty, makeQty, fromStock: Math.round((qty - makeQty) * 1000) / 1000,
     canMake, pendingQty: pending > 1e-6 ? pending : 0,
-    shortage: pending > 1e-6 ? shortageFor(data, item, makeQty, body.materialChoices) : [],
+    shortage: pending > 1e-6 ? await shortageFor(data, item, makeQty, body.materialChoices) : [],
   };
 }
 
@@ -564,11 +567,11 @@ function matWidthOf(v) {
 /* updateWorkOrder — edit a planned run. Due date, priority and tape width can
    change any time before dispatch; quantity and line only while NOTHING has
    been posted or completed (stage movements are derived from them). */
-function updateWorkOrder(user, id, body) {
+async function updateWorkOrder(user, id, body) {
   if (!user) throw err("Not authenticated", 401);
   if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
   const wo = (data.workorders || []).find((w) => w.id === id);
   if (!wo) throw err("Work order not found", 404);
   if (wo.dispatched) throw err("Dispatched work orders cannot be edited", 400);
@@ -581,7 +584,7 @@ function updateWorkOrder(user, id, body) {
     if (newId.length > 24) throw err("Work order number is too long", 400);
     if (newId !== wo.id) {
       if ((data.workorders || []).some((w) => w.id === newId)) throw err("Work order " + newId + " already exists", 409);
-      repo.renameWorkOrder(wo.id, newId);
+      await repo.renameWorkOrder(wo.id, newId);
       wo.id = newId;
     }
   }
@@ -591,7 +594,7 @@ function updateWorkOrder(user, id, body) {
     if (started) throw err("Product cannot change after production has started", 400);
     const newItem = (data.items || []).find((i) => i.id === body.itemId && i.cat === "FG");
     if (!newItem) throw err("Unknown product", 400);
-    assertMaterialsAvailable(data, newItem, body.qty !== undefined ? +body.qty : wo.qty, null);
+    await assertMaterialsAvailable(data, newItem, body.qty !== undefined ? +body.qty : wo.qty, null);
     wo.itemId = body.itemId;
     delete wo.materialChoices;                 // the picks belonged to the old recipe
     const q2 = body.qty !== undefined ? +body.qty : wo.qty;
@@ -615,7 +618,7 @@ function updateWorkOrder(user, id, body) {
     if (started && Math.abs(q - wo.qty) > 1e-9) throw err("Quantity cannot change after production has started", 400);
     if (Math.abs(q - wo.qty) > 1e-9) {
       const item = (data.items || []).find((i) => i.id === wo.itemId);
-      if (item) assertMaterialsAvailable(data, item, q, wo.materialChoices);
+      if (item) await assertMaterialsAvailable(data, item, q, wo.materialChoices);
       wo.qty = q;
     }
   }
@@ -630,15 +633,15 @@ function updateWorkOrder(user, id, body) {
   wo.progress = calcProgress(wo.route || []);
   wo.status = S.rollupStatus(wo);
   wo.updatedBy = user.username; wo.updatedAt = new Date().toISOString();
-  repo.putWorkOrder(wo);
+  await repo.putWorkOrder(wo);
   return summarize(wo, data);
 }
 
-function createWorkOrder(user, body) {
+async function createWorkOrder(user, body) {
   if (!user) throw err("Not authenticated", 401);
   if (user.role !== "admin" && user.role !== "office") throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
   const item = (data.items || []).find((i) => i.id === body.itemId);
   if (!item) throw err("Unknown product", 400);
   const qty = +body.qty;
@@ -671,11 +674,11 @@ function createWorkOrder(user, body) {
   const inHouse = !!S.productOwner(item.id, data);
   let runQty = makeQty, pendingQty = 0, shortage = [];
   if (makeQty > 0 && !inHouse) {
-    const cap = maxMakeable(data, item, body.materialChoices);
+    const cap = await maxMakeable(data, item, body.materialChoices);
     if (isFinite(cap) && cap < makeQty - 1e-6) {
       runQty = Math.max(0, Math.floor(cap * 1000) / 1000);
       pendingQty = Math.round((makeQty - runQty) * 1000) / 1000;
-      shortage = shortageFor(data, item, makeQty, body.materialChoices);
+      shortage = await shortageFor(data, item, makeQty, body.materialChoices);
       // the office has to have seen the shortage and said yes
       if (!body.allowShortage) {
         const e = err("Only " + runQty + " of " + makeQty + " can be made — the store is short. "
@@ -759,19 +762,22 @@ function createWorkOrder(user, body) {
   const stagePlan = S.computeStagePlan(wo.itemId, runTotal, data, wo.materialChoices, runNet);
   const moves = [];
   if (stagePlan) {
-    (wo.route || []).forEach((r) => {
-      if (!stagePlan[r.key]) return;
-      S.stageMovements(stagePlan, r.key, wo, itemsById, user.username, todayISO(), data.movements, GT.heldWarehouseIds(data))
-        .forEach((m) => moves.push(m));
-    });
+    /* Read once, before the loop: the held-warehouse list does not vary by
+       route step, and it is a database round trip per step if left inside. */
+    const held = await GT.heldWarehouseIds(data);
+    for (const r of (wo.route || [])) {
+      if (!stagePlan[r.key]) continue;
+      for (const m of S.stageMovements(stagePlan, r.key, wo, itemsById, user.username,
+        todayISO(), data.movements, held)) moves.push(m);
+    }
   }
-  if (moves.length) repo.addMovements(moves);
+  if (moves.length) await repo.addMovements(moves);
   (wo.route || []).forEach((r) => { r.posted = true; });
   wo.stockPosted = true;
   wo.stockPostedAt = new Date().toISOString();
 
   wo.status = S.rollupStatus(wo);
-  repo.putWorkOrder(wo);
+  await repo.putWorkOrder(wo);
   return summarize(wo, data);
 }
 
@@ -782,11 +788,11 @@ function createWorkOrder(user, body) {
    to the finished-goods warehouse the supervisor chose.
    body: { itemId, qty, wh }
    ============================================================ */
-function produceFinished(user, body) {
+async function produceFinished(user, body) {
   if (!user) throw err("Not authenticated", 401);
   if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
 
   const item = (data.items || []).find((i) => i.id === body.itemId);
   if (!item) throw err("Unknown product", 400);
@@ -825,7 +831,7 @@ function produceFinished(user, body) {
      stock lands, once the booking is known to have succeeded.
      A half-made roll is graded against its parent product's spec — it is the
      same web, measured before it is slit. */
-  const gate = LAB.finishedStockGate(recipeOwnerId, body, data);
+  const gate = await LAB.finishedStockGate(recipeOwnerId, body, data);
   if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
 
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
@@ -905,7 +911,7 @@ function produceFinished(user, body) {
     note: (isWip ? "Work in process added at " : "Finished stock added at ") + warehouse.name
       + (tapeWidth ? " · " + tapeWidth + " mm tape width" : ""), by });
 
-  repo.addMovements(moves);
+  await repo.addMovements(moves);
 
   /* The parameters the form collected belong to the ITEM — the tape width a
      finished good is slit to is what a later work order matches its stock on,
@@ -914,14 +920,14 @@ function produceFinished(user, body) {
   if (tapeWidth && !isWip) patch.tapeWidthMM = tapeWidth;
   if (body.thicknessMM != null && body.thicknessMM !== "") patch.thicknessMM = +body.thicknessMM || null;
   if (body.gsm != null && body.gsm !== "") patch.gsm = +body.gsm || null;
-  if (Object.keys(patch).length) repo.putItem(Object.assign({}, item, patch));
+  if (Object.keys(patch).length) await repo.putItem(Object.assign({}, item, patch));
 
   /* the batch's certificate, now that the stock is really in. Readings taken
      on the floor are the PRODUCTION set; the lab incharge adds theirs to the
      same document later, exactly as for a coated work order. */
   let labReport = null;
   if (gate.values) {
-    labReport = LAB.createReport({
+    labReport = await LAB.createReport({
       productId: gate.product.id, refNo: gate.refNo, source: "production",
       values: gate.values,
       testedBy: body.testedBy != null ? String(body.testedBy) : (user.name || user.username),
@@ -944,14 +950,14 @@ function produceFinished(user, body) {
  * The form calls this to build its readings block; it never carries the spec
  * limits, so nobody can tune a measurement until it passes.
  */
-function finishedStockLabSheet(user, itemId) {
+async function finishedStockLabSheet(user, itemId) {
   if (!user) throw err("Not authenticated", 401);
   if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
-  const data = fullState();
+  const data = await fullState();
   const item = (data.items || []).find((i) => i.id === itemId);
   if (!item) throw err("Unknown product", 400);
   const ownerId = item.cat === "WIP" ? (item.stageOf || "") : item.id;
-  const g = LAB.finishedStockGate(ownerId, {}, data);
+  const g = await LAB.finishedStockGate(ownerId, {}, data);
   return { itemId: item.id, recipeOwnerId: ownerId, required: g.required,
     product: g.product ? { id: g.product.id, code: g.product.code, name: g.product.name,
       refMode: g.product.refMode || "batch" } : null,
@@ -965,7 +971,7 @@ function finishedStockLabSheet(user, itemId) {
    deducted from the store as an ISSUE movement.
    body: { woId?, lines:[{ itemId, qty, location, reason }] }
    ============================================================ */
-function recordExcessMaterial(user, body) {
+async function recordExcessMaterial(user, body) {
   if (!user) throw err("Not authenticated", 401);
   const isOffice = user.role === "admin" || user.role === "office";
   if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
@@ -973,13 +979,13 @@ function recordExcessMaterial(user, body) {
   const lines = Array.isArray(body.lines) ? body.lines : [];
   if (!lines.length) throw err("Add at least one material to justify", 400);
 
-  const data = fullState();
+  const data = await fullState();
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
   const whById = Object.fromEntries((data.warehouses || []).map((w) => [w.id, w]));
 
   // 1) the excess is always tied to a REAL job, and (for supervisors) one in
   //    their own work area — same authorization rule as advance().
-  const found = repo.getWorkOrder(body.woId);
+  const found = await repo.getWorkOrder(body.woId);
   if (!found || !found.id) throw err("Work order not found", 404);
   const wo = withRoute(found, data);
   const route = wo.route || [];
@@ -1037,12 +1043,12 @@ function recordExcessMaterial(user, body) {
   });
 
   if (!moves.length) throw err("No valid material lines", 400);
-  repo.addMovements(moves);
+  await repo.addMovements(moves);
   return { ok: true, ref, woId: woRef, deducted };
 }
 
 /* ---- legacy status-based endpoint kept working (maps to actions) ---- */
-function updateWorkOrderStatus(user, woId, status, opts) {
+async function updateWorkOrderStatus(user, woId, status, opts) {
   const map = {
     "In Production": "start", "In Progress": "start", "Released": "start",
     "Pending": "pause",
@@ -1053,7 +1059,7 @@ function updateWorkOrderStatus(user, woId, status, opts) {
   if (!action) throw err("Invalid status '" + status + "'", 400);
   // the body travels on, so this older route can still answer the coating
   // gate (wipWh) rather than being unable to close the stage at all
-  return advance(user, woId, action, opts);
+  return await advance(user, woId, action, opts);
 }
 
 /* The production line must belong to the area that actually STARTS the job:
@@ -1105,11 +1111,11 @@ function summarize(wo, data) {
    ============================================================ */
 const FG_STORE = "WH-FG";
 
-function returnStock(user, body) {
+async function returnStock(user, body) {
   if (!user) throw err("Not authenticated", 401);
   if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
   const item = (data.items || []).find((i) => i.id === body.itemId);
   if (!item) throw err("Unknown material", 400);
   const qty = +body.qty;
@@ -1127,7 +1133,7 @@ function returnStock(user, body) {
     note: (body.reason ? String(body.reason).slice(0, 140) : "Returned from floor"),
     by: user.username,
   };
-  repo.addMovements([mv]);
+  await repo.addMovements([mv]);
   return { ok: true, movement: mv, item: { id: item.id, name: item.name, uom: item.uom } };
 }
 
@@ -1142,11 +1148,11 @@ function returnStock(user, body) {
    actually has a BOM — otherwise the run is recorded and flagged,
    rather than inventing a consumption.
    ============================================================ */
-function createAdhocProduction(user, body) {
+async function createAdhocProduction(user, body) {
   if (!user) throw err("Not authenticated", 401);
   if (!["supervisor", "admin", "office"].includes(user.role)) throw err("Forbidden", 403);
   body = body || {};
-  const data = fullState();
+  const data = await fullState();
   const item = (data.items || []).find((i) => i.id === body.itemId);
   if (!item) throw err("Unknown product", 400);
   if (item.cat !== "FG") throw err("Only finished goods can be recorded as production", 400);
@@ -1178,7 +1184,7 @@ function createAdhocProduction(user, body) {
     createdBy: user.username, createdAt: now,
   };
   wo.status = S.rollupStatus(wo);
-  repo.putWorkOrder(wo);
+  await repo.putWorkOrder(wo);
 
   const ref = "AP-" + Date.now().toString(36).toUpperCase();
   // the run's output is NOT stocked (same rule as every stage) — only the
@@ -1201,7 +1207,7 @@ function createAdhocProduction(user, body) {
     });
     deducted = consumed.length > 0;
   }
-  repo.addMovements(moves);
+  await repo.addMovements(moves);
 
   return {
     ok: true, workOrder: wo.id, itemId: item.id, name: item.name,

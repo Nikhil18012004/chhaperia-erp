@@ -230,8 +230,8 @@ function nextId(list) {
    goalposts (the same rule labService applies to the TDS spec). So a lab write
    carries the parameter list only; a `spec` from anyone but admin is ignored,
    not rejected, so their save still succeeds. */
-function setItemQc(itemId, body, user) {
-  const item = repo.getItem(itemId);
+async function setItemQc(itemId, body, user) {
+  const item = await repo.getItem(itemId);
   if (!item) throw err("Unknown item " + itemId, 404);
   body = body || {};
   const isAdmin = !user || user.role === "admin";
@@ -262,13 +262,13 @@ function setItemQc(itemId, body, user) {
     item.qcSpec = spec;
     specChanged = true;
   }
-  repo.putItem(item);
+  await repo.putItem(item);
   /* Limits changed → every report already filed on this material was graded
      against the OLD yardstick, so re-grade them. Leaving stale verdicts on
      screen next to a new spec is how a lot reads Pass against limits it would
      now fail. A parameter-list change re-grades too: a report's rows come from
      the list, so dropping one has to drop its verdict with it. */
-  const regraded = regradeItem(itemId, item);
+  const regraded = await regradeItem(itemId, item);
   return { ok: true, itemId, params: paramKeysForItem(item), specKeys: specKeys(item),
     specEditable: isAdmin, specChanged, regraded };
 }
@@ -283,35 +283,38 @@ function setItemQc(itemId, body, user) {
    would make a lot pass or fail against a number nobody agreed to.
    ============================================================ */
 const PURCHASABLE = ["RM", "PKG", "CON"];
-function ensureItemQc() {
-  const items = repo.getState().items || [];
+async function ensureItemQc() {
+  const items = (await repo.getState()).items || [];
   let changed = 0;
-  items.forEach((i) => {
-    if (PURCHASABLE.indexOf(i.cat) < 0) return;
-    if (Array.isArray(i.qcParams) && i.qcParams.length) return;   // already configured
+  /* for…of, not forEach. The body writes to the database now, and forEach
+     throws away the promise its callback returns — the loop would report a
+     count and return before a single item had actually been saved. */
+  for (const i of items) {
+    if (PURCHASABLE.indexOf(i.cat) < 0) continue;
+    if (Array.isArray(i.qcParams) && i.qcParams.length) continue;   // already configured
     const keys = derivedParamKeys(i);
-    const full = repo.getItem(i.id);
-    if (!full) return;
+    const full = await repo.getItem(i.id);
+    if (!full) continue;
     full.qcParams = keys;
-    repo.putItem(full);
+    await repo.putItem(full);
     changed++;
-  });
+  }
   return { changed, items: items.filter((i) => PURCHASABLE.indexOf(i.cat) >= 0).length };
 }
 
 /** Re-grade the reports for one material after its spec changed. */
-function regradeItem(itemId, item) {
+async function regradeItem(itemId, item) {
   const params = paramsForItem(item);
   const spec = specOf(item);
   let n = 0;
-  repo.getGrnTests().filter((t) => t.itemId === itemId).forEach((t) => {
+  for (const t of (await repo.getGrnTests()).filter((t) => t.itemId === itemId)) {
     const graded = evaluate(t.values, spec, params);
-    repo.putGrnTest(Object.assign({}, t, {
+    await repo.putGrnTest(Object.assign({}, t, {
       params, results: graded.results, result: graded.result,
       complete: isComplete(t.values, params),
     }));
     n++;
-  });
+  }
   return n;
 }
 
@@ -319,13 +322,13 @@ function regradeItem(itemId, item) {
    THE TEST ITSELF
    ============================================================ */
 /** What the entry form needs for one material on one receipt. */
-function testFormFor(grnId, itemId) {
-  const grn = repo.getGrn(grnId);
+async function testFormFor(grnId, itemId) {
+  const grn = await repo.getGrn(grnId);
   if (!grn) throw err("Goods receipt not found", 404);
   const line = (grn.lines || []).find((l) => l.itemId === itemId);
   if (!line) throw err("This receipt has no line for " + itemId, 404);
-  const item = repo.getItem(itemId) || {};
-  const existing = repo.getGrnTestFor(grnId, itemId);
+  const item = await repo.getItem(itemId) || {};
+  const existing = await repo.getGrnTestFor(grnId, itemId);
   return {
     grnId, itemId,
     grn: { id: grn.id, date: grn.date, poId: grn.poId, supplierId: grn.supplierId,
@@ -347,20 +350,20 @@ function testFormFor(grnId, itemId) {
  * File (or re-file) the readings for one material on one receipt.
  * body: { itemId, values:{param:value}, remarks?, date? }
  */
-function submitTest(grnId, body, user) {
+async function submitTest(grnId, body, user) {
   body = body || {};
-  const grn = repo.getGrn(grnId);
+  const grn = await repo.getGrn(grnId);
   if (!grn) throw err("Goods receipt not found", 404);
   if (grn.status === "Cancelled") throw err("This goods receipt was cancelled — there is nothing to test.", 400);
   const itemId = str(body.itemId, 80);
   const line = (grn.lines || []).find((l) => l.itemId === itemId);
   if (!line) throw err("This receipt has no line for " + (itemId || "that material"), 400);
 
-  const item = repo.getItem(itemId) || {};
+  const item = await repo.getItem(itemId) || {};
   const params = paramsForItem(item);
   if (!params.length) throw err("No test parameters are set for " + (item.name || itemId) + ".", 400);
 
-  const existing = repo.getGrnTestFor(grnId, itemId);
+  const existing = await repo.getGrnTestFor(grnId, itemId);
   const values = pickValues(body.values, params);
   const missing = missingParams(values, params);
   if (missing.length) {
@@ -378,7 +381,7 @@ function submitTest(grnId, body, user) {
      decision belongs to the reading it was made on. */
   const priorDecision = existing && existing.result === graded.result ? (existing.decision || "") : "";
   const test = {
-    id: (existing && existing.id) || nextId(repo.getGrnTests()),
+    id: (existing && existing.id) || nextId(await repo.getGrnTests()),
     grnId, itemId,
     poId: grn.poId || "", supplierId: grn.supplierId || "",
     itemName: item.name || line.name || itemId,
@@ -412,7 +415,7 @@ function submitTest(grnId, body, user) {
     remarks: str(body.remarks, 500),
     createdAt: (existing && existing.createdAt) || now,
   };
-  repo.putGrnTest(test);
+  await repo.putGrnTest(test);
   return { ok: true, test, awaitingDecision: awaitingDecision(test) };
 }
 
@@ -431,9 +434,9 @@ function awaitingDecision(t) {
  *                       and is good stock. Nothing moves.
  * Only ever posts the transfer once, so a double-click cannot move the lot twice.
  */
-function decideTest(id, body, user) {
+async function decideTest(id, body, user) {
   body = body || {};
-  const t = repo.getGrnTest(id);
+  const t = await repo.getGrnTest(id);
   if (!t) throw err("Test report not found", 404);
   if (t.result !== "Fail") throw err("Only a failed lot needs a decision — this one reads " + (t.result || "Pending") + ".", 400);
   if (t.decision) throw err("This lot was already " + t.decision + " by " + (t.decidedBy || "an admin") + ".", 409);
@@ -445,7 +448,7 @@ function decideTest(id, body, user) {
   if (approve) {
     const qty = +t.acceptedQty || 0;
     const from = t.wh || "";
-    const hold = quarantineWarehouse();
+    const hold = await quarantineWarehouse();
     if (!hold) throw err("No quarantine store exists to hold the lot. Add a warehouse of type 'Quarantine'.", 400);
     if (qty > 0 && from && from !== hold) {
       /* An XFER PAIR, the ledger idiom this ERP already uses to re-home stock:
@@ -456,7 +459,7 @@ function decideTest(id, body, user) {
          note / return), and not one to take on the lab's behalf. */
       const ref = t.grnId;
       const note2 = "Failed incoming test — quarantined on admin approval";
-      repo.addMovements([
+      await repo.addMovements([
         { id: mvId(), date: todayISO(), itemId: t.itemId, wh: from, type: "XFER",
           qty: -Math.abs(qty), rate: 0, ref, note: note2, by: (user && user.username) || "admin" },
         { id: mvId(), date: todayISO(), itemId: t.itemId, wh: hold, type: "XFER",
@@ -472,28 +475,28 @@ function decideTest(id, body, user) {
     decisionNote: note,
     quarantined: approve ? moved : null,
   });
-  repo.putGrnTest(out);
+  await repo.putGrnTest(out);
   return { ok: true, test: out, moved };
 }
 
 /** The store that holds quarantined material, by warehouse TYPE not by id. */
-function quarantineWarehouse() {
-  const whs = repo.getState().warehouses || [];
+async function quarantineWarehouse() {
+  const whs = (await repo.getState()).warehouses || [];
   const hold = whs.find((w) => /quarantine|qc.?hold|reject/i.test(String(w.type || "") + " " + String(w.name || "")));
   return hold ? hold.id : null;
 }
 /** Ids of every store whose contents production must not be able to draw. */
-function heldWarehouseIds(data) {
-  const whs = (data && data.warehouses) || repo.getState().warehouses || [];
+async function heldWarehouseIds(data) {
+  const whs = (data && data.warehouses) || (await repo.getState()).warehouses || [];
   return whs.filter((w) => /quarantine|qc.?hold|reject/i.test(String(w.type || "") + " " + String(w.name || "")))
     .map((w) => w.id);
 }
 
 /** Every failed lot still waiting on the admin — the notification list. */
-function pendingDecisions(data) {
+async function pendingDecisions(data) {
   data = data || {};
-  const tests = data.grnTests || repo.getGrnTests();
-  const grns = data.grns || repo.getGrns();
+  const tests = data.grnTests || await repo.getGrnTests();
+  const grns = data.grns || await repo.getGrns();
   const live = new Set(grns.filter((g) => g.status !== "Cancelled").map((g) => g.id));
   return tests.filter((t) => awaitingDecision(t) && live.has(t.grnId))
     .map((t) => ({
@@ -507,23 +510,27 @@ function pendingDecisions(data) {
     .sort((a, b) => String(b.grnId).localeCompare(String(a.grnId)));
 }
 
-function deleteTest(id) {
-  if (!repo.getGrnTest(id)) throw err("Test report not found", 404);
-  return repo.deleteGrnTest(id);
+async function deleteTest(id) {
+  if (!await repo.getGrnTest(id)) throw err("Test report not found", 404);
+  return await repo.deleteGrnTest(id);
 }
 
 /* ============================================================
    READING IT BACK — what the PO and the receipt show
    ============================================================ */
 /** Per-line test state for one receipt, plus the receipt's overall verdict. */
-function statusForGrn(grn, data) {
+async function statusForGrn(grn, data) {
   data = data || {};
   const items = data.items || null;
   const itemById = items ? Object.fromEntries(items.map((i) => [i.id, i])) : null;
-  const tests = data.grnTests || repo.getGrnTests();
+  const tests = data.grnTests || await repo.getGrnTests();
   const mine = tests.filter((t) => t.grnId === grn.id);
+  /* Prefetched rather than read inside .map(): the callback would need an
+     await, and .map() would then hand back an array of promises. */
+  const fetched = {};
+  if (!itemById) for (const l of (grn.lines || [])) fetched[l.itemId] = await repo.getItem(l.itemId);
   const lines = (grn.lines || []).map((l) => {
-    const item = (itemById ? itemById[l.itemId] : repo.getItem(l.itemId)) || {};
+    const item = (itemById ? itemById[l.itemId] : fetched[l.itemId]) || {};
     const t = mine.find((x) => x.itemId === l.itemId) || null;
     return {
       itemId: l.itemId, name: l.name || item.name || l.itemId,
@@ -554,12 +561,15 @@ function statusForGrn(grn, data) {
 }
 
 /** Roll the receipts of one purchase order into a single QC verdict. */
-function statusForPo(poId, data) {
+async function statusForPo(poId, data) {
   data = data || {};
-  const grns = (data.grns || repo.getGrns())
+  const grns = (data.grns || await repo.getGrns())
     .filter((g) => g.poId === poId && g.status !== "Cancelled");
   if (!grns.length) return { poId, result: "No receipt", pending: 0, grns: [] };
-  const each = grns.map((g) => statusForGrn(g, data));
+  /* Sequential, not .map(): an async callback makes .map() return promises,
+     and the reduce/some just below would be counting promise objects. */
+  const each = [];
+  for (const g of grns) each.push(await statusForGrn(g, data));
   const pending = each.reduce((s, x) => s + x.pending, 0);
   const anyFail = each.some((x) => x.result === "Fail");
   const required = each.some((x) => x.result !== "Not required");
@@ -576,12 +586,12 @@ function statusForPo(poId, data) {
  * The lab incharge's incoming worklist: every posted receipt line that
  * still owes a reading, newest receipt first.
  */
-function pendingTests(data) {
+async function pendingTests(data) {
   data = data || {};
-  const grns = (data.grns || repo.getGrns()).filter((g) => g.status !== "Cancelled");
+  const grns = (data.grns || await repo.getGrns()).filter((g) => g.status !== "Cancelled");
   const out = [];
-  grns.forEach((g) => {
-    const st = statusForGrn(g, data);
+  for (const g of grns) {
+    const st = await statusForGrn(g, data);
     st.lines.forEach((l) => {
       if (!l.params || l.tested) return;
       out.push({
@@ -590,7 +600,7 @@ function pendingTests(data) {
         itemId: l.itemId, itemName: l.name, params: l.params,
       });
     });
-  });
+  }
   return out.sort((a, b) => String(b.grnId).localeCompare(String(a.grnId)));
 }
 

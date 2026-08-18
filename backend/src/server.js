@@ -17,7 +17,7 @@ const erpService = require("./services/erpService");
 const hrService = require("./services/hrService");
 const labService = require("./services/labService");
 const grnTestService = require("./services/grnTestService");
-const { closeDb } = require("./db/connection");
+const { closeDb, init: initDb, readConfig } = require("./db/connection");
 
 const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
@@ -130,62 +130,86 @@ app.use((err, req, res, next) => {
   res.status(status).json(out);
 });
 
-const server = app.listen(PORT, () => {
+/* ⚠ THE DATABASE IS OPENED BEFORE ANYTHING IS SEEDED OR SERVED.
+   SQLite would create its file on demand, so a broken configuration simply
+   never came up. A server can be unreachable, refuse the password, or be
+   missing the schema, and each of those used to surface as the first request
+   of the day failing in front of somebody. init() connects, applies the
+   schema and runs the migrations; if it throws, the process stops here with
+   the reason printed, which is the only honest thing to do. */
+async function boot() {
+  await initDb();
+
   // ensure default accounts exist on first run
   let seedInfo = { seeded: false };
-  try { seedInfo = authService.seedDefaultUsers(); } catch (e) { console.error("[user seed]", e.message); }
+  try { seedInfo = await authService.seedDefaultUsers(); } catch (e) { console.error("[user seed]", e.message); }
 
   // Accounts are no longer flagged for a forced password change. Clear any
   // flag left behind by an earlier build so nobody is prompted again.
-  try { const fp = authService.clearPasswordChangeFlags(); if (fp.cleared) console.log("  ├─ Security : cleared " + fp.cleared + " leftover forced-password-change flag(s)"); }
+  try { const fp = await authService.clearPasswordChangeFlags(); if (fp.cleared) console.log("  ├─ Security : cleared " + fp.cleared + " leftover forced-password-change flag(s)"); }
   catch (e) { console.error("[pw flag]", e.message); }
 
   // ensure the multi-stage routing model is applied to existing data (idempotent)
-  try { const m = erpService.ensureStageModel(); if (m.changed) console.log("  ├─ Stages   : migrated data to multi-stage routing"); }
+  try { const m = await erpService.ensureStageModel(); if (m.changed) console.log("  ├─ Stages   : migrated data to multi-stage routing"); }
   catch (e) { console.error("[stage migration]", e.message); }
 
   // restore the CRM pipeline if this DB was seeded before the CRM module existed
-  try { const c = erpService.ensureCrm(); if (c.changed) console.log("  ├─ CRM      : restored " + c.count + " sales leads"); }
+  try { const c = await erpService.ensureCrm(); if (c.changed) console.log("  ├─ CRM      : restored " + c.count + " sales leads"); }
   catch (e) { console.error("[crm restore]", e.message); }
 
   // seed demo HR data (workers + leave types + recent attendance) on first run
-  try { const hr = hrService.ensureHr(); if (hr.changed) console.log("  ├─ HR       : seeded " + hr.workers + " workers + attendance"); }
+  try { const hr = await hrService.ensureHr(); if (hr.changed) console.log("  ├─ HR       : seeded " + hr.workers + " workers + attendance"); }
   catch (e) { console.error("[hr seed]", e.message); }
 
   // seed demo transport agencies (dispatch directory) on first run
-  try { const dp = erpService.ensureDispatch(); if (dp.changed) console.log("  ├─ Dispatch : seeded " + dp.count + " transport agencies"); }
+  try { const dp = await erpService.ensureDispatch(); if (dp.changed) console.log("  ├─ Dispatch : seeded " + dp.count + " transport agencies"); }
   catch (e) { console.error("[dispatch seed]", e.message); }
 
   // seed the two invoice billing entities (Cable Material / International) on first run
-  try { const co = erpService.ensureCompanies(); if (co.changed) console.log("  ├─ Invoice  : seeded " + co.count + " billing companies"); }
+  try { const co = await erpService.ensureCompanies(); if (co.changed) console.log("  ├─ Invoice  : seeded " + co.count + " billing companies"); }
   catch (e) { console.error("[company seed]", e.message); }
 
   // seed the lab-reports product master (finished-goods list) on first run
-  try { const lp = labService.ensureLab(); if (lp.changed) console.log("  ├─ Lab      : seeded " + lp.products + " lab products"); }
+  try { const lp = await labService.ensureLab(); if (lp.changed) console.log("  ├─ Lab      : seeded " + lp.products + " lab products"); }
   catch (e) { console.error("[lab seed]", e.message); }
 
   /* Give every purchasable material a real incoming-test parameter list, worked
      out from what the material is (grnTestService.classify). Non-destructive —
      a material somebody has already configured is skipped — so it can run on
      every boot and simply covers anything newly added. */
-  try { const qc = grnTestService.ensureItemQc(); if (qc.changed) console.log("  ├─ Incoming : QC parameters set on " + qc.changed + " of " + qc.items + " materials"); }
+  try { const qc = await grnTestService.ensureItemQc(); if (qc.changed) console.log("  ├─ Incoming : QC parameters set on " + qc.changed + " of " + qc.items + " materials"); }
   catch (e) { console.error("[incoming qc seed]", e.message); }
 
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);
   console.log(`  ├─ Frontend : http://localhost:${PORT}/`);
-  console.log(`  ├─ Database : SQLite (data/chhaperia.db)`);
+  const cfg = readConfig();
+  console.log(`  ├─ Database : MySQL ${cfg.host}:${cfg.port}/${cfg.database}` +
+    (cfg.ssl ? " (TLS)" : ""));
   if (seedInfo.seeded) {
     console.log(`  └─ Users    : seeded ${seedInfo.count} default accounts (admin/admin@123)\n`);
   } else {
     console.log(`  └─ Users    : ${seedInfo.count || "existing"} accounts\n`);
   }
+  return true;
+}
+
+const server = app.listen(PORT);
+
+/* Exported so the tests can wait for the schema, the migrations and the seed
+   to be in place before they ask the API for anything. A failure here is
+   fatal: there is no useful half-running state for an ERP that cannot reach
+   its database, and pretending otherwise only moves the error to the first
+   person who tries to use it. */
+const ready = boot().catch((e) => {
+  console.error("\n  Chhaperia ERP could not start:\n  " + (e && e.message) + "\n");
+  process.exit(1);
 });
 
 // Graceful shutdown: stop accepting connections, close the DB handle, exit.
 function shutdown(sig) {
   console.log(`\n[${sig}] shutting down…`);
-  server.close(() => { try { closeDb(); } catch {} process.exit(0); });
+  server.close(async () => { try { await closeDb(); } catch {} process.exit(0); });
   setTimeout(() => process.exit(0), 3000).unref(); // hard-stop if close hangs
 }
 ["SIGINT", "SIGTERM"].forEach((s) => process.on(s, () => shutdown(s)));
@@ -193,4 +217,4 @@ function shutdown(sig) {
 process.on("unhandledRejection", (r) => console.error("[unhandledRejection]", r));
 process.on("uncaughtException", (e) => console.error("[uncaughtException]", e.stack || e));
 
-module.exports = { app, server };
+module.exports = { app, server, ready };

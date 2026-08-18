@@ -94,12 +94,12 @@ function verifyToken(token) {
 /* ============================================================
    LOGIN  /  CURRENT USER
    ============================================================ */
-function login(username, password) {
-  const u = users.findByUsername(username, true);
+async function login(username, password) {
+  const u = await users.findByUsername(username, true);
   if (!u || !u.active) return null;
   if (!verifyPassword(password, u.pass)) return null;
-  users.touchLogin(u.id);
-  const safe = users.findById(u.id); // without pass
+  await users.touchLogin(u.id);
+  const safe = await users.findById(u.id); // without pass
   return { token: issueToken(safe), user: safe };
 }
 
@@ -117,10 +117,10 @@ function renewedToken(token, user) {
 
 /** Resolve the user from a token (fresh from DB, so role changes apply).
     A token whose version lags the user's current one has been revoked. */
-function userFromToken(token) {
+async function userFromToken(token) {
   const payload = verifyToken(token);
   if (!payload) return null;
-  const u = users.findById(payload.uid);
+  const u = await users.findById(payload.uid);
   if (!u || !u.active) return null;
   if ((payload.v || 0) !== (u.tokenVersion || 0)) return null; // account-wide revoke
   if (payload.sid && isSessionRevoked(u, payload.sid)) return null; // this device signed out
@@ -137,31 +137,31 @@ function isSessionRevoked(user, sid) {
 }
 
 /** Revoke ONE sign-in (the device that clicked Sign Out). */
-function revokeSession(userId, sid) {
-  const u = users.findById(userId);
+async function revokeSession(userId, sid) {
+  const u = await users.findById(userId);
   if (!u || !sid) return null;
   const live = (u.revokedSids || []).filter((r) => r && (r.exp || 0) > Date.now());
   if (!live.some((r) => r.sid === sid)) live.push({ sid, exp: Date.now() + TOKEN_TTL_MS });
-  return users.patchDoc(userId, { revokedSids: live });
+  return await users.patchDoc(userId, { revokedSids: live });
 }
 
 /** Invalidate every outstanding token for a user (password change / reset). */
-function revokeTokens(userId) {
-  const u = users.findById(userId);
+async function revokeTokens(userId) {
+  const u = await users.findById(userId);
   if (!u) return null;
-  return users.patchDoc(userId, { tokenVersion: (u.tokenVersion || 0) + 1 });
+  return await users.patchDoc(userId, { tokenVersion: (u.tokenVersion || 0) + 1 });
 }
 
 /** Self-service password change; clears the must-change flag and rotates
     the token version so old sessions die. Returns { token, user }. */
-function changePassword(userId, currentPassword, newPassword) {
-  const u = users.findById(userId, true);
+async function changePassword(userId, currentPassword, newPassword) {
+  const u = await users.findById(userId, true);
   if (!u) throw httpErr("User not found", 404);
   if (!verifyPassword(currentPassword, u.pass)) throw httpErr("Current password is incorrect", 401);
   if (!newPassword || String(newPassword).length < 8) throw httpErr("New password must be at least 8 characters", 400);
   if (String(newPassword) === String(currentPassword)) throw httpErr("New password must be different", 400);
-  users.updateUser(userId, { pass: hashPassword(newPassword) });
-  const fresh = users.patchDoc(userId, {
+  await users.updateUser(userId, { pass: hashPassword(newPassword) });
+  const fresh = await users.patchDoc(userId, {
     mustChangePassword: false,
     tokenVersion: (u.tokenVersion || 0) + 1,
   });
@@ -171,11 +171,11 @@ function changePassword(userId, currentPassword, newPassword) {
 /** Clear any leftover forced-password-change flag. Nothing sets the flag any
     more — changing a password is optional — so this only tidies up accounts
     flagged by an earlier build, which would otherwise be prompted forever. */
-function clearPasswordChangeFlags() {
+async function clearPasswordChangeFlags() {
   let cleared = 0;
-  for (const u of users.listUsers()) {
+  for (const u of await users.listUsers()) {
     if (!u.mustChangePassword) continue;
-    users.patchDoc(u.id, { mustChangePassword: false });
+    await users.patchDoc(u.id, { mustChangePassword: false });
     cleared++;
   }
   return { cleared };
@@ -197,11 +197,11 @@ const DEFAULT_USERS = [
   { id: "U-SUP-FG", username: "fiberglass", name: "Fiber-Glass & Slitting Supervisor", role: "supervisor", area: "fiberglass" },
 ];
 
-function seedDefaultUsers() {
-  if (users.countUsers() > 0) return { seeded: false, count: users.countUsers() };
+async function seedDefaultUsers() {
+  if (await users.countUsers() > 0) return { seeded: false, count: await users.countUsers() };
   let n = 0;
   for (const du of DEFAULT_USERS) {
-    users.createUser({ ...du, pass: hashPassword(du.username + "@123") });
+    await users.createUser({ ...du, pass: hashPassword(du.username + "@123") });
     n++;
   }
   return { seeded: true, count: n };
@@ -213,22 +213,22 @@ function seedDefaultUsers() {
 const VALID_ROLES = ["admin", "office", "lab", "supervisor"];
 const VALID_AREAS = ["coating", "slitting", "fiberglass"];
 
-function createUserAccount({ username, name, role, area, password }) {
+async function createUserAccount({ username, name, role, area, password }) {
   username = String(username || "").trim().toLowerCase();
   if (!username) throw httpErr("Username is required", 400);
   if (!VALID_ROLES.includes(role)) throw httpErr("Invalid role", 400);
   if (role === "supervisor" && !VALID_AREAS.includes(area)) throw httpErr("Supervisor needs a valid area", 400);
-  if (users.findByUsername(username)) throw httpErr("Username already exists", 409);
+  if (await users.findByUsername(username)) throw httpErr("Username already exists", 409);
   if (!password || String(password).length < 4) throw httpErr("Password must be at least 4 characters", 400);
   const id = "U-" + crypto.randomBytes(4).toString("hex").toUpperCase();
-  return users.createUser({
+  return await users.createUser({
     id, username, name: name || username, role,
     area: role === "supervisor" ? area : null,
     pass: hashPassword(password),
   });
 }
 
-function updateUserAccount(id, patch) {
+async function updateUserAccount(id, patch) {
   const out = {};
   if (patch.name != null) out.name = patch.name;
   if (patch.role != null) {
@@ -241,12 +241,12 @@ function updateUserAccount(id, patch) {
     if (String(patch.password).length < 4) throw httpErr("Password must be at least 4 characters", 400);
     out.pass = hashPassword(patch.password);
   }
-  const u = users.updateUser(id, out);
+  const u = await users.updateUser(id, out);
   if (!u) throw httpErr("User not found", 404);
   if (patch.password) {
     // the new password stands on its own — no change is forced afterwards —
     // but every session issued under the OLD password is still revoked
-    return users.patchDoc(id, { tokenVersion: (u.tokenVersion || 0) + 1 });
+    return await users.patchDoc(id, { tokenVersion: (u.tokenVersion || 0) + 1 });
   }
   return u;
 }
@@ -258,7 +258,7 @@ module.exports = {
   login, userFromToken, seedDefaultUsers, revokeSession,
   revokeTokens, changePassword, clearPasswordChangeFlags, IS_PROD,
   createUserAccount, updateUserAccount,
-  listUsers: () => users.listUsers(),
-  deleteUser: (id) => users.deleteUser(id),
+  listUsers: async () => await users.listUsers(),
+  deleteUser: async (id) => await users.deleteUser(id),
   VALID_ROLES, VALID_AREAS,
 };

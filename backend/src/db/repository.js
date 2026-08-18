@@ -1,5 +1,5 @@
 /* ============================================================
-   CHHAPERIA ERP — DATABASE LAYER · repository (DAO)
+   CHHAPERIA ERP — DATABASE LAYER · repository (DAO)  [MySQL 8.4]
    The ONLY module that knows SQL. Exposes a document-oriented
    API to the backend services:
        getState()           -> full dataset (frontend shape)
@@ -8,35 +8,79 @@
        updateSettings(doc)  -> patch settings only (fast path)
    The "state" shape intentionally matches what the frontend
    engine expects, so the UI contract is unchanged.
+
+   FOUR THINGS THE MOVE OFF SQLITE CHANGED HERE
+
+   1. EVERY FUNCTION IS ASYNC. MySQL is a socket, not a file.
+      Every caller of these functions awaits them, all the way up
+      through the services to the route handlers.
+
+   2. EVERY FUNCTION TAKES AN OPTIONAL EXECUTOR `x`. Outside a
+      transaction it is omitted and the pool is used. INSIDE one it
+      MUST be passed down, because a transaction lives on a single
+      connection and a query taken from the pool is not part of it.
+      That failure is silent — the write simply commits on its own
+      — so `x` is threaded through every path that writes.
+
+   3. NO forEach AROUND AN AWAIT. Array.prototype.forEach ignores
+      the promise its callback returns, so a loop that looked like
+      it inserted a hundred rows would fire a hundred un-awaited
+      inserts and return before any of them landed — inside a
+      transaction that then commits, which is data loss that
+      reports success. Every such loop is a for…of.
+
+   4. UPSERTS ARE `ON DUPLICATE KEY UPDATE`. SQLite's
+      `ON CONFLICT(id) DO UPDATE SET c=excluded.c` becomes
+      `... VALUES(...) AS new ON DUPLICATE KEY UPDATE c=new.c`.
+      Worth knowing: MySQL fires this on ANY unique-key collision,
+      not only the column named. Every table here has exactly one
+      key, so today the two are equivalent — the day a UNIQUE index
+      is added to one of them, that stops being true.
+
+   Identifiers are backquoted throughout. `lines` and `lead` are
+   reserved words in MySQL 8, and quoting only those two would
+   leave the next one to be discovered in production.
    ============================================================ */
 "use strict";
-const { getDb } = require("./connection");
+const { db, withTx } = require("./connection");
 
 const J = (v) => (v == null ? null : JSON.stringify(v));
-const P = (v, d) => { try { return v == null ? d : JSON.parse(v); } catch { return d; } };
+
+/* Reading a JSON column gives back a PARSED value — mysql2 does that
+   for the JSON type. Reading the same data out of an older TEXT
+   column gives a string. P() takes either, so a database part-way
+   through a migration cannot produce two different shapes. */
+const P = (v, d) => {
+  if (v == null) return d;
+  if (typeof v === "object") return v;
+  try { return JSON.parse(v); } catch { return d; }
+};
+
+/* The executor for this call: the transaction's, or the pool's. */
+const ex = async (x) => x || (await db());
 
 /* ---------- READ: assemble the full dataset document ---------- */
-function getState() {
-  const db = getDb();
+async function getState(x0) {
+  const x = await ex(x0);
 
-  const org = P(db.prepare("SELECT doc FROM org WHERE id=1").pluck().get(), null);
-  const settings = P(db.prepare("SELECT doc FROM settings WHERE id=1").pluck().get(), {
+  const org = P(await x.val("SELECT `doc` FROM `org` WHERE `id`=1"), null);
+  const settings = P(await x.val("SELECT `doc` FROM `settings` WHERE `id`=1"), {
     theme: "dark", accent: "orange", autoAccent: false, lowStockOnly: false,
   });
   const meta = {};
-  db.prepare("SELECT k,v FROM meta").all().forEach((r) => (meta[r.k] = r.v));
+  for (const r of await x.all("SELECT `k`,`v` FROM `meta`")) meta[r.k] = r.v;
 
-  const warehouses = db.prepare("SELECT id,name,type,city FROM warehouses").all();
-  const categories = db.prepare("SELECT id,name,kind FROM categories").all();
-  const suppliers = db.prepare("SELECT doc FROM suppliers").all().map((r) => P(r.doc));
-  const customers = db.prepare("SELECT doc FROM customers").all().map((r) => P(r.doc));
-  const transporters = db.prepare("SELECT doc FROM transporters").all().map((r) => P(r.doc));
+  const warehouses = await x.all("SELECT `id`,`name`,`type`,`city` FROM `warehouses`");
+  const categories = await x.all("SELECT `id`,`name`,`kind` FROM `categories`");
+  const suppliers = (await x.all("SELECT `doc` FROM `suppliers`")).map((r) => P(r.doc));
+  const customers = (await x.all("SELECT `doc` FROM `customers`")).map((r) => P(r.doc));
+  const transporters = (await x.all("SELECT `doc` FROM `transporters`")).map((r) => P(r.doc));
   // the date is a promoted column, so it wins over any stale copy in the doc
-  const appointments = db.prepare("SELECT id,date,doc FROM appointments").all()
+  const appointments = (await x.all("SELECT `id`,`date`,`doc` FROM `appointments`"))
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, date: r.date }));
 
   // items: merge promoted columns back into the doc
-  const items = db.prepare("SELECT * FROM items").all().map((r) => {
+  const items = (await x.all("SELECT * FROM `items`")).map((r) => {
     const extra = P(r.doc, {});
     return Object.assign({}, extra, {
       id: r.id, name: r.name, cat: r.cat, uom: r.uom,
@@ -47,36 +91,37 @@ function getState() {
   });
 
   const boms = {};
-  db.prepare("SELECT item_id,yield,lines,alternates FROM boms").all().forEach((r) => {
+  for (const r of await x.all("SELECT `item_id`,`yield`,`lines`,`alternates` FROM `boms`")) {
     boms[r.item_id] = { yield: r.yield, lines: P(r.lines, []) };
     const alt = P(r.alternates, null);
     if (alt && alt.length) boms[r.item_id].alternates = alt;
-  });
+  }
 
-  const movements = db.prepare(
-    "SELECT id,date,item_id,wh,type,qty,rate,ref,note,by_who,supplier_id FROM movements ORDER BY date ASC, id ASC"
-  ).all().map((m) => {
+  const movements = (await x.all(
+    "SELECT `id`,`date`,`item_id`,`wh`,`type`,`qty`,`rate`,`ref`,`note`,`by_who`,`supplier_id` " +
+    "FROM `movements` ORDER BY `date` ASC, `id` ASC"
+  )).map((m) => {
     const o = { id: m.id, date: m.date, itemId: m.item_id, wh: m.wh, type: m.type,
       qty: m.qty, rate: m.rate, ref: m.ref, note: m.note, by: m.by_who };
     if (m.supplier_id) o.supplierId = m.supplier_id;
     return o;
   });
 
-  const workorders = db.prepare("SELECT * FROM work_orders").all().map((w) =>
+  const workorders = (await x.all("SELECT * FROM `work_orders`")).map((w) =>
     Object.assign({}, P(w.doc, {}), {
       id: w.id, date: w.date, itemId: w.item_id, qty: w.qty, status: w.status,
       due: w.due, line: w.line, progress: w.progress, priority: w.priority,
     })
   );
 
-  const salesorders = db.prepare("SELECT * FROM sales_orders").all().map((s) =>
+  const salesorders = (await x.all("SELECT * FROM `sales_orders`")).map((s) =>
     Object.assign({}, P(s.doc, {}), {
       id: s.id, date: s.date, customerId: s.customer_id, status: s.status,
       promised: s.promised, priority: s.priority, value: s.value, lines: P(s.lines, []),
     })
   );
 
-  const purchaseorders = db.prepare("SELECT * FROM purchase_orders").all().map((p) =>
+  const purchaseorders = (await x.all("SELECT * FROM `purchase_orders`")).map((p) =>
     Object.assign({}, P(p.doc, {}), {
       id: p.id, date: p.date, supplierId: p.supplier_id, status: p.status,
       eta: p.eta, value: p.value, lines: P(p.lines, []),
@@ -84,7 +129,7 @@ function getState() {
   );
 
   // CRM leads — merge promoted columns back into the doc (which holds activities[])
-  const leads = db.prepare("SELECT * FROM leads").all().map((l) =>
+  const leads = (await x.all("SELECT * FROM `leads`")).map((l) =>
     Object.assign({}, P(l.doc, {}), {
       id: l.id, company: l.company, contact: l.contact, stage: l.stage,
       value: l.value, owner: l.owner, created: l.created,
@@ -93,26 +138,26 @@ function getState() {
   );
 
   // ---- Human Resources (workers, attendance, leave, payroll) ----
-  const hrWorkers = db.prepare("SELECT * FROM hr_workers").all().map(mapWorker);
-  const hrAttendance = db.prepare("SELECT * FROM hr_attendance").all().map(mapAtt);
-  const hrLeaveTypes = db.prepare("SELECT * FROM hr_leave_types").all()
+  const hrWorkers = (await x.all("SELECT * FROM `hr_workers`")).map(mapWorker);
+  const hrAttendance = (await x.all("SELECT * FROM `hr_attendance`")).map(mapAtt);
+  const hrLeaveTypes = (await x.all("SELECT * FROM `hr_leave_types`"))
     .map((r) => ({ id: r.id, name: r.name, quota: r.quota, accrual: r.accrual, paid: !!r.paid, color: r.color }));
-  const hrLeaves = db.prepare("SELECT * FROM hr_leaves").all().map(mapLeave);
-  const hrPayruns = db.prepare("SELECT * FROM hr_payruns ORDER BY period DESC").all()
+  const hrLeaves = (await x.all("SELECT * FROM `hr_leaves`")).map(mapLeave);
+  const hrPayruns = (await x.all("SELECT * FROM `hr_payruns` ORDER BY `period` DESC"))
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, period: r.period, status: r.status, generatedAt: r.generated_at }));
-  const hrPayslips = db.prepare("SELECT * FROM hr_payslips").all()
+  const hrPayslips = (await x.all("SELECT * FROM `hr_payslips`"))
     .map((r) => Object.assign({ id: r.id, payrunId: r.payrun_id, workerId: r.worker_id }, P(r.doc, {})));
 
   // ---- Lab reports (QC test certificates + their own product master) ----
-  const labProducts = db.prepare("SELECT doc FROM lab_products").all().map((r) => P(r.doc));
-  const labReports = db.prepare("SELECT doc FROM lab_reports").all().map((r) => P(r.doc));
+  const labProducts = (await x.all("SELECT `doc` FROM `lab_products`")).map((r) => P(r.doc));
+  const labReports = (await x.all("SELECT `doc` FROM `lab_reports`")).map((r) => P(r.doc));
 
   // ---- Goods receipt notes (numbered receipt documents) ----
-  const grns = db.prepare("SELECT id,doc FROM grns ORDER BY id ASC").all()
+  const grns = (await x.all("SELECT `id`,`doc` FROM `grns` ORDER BY `id` ASC"))
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id }));
 
   // ---- Incoming-material test reports, one per (receipt × material) ----
-  const grnTests = db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests ORDER BY id ASC").all()
+  const grnTests = (await x.all("SELECT `id`,`grn_id`,`item_id`,`doc` FROM `grn_tests` ORDER BY `id` ASC"))
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, grnId: r.grn_id, itemId: r.item_id }));
 
   return {
@@ -142,97 +187,105 @@ function mapLeave(r) {
     days: r.days, status: r.status, reason: r.reason, appliedOn: r.applied_on, decidedBy: r.decided_by };
 }
 
-/* ---------- WRITE: replace the entire dataset in one transaction ---------- */
-function saveState(data) {
-  const db = getDb();
-  const tx = db.transaction((d) => {
-    // wipe
+/* ---------- WRITE: replace the entire dataset in one transaction ----------
+   ⚠ The wipe order is load-bearing now. SQLite only enforced foreign keys
+   because PRAGMA foreign_keys asked it to; InnoDB always does. boms points at
+   items and items points at categories, so they must empty in that order —
+   which is the order this list was already in. */
+async function saveState(data) {
+  await withTx(async (x) => {
+    const d = data;
+
     for (const t of ["movements", "work_orders", "sales_orders", "purchase_orders",
       "boms", "items", "suppliers", "customers", "warehouses", "categories",
       "leads", "org", "settings", "meta"]) {
-      db.prepare(`DELETE FROM ${t}`).run();
+      await x.run("DELETE FROM `" + t + "`");
     }
 
-    db.prepare("INSERT INTO org(id,doc) VALUES(1,?)").run(J(d.org || {}));
-    db.prepare("INSERT INTO settings(id,doc) VALUES(1,?)").run(J(d.settings || {}));
-    db.prepare("INSERT INTO meta(k,v) VALUES('seededAt',?)")
-      .run(d.seededAt || new Date().toISOString());
-    db.prepare("INSERT INTO meta(k,v) VALUES('version',?)").run(String(d.version || 1));
+    await x.run("INSERT INTO `org`(`id`,`doc`) VALUES(1,?)", [J(d.org || {})]);
+    await x.run("INSERT INTO `settings`(`id`,`doc`) VALUES(1,?)", [J(d.settings || {})]);
+    await x.run("INSERT INTO `meta`(`k`,`v`) VALUES('seededAt',?)",
+      [d.seededAt || new Date().toISOString()]);
+    await x.run("INSERT INTO `meta`(`k`,`v`) VALUES('version',?)", [String(d.version || 1)]);
 
-    const wh = db.prepare("INSERT INTO warehouses(id,name,type,city) VALUES(@id,@name,@type,@city)");
-    (d.warehouses || []).forEach((w) => wh.run({ id: w.id, name: w.name, type: w.type || null, city: w.city || null }));
+    const WH = "INSERT INTO `warehouses`(`id`,`name`,`type`,`city`) VALUES(:id,:name,:type,:city)";
+    for (const w of d.warehouses || [])
+      await x.run(WH, { id: w.id, name: w.name, type: w.type || null, city: w.city || null });
 
-    const cat = db.prepare("INSERT INTO categories(id,name,kind) VALUES(@id,@name,@kind)");
-    (d.categories || []).forEach((c) => cat.run({ id: c.id, name: c.name, kind: c.kind || null }));
+    const CAT = "INSERT INTO `categories`(`id`,`name`,`kind`) VALUES(:id,:name,:kind)";
+    for (const c of d.categories || [])
+      await x.run(CAT, { id: c.id, name: c.name, kind: c.kind || null });
 
-    const sup = db.prepare("INSERT INTO suppliers(id,doc) VALUES(?,?)");
-    (d.suppliers || []).forEach((s) => sup.run(s.id, J(s)));
+    const SUP = "INSERT INTO `suppliers`(`id`,`doc`) VALUES(?,?)";
+    for (const s of d.suppliers || []) await x.run(SUP, [s.id, J(s)]);
 
-    const cus = db.prepare("INSERT INTO customers(id,doc) VALUES(?,?)");
-    (d.customers || []).forEach((c) => cus.run(c.id, J(c)));
+    const CUS = "INSERT INTO `customers`(`id`,`doc`) VALUES(?,?)";
+    for (const c of d.customers || []) await x.run(CUS, [c.id, J(c)]);
 
-    const it = db.prepare(`INSERT INTO items
-      (id,name,cat,uom,cost,price,reorder,safety,lead,abc,hsn,supplier_id,grp,doc)
-      VALUES(@id,@name,@cat,@uom,@cost,@price,@reorder,@safety,@lead,@abc,@hsn,@supplier_id,@grp,@doc)`);
-    (d.items || []).forEach((i) => {
+    const IT = "INSERT INTO `items` " +
+      "(`id`,`name`,`cat`,`uom`,`cost`,`price`,`reorder`,`safety`,`lead`,`abc`,`hsn`,`supplier_id`,`grp`,`doc`) " +
+      "VALUES(:id,:name,:cat,:uom,:cost,:price,:reorder,:safety,:lead,:abc,:hsn,:supplier_id,:grp,:doc)";
+    for (const i of d.items || []) {
       const { id, name, cat, uom, cost, price, reorder, safety, lead, abc, hsn, supplierId, group, ...rest } = i;
-      it.run({
+      await x.run(IT, {
         id, name, cat: cat || null, uom: uom || null,
         cost: cost || 0, price: price || 0, reorder: reorder || 0, safety: safety || 0,
         lead: lead || 7, abc: abc || null, hsn: hsn || null,
         supplier_id: supplierId || null, grp: group || null, doc: J(rest),
       });
-    });
+    }
 
-    const bom = db.prepare("INSERT INTO boms(item_id,yield,lines,alternates) VALUES(?,?,?,?)");
-    Object.entries(d.boms || {}).forEach(([itemId, b]) => bom.run(itemId, b.yield || 1, J(b.lines || []),
-      (Array.isArray(b.alternates) && b.alternates.length) ? J(b.alternates) : null));
+    const BOM = "INSERT INTO `boms`(`item_id`,`yield`,`lines`,`alternates`) VALUES(?,?,?,?)";
+    for (const [itemId, b] of Object.entries(d.boms || {}))
+      await x.run(BOM, [itemId, b.yield || 1, J(b.lines || []),
+        (Array.isArray(b.alternates) && b.alternates.length) ? J(b.alternates) : null]);
 
-    const mv = db.prepare(`INSERT INTO movements
-      (id,date,item_id,wh,type,qty,rate,ref,note,by_who,supplier_id)
-      VALUES(@id,@date,@item_id,@wh,@type,@qty,@rate,@ref,@note,@by_who,@supplier_id)`);
-    (d.movements || []).forEach((m) => mv.run({
-      id: m.id, date: m.date, item_id: m.itemId, wh: m.wh || null, type: m.type,
-      qty: m.qty, rate: m.rate || 0, ref: m.ref || null, note: m.note || null,
-      by_who: m.by || null, supplier_id: m.supplierId || null,
-    }));
+    const MV = "INSERT INTO `movements` " +
+      "(`id`,`date`,`item_id`,`wh`,`type`,`qty`,`rate`,`ref`,`note`,`by_who`,`supplier_id`) " +
+      "VALUES(:id,:date,:item_id,:wh,:type,:qty,:rate,:ref,:note,:by_who,:supplier_id)";
+    for (const m of d.movements || [])
+      await x.run(MV, {
+        id: m.id, date: m.date, item_id: m.itemId, wh: m.wh || null, type: m.type,
+        qty: m.qty, rate: m.rate || 0, ref: m.ref || null, note: m.note || null,
+        by_who: m.by || null, supplier_id: m.supplierId || null,
+      });
 
-    const wo = db.prepare(`INSERT INTO work_orders
-      (id,date,item_id,qty,status,due,line,progress,priority,doc)
-      VALUES(@id,@date,@item_id,@qty,@status,@due,@line,@progress,@priority,@doc)`);
-    (d.workorders || []).forEach((w) => {
+    const WO = "INSERT INTO `work_orders` " +
+      "(`id`,`date`,`item_id`,`qty`,`status`,`due`,`line`,`progress`,`priority`,`doc`) " +
+      "VALUES(:id,:date,:item_id,:qty,:status,:due,:line,:progress,:priority,:doc)";
+    for (const w of d.workorders || []) {
       const { id, date, itemId, qty, status, due, line, progress, priority, ...rest } = w;
-      wo.run({ id, date, item_id: itemId, qty, status, due: due || null, line: line || null,
+      await x.run(WO, { id, date, item_id: itemId, qty, status, due: due || null, line: line || null,
         progress: progress || 0, priority: priority || null, doc: J(rest) });
-    });
+    }
 
-    const so = db.prepare(`INSERT INTO sales_orders
-      (id,date,customer_id,status,promised,priority,value,lines,doc)
-      VALUES(@id,@date,@customer_id,@status,@promised,@priority,@value,@lines,@doc)`);
-    (d.salesorders || []).forEach((s) => {
+    const SO = "INSERT INTO `sales_orders` " +
+      "(`id`,`date`,`customer_id`,`status`,`promised`,`priority`,`value`,`lines`,`doc`) " +
+      "VALUES(:id,:date,:customer_id,:status,:promised,:priority,:value,:lines,:doc)";
+    for (const s of d.salesorders || []) {
       const { id, date, customerId, status, promised, priority, value, lines, ...rest } = s;
-      so.run({ id, date, customer_id: customerId, status, promised: promised || null,
+      await x.run(SO, { id, date, customer_id: customerId, status, promised: promised || null,
         priority: priority || null, value: value || 0, lines: J(lines || []), doc: J(rest) });
-    });
+    }
 
-    const po = db.prepare(`INSERT INTO purchase_orders
-      (id,date,supplier_id,status,eta,value,lines,doc)
-      VALUES(@id,@date,@supplier_id,@status,@eta,@value,@lines,@doc)`);
-    (d.purchaseorders || []).forEach((p) => {
+    const PO = "INSERT INTO `purchase_orders` " +
+      "(`id`,`date`,`supplier_id`,`status`,`eta`,`value`,`lines`,`doc`) " +
+      "VALUES(:id,:date,:supplier_id,:status,:eta,:value,:lines,:doc)";
+    for (const p of d.purchaseorders || []) {
       const { id, date, supplierId, status, eta, value, lines, ...rest } = p;
-      po.run({ id, date, supplier_id: supplierId, status, eta: eta || null,
+      await x.run(PO, { id, date, supplier_id: supplierId, status, eta: eta || null,
         value: value || 0, lines: J(lines || []), doc: J(rest) });
-    });
+    }
 
-    const ld = db.prepare(`INSERT INTO leads
-      (id,company,contact,stage,value,owner,created,next_follow_up,customer_id,doc)
-      VALUES(@id,@company,@contact,@stage,@value,@owner,@created,@next_follow_up,@customer_id,@doc)`);
-    (d.leads || []).forEach((l) => {
+    const LD = "INSERT INTO `leads` " +
+      "(`id`,`company`,`contact`,`stage`,`value`,`owner`,`created`,`next_follow_up`,`customer_id`,`doc`) " +
+      "VALUES(:id,:company,:contact,:stage,:value,:owner,:created,:next_follow_up,:customer_id,:doc)";
+    for (const l of d.leads || []) {
       const { id, company, contact, stage, value, owner, created, nextFollowUp, customerId, ...rest } = l;
-      ld.run({ id, company, contact: contact || null, stage: stage || "New",
+      await x.run(LD, { id, company, contact: contact || null, stage: stage || "New",
         value: value || 0, owner: owner || null, created: created || null,
         next_follow_up: nextFollowUp || null, customer_id: customerId || null, doc: J(rest) });
-    });
+    }
 
     /* ---- the collections getState() also hands out ----
        Dispatch, Lab, HR and the Calendar are part of the state document, so a
@@ -243,94 +296,90 @@ function saveState(data) {
        Guarded on the key being present, because a payload that never mentions a
        collection is not the same as one that empties it: buildSeed() carries no
        transporters / lab / HR / appointments keys, so reset() and the boot-time
-       migrations must leave those tables standing rather than wipe them.
-       */
-    const replace = (key, table, write) => {
+       migrations must leave those tables standing rather than wipe them. */
+    const replace = async (key, table, write) => {
       if (!Array.isArray(d[key])) return;
-      db.prepare(`DELETE FROM ${table}`).run();
-      d[key].forEach(write);
+      await x.run("DELETE FROM `" + table + "`");
+      for (const row of d[key]) await write(row);
     };
 
-    const tr = db.prepare("INSERT INTO transporters(id,doc) VALUES(?,?)");
-    replace("transporters", "transporters", (t) => tr.run(t.id, J(t)));
+    const TR = "INSERT INTO `transporters`(`id`,`doc`) VALUES(?,?)";
+    await replace("transporters", "transporters", (t) => x.run(TR, [t.id, J(t)]));
 
-    const lp = db.prepare("INSERT INTO lab_products(id,doc) VALUES(?,?)");
-    replace("labProducts", "lab_products", (p) => lp.run(p.id, J(p)));
+    const LP = "INSERT INTO `lab_products`(`id`,`doc`) VALUES(?,?)";
+    await replace("labProducts", "lab_products", (p) => x.run(LP, [p.id, J(p)]));
 
-    const lrp = db.prepare("INSERT INTO lab_reports(id,doc) VALUES(?,?)");
-    replace("labReports", "lab_reports", (r) => lrp.run(r.id, J(r)));
+    const LRP = "INSERT INTO `lab_reports`(`id`,`doc`) VALUES(?,?)";
+    await replace("labReports", "lab_reports", (r) => x.run(LRP, [r.id, J(r)]));
 
-    const gr = db.prepare("INSERT INTO grns(id,doc) VALUES(?,?)");
-    replace("grns", "grns", (g) => { const { id, ...rest } = g; gr.run(id, J(rest)); });
+    const GR = "INSERT INTO `grns`(`id`,`doc`) VALUES(?,?)";
+    await replace("grns", "grns", (g) => { const { id, ...rest } = g; return x.run(GR, [id, J(rest)]); });
 
-    const gt = db.prepare("INSERT INTO grn_tests(id,grn_id,item_id,doc) VALUES(@id,@grn_id,@item_id,@doc)");
-    replace("grnTests", "grn_tests", (t) => {
+    const GT = "INSERT INTO `grn_tests`(`id`,`grn_id`,`item_id`,`doc`) VALUES(:id,:grn_id,:item_id,:doc)";
+    await replace("grnTests", "grn_tests", (t) => {
       const { id, grnId, itemId, ...rest } = t;
-      gt.run({ id, grn_id: grnId || "", item_id: itemId || "", doc: J(rest) });
+      return x.run(GT, { id, grn_id: grnId || "", item_id: itemId || "", doc: J(rest) });
     });
 
-    const ap = db.prepare("INSERT INTO appointments(id,date,doc) VALUES(@id,@date,@doc)");
-    replace("appointments", "appointments", (a) => {
+    const AP = "INSERT INTO `appointments`(`id`,`date`,`doc`) VALUES(:id,:date,:doc)";
+    await replace("appointments", "appointments", (a) => {
       const { id, date, ...rest } = a;
-      ap.run({ id, date: date || null, doc: J(rest) });
+      return x.run(AP, { id, date: date || null, doc: J(rest) });
     });
 
-    const hw = db.prepare(`INSERT INTO hr_workers
-      (id,name,dept,designation,pay_type,daily_rate,monthly_ctc,device_uid,active,joined,doc)
-      VALUES(@id,@name,@dept,@designation,@pay_type,@daily_rate,@monthly_ctc,@device_uid,@active,@joined,@doc)`);
-    replace("hrWorkers", "hr_workers", (w) => {
+    const HW = "INSERT INTO `hr_workers` " +
+      "(`id`,`name`,`dept`,`designation`,`pay_type`,`daily_rate`,`monthly_ctc`,`device_uid`,`active`,`joined`,`doc`) " +
+      "VALUES(:id,:name,:dept,:designation,:pay_type,:daily_rate,:monthly_ctc,:device_uid,:active,:joined,:doc)";
+    await replace("hrWorkers", "hr_workers", (w) => {
       const { id, name, dept, designation, payType, dailyRate, monthlyCtc, deviceUid, active, joined, ...rest } = w;
-      hw.run({ id, name: name || "", dept: dept || null, designation: designation || null,
+      return x.run(HW, { id, name: name || "", dept: dept || null, designation: designation || null,
         pay_type: payType || "daily", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
         device_uid: deviceUid || null, active: active === false ? 0 : 1, joined: joined || null, doc: J(rest) });
     });
 
-    const ha = db.prepare(`INSERT INTO hr_attendance
-      (id,worker_id,date,status,in_time,out_time,hours,ot_hours,note,source)
-      VALUES(@id,@worker_id,@date,@status,@in_time,@out_time,@hours,@ot_hours,@note,@source)`);
-    replace("hrAttendance", "hr_attendance", (a) => {
-      ha.run({ id: a.id || a.workerId + ":" + a.date, worker_id: a.workerId, date: a.date,
+    const HA = "INSERT INTO `hr_attendance` " +
+      "(`id`,`worker_id`,`date`,`status`,`in_time`,`out_time`,`hours`,`ot_hours`,`note`,`source`) " +
+      "VALUES(:id,:worker_id,:date,:status,:in_time,:out_time,:hours,:ot_hours,:note,:source)";
+    await replace("hrAttendance", "hr_attendance", (a) =>
+      x.run(HA, { id: a.id || a.workerId + ":" + a.date, worker_id: a.workerId, date: a.date,
         status: a.status || null, in_time: a.inTime || null, out_time: a.outTime || null,
-        hours: a.hours || 0, ot_hours: a.otHours || 0, note: a.note || null, source: a.source || "device" });
-    });
+        hours: a.hours || 0, ot_hours: a.otHours || 0, note: a.note || null, source: a.source || "device" }));
 
-    const hlt = db.prepare(`INSERT INTO hr_leave_types(id,name,quota,accrual,paid,color)
-      VALUES(@id,@name,@quota,@accrual,@paid,@color)`);
-    replace("hrLeaveTypes", "hr_leave_types", (t) => {
-      hlt.run({ id: t.id, name: t.name || t.id, quota: t.quota || 0,
-        accrual: t.accrual || "fixed", paid: t.paid === false ? 0 : 1, color: t.color || null });
-    });
+    const HLT = "INSERT INTO `hr_leave_types`(`id`,`name`,`quota`,`accrual`,`paid`,`color`) " +
+      "VALUES(:id,:name,:quota,:accrual,:paid,:color)";
+    await replace("hrLeaveTypes", "hr_leave_types", (t) =>
+      x.run(HLT, { id: t.id, name: t.name || t.id, quota: t.quota || 0,
+        accrual: t.accrual || "fixed", paid: t.paid === false ? 0 : 1, color: t.color || null }));
 
-    const hl = db.prepare(`INSERT INTO hr_leaves
-      (id,worker_id,type,from_date,to_date,days,status,reason,applied_on,decided_by)
-      VALUES(@id,@worker_id,@type,@from_date,@to_date,@days,@status,@reason,@applied_on,@decided_by)`);
-    replace("hrLeaves", "hr_leaves", (l) => {
-      hl.run({ id: l.id, worker_id: l.workerId, type: l.type, from_date: l.fromDate, to_date: l.toDate,
+    const HL = "INSERT INTO `hr_leaves` " +
+      "(`id`,`worker_id`,`type`,`from_date`,`to_date`,`days`,`status`,`reason`,`applied_on`,`decided_by`) " +
+      "VALUES(:id,:worker_id,:type,:from_date,:to_date,:days,:status,:reason,:applied_on,:decided_by)";
+    await replace("hrLeaves", "hr_leaves", (l) =>
+      x.run(HL, { id: l.id, worker_id: l.workerId, type: l.type, from_date: l.fromDate, to_date: l.toDate,
         days: l.days || 0, status: l.status || "Pending", reason: l.reason || null,
-        applied_on: l.appliedOn || null, decided_by: l.decidedBy || null });
-    });
+        applied_on: l.appliedOn || null, decided_by: l.decidedBy || null }));
 
-    const hpr = db.prepare(`INSERT INTO hr_payruns(id,period,status,generated_at,doc)
-      VALUES(@id,@period,@status,@generated_at,@doc)`);
-    replace("hrPayruns", "hr_payruns", (pr) => {
+    const HPR = "INSERT INTO `hr_payruns`(`id`,`period`,`status`,`generated_at`,`doc`) " +
+      "VALUES(:id,:period,:status,:generated_at,:doc)";
+    await replace("hrPayruns", "hr_payruns", (pr) => {
       const { id, period, status, generatedAt, ...rest } = pr;
-      hpr.run({ id, period, status: status || "Draft", generated_at: generatedAt || null, doc: J(rest) });
+      return x.run(HPR, { id, period, status: status || "Draft", generated_at: generatedAt || null, doc: J(rest) });
     });
 
-    const hps = db.prepare("INSERT INTO hr_payslips(id,payrun_id,worker_id,doc) VALUES(@id,@payrun_id,@worker_id,@doc)");
-    replace("hrPayslips", "hr_payslips", (ps) => {
+    const HPS = "INSERT INTO `hr_payslips`(`id`,`payrun_id`,`worker_id`,`doc`) " +
+      "VALUES(:id,:payrun_id,:worker_id,:doc)";
+    await replace("hrPayslips", "hr_payslips", (ps) => {
       const { id, payrunId, workerId, ...rest } = ps;
-      hps.run({ id, payrun_id: payrunId, worker_id: workerId, doc: J(rest) });
+      return x.run(HPS, { id, payrun_id: payrunId, worker_id: workerId, doc: J(rest) });
     });
   });
-  tx(data);
   return getState();
 }
 
-function isEmpty() {
-  const db = getDb();
-  const n = db.prepare("SELECT COUNT(*) AS c FROM items").pluck().get();
-  return n === 0;
+async function isEmpty(x0) {
+  const x = await ex(x0);
+  const n = await x.val("SELECT COUNT(*) AS `c` FROM `items`");
+  return Number(n) === 0;
 }
 
 /* ---------- TARGETED WRITES ----------
@@ -339,9 +388,9 @@ function isEmpty() {
    which was slow and caused last-writer-wins races between panels. */
 
 /** Read one work order in the frontend document shape (or null). */
-function getWorkOrder(id) {
-  const db = getDb();
-  const w = db.prepare("SELECT * FROM work_orders WHERE id=?").get(id);
+async function getWorkOrder(id, x0) {
+  const x = await ex(x0);
+  const w = await x.one("SELECT * FROM `work_orders` WHERE `id`=?", [id]);
   if (!w) return null;
   return Object.assign({}, P(w.doc, {}), {
     id: w.id, date: w.date, itemId: w.item_id, qty: w.qty, status: w.status,
@@ -350,47 +399,47 @@ function getWorkOrder(id) {
 }
 
 /** Insert-or-replace one work order (extra fields kept in doc JSON). */
-function putWorkOrder(w) {
-  const db = getDb();
+async function putWorkOrder(w, x0) {
+  const x = await ex(x0);
   const { id, date, itemId, qty, status, due, line, progress, priority, ...rest } = w;
-  db.prepare(`INSERT INTO work_orders
-      (id,date,item_id,qty,status,due,line,progress,priority,doc)
-      VALUES(@id,@date,@item_id,@qty,@status,@due,@line,@progress,@priority,@doc)
-      ON CONFLICT(id) DO UPDATE SET
-        date=excluded.date, item_id=excluded.item_id, qty=excluded.qty,
-        status=excluded.status, due=excluded.due, line=excluded.line,
-        progress=excluded.progress, priority=excluded.priority, doc=excluded.doc`)
-    .run({ id, date: date || null, item_id: itemId || null, qty: qty || 0,
+  await x.run(
+    "INSERT INTO `work_orders` " +
+    "(`id`,`date`,`item_id`,`qty`,`status`,`due`,`line`,`progress`,`priority`,`doc`) " +
+    "VALUES(:id,:date,:item_id,:qty,:status,:due,:line,:progress,:priority,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE " +
+    "`date`=`new`.`date`, `item_id`=`new`.`item_id`, `qty`=`new`.`qty`, " +
+    "`status`=`new`.`status`, `due`=`new`.`due`, `line`=`new`.`line`, " +
+    "`progress`=`new`.`progress`, `priority`=`new`.`priority`, `doc`=`new`.`doc`",
+    { id, date: date || null, item_id: itemId || null, qty: qty || 0,
       status: status || null, due: due || null, line: line || null,
       progress: progress || 0, priority: priority || null, doc: J(rest) });
-  return getWorkOrder(id);
+  return getWorkOrder(id, x);
 }
 
 /** Append stock movements (used when a stage posts its consumption/output). */
-function addMovements(moves) {
+async function addMovements(moves) {
   if (!moves || !moves.length) return 0;
-  const db = getDb();
-  const mv = db.prepare(`INSERT INTO movements
-      (id,date,item_id,wh,type,qty,rate,ref,note,by_who,supplier_id)
-      VALUES(@id,@date,@item_id,@wh,@type,@qty,@rate,@ref,@note,@by_who,@supplier_id)`);
-  const tx = db.transaction((rows) => {
-    rows.forEach((m) => mv.run({
-      id: m.id, date: m.date, item_id: m.itemId, wh: m.wh || null, type: m.type,
-      qty: m.qty, rate: m.rate || 0, ref: m.ref || null, note: m.note || null,
-      by_who: m.by || null, supplier_id: m.supplierId || null,
-    }));
+  await withTx(async (x) => {
+    const MV = "INSERT INTO `movements` " +
+      "(`id`,`date`,`item_id`,`wh`,`type`,`qty`,`rate`,`ref`,`note`,`by_who`,`supplier_id`) " +
+      "VALUES(:id,:date,:item_id,:wh,:type,:qty,:rate,:ref,:note,:by_who,:supplier_id)";
+    for (const m of moves)
+      await x.run(MV, {
+        id: m.id, date: m.date, item_id: m.itemId, wh: m.wh || null, type: m.type,
+        qty: m.qty, rate: m.rate || 0, ref: m.ref || null, note: m.note || null,
+        by_who: m.by || null, supplier_id: m.supplierId || null,
+      });
   });
-  tx(moves);
   return moves.length;
 }
 
 /** Append a single stock movement (hot path for manual receipts/adjustments). */
-function addMovement(m) { return addMovements([m]); }
+async function addMovement(m) { return addMovements([m]); }
 
 /** Read one item in the frontend document shape (or null). */
-function getItem(id) {
-  const db = getDb();
-  const r = db.prepare("SELECT * FROM items WHERE id=?").get(id);
+async function getItem(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `items` WHERE `id`=?", [id]);
   if (!r) return null;
   return Object.assign({}, P(r.doc, {}), {
     id: r.id, name: r.name, cat: r.cat, uom: r.uom, cost: r.cost, price: r.price,
@@ -400,28 +449,29 @@ function getItem(id) {
 }
 
 /** Insert-or-update one item (promoted columns + extra fields in doc JSON). */
-function putItem(i) {
-  const db = getDb();
+async function putItem(i, x0) {
+  const x = await ex(x0);
   const { id, name, cat, uom, cost, price, reorder, safety, lead, abc, hsn, supplierId, group, ...rest } = i;
-  db.prepare(`INSERT INTO items
-      (id,name,cat,uom,cost,price,reorder,safety,lead,abc,hsn,supplier_id,grp,doc)
-      VALUES(@id,@name,@cat,@uom,@cost,@price,@reorder,@safety,@lead,@abc,@hsn,@supplier_id,@grp,@doc)
-      ON CONFLICT(id) DO UPDATE SET
-        name=excluded.name, cat=excluded.cat, uom=excluded.uom, cost=excluded.cost,
-        price=excluded.price, reorder=excluded.reorder, safety=excluded.safety,
-        lead=excluded.lead, abc=excluded.abc, hsn=excluded.hsn,
-        supplier_id=excluded.supplier_id, grp=excluded.grp, doc=excluded.doc`)
-    .run({ id, name: name || null, cat: cat || null, uom: uom || null,
+  await x.run(
+    "INSERT INTO `items` " +
+    "(`id`,`name`,`cat`,`uom`,`cost`,`price`,`reorder`,`safety`,`lead`,`abc`,`hsn`,`supplier_id`,`grp`,`doc`) " +
+    "VALUES(:id,:name,:cat,:uom,:cost,:price,:reorder,:safety,:lead,:abc,:hsn,:supplier_id,:grp,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE " +
+    "`name`=`new`.`name`, `cat`=`new`.`cat`, `uom`=`new`.`uom`, `cost`=`new`.`cost`, " +
+    "`price`=`new`.`price`, `reorder`=`new`.`reorder`, `safety`=`new`.`safety`, " +
+    "`lead`=`new`.`lead`, `abc`=`new`.`abc`, `hsn`=`new`.`hsn`, " +
+    "`supplier_id`=`new`.`supplier_id`, `grp`=`new`.`grp`, `doc`=`new`.`doc`",
+    { id, name: name || null, cat: cat || null, uom: uom || null,
       cost: cost || 0, price: price || 0, reorder: reorder || 0, safety: safety || 0,
       lead: lead || 7, abc: abc || null, hsn: hsn || null,
       supplier_id: supplierId || null, grp: group || null, doc: J(rest) });
-  return getItem(id);
+  return getItem(id, x);
 }
 
 /** Read one purchase order in the frontend document shape (or null). */
-function getPurchaseOrder(id) {
-  const db = getDb();
-  const p = db.prepare("SELECT * FROM purchase_orders WHERE id=?").get(id);
+async function getPurchaseOrder(id, x0) {
+  const x = await ex(x0);
+  const p = await x.one("SELECT * FROM `purchase_orders` WHERE `id`=?", [id]);
   if (!p) return null;
   return Object.assign({}, P(p.doc, {}), {
     id: p.id, date: p.date, supplierId: p.supplier_id, status: p.status,
@@ -430,152 +480,157 @@ function getPurchaseOrder(id) {
 }
 
 /** Insert-or-update one purchase order. */
-function putPurchaseOrder(p) {
-  const db = getDb();
+async function putPurchaseOrder(p, x0) {
+  const x = await ex(x0);
   const { id, date, supplierId, status, eta, value, lines, ...rest } = p;
-  db.prepare(`INSERT INTO purchase_orders
-      (id,date,supplier_id,status,eta,value,lines,doc)
-      VALUES(@id,@date,@supplier_id,@status,@eta,@value,@lines,@doc)
-      ON CONFLICT(id) DO UPDATE SET
-        date=excluded.date, supplier_id=excluded.supplier_id, status=excluded.status,
-        eta=excluded.eta, value=excluded.value, lines=excluded.lines, doc=excluded.doc`)
-    .run({ id, date: date || null, supplier_id: supplierId || null, status: status || null,
+  await x.run(
+    "INSERT INTO `purchase_orders` " +
+    "(`id`,`date`,`supplier_id`,`status`,`eta`,`value`,`lines`,`doc`) " +
+    "VALUES(:id,:date,:supplier_id,:status,:eta,:value,:lines,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE " +
+    "`date`=`new`.`date`, `supplier_id`=`new`.`supplier_id`, `status`=`new`.`status`, " +
+    "`eta`=`new`.`eta`, `value`=`new`.`value`, `lines`=`new`.`lines`, `doc`=`new`.`doc`",
+    { id, date: date || null, supplier_id: supplierId || null, status: status || null,
       eta: eta || null, value: value || 0, lines: J(lines || []), doc: J(rest) });
-  return getPurchaseOrder(id);
+  return getPurchaseOrder(id, x);
 }
 
 /** Delete one purchase order and reverse any stock movements posted against
     it (GRN receipts), all in one transaction. Its goods receipt notes are
-    CANCELLED, not deleted — a numbered document must never silently vanish. */
-function deletePurchaseOrder(id) {
-  const db = getDb();
-  const tx = db.transaction((pid) => {
-    db.prepare("DELETE FROM movements WHERE ref=?").run(pid);
-    db.prepare("UPDATE grns SET doc=json_set(doc,'$.status','Cancelled') WHERE json_extract(doc,'$.poId')=?").run(pid);
-    db.prepare("DELETE FROM purchase_orders WHERE id=?").run(pid);
+    CANCELLED, not deleted — a numbered document must never silently vanish.
+
+    ⚠ `doc->>'$.poId'` and not json_extract(...). MySQL's JSON_EXTRACT returns
+    a JSON value, so a quoted "PO-1" never equals the plain string PO-1 and the
+    UPDATE would match nothing at all — silently. ->> unquotes it, which is
+    what SQLite's json_extract did by itself. */
+async function deletePurchaseOrder(id) {
+  await withTx(async (x) => {
+    await x.run("DELETE FROM `movements` WHERE `ref`=?", [id]);
+    await x.run("UPDATE `grns` SET `doc`=JSON_SET(`doc`,'$.status','Cancelled') " +
+      "WHERE `doc`->>'$.poId'=?", [id]);
+    await x.run("DELETE FROM `purchase_orders` WHERE `id`=?", [id]);
   });
-  tx(id);
   return { id };
 }
 
 /* ---------- GOODS RECEIPT NOTES (granular) ---------- */
-function getGrns() {
-  const db = getDb();
-  return db.prepare("SELECT id,doc FROM grns ORDER BY id ASC").all()
+async function getGrns(x0) {
+  const x = await ex(x0);
+  return (await x.all("SELECT `id`,`doc` FROM `grns` ORDER BY `id` ASC"))
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id }));
 }
-function putGrn(g) {
-  const db = getDb();
+async function putGrn(g, x0) {
+  const x = await ex(x0);
   const { id, ...rest } = g;
-  db.prepare(`INSERT INTO grns(id,doc) VALUES(@id,@doc)
-      ON CONFLICT(id) DO UPDATE SET doc=excluded.doc`).run({ id, doc: J(rest) });
+  await x.run("INSERT INTO `grns`(`id`,`doc`) VALUES(:id,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", { id, doc: J(rest) });
   return g;
 }
-function getGrn(id) {
-  const db = getDb();
-  const r = db.prepare("SELECT id,doc FROM grns WHERE id=?").get(id);
+async function getGrn(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT `id`,`doc` FROM `grns` WHERE `id`=?", [id]);
   return r ? Object.assign({}, P(r.doc, {}), { id: r.id }) : null;
 }
 
 /* ---------- INCOMING-MATERIAL TEST REPORTS (granular) ---------- */
 const grnTestRow = (r) => Object.assign({}, P(r.doc, {}),
   { id: r.id, grnId: r.grn_id, itemId: r.item_id });
-function getGrnTests() {
-  const db = getDb();
-  return db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests ORDER BY id ASC").all().map(grnTestRow);
+async function getGrnTests(x0) {
+  const x = await ex(x0);
+  return (await x.all("SELECT `id`,`grn_id`,`item_id`,`doc` FROM `grn_tests` ORDER BY `id` ASC")).map(grnTestRow);
 }
-function getGrnTest(id) {
-  const db = getDb();
-  const r = db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests WHERE id=?").get(id);
+async function getGrnTest(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT `id`,`grn_id`,`item_id`,`doc` FROM `grn_tests` WHERE `id`=?", [id]);
   return r ? grnTestRow(r) : null;
 }
 /* One report per (receipt × material) — re-measuring the same line updates it
    rather than filing a second, contradictory result for the same delivery. */
-function getGrnTestFor(grnId, itemId) {
-  const db = getDb();
-  const r = db.prepare("SELECT id,grn_id,item_id,doc FROM grn_tests WHERE grn_id=? AND item_id=?")
-    .get(grnId, itemId);
+async function getGrnTestFor(grnId, itemId, x0) {
+  const x = await ex(x0);
+  const r = await x.one(
+    "SELECT `id`,`grn_id`,`item_id`,`doc` FROM `grn_tests` WHERE `grn_id`=? AND `item_id`=?",
+    [grnId, itemId]);
   return r ? grnTestRow(r) : null;
 }
-function putGrnTest(t) {
-  const db = getDb();
+async function putGrnTest(t, x0) {
+  const x = await ex(x0);
   const { id, grnId, itemId, ...rest } = t;
-  db.prepare(`INSERT INTO grn_tests(id,grn_id,item_id,doc) VALUES(@id,@grn_id,@item_id,@doc)
-      ON CONFLICT(id) DO UPDATE SET grn_id=excluded.grn_id, item_id=excluded.item_id,
-        doc=excluded.doc`)
-    .run({ id, grn_id: grnId || "", item_id: itemId || "", doc: J(rest) });
+  await x.run("INSERT INTO `grn_tests`(`id`,`grn_id`,`item_id`,`doc`) " +
+    "VALUES(:id,:grn_id,:item_id,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `grn_id`=`new`.`grn_id`, `item_id`=`new`.`item_id`, `doc`=`new`.`doc`",
+    { id, grn_id: grnId || "", item_id: itemId || "", doc: J(rest) });
   return t;
 }
-function deleteGrnTest(id) {
-  getDb().prepare("DELETE FROM grn_tests WHERE id=?").run(id);
+async function deleteGrnTest(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `grn_tests` WHERE `id`=?", [id]);
   return { id };
 }
 
 /* ---------- SALES ORDERS (granular) ---------- */
-function getSalesOrder(id) {
-  const db = getDb();
-  const s = db.prepare("SELECT * FROM sales_orders WHERE id=?").get(id);
+async function getSalesOrder(id, x0) {
+  const x = await ex(x0);
+  const s = await x.one("SELECT * FROM `sales_orders` WHERE `id`=?", [id]);
   if (!s) return null;
   return Object.assign({}, P(s.doc, {}), {
     id: s.id, date: s.date, customerId: s.customer_id, status: s.status,
     promised: s.promised, priority: s.priority, value: s.value, lines: P(s.lines, []),
   });
 }
-function putSalesOrder(s) {
-  const db = getDb();
+async function putSalesOrder(s, x0) {
+  const x = await ex(x0);
   const { id, date, customerId, status, promised, priority, value, lines, ...rest } = s;
-  db.prepare(`INSERT INTO sales_orders
-      (id,date,customer_id,status,promised,priority,value,lines,doc)
-      VALUES(@id,@date,@customer_id,@status,@promised,@priority,@value,@lines,@doc)
-      ON CONFLICT(id) DO UPDATE SET
-        date=excluded.date, customer_id=excluded.customer_id, status=excluded.status,
-        promised=excluded.promised, priority=excluded.priority, value=excluded.value,
-        lines=excluded.lines, doc=excluded.doc`)
-    .run({ id, date: date || null, customer_id: customerId || null, status: status || null,
+  await x.run(
+    "INSERT INTO `sales_orders` " +
+    "(`id`,`date`,`customer_id`,`status`,`promised`,`priority`,`value`,`lines`,`doc`) " +
+    "VALUES(:id,:date,:customer_id,:status,:promised,:priority,:value,:lines,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE " +
+    "`date`=`new`.`date`, `customer_id`=`new`.`customer_id`, `status`=`new`.`status`, " +
+    "`promised`=`new`.`promised`, `priority`=`new`.`priority`, `value`=`new`.`value`, " +
+    "`lines`=`new`.`lines`, `doc`=`new`.`doc`",
+    { id, date: date || null, customer_id: customerId || null, status: status || null,
       promised: promised || null, priority: priority || null, value: value || 0,
       lines: J(lines || []), doc: J(rest) });
-  return getSalesOrder(id);
+  return getSalesOrder(id, x);
 }
 /** Delete one sales order and reverse any dispatch (SALE) movements. */
-function deleteSalesOrder(id) {
-  const db = getDb();
-  const tx = db.transaction((sid) => {
-    db.prepare("DELETE FROM movements WHERE ref=?").run(sid);
-    db.prepare("DELETE FROM sales_orders WHERE id=?").run(sid);
+async function deleteSalesOrder(id) {
+  await withTx(async (x) => {
+    await x.run("DELETE FROM `movements` WHERE `ref`=?", [id]);
+    await x.run("DELETE FROM `sales_orders` WHERE `id`=?", [id]);
   });
-  tx(id);
   return { id };
 }
 
 /* ---------- BILL OF MATERIALS (granular) ---------- */
-function getBom(itemId) {
-  const db = getDb();
-  const b = db.prepare("SELECT item_id,yield,lines,alternates FROM boms WHERE item_id=?").get(itemId);
+async function getBom(itemId, x0) {
+  const x = await ex(x0);
+  const b = await x.one("SELECT `item_id`,`yield`,`lines`,`alternates` FROM `boms` WHERE `item_id`=?", [itemId]);
   if (!b) return null;
   const out = { itemId: b.item_id, yield: b.yield, lines: P(b.lines, []) };
   const alt = P(b.alternates, null);
   if (alt && alt.length) out.alternates = alt;
   return out;
 }
-function putBom(itemId, bom) {
-  const db = getDb();
+async function putBom(itemId, bom, x0) {
+  const x = await ex(x0);
   const alt = (bom && Array.isArray(bom.alternates) && bom.alternates.length) ? J(bom.alternates) : null;
-  db.prepare(`INSERT INTO boms(item_id,yield,lines,alternates) VALUES(?,?,?,?)
-      ON CONFLICT(item_id) DO UPDATE SET yield=excluded.yield, lines=excluded.lines,
-        alternates=excluded.alternates`)
-    .run(itemId, (bom && bom.yield) || 1, J((bom && bom.lines) || []), alt);
-  return getBom(itemId);
+  await x.run("INSERT INTO `boms`(`item_id`,`yield`,`lines`,`alternates`) VALUES(?,?,?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `yield`=`new`.`yield`, `lines`=`new`.`lines`, `alternates`=`new`.`alternates`",
+    [itemId, (bom && bom.yield) || 1, J((bom && bom.lines) || []), alt]);
+  return getBom(itemId, x);
 }
-function deleteBom(itemId) {
-  const db = getDb();
-  db.prepare("DELETE FROM boms WHERE item_id=?").run(itemId);
+async function deleteBom(itemId, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `boms` WHERE `item_id`=?", [itemId]);
   return { itemId };
 }
 
 /* ---------- CRM LEADS (granular) ---------- */
-function getLead(id) {
-  const db = getDb();
-  const l = db.prepare("SELECT * FROM leads WHERE id=?").get(id);
+async function getLead(id, x0) {
+  const x = await ex(x0);
+  const l = await x.one("SELECT * FROM `leads` WHERE `id`=?", [id]);
   if (!l) return null;
   return Object.assign({}, P(l.doc, {}), {
     id: l.id, company: l.company, contact: l.contact, stage: l.stage,
@@ -583,168 +638,204 @@ function getLead(id) {
     nextFollowUp: l.next_follow_up, customerId: l.customer_id,
   });
 }
-function putLead(l) {
-  const db = getDb();
+async function putLead(l, x0) {
+  const x = await ex(x0);
   const { id, company, contact, stage, value, owner, created, nextFollowUp, customerId, ...rest } = l;
-  db.prepare(`INSERT INTO leads
-      (id,company,contact,stage,value,owner,created,next_follow_up,customer_id,doc)
-      VALUES(@id,@company,@contact,@stage,@value,@owner,@created,@next_follow_up,@customer_id,@doc)
-      ON CONFLICT(id) DO UPDATE SET
-        company=excluded.company, contact=excluded.contact, stage=excluded.stage,
-        value=excluded.value, owner=excluded.owner, created=excluded.created,
-        next_follow_up=excluded.next_follow_up, customer_id=excluded.customer_id, doc=excluded.doc`)
-    .run({ id, company: company || "", contact: contact || null, stage: stage || "New",
+  await x.run(
+    "INSERT INTO `leads` " +
+    "(`id`,`company`,`contact`,`stage`,`value`,`owner`,`created`,`next_follow_up`,`customer_id`,`doc`) " +
+    "VALUES(:id,:company,:contact,:stage,:value,:owner,:created,:next_follow_up,:customer_id,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE " +
+    "`company`=`new`.`company`, `contact`=`new`.`contact`, `stage`=`new`.`stage`, " +
+    "`value`=`new`.`value`, `owner`=`new`.`owner`, `created`=`new`.`created`, " +
+    "`next_follow_up`=`new`.`next_follow_up`, `customer_id`=`new`.`customer_id`, `doc`=`new`.`doc`",
+    { id, company: company || "", contact: contact || null, stage: stage || "New",
       value: value || 0, owner: owner || null, created: created || null,
       next_follow_up: nextFollowUp || null, customer_id: customerId || null, doc: J(rest) });
-  return getLead(id);
+  return getLead(id, x);
 }
-function deleteLead(id) {
-  const db = getDb();
-  db.prepare("DELETE FROM leads WHERE id=?").run(id);
+async function deleteLead(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `leads` WHERE `id`=?", [id]);
   return { id };
 }
 
 /* ---------- CUSTOMERS (granular) — used by CRM Won→customer conversion ---------- */
-function getCustomer(id) {
-  const db = getDb();
-  const c = db.prepare("SELECT doc FROM customers WHERE id=?").get(id);
+async function getCustomer(id, x0) {
+  const x = await ex(x0);
+  const c = await x.one("SELECT `doc` FROM `customers` WHERE `id`=?", [id]);
   return c ? P(c.doc) : null;
 }
-function putCustomer(c) {
-  const db = getDb();
-  db.prepare("INSERT INTO customers(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(c.id, J(c));
+async function putCustomer(c, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `customers`(`id`,`doc`) VALUES(?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [c.id, J(c)]);
   return c;
 }
-function deleteCustomer(id) { getDb().prepare("DELETE FROM customers WHERE id=?").run(id); return { id }; }
+async function deleteCustomer(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `customers` WHERE `id`=?", [id]);
+  return { id };
+}
 
 /* ---------- SUPPLIERS (granular) ---------- */
-function getSupplier(id) {
-  const s = getDb().prepare("SELECT doc FROM suppliers WHERE id=?").get(id);
+async function getSupplier(id, x0) {
+  const x = await ex(x0);
+  const s = await x.one("SELECT `doc` FROM `suppliers` WHERE `id`=?", [id]);
   return s ? P(s.doc) : null;
 }
-function putSupplier(s) {
-  getDb().prepare("INSERT INTO suppliers(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(s.id, J(s));
+async function putSupplier(s, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `suppliers`(`id`,`doc`) VALUES(?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [s.id, J(s)]);
   return s;
 }
-function deleteSupplier(id) { getDb().prepare("DELETE FROM suppliers WHERE id=?").run(id); return { id }; }
+async function deleteSupplier(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `suppliers` WHERE `id`=?", [id]);
+  return { id };
+}
 
 /* ---------- ORG (company profile — holds the invoice company entities) ---------- */
-function getOrg() {
-  return P(getDb().prepare("SELECT doc FROM org WHERE id=1").pluck().get(), null);
+async function getOrg(x0) {
+  const x = await ex(x0);
+  return P(await x.val("SELECT `doc` FROM `org` WHERE `id`=1"), null);
 }
-function putOrg(doc) {
-  getDb().prepare("INSERT INTO org(id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(J(doc || {}));
+async function putOrg(doc, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `org`(`id`,`doc`) VALUES(1,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [J(doc || {})]);
   return doc;
 }
 
 /* ---------- ITEM / WORK-ORDER deletes ---------- */
-function deleteItem(id) {
-  const db = getDb();
-  db.prepare("DELETE FROM items WHERE id=?").run(id);
+async function deleteItem(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `items` WHERE `id`=?", [id]);
   return { id };
 }
-function renameWorkOrder(oldId, newId) {
-  const db = getDb();
+async function renameWorkOrder(oldId, newId) {
   // the WO number is the row key and the ref every stage movement carries —
   // both move together or the ledger orphans
-  const tx = db.transaction(() => {
-    db.prepare("UPDATE movements SET ref=? WHERE ref=?").run(newId, oldId);
-    db.prepare("UPDATE work_orders SET id=? WHERE id=?").run(newId, oldId);
+  await withTx(async (x) => {
+    await x.run("UPDATE `movements` SET `ref`=? WHERE `ref`=?", [newId, oldId]);
+    await x.run("UPDATE `work_orders` SET `id`=? WHERE `id`=?", [newId, oldId]);
   });
-  tx();
   return { id: newId };
 }
-function deleteWorkOrder(id) {
-  const db = getDb();
+async function deleteWorkOrder(id) {
   // mirror deleteSalesOrder: the WO's posted stage movements (ISSUE/PROD)
   // go with it, so stock figures roll back instead of orphaning
-  const tx = db.transaction((wid) => {
-    db.prepare("DELETE FROM movements WHERE ref=?").run(wid);
-    db.prepare("DELETE FROM work_orders WHERE id=?").run(wid);
+  await withTx(async (x) => {
+    await x.run("DELETE FROM `movements` WHERE `ref`=?", [id]);
+    await x.run("DELETE FROM `work_orders` WHERE `id`=?", [id]);
   });
-  tx(id);
   return { id };
 }
 
 /* ---------- WAREHOUSES ---------- */
-function getWarehouse(id) {
-  return getDb().prepare("SELECT id,name,type,city FROM warehouses WHERE id=?").get(id) || null;
+async function getWarehouse(id, x0) {
+  const x = await ex(x0);
+  return (await x.one("SELECT `id`,`name`,`type`,`city` FROM `warehouses` WHERE `id`=?", [id])) || null;
 }
-function putWarehouse(w) {
-  getDb().prepare("INSERT INTO warehouses(id,name,type,city) VALUES(@id,@name,@type,@city) " +
-    "ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,city=excluded.city")
-    .run({ id: w.id, name: w.name, type: w.type || null, city: w.city || null });
+async function putWarehouse(w, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `warehouses`(`id`,`name`,`type`,`city`) VALUES(:id,:name,:type,:city) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `name`=`new`.`name`, `type`=`new`.`type`, `city`=`new`.`city`",
+    { id: w.id, name: w.name, type: w.type || null, city: w.city || null });
   return w;
 }
 
 /* ---------- TRANSPORTERS (dispatch providers) ---------- */
-function getTransporter(id) {
-  const db = getDb();
-  const t = db.prepare("SELECT doc FROM transporters WHERE id=?").get(id);
+async function getTransporter(id, x0) {
+  const x = await ex(x0);
+  const t = await x.one("SELECT `doc` FROM `transporters` WHERE `id`=?", [id]);
   return t ? P(t.doc) : null;
 }
-function putTransporter(t) {
-  const db = getDb();
-  db.prepare("INSERT INTO transporters(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(t.id, J(t));
+async function putTransporter(t, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `transporters`(`id`,`doc`) VALUES(?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [t.id, J(t)]);
   return t;
 }
-function deleteTransporter(id) { getDb().prepare("DELETE FROM transporters WHERE id=?").run(id); return { id }; }
+async function deleteTransporter(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `transporters` WHERE `id`=?", [id]);
+  return { id };
+}
 
 /* ---------- APPOINTMENTS (calendar diary entries) ---------- */
-function getAppointment(id) {
-  const a = getDb().prepare("SELECT id,date,doc FROM appointments WHERE id=?").get(id);
+async function getAppointment(id, x0) {
+  const x = await ex(x0);
+  const a = await x.one("SELECT `id`,`date`,`doc` FROM `appointments` WHERE `id`=?", [id]);
   return a ? Object.assign({}, P(a.doc, {}), { id: a.id, date: a.date }) : null;
 }
-function putAppointment(a) {
+async function putAppointment(a, x0) {
+  const x = await ex(x0);
   const { id, date, ...rest } = a;
-  getDb().prepare(`INSERT INTO appointments(id,date,doc) VALUES(@id,@date,@doc)
-      ON CONFLICT(id) DO UPDATE SET date=excluded.date, doc=excluded.doc`)
-    .run({ id, date: date || null, doc: J(rest) });
-  return getAppointment(id);
+  await x.run("INSERT INTO `appointments`(`id`,`date`,`doc`) VALUES(:id,:date,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `date`=`new`.`date`, `doc`=`new`.`doc`",
+    { id, date: date || null, doc: J(rest) });
+  return getAppointment(id, x);
 }
-function deleteAppointment(id) { getDb().prepare("DELETE FROM appointments WHERE id=?").run(id); return { id }; }
+async function deleteAppointment(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `appointments` WHERE `id`=?", [id]);
+  return { id };
+}
 
 /* ---------- LAB REPORTS (QC certificates + own product master) ---------- */
-function getLabProduct(id) {
-  const r = getDb().prepare("SELECT doc FROM lab_products WHERE id=?").get(id);
+async function getLabProduct(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT `doc` FROM `lab_products` WHERE `id`=?", [id]);
   return r ? P(r.doc) : null;
 }
-function putLabProduct(p) {
-  getDb().prepare("INSERT INTO lab_products(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(p.id, J(p));
+async function putLabProduct(p, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `lab_products`(`id`,`doc`) VALUES(?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [p.id, J(p)]);
   return p;
 }
-function deleteLabProduct(id) { getDb().prepare("DELETE FROM lab_products WHERE id=?").run(id); return { id }; }
-function labProductsEmpty() { return getDb().prepare("SELECT COUNT(*) n FROM lab_products").get().n === 0; }
+async function deleteLabProduct(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `lab_products` WHERE `id`=?", [id]);
+  return { id };
+}
+async function labProductsEmpty(x0) {
+  const x = await ex(x0);
+  return Number(await x.val("SELECT COUNT(*) AS `n` FROM `lab_products`")) === 0;
+}
 
-function getLabReport(id) {
-  const r = getDb().prepare("SELECT doc FROM lab_reports WHERE id=?").get(id);
+async function getLabReport(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT `doc` FROM `lab_reports` WHERE `id`=?", [id]);
   return r ? P(r.doc) : null;
 }
-function putLabReport(rep) {
-  getDb().prepare("INSERT INTO lab_reports(id,doc) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(rep.id, J(rep));
+async function putLabReport(rep, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `lab_reports`(`id`,`doc`) VALUES(?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [rep.id, J(rep)]);
   return rep;
 }
-function deleteLabReport(id) { getDb().prepare("DELETE FROM lab_reports WHERE id=?").run(id); return { id }; }
-
-function getSettings() {
-  const db = getDb();
-  return P(db.prepare("SELECT doc FROM settings WHERE id=1").pluck().get(), {});
-}
-function categoryExists(id) {
-  const db = getDb();
-  return !!db.prepare("SELECT 1 FROM categories WHERE id=?").get(id);
+async function deleteLabReport(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `lab_reports` WHERE `id`=?", [id]);
+  return { id };
 }
 
-function updateSettings(doc) {
-  const db = getDb();
-  db.prepare("INSERT INTO settings(id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc")
-    .run(J(doc || {}));
+async function getSettings(x0) {
+  const x = await ex(x0);
+  return P(await x.val("SELECT `doc` FROM `settings` WHERE `id`=1"), {});
+}
+async function categoryExists(id, x0) {
+  const x = await ex(x0);
+  return !!(await x.one("SELECT 1 AS `ok` FROM `categories` WHERE `id`=?", [id]));
+}
+
+async function updateSettings(doc, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `settings`(`id`,`doc`) VALUES(1,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [J(doc || {})]);
   return doc;
 }
 
@@ -752,144 +843,181 @@ function updateSettings(doc) {
    HUMAN RESOURCES — granular accessors
    ============================================================ */
 /* ---- workers ---- */
-function getWorker(id) {
-  const db = getDb();
-  const r = db.prepare("SELECT * FROM hr_workers WHERE id=?").get(id);
+async function getWorker(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `hr_workers` WHERE `id`=?", [id]);
   return r ? mapWorker(r) : null;
 }
-function getWorkerByDevice(uid) {
-  const db = getDb();
-  const r = db.prepare("SELECT * FROM hr_workers WHERE device_uid=?").get(String(uid));
+async function getWorkerByDevice(uid, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `hr_workers` WHERE `device_uid`=?", [String(uid)]);
   return r ? mapWorker(r) : null;
 }
-function putWorker(w) {
-  const db = getDb();
+async function putWorker(w, x0) {
+  const x = await ex(x0);
   const { id, name, dept, designation, payType, dailyRate, monthlyCtc, deviceUid, active, joined, ...rest } = w;
-  db.prepare(`INSERT INTO hr_workers
-      (id,name,dept,designation,pay_type,daily_rate,monthly_ctc,device_uid,active,joined,doc)
-      VALUES(@id,@name,@dept,@designation,@pay_type,@daily_rate,@monthly_ctc,@device_uid,@active,@joined,@doc)
-      ON CONFLICT(id) DO UPDATE SET
-        name=excluded.name, dept=excluded.dept, designation=excluded.designation,
-        pay_type=excluded.pay_type, daily_rate=excluded.daily_rate, monthly_ctc=excluded.monthly_ctc,
-        device_uid=excluded.device_uid, active=excluded.active, joined=excluded.joined, doc=excluded.doc`)
-    .run({ id, name: name || "", dept: dept || null, designation: designation || null,
+  await x.run(
+    "INSERT INTO `hr_workers` " +
+    "(`id`,`name`,`dept`,`designation`,`pay_type`,`daily_rate`,`monthly_ctc`,`device_uid`,`active`,`joined`,`doc`) " +
+    "VALUES(:id,:name,:dept,:designation,:pay_type,:daily_rate,:monthly_ctc,:device_uid,:active,:joined,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE " +
+    "`name`=`new`.`name`, `dept`=`new`.`dept`, `designation`=`new`.`designation`, " +
+    "`pay_type`=`new`.`pay_type`, `daily_rate`=`new`.`daily_rate`, `monthly_ctc`=`new`.`monthly_ctc`, " +
+    "`device_uid`=`new`.`device_uid`, `active`=`new`.`active`, `joined`=`new`.`joined`, `doc`=`new`.`doc`",
+    { id, name: name || "", dept: dept || null, designation: designation || null,
       pay_type: payType || "daily", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
       device_uid: deviceUid || null, active: active === false ? 0 : 1, joined: joined || null, doc: J(rest) });
-  return getWorker(id);
+  return getWorker(id, x);
 }
-function deleteWorker(id) { getDb().prepare("DELETE FROM hr_workers WHERE id=?").run(id); return { id }; }
+async function deleteWorker(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `hr_workers` WHERE `id`=?", [id]);
+  return { id };
+}
 
 /* ---- punches (append-only) ---- */
-function addPunch(p) {
-  getDb().prepare(`INSERT INTO hr_punches(id,worker_id,device_uid,ts,direction,device_id,source)
-      VALUES(@id,@worker_id,@device_uid,@ts,@direction,@device_id,@source)`)
-    .run({ id: p.id, worker_id: p.workerId || null, device_uid: p.deviceUid || null, ts: p.ts,
+async function addPunch(p, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `hr_punches`(`id`,`worker_id`,`device_uid`,`ts`,`direction`,`device_id`,`source`) " +
+    "VALUES(:id,:worker_id,:device_uid,:ts,:direction,:device_id,:source)",
+    { id: p.id, worker_id: p.workerId || null, device_uid: p.deviceUid || null, ts: p.ts,
       direction: p.direction || "auto", device_id: p.deviceId || null, source: p.source || "device" });
   return p;
 }
-function punchesForDate(date) {
-  return getDb().prepare("SELECT * FROM hr_punches WHERE ts LIKE ? ORDER BY ts ASC").all(date + "%")
-    .map((r) => ({ id: r.id, workerId: r.worker_id, deviceUid: r.device_uid, ts: r.ts, direction: r.direction, deviceId: r.device_id, source: r.source }));
+const punchRow = (r) => ({ id: r.id, workerId: r.worker_id, deviceUid: r.device_uid,
+  ts: r.ts, direction: r.direction, deviceId: r.device_id, source: r.source });
+async function punchesForDate(date, x0) {
+  const x = await ex(x0);
+  return (await x.all("SELECT * FROM `hr_punches` WHERE `ts` LIKE ? ORDER BY `ts` ASC", [date + "%"]))
+    .map(punchRow);
 }
-function recentPunches(limit) {
-  return getDb().prepare("SELECT * FROM hr_punches ORDER BY ts DESC LIMIT ?").all(limit || 100)
-    .map((r) => ({ id: r.id, workerId: r.worker_id, deviceUid: r.device_uid, ts: r.ts, direction: r.direction, deviceId: r.device_id, source: r.source }));
+/* LIMIT is interpolated, NOT bound. It is coerced to an integer and clamped
+   first, so nothing but a number can reach the SQL — some MySQL/driver
+   combinations send a bound LIMIT as a string and reject it, and a validated
+   integer is the one safe way to write this. */
+async function recentPunches(limit, x0) {
+  const x = await ex(x0);
+  const n = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 100)));
+  return (await x.all("SELECT * FROM `hr_punches` ORDER BY `ts` DESC LIMIT " + n)).map(punchRow);
 }
 
 /* ---- attendance (daily muster) ---- */
-function getAttendance(workerId, date) {
-  const r = getDb().prepare("SELECT * FROM hr_attendance WHERE id=?").get(workerId + ":" + date);
+async function getAttendance(workerId, date, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `hr_attendance` WHERE `id`=?", [workerId + ":" + date]);
   return r ? mapAtt(r) : null;
 }
-function putAttendance(a) {
-  const db = getDb();
+async function putAttendance(a, x0) {
+  const x = await ex(x0);
   const id = a.workerId + ":" + a.date;
-  db.prepare(`INSERT INTO hr_attendance(id,worker_id,date,status,in_time,out_time,hours,ot_hours,note,source)
-      VALUES(@id,@worker_id,@date,@status,@in_time,@out_time,@hours,@ot_hours,@note,@source)
-      ON CONFLICT(id) DO UPDATE SET status=excluded.status, in_time=excluded.in_time,
-        out_time=excluded.out_time, hours=excluded.hours, ot_hours=excluded.ot_hours,
-        note=excluded.note, source=excluded.source`)
-    .run({ id, worker_id: a.workerId, date: a.date, status: a.status || null,
+  await x.run(
+    "INSERT INTO `hr_attendance` " +
+    "(`id`,`worker_id`,`date`,`status`,`in_time`,`out_time`,`hours`,`ot_hours`,`note`,`source`) " +
+    "VALUES(:id,:worker_id,:date,:status,:in_time,:out_time,:hours,:ot_hours,:note,:source) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `status`=`new`.`status`, `in_time`=`new`.`in_time`, " +
+    "`out_time`=`new`.`out_time`, `hours`=`new`.`hours`, `ot_hours`=`new`.`ot_hours`, " +
+    "`note`=`new`.`note`, `source`=`new`.`source`",
+    { id, worker_id: a.workerId, date: a.date, status: a.status || null,
       in_time: a.inTime || null, out_time: a.outTime || null, hours: a.hours || 0,
       ot_hours: a.otHours || 0, note: a.note || null, source: a.source || "device" });
-  return getAttendance(a.workerId, a.date);
+  return getAttendance(a.workerId, a.date, x);
 }
-function attendanceForPeriod(period) {
-  return getDb().prepare("SELECT * FROM hr_attendance WHERE date LIKE ? ORDER BY date ASC").all(period + "%").map(mapAtt);
+async function attendanceForPeriod(period, x0) {
+  const x = await ex(x0);
+  return (await x.all("SELECT * FROM `hr_attendance` WHERE `date` LIKE ? ORDER BY `date` ASC",
+    [period + "%"])).map(mapAtt);
 }
 
 /* ---- leave types ---- */
-function putLeaveType(t) {
-  getDb().prepare(`INSERT INTO hr_leave_types(id,name,quota,accrual,paid,color)
-      VALUES(@id,@name,@quota,@accrual,@paid,@color)
-      ON CONFLICT(id) DO UPDATE SET name=excluded.name, quota=excluded.quota,
-        accrual=excluded.accrual, paid=excluded.paid, color=excluded.color`)
-    .run({ id: t.id, name: t.name || t.id, quota: t.quota || 0, accrual: t.accrual || "fixed",
+async function putLeaveType(t, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `hr_leave_types`(`id`,`name`,`quota`,`accrual`,`paid`,`color`) " +
+    "VALUES(:id,:name,:quota,:accrual,:paid,:color) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `name`=`new`.`name`, `quota`=`new`.`quota`, " +
+    "`accrual`=`new`.`accrual`, `paid`=`new`.`paid`, `color`=`new`.`color`",
+    { id: t.id, name: t.name || t.id, quota: t.quota || 0, accrual: t.accrual || "fixed",
       paid: t.paid === false ? 0 : 1, color: t.color || null });
   return t;
 }
-function getLeaveType(id) {
-  const r = getDb().prepare("SELECT * FROM hr_leave_types WHERE id=?").get(id);
+async function getLeaveType(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `hr_leave_types` WHERE `id`=?", [id]);
   return r ? { id: r.id, name: r.name, quota: r.quota, accrual: r.accrual, paid: !!r.paid, color: r.color } : null;
 }
-function deleteLeaveType(id) { getDb().prepare("DELETE FROM hr_leave_types WHERE id=?").run(id); return { id }; }
-
-/* ---- leaves ---- */
-function getLeave(id) {
-  const r = getDb().prepare("SELECT * FROM hr_leaves WHERE id=?").get(id);
-  return r ? mapLeave(r) : null;
-}
-function putLeave(l) {
-  const db = getDb();
-  db.prepare(`INSERT INTO hr_leaves(id,worker_id,type,from_date,to_date,days,status,reason,applied_on,decided_by)
-      VALUES(@id,@worker_id,@type,@from_date,@to_date,@days,@status,@reason,@applied_on,@decided_by)
-      ON CONFLICT(id) DO UPDATE SET worker_id=excluded.worker_id, type=excluded.type,
-        from_date=excluded.from_date, to_date=excluded.to_date, days=excluded.days,
-        status=excluded.status, reason=excluded.reason, applied_on=excluded.applied_on, decided_by=excluded.decided_by`)
-    .run({ id: l.id, worker_id: l.workerId, type: l.type, from_date: l.fromDate, to_date: l.toDate,
-      days: l.days || 0, status: l.status || "Pending", reason: l.reason || null,
-      applied_on: l.appliedOn || null, decided_by: l.decidedBy || null });
-  return getLeave(l.id);
-}
-function deleteLeave(id) { getDb().prepare("DELETE FROM hr_leaves WHERE id=?").run(id); return { id }; }
-
-/* ---- payroll ---- */
-function getPayrun(id) {
-  const r = getDb().prepare("SELECT * FROM hr_payruns WHERE id=?").get(id);
-  return r ? Object.assign({}, P(r.doc, {}), { id: r.id, period: r.period, status: r.status, generatedAt: r.generated_at }) : null;
-}
-function putPayrun(pr) {
-  const db = getDb();
-  const { id, period, status, generatedAt, ...rest } = pr;
-  db.prepare(`INSERT INTO hr_payruns(id,period,status,generated_at,doc)
-      VALUES(@id,@period,@status,@generated_at,@doc)
-      ON CONFLICT(id) DO UPDATE SET period=excluded.period, status=excluded.status,
-        generated_at=excluded.generated_at, doc=excluded.doc`)
-    .run({ id, period, status: status || "Draft", generated_at: generatedAt || null, doc: J(rest) });
-  return getPayrun(id);
-}
-function putPayslip(ps) {
-  const db = getDb();
-  const { id, payrunId, workerId, ...rest } = ps;
-  db.prepare(`INSERT INTO hr_payslips(id,payrun_id,worker_id,doc) VALUES(@id,@payrun_id,@worker_id,@doc)
-      ON CONFLICT(id) DO UPDATE SET payrun_id=excluded.payrun_id, worker_id=excluded.worker_id, doc=excluded.doc`)
-    .run({ id, payrun_id: payrunId, worker_id: workerId, doc: J(rest) });
-  return ps;
-}
-function payslipsForRun(payrunId) {
-  return getDb().prepare("SELECT * FROM hr_payslips WHERE payrun_id=?").all(payrunId)
-    .map((r) => Object.assign({ id: r.id, payrunId: r.payrun_id, workerId: r.worker_id }, P(r.doc, {})));
-}
-function deletePayrun(id) {
-  const db = getDb();
-  const tx = db.transaction((pid) => {
-    db.prepare("DELETE FROM hr_payslips WHERE payrun_id=?").run(pid);
-    db.prepare("DELETE FROM hr_payruns WHERE id=?").run(pid);
-  });
-  tx(id);
+async function deleteLeaveType(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `hr_leave_types` WHERE `id`=?", [id]);
   return { id };
 }
-function hrIsEmpty() { return getDb().prepare("SELECT COUNT(*) AS c FROM hr_workers").pluck().get() === 0; }
+
+/* ---- leaves ---- */
+async function getLeave(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `hr_leaves` WHERE `id`=?", [id]);
+  return r ? mapLeave(r) : null;
+}
+async function putLeave(l, x0) {
+  const x = await ex(x0);
+  await x.run(
+    "INSERT INTO `hr_leaves` " +
+    "(`id`,`worker_id`,`type`,`from_date`,`to_date`,`days`,`status`,`reason`,`applied_on`,`decided_by`) " +
+    "VALUES(:id,:worker_id,:type,:from_date,:to_date,:days,:status,:reason,:applied_on,:decided_by) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `worker_id`=`new`.`worker_id`, `type`=`new`.`type`, " +
+    "`from_date`=`new`.`from_date`, `to_date`=`new`.`to_date`, `days`=`new`.`days`, " +
+    "`status`=`new`.`status`, `reason`=`new`.`reason`, `applied_on`=`new`.`applied_on`, " +
+    "`decided_by`=`new`.`decided_by`",
+    { id: l.id, worker_id: l.workerId, type: l.type, from_date: l.fromDate, to_date: l.toDate,
+      days: l.days || 0, status: l.status || "Pending", reason: l.reason || null,
+      applied_on: l.appliedOn || null, decided_by: l.decidedBy || null });
+  return getLeave(l.id, x);
+}
+async function deleteLeave(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `hr_leaves` WHERE `id`=?", [id]);
+  return { id };
+}
+
+/* ---- payroll ---- */
+async function getPayrun(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT * FROM `hr_payruns` WHERE `id`=?", [id]);
+  return r ? Object.assign({}, P(r.doc, {}), { id: r.id, period: r.period, status: r.status, generatedAt: r.generated_at }) : null;
+}
+async function putPayrun(pr, x0) {
+  const x = await ex(x0);
+  const { id, period, status, generatedAt, ...rest } = pr;
+  await x.run("INSERT INTO `hr_payruns`(`id`,`period`,`status`,`generated_at`,`doc`) " +
+    "VALUES(:id,:period,:status,:generated_at,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `period`=`new`.`period`, `status`=`new`.`status`, " +
+    "`generated_at`=`new`.`generated_at`, `doc`=`new`.`doc`",
+    { id, period, status: status || "Draft", generated_at: generatedAt || null, doc: J(rest) });
+  return getPayrun(id, x);
+}
+async function putPayslip(ps, x0) {
+  const x = await ex(x0);
+  const { id, payrunId, workerId, ...rest } = ps;
+  await x.run("INSERT INTO `hr_payslips`(`id`,`payrun_id`,`worker_id`,`doc`) " +
+    "VALUES(:id,:payrun_id,:worker_id,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `payrun_id`=`new`.`payrun_id`, `worker_id`=`new`.`worker_id`, `doc`=`new`.`doc`",
+    { id, payrun_id: payrunId, worker_id: workerId, doc: J(rest) });
+  return ps;
+}
+async function payslipsForRun(payrunId, x0) {
+  const x = await ex(x0);
+  return (await x.all("SELECT * FROM `hr_payslips` WHERE `payrun_id`=?", [payrunId]))
+    .map((r) => Object.assign({ id: r.id, payrunId: r.payrun_id, workerId: r.worker_id }, P(r.doc, {})));
+}
+async function deletePayrun(id) {
+  await withTx(async (x) => {
+    await x.run("DELETE FROM `hr_payslips` WHERE `payrun_id`=?", [id]);
+    await x.run("DELETE FROM `hr_payruns` WHERE `id`=?", [id]);
+  });
+  return { id };
+}
+async function hrIsEmpty(x0) {
+  const x = await ex(x0);
+  return Number(await x.val("SELECT COUNT(*) AS `c` FROM `hr_workers`")) === 0;
+}
 
 module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,

@@ -56,14 +56,14 @@ function deepMerge(base, over) {
   }
   return out;
 }
-function getConfig() {
-  const s = repo.getSettings() || {};
+async function getConfig() {
+  const s = await repo.getSettings() || {};
   return deepMerge(HR_DEFAULTS, s.hr || {});
 }
-function setConfig(patch) {
-  const s = repo.getSettings() || {};
-  s.hr = deepMerge(getConfig(), patch || {});
-  repo.updateSettings(s);
+async function setConfig(patch) {
+  const s = await repo.getSettings() || {};
+  s.hr = deepMerge(await getConfig(), patch || {});
+  await repo.updateSettings(s);
   return s.hr;
 }
 function isWeekOff(dateStr, cfg) { return (cfg.weekOff || []).includes(new Date(dateStr + "T12:00:00").getDay()); }
@@ -91,44 +91,44 @@ function normalizeTs(ts, cfg) {
 /* ============================================================
    WORKERS
    ============================================================ */
-function listWorkers() { return repo.getState().hrWorkers; }
-function createWorker(w) {
+async function listWorkers() { return (await repo.getState()).hrWorkers; }
+async function createWorker(w) {
   w = w || {};
   if (!w.name) throw err("Worker needs a name", 400);
-  if (!w.id) w.id = nextId(repo.getState().hrWorkers, "EMP-");
-  else if (repo.getWorker(w.id)) throw err("Worker " + w.id + " already exists", 409);
-  if (w.deviceUid && repo.getWorkerByDevice(w.deviceUid) && repo.getWorkerByDevice(w.deviceUid).id !== w.id)
+  if (!w.id) w.id = nextId((await repo.getState()).hrWorkers, "EMP-");
+  else if (await repo.getWorker(w.id)) throw err("Worker " + w.id + " already exists", 409);
+  if (w.deviceUid && await repo.getWorkerByDevice(w.deviceUid) && (await repo.getWorkerByDevice(w.deviceUid)).id !== w.id)
     throw err("Device id " + w.deviceUid + " is already mapped to another worker", 409);
   w.payType = w.payType || "daily";
   w.dailyRate = num(w.dailyRate);
   w.monthlyCtc = num(w.monthlyCtc);
   w.joined = w.joined || todayISO();
-  return repo.putWorker(w);
+  return await repo.putWorker(w);
 }
-function updateWorker(id, patch) {
-  const existing = repo.getWorker(id);
+async function updateWorker(id, patch) {
+  const existing = await repo.getWorker(id);
   if (!existing) throw err("Worker not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (merged.deviceUid) {
-    const owner = repo.getWorkerByDevice(merged.deviceUid);
+    const owner = await repo.getWorkerByDevice(merged.deviceUid);
     if (owner && owner.id !== id) throw err("Device id " + merged.deviceUid + " is already mapped to " + owner.id, 409);
   }
   merged.dailyRate = num(merged.dailyRate);
   merged.monthlyCtc = num(merged.monthlyCtc);
-  return repo.putWorker(merged);
+  return await repo.putWorker(merged);
 }
-function deleteWorker(id) {
-  if (!repo.getWorker(id)) throw err("Worker not found", 404);
-  return repo.deleteWorker(id);
+async function deleteWorker(id) {
+  if (!await repo.getWorker(id)) throw err("Worker not found", 404);
+  return await repo.deleteWorker(id);
 }
 
 /* ============================================================
    ATTENDANCE — biometric punch ingestion + derivation
    ============================================================ */
 /** Recompute one worker's daily muster row from that day's punches. */
-function recomputeAttendance(workerId, date) {
-  const cfg = getConfig();
-  const punches = repo.punchesForDate(date).filter((p) => p.workerId === workerId).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+async function recomputeAttendance(workerId, date) {
+  const cfg = await getConfig();
+  const punches = (await repo.punchesForDate(date)).filter((p) => p.workerId === workerId).sort((a, b) => (a.ts < b.ts ? -1 : 1));
   if (!punches.length) return null;
   const first = punches[0].ts, last = punches[punches.length - 1].ts;
   const inT = first.slice(11, 16), outT = punches.length > 1 ? last.slice(11, 16) : null;
@@ -137,53 +137,53 @@ function recomputeAttendance(workerId, date) {
   const ot = Math.max(0, round(hours - cfg.standardDayHours));
   let status = "P";
   if (punches.length > 1 && hours > 0 && hours < cfg.halfDayBelowHours) status = "HD";
-  return repo.putAttendance({ workerId, date, status, inTime: inT, outTime: outT, hours, otHours: ot, source: "device" });
+  return await repo.putAttendance({ workerId, date, status, inTime: inT, outTime: outT, hours, otHours: ot, source: "device" });
 }
 
 /** Ingest ONE raw biometric punch (device → server). Resolves the worker by
     device user id, stores the punch, and refreshes that day's muster. */
-function ingestPunch(body) {
+async function ingestPunch(body) {
   body = body || {};
   const deviceUid = String(body.deviceUid || body.userId || body.uid || body.pin || "").trim();
   if (!deviceUid) throw err("Punch needs a device user id (deviceUid)", 400);
   const rawTs = body.ts || body.time || new Date().toISOString();
   if (isNaN(new Date(rawTs).getTime())) throw err("Punch has an invalid timestamp", 400);
-  const ts = normalizeTs(rawTs, getConfig());   // store factory-local wall-clock
-  const worker = repo.getWorkerByDevice(deviceUid);
-  const punch = repo.addPunch({
+  const ts = normalizeTs(rawTs, await getConfig());   // store factory-local wall-clock
+  const worker = await repo.getWorkerByDevice(deviceUid);
+  const punch = await repo.addPunch({
     id: rid("PN"), workerId: worker ? worker.id : null, deviceUid, ts,
     direction: body.direction || body.state || "auto", deviceId: body.deviceId || body.sn || null,
     source: body.source || "device",
   });
   let attendance = null;
-  if (worker) attendance = recomputeAttendance(worker.id, ts.slice(0, 10));
+  if (worker) attendance = await recomputeAttendance(worker.id, ts.slice(0, 10));
   return { ok: true, matched: !!worker, workerId: worker ? worker.id : null, punch, attendance };
 }
 
 /** Manual muster entry / correction (HR desk). */
-function setAttendance(a) {
+async function setAttendance(a) {
   a = a || {};
   if (!a.workerId || !a.date) throw err("Attendance needs workerId and date", 400);
-  if (!repo.getWorker(a.workerId)) throw err("Unknown worker " + a.workerId, 400);
+  if (!await repo.getWorker(a.workerId)) throw err("Unknown worker " + a.workerId, 400);
   let hours = num(a.hours), ot = num(a.otHours);
   if (!hours && a.inTime && a.outTime) {
     hours = round((new Date(a.date + "T" + a.outTime) - new Date(a.date + "T" + a.inTime)) / 3.6e6);
-    ot = Math.max(0, round(hours - getConfig().standardDayHours));
+    ot = Math.max(0, round(hours - (await getConfig()).standardDayHours));
   }
-  return repo.putAttendance({ workerId: a.workerId, date: a.date, status: a.status || "P",
+  return await repo.putAttendance({ workerId: a.workerId, date: a.date, status: a.status || "P",
     inTime: a.inTime || null, outTime: a.outTime || null, hours, otHours: ot, note: a.note || null, source: "manual" });
 }
 
-function recentPunches(limit) { return repo.recentPunches(limit || 100); }
+async function recentPunches(limit) { return await repo.recentPunches(limit || 100); }
 
 /* ============================================================
    LEAVE — configurable types, apply / approve, live balances
    ============================================================ */
-function saveLeaveType(t) {
+async function saveLeaveType(t) {
   if (!t || !t.id) throw err("Leave type needs an id/code", 400);
-  return repo.putLeaveType(Object.assign({ name: t.id }, t));
+  return await repo.putLeaveType(Object.assign({ name: t.id }, t));
 }
-function deleteLeaveType(id) { return repo.deleteLeaveType(id); }
+async function deleteLeaveType(id) { return await repo.deleteLeaveType(id); }
 
 function daysBetween(from, to) { return eachDate(from, to).length; }
 
@@ -204,8 +204,8 @@ function earnedLeaveDays(attendance, workerId, year) {
 }
 
 /** Live leave balances for a worker: quota (or earned) − approved-this-year. */
-function leaveBalances(workerId) {
-  const st = repo.getState();
+async function leaveBalances(workerId) {
+  const st = await repo.getState();
   const year = String(new Date().getFullYear());
   const earned = earnedLeaveDays(st.hrAttendance || [], workerId, year);
   return (st.hrLeaveTypes || []).map((t) => {
@@ -216,40 +216,40 @@ function leaveBalances(workerId) {
   });
 }
 
-function applyLeave(l) {
+async function applyLeave(l) {
   l = l || {};
-  if (!l.workerId || !repo.getWorker(l.workerId)) throw err("Unknown worker", 400);
-  if (!l.type || !repo.getLeaveType(l.type)) throw err("Unknown leave type", 400);
+  if (!l.workerId || !await repo.getWorker(l.workerId)) throw err("Unknown worker", 400);
+  if (!l.type || !await repo.getLeaveType(l.type)) throw err("Unknown leave type", 400);
   if (!l.fromDate || !l.toDate) throw err("Leave needs from and to dates", 400);
   if (l.toDate < l.fromDate) throw err("End date is before start date", 400);
   const days = l.days != null ? num(l.days) : daysBetween(l.fromDate, l.toDate);
-  const lv = { id: l.id || nextId(repo.getState().hrLeaves, "LV-"), workerId: l.workerId, type: l.type,
+  const lv = { id: l.id || nextId((await repo.getState()).hrLeaves, "LV-"), workerId: l.workerId, type: l.type,
     fromDate: l.fromDate, toDate: l.toDate, days, status: l.status || "Pending",
     reason: l.reason || null, appliedOn: l.appliedOn || todayISO() };
-  return repo.putLeave(lv);
+  return await repo.putLeave(lv);
 }
 
-function decideLeave(id, status, user) {
-  const lv = repo.getLeave(id);
+async function decideLeave(id, status, user) {
+  const lv = await repo.getLeave(id);
   if (!lv) throw err("Leave not found", 404);
   if (!["Approved", "Rejected", "Pending"].includes(status)) throw err("Invalid status", 400);
   lv.status = status;
   lv.decidedBy = (user && user.username) || "office";
-  repo.putLeave(lv);
+  await repo.putLeave(lv);
   // reflect an approved leave on the muster so payroll pays it as a leave day
   if (status === "Approved") {
-    eachDate(lv.fromDate, lv.toDate).forEach((d) => {
-      const existing = repo.getAttendance(lv.workerId, d);
+    for (const d of eachDate(lv.fromDate, lv.toDate)) {
+      const existing = await repo.getAttendance(lv.workerId, d);
       if (!existing || existing.source !== "device") {
-        repo.putAttendance({ workerId: lv.workerId, date: d, status: "L", note: lv.type + " leave", source: "leave" });
+        await repo.putAttendance({ workerId: lv.workerId, date: d, status: "L", note: lv.type + " leave", source: "leave" });
       }
-    });
+    }
   }
   return lv;
 }
-function deleteLeave(id) {
-  if (!repo.getLeave(id)) throw err("Leave not found", 404);
-  return repo.deleteLeave(id);
+async function deleteLeave(id) {
+  if (!await repo.getLeave(id)) throw err("Leave not found", 404);
+  return await repo.deleteLeave(id);
 }
 
 /* ============================================================
@@ -283,8 +283,8 @@ function advanceOf(worker) {
 
 /** Recovered so far — counted ONLY from FINALISED runs, and never from the
     period being computed (that instalment is what we are working out). */
-function advanceRecovered(workerId, exceptPeriod, st) {
-  st = st || repo.getState();
+async function advanceRecovered(workerId, exceptPeriod, st) {
+  st = st || await repo.getState();
   const finalised = {};
   (st.hrPayruns || []).forEach((pr) => {
     if (pr.status === "Finalized" && pr.period !== exceptPeriod) finalised[pr.id] = true;
@@ -296,11 +296,11 @@ function advanceRecovered(workerId, exceptPeriod, st) {
 /** What this period should recover from a worker, and the balance either side.
     The last instalment is trimmed to whatever is still outstanding, so an
     advance is never over-recovered. */
-function advanceForPeriod(worker, period, st) {
+async function advanceForPeriod(worker, period, st) {
   const adv = advanceOf(worker);
   if (!adv) return null;
   if (adv.startPeriod && period < adv.startPeriod) return null;   // not started yet
-  const recovered = advanceRecovered(worker.id, period, st);
+  const recovered = await advanceRecovered(worker.id, period, st);
   const opening = round(Math.max(0, adv.amount - recovered));
   if (opening <= 0) return { amount: adv.amount, opening: 0, instalment: 0, closing: 0, cleared: true };
   const instalment = round(Math.min(adv.monthly > 0 ? adv.monthly : opening, opening));
@@ -308,12 +308,12 @@ function advanceForPeriod(worker, period, st) {
 }
 
 /** Set / clear a worker's advance. `null` (or a zero amount) clears it. */
-function setAdvance(workerId, body) {
-  const w = repo.getWorker(workerId);
+async function setAdvance(workerId, body) {
+  const w = await repo.getWorker(workerId);
   if (!w) throw err("Worker not found", 404);
   body = body || {};
   const amount = round(num(body.amount));
-  if (!amount) { delete w.advance; return repo.putWorker(w); }
+  if (!amount) { delete w.advance; return await repo.putWorker(w); }
   if (amount < 0) throw err("Advance amount cannot be negative", 400);
   const monthly = round(num(body.monthly));
   if (monthly < 0) throw err("Monthly deduction cannot be negative", 400);
@@ -322,23 +322,23 @@ function setAdvance(workerId, body) {
   w.advance = { amount, monthly, note: String(body.note || "").slice(0, 200),
     startPeriod: body.startPeriod || null,
     startedOn: (w.advance && w.advance.startedOn) || todayISO() };
-  return repo.putWorker(w);
+  return await repo.putWorker(w);
 }
 
 /** A worker's advance with its live balance — what the UI shows. */
-function advanceStatus(workerId) {
-  const w = repo.getWorker(workerId);
+async function advanceStatus(workerId) {
+  const w = await repo.getWorker(workerId);
   if (!w) throw err("Worker not found", 404);
   const adv = advanceOf(w);
   if (!adv) return { workerId, name: w.name, advance: null };
-  const recovered = advanceRecovered(workerId, null);
+  const recovered = await advanceRecovered(workerId, null);
   return { workerId, name: w.name,
     advance: Object.assign({}, adv, { recovered, outstanding: round(Math.max(0, adv.amount - recovered)) }) };
 }
 
 /** Compute one worker's payslip for a period (YYYY-MM) from attendance. */
-function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
-  const att = repo.attendanceForPeriod(period).filter((a) => a.workerId === worker.id);
+async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
+  const att = (await repo.attendanceForPeriod(period)).filter((a) => a.workerId === worker.id);
   let present = 0, otHours = 0, paidLeave = 0, unpaidLeave = 0, absent = 0;
   att.forEach((a) => {
     if (a.status === "P") present += 1;
@@ -393,12 +393,12 @@ function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
 }
 
 /** Generate (or regenerate) a Draft pay run for the period. */
-function runPayroll(period, opts) {
+async function runPayroll(period, opts) {
   opts = opts || {};
   if (!/^\d{4}-\d{2}$/.test(period || "")) throw err("Period must be YYYY-MM", 400);
-  const cfg = getConfig();
-  const st = repo.getState();
-  const existing = repo.getPayrun("PR-" + period);
+  const cfg = await getConfig();
+  const st = await repo.getState();
+  const existing = await repo.getPayrun("PR-" + period);
   if (existing && existing.status === "Finalized" && !opts.force) throw err("Pay run for " + period + " is finalized", 400);
   /* Payroll normally covers every active worker. `workerIds` narrows it to a
      chosen few — the clerk who settles the coating floor today and the rest on
@@ -436,14 +436,19 @@ function runPayroll(period, opts) {
     return t ? t.paid !== false : true;
   };
 
-  const slips = workers.map((w) => computeSlip(w, period, cfg, isPaidLeaveDay, advanceForPeriod(w, period, st)));
+  /* One worker at a time. .map() with an async callback yields promises, and
+     every total below would be computed from those instead of from wages. */
+  const slips = [];
+  for (const w of workers)
+    slips.push(await computeSlip(w, period, cfg, isPaidLeaveDay,
+      await advanceForPeriod(w, period, st)));
   const payrunId = "PR-" + period;
   /* A run for a few people must not wipe the payslips already made for this
      month, and the header has to agree with the list under it — so the totals
      cover EVERY slip in the run, not just the ones recomputed just now. Slips
      edited by hand keep their adjusted figures. */
   const merged = {};
-  repo.payslipsForRun(payrunId).forEach((s) => { merged[s.workerId] = s; });
+  (await repo.payslipsForRun(payrunId)).forEach((s) => { merged[s.workerId] = s; });
   slips.forEach((s) => { merged[s.workerId] = s; });
   const allSlips = Object.keys(merged).map((k) => merged[k]);
   const totals = allSlips.reduce((t, s) => { const d = s.deductions || {};
@@ -451,58 +456,62 @@ function runPayroll(period, opts) {
       pf: t.pf + num(d.pf), esi: t.esi + num(d.esi), pt: t.pt + num(d.pt),
       advances: t.advances + num(s.advances) }; },
     { gross: 0, net: 0, pf: 0, esi: 0, pt: 0, advances: 0 });
-  const payrun = repo.putPayrun({ id: payrunId, period, status: "Draft", generatedAt: new Date().toISOString(),
+  const payrun = await repo.putPayrun({ id: payrunId, period, status: "Draft", generatedAt: new Date().toISOString(),
     workers: allSlips.length, totals: { gross: round(totals.gross), net: round(totals.net),
       pf: round(totals.pf), esi: round(totals.esi), pt: round(totals.pt),
       advances: round(totals.advances) }, config: cfg });
-  slips.forEach((s) => repo.putPayslip(Object.assign({ id: payrunId + ":" + s.workerId, payrunId }, s)));
-  return { payrun, payslips: repo.payslipsForRun(payrunId) };
+  for (const s of slips) await repo.putPayslip(Object.assign({ id: payrunId + ":" + s.workerId, payrunId }, s));
+  return { payrun, payslips: await repo.payslipsForRun(payrunId) };
 }
 
-function finalizePayrun(id) {
-  const pr = repo.getPayrun(id);
+async function finalizePayrun(id) {
+  const pr = await repo.getPayrun(id);
   if (!pr) throw err("Pay run not found", 404);
   pr.status = "Finalized";
-  return repo.putPayrun(pr);
+  return await repo.putPayrun(pr);
 }
-function deletePayrun(id) {
-  if (!repo.getPayrun(id)) throw err("Pay run not found", 404);
-  return repo.deletePayrun(id);
+async function deletePayrun(id) {
+  if (!await repo.getPayrun(id)) throw err("Pay run not found", 404);
+  return await repo.deletePayrun(id);
 }
 /** Adjust one payslip's advances/manual lines and recompute net.
     A one-month override of the standing instalment: it may not recover more
     than the worker still owes, and the closing balance follows it. */
-function updatePayslip(id, patch) {
+async function updatePayslip(id, patch) {
   const [payrunId] = id.split(":");
-  const pr = repo.getPayrun(payrunId);
+  const pr = await repo.getPayrun(payrunId);
   if (!pr) throw err("Pay run not found", 404);
   if (pr.status === "Finalized") throw err("Pay run is finalized", 400);
-  const slip = repo.payslipsForRun(payrunId).find((s) => s.id === id);
+  const slip = (await repo.payslipsForRun(payrunId)).find((s) => s.id === id);
   if (!slip) throw err("Payslip not found", 404);
   let advances = round(num((patch || {}).advances));
   if (advances < 0) throw err("A deduction cannot be negative", 400);
-  const st = repo.getState();
+  const st = await repo.getState();
   const worker = (st.hrWorkers || []).find((w) => w.id === slip.workerId);
-  const plan = worker ? advanceForPeriod(worker, pr.period, st) : null;
+  const plan = worker ? await advanceForPeriod(worker, pr.period, st) : null;
   if (plan) {
     if (advances > plan.opening) throw err("Only " + plan.opening + " is still outstanding on this advance", 400);
     slip.advance = { total: plan.amount, opening: plan.opening, closing: round(plan.opening - advances) };
   }
   slip.advances = advances;
   slip.net = round(slip.gross - slip.deductions.pf - slip.deductions.esi - slip.deductions.pt - advances);
-  return repo.putPayslip(slip);
+  return await repo.putPayslip(slip);
 }
-function payslips(payrunId) { return repo.payslipsForRun(payrunId); }
+async function payslips(payrunId) { return await repo.payslipsForRun(payrunId); }
 
 /* ============================================================
    SEED — populate demo HR data on first run (idempotent).
    Mirrors ensureCrm: only fills when the workers table is empty.
    ============================================================ */
-function ensureHr() {
-  if (!repo.hrIsEmpty()) return { changed: false, workers: repo.getState().hrWorkers.length };
-  [["EL", "Earned Leave", 12, "earned"], ["CL", "Casual Leave", 7, "fixed"], ["SL", "Sick Leave", 7, "fixed"]]
-    .forEach(([id, name, quota, accrual], i) => repo.putLeaveType({ id, name, quota, accrual, paid: true,
-      color: ["#0fb5ae", "#7c5cff", "#e0a000"][i] }));
+async function ensureHr() {
+  if (!await repo.hrIsEmpty()) return { changed: false, workers: (await repo.getState()).hrWorkers.length };
+  const LEAVE_SEED = [["EL", "Earned Leave", 12, "earned"], ["CL", "Casual Leave", 7, "fixed"],
+    ["SL", "Sick Leave", 7, "fixed"]];
+  for (let i = 0; i < LEAVE_SEED.length; i++) {
+    const [id, name, quota, accrual] = LEAVE_SEED[i];
+    await repo.putLeaveType({ id, name, quota, accrual, paid: true,
+      color: ["#0fb5ae", "#7c5cff", "#e0a000"][i] });
+  }
   const demo = [
     ["Ramesh Kumar", "coating", "Machine Operator", 620],
     ["Suresh Patil", "coating", "Coating Helper", 520],
@@ -513,28 +522,35 @@ function ensureHr() {
     ["Geeta Sharma", "packing", "Packing & QC", 540],
     ["Vijay Rao", "admin", "Store Keeper", 700],
   ];
-  const workers = demo.map((d, i) => repo.putWorker({
-    id: "EMP-" + String(1001 + i).slice(1), name: d[0], dept: d[1], designation: d[2], payType: "daily",
-    dailyRate: d[3], deviceUid: String(1001 + i), active: true, joined: "2025-01-15",
-    phone: "9" + (400000000 + i * 111111), shift: "General",
-  }));
+  /* .map() would collect promises, not workers. Built one at a time so each
+     row is written — and awaited — before the next. */
+  const workers = [];
+  for (let i = 0; i < demo.length; i++) {
+    const d = demo[i];
+    workers.push(await repo.putWorker({
+      id: "EMP-" + String(1001 + i).slice(1), name: d[0], dept: d[1], designation: d[2], payType: "daily",
+      dailyRate: d[3], deviceUid: String(1001 + i), active: true, joined: "2025-01-15",
+      phone: "9" + (400000000 + i * 111111), shift: "General",
+    }));
+  }
   const t = new Date();
-  workers.forEach((w, wi) => {
+  for (let wi = 0; wi < workers.length; wi++) {
+    const w = workers[wi];
     for (let back = 24; back >= 1; back--) {
       const dt = new Date(t.getFullYear(), t.getMonth(), t.getDate() - back);
       const ds = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
       if (dt.getDay() === 0) continue;                 // Sunday weekly-off
       const k = (wi + back) % 13;
-      if (k === 0) { repo.putAttendance({ workerId: w.id, date: ds, status: "A", source: "manual" }); continue; }
+      if (k === 0) { await repo.putAttendance({ workerId: w.id, date: ds, status: "A", source: "manual" }); continue; }
       const half = k === 5;
       const ot = k % 4 === 0 ? 2 : (k % 6 === 0 ? 1.5 : 0);
       const hours = half ? 4 : round(8 + ot);
       const outH = half ? 13 : 17 + Math.floor((ot * 60 + 30) / 60);
       const outM = half ? 0 : ((ot * 60 + 30) % 60);
-      repo.putAttendance({ workerId: w.id, date: ds, status: half ? "HD" : "P",
+      await repo.putAttendance({ workerId: w.id, date: ds, status: half ? "HD" : "P",
         inTime: "09:00", outTime: `${pad(outH)}:${pad(outM)}`, hours, otHours: ot, source: "device" });
     }
-  });
+  }
   return { changed: true, workers: workers.length };
 }
 

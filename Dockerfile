@@ -1,8 +1,8 @@
 # Chhaperia ERP — container image
 # Works on any container host: Fly.io, Railway, Koyeb, Render (Docker), etc.
-# better-sqlite3 ships prebuilt binaries for Node 20 on linux/glibc, so the
-# slim image needs no compiler toolchain. (If a host forces a native build,
-# switch the base image to node:20-bookworm — it includes build-essential.)
+# The database is MySQL 8.4, reached over the network — configure it with the
+# CHHAPERIA_DB_* environment variables (see database/MIGRATION.md). Nothing
+# here needs a compiler toolchain: mysql2 is pure JavaScript.
 FROM node:20-bookworm-slim
 
 WORKDIR /app
@@ -14,7 +14,8 @@ RUN npm install --prefix backend --omit=dev
 # App source: backend (API), frontend (served static), database (schema.sql).
 COPY . .
 
-# Keep the SQLite DB on a mounted volume so it survives restarts/redeploys.
+# /data holds the BarTender hand-off CSVs (and any future file artefacts) —
+# the database itself lives in MySQL, not on this volume.
 ENV CHHAPERIA_DATA_DIR=/data
 RUN mkdir -p /data
 VOLUME ["/data"]

@@ -4,9 +4,10 @@
 #   2. render.com  ->  New  ->  Blueprint  ->  pick this repo  ->  Apply
 #   Render reads this file and provisions the service automatically.
 #
-# Free plan note: the free instance has NO persistent disk, so the SQLite DB is
-# ephemeral — it auto-seeds demo data on each cold start and resets on redeploy.
-# For data that survives restarts, see DEPLOY.md ("Make data persistent").
+# Database note: the backend needs MySQL 8.4, which Render does not host —
+# provision one elsewhere (Aiven, PlanetScale, RDS…) and set CHHAPERIA_DB_URL
+# below. Production refuses to boot without credentials, and refuses an
+# unencrypted connection to a remote host.
 services:
   - type: web
     name: chhaperia-erp
