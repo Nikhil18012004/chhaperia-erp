@@ -52,3 +52,4 @@ data/demo-manifest.json
 .env.local
 data/bartender/
 run-local.cmd
+backups/
