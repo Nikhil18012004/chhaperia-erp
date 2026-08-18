@@ -1974,21 +1974,20 @@
        ============================================================ */
     const MAX_IMPORT=12*1024*1024;      // a design may carry placed pictures
     const LABEL_KIND="chhaperia-label";
-    /* THE EXTENSION IS .label — a label file, which is what it is.
+    /* THE EXTENSION IS .json — which is precisely what the bytes are, and
+       every machine already knows what to do with them.
 
-       Not .json: that is the shape of the bytes, not the kind of thing they
-       are, and it tells an operator nothing about what they are holding.
-
-       Not .btw either, and this one was learned the hard way. A real .btw is
-       Seagull's own closed binary; naming our file .btw does not make
-       BarTender read it, it only makes Windows hand the file straight to the
-       one application certain to reject it — error #3323, "not a supported
-       file type". .label has no such association: double-click it and Windows
-       asks what to open it with, instead of confidently doing the wrong thing.
+       .label was tried, and Windows answered plainly: "This file does not
+       have an app associated with it." .btw was tried before that and was
+       worse — a real .btw is Seagull's own closed binary, so naming our file
+       .btw does not make BarTender read it; it only hands the file to the one
+       application certain to reject it, error #3323, "not a supported file
+       type". .json double-clicks open in an editor, drops into any other tool
+       that speaks it, and reads as plain text when somebody needs to look.
 
        Import never looks at the extension anyway; it reads the bytes. This
        name is for the human in the downloads folder. */
-    const LABEL_EXT=".label";
+    const LABEL_EXT=".json";
 
     function downloadDoc(d){
       const payload={kind:LABEL_KIND, version:1,
@@ -2575,73 +2574,17 @@
           h("div",{class:"ls-hero-s",text:total
             ? "Open a label to edit and print it, or start a new one. Everything you save is on the server — it is there on every machine that signs in."
             : "Text, barcodes, QR codes and pictures, printed by the sheet or the roll. Start with the size you are printing on and the canvas does the rest."}),
-          h("div",{class:"ls-hero-a"},[
-            h("button",{class:"btn primary",onclick:()=>newBlank(),
-              title:"It asks what you are printing on first",text:"＋  New label"}),
-            h("button",{class:"btn",onclick:askForFile,
-              title:"Bring in a label downloaded from a Label Studio. Any file name "+
-                    "will do — the contents decide. One file may hold several. "+
-                    "BarTender .btw files cannot be read."},
-              [ico("open",14),h("span",{text:"Import label…"})]),
-            opened?h("button",{class:"btn",onclick:()=>{screen="design";paint();},
-              text:"← Back to “"+doc().name+"”"}):null,
-          ].filter(Boolean)),
-        ]),
-        h("div",{class:"ls-hero-r"},[
-          h("div",{class:"ls-stat"},[
-            h("b",{text:String(total)}),
-            h("span",{text:total===1?"saved label":"saved labels"}),
-          ]),
-          h("div",{class:"ls-stat"},[
-            h("b",{text:String(docs.reduce((n,d)=>n+d.objects.length,0))}),
-            h("span",{text:"objects placed"}),
-          ]),
-        ]),
+          /* The banner keeps one control only: the way BACK to a label
+             already open. Starting one and importing one both belong with
+             the library itself, below — which is where you are looking when
+             you want either. The two counters that used to sit on the right
+             answered a question nobody was asking. */
+          opened?h("div",{class:"ls-hero-a"},[
+            h("button",{class:"btn",onclick:()=>{screen="design";paint();},
+              text:"← Back to “"+doc().name+"”"}),
+          ]):null,
+        ].filter(Boolean)),
       ]));
-
-      /* ---- RECENT ----
-         A library of forty templates is a wall to read, and on any given day
-         you are working on two of them. The ones you touched last, first, big
-         enough to recognise by their artwork rather than their name — and
-         with Print on the face, because that is the errand. */
-      const rec=recentDocs().filter(x=>x.d.usedAt).slice(0,4);
-      if(rec.length){
-        wrap.appendChild(h("div",{class:"ls-sec"},[
-          h("div",{class:"ls-sec-h"},[
-            h("span",{class:"ls-lbl",text:"Pick up where you left off"}),
-            h("span",{class:"hint",style:"margin:0",
-              text:"Open it to edit, or print it without opening it at all."}),
-          ]),
-          h("div",{class:"ls-rec-row"},rec.map(({d,i})=>{
-            const rw=210, rh=112;
-            const rk=Math.min(rw/(d.w*PX_MM), rh/(d.h*PX_MM));
-            return h("div",{class:"ls-rec-c"+(i===di&&opened?" on":""),
-              role:"button",tabindex:"0",title:"Open “"+d.name+"”",
-              onclick:(e)=>{ if(e.target.closest&&e.target.closest(".ls-rec-b")) return;
-                openDoc(i); },
-              onkeydown:(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDoc(i); } }},[
-              h("div",{class:"ls-rec-pv",style:`height:${rh}px`},
-                h("div",{class:"wz-frame",
-                  style:`width:${(d.w*PX_MM*rk).toFixed(1)}px;height:${(d.h*PX_MM*rk).toFixed(1)}px`},
-                  h("iframe",{srcdoc:oneHtml(d,{index:0,now:new Date(),prompts:{}}),
-                    scrolling:"no","aria-hidden":"true",tabindex:"-1",
-                    style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${rk.toFixed(4)});`+
-                      `transform-origin:top left`}))),
-              h("div",{class:"ls-rec-n",text:d.name}),
-              h("div",{class:"ls-rec-t",text:usedAgo(d)+" · "+sizeS(d.w,d.h)+
-                " · "+(d.mode==="roll"?"roll":"sheet")}),
-              h("div",{class:"ls-rec-act"},[
-                h("button",{class:"ls-rec-b",type:"button",title:"Open in the designer",
-                  onclick:(e)=>{ e.stopPropagation(); openDoc(i); },text:"Open"}),
-                h("button",{class:"ls-rec-b go",type:"button",
-                  title:"Straight to the print dialog",
-                  onclick:(e)=>{ e.stopPropagation(); printFrom(i); }},
-                  [ico("print",13),h("span",{text:"Print"})]),
-              ]),
-            ]);
-          })),
-        ]));
-      }
 
       /* ---- everything, searchable ---- */
       const q=galQuery.trim().toLowerCase();
@@ -2670,8 +2613,16 @@
           h("span",{class:"ls-lbl",text:total?"All labels":"Nothing saved yet"}),
           h("span",{class:"hint",style:"margin:0",text:total
             ? "Click one to open it. Right-click a name in the designer for more."
-            : "Start a label above, design it, and press Save — it will be waiting here next time."}),
+            : "Start one below, design it, and press Save — it will be waiting here next time."}),
           h("div",{class:"sp"}),
+          /* Import sits with the library it adds to. It is an occasional
+             errand — a supplier's file, a restore from a backup — and the
+             banner was too loud a place to keep asking about it. */
+          h("button",{class:"btn sm",onclick:askForFile,
+            title:"Bring in a label downloaded from a Label Studio. Any file name "+
+                  "will do — the contents decide. One file may hold several. "+
+                  "BarTender .btw files cannot be read."},
+            [ico("open",13),h("span",{text:"Import label…"})]),
           total>3?search:null,
         ].filter(Boolean)),
       ]));
