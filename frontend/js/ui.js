@@ -45,7 +45,7 @@
   /* ---------- modal ---------- */
   /* wide  = 960px  (tables, detail views)
      xwide = 1240px (document forms: PO / SO carry a header block AND line items) */
-  function modal({title, sub, body, foot, wide, xwide}){
+  function modal({title, sub, body, foot, wide, xwide, onClose}){
     const host=$("#modalHost"); host.hidden=false; host.innerHTML="";
     const prevFocus=document.activeElement;   // restore focus on close (a11y)
     const width=xwide?"width:min(1240px,96vw)":(wide?"width:min(960px,96vw)":"");
@@ -73,17 +73,41 @@
     document.addEventListener("keydown",onKey);
     host.onclick=e=>{ if(e.target===host) close(); };
     function close(){ host.hidden=true; host.innerHTML=""; document.removeEventListener("keydown",onKey);
-      if(prevFocus && prevFocus.focus) try{ prevFocus.focus(); }catch{} }
+      if(prevFocus && prevFocus.focus) try{ prevFocus.focus(); }catch{}
+      /* Escape, the X and the backdrop all land here. A dialog that answers a
+         question has to settle its promise on those paths too, or the caller
+         waits for ever. Buttons answer first, and a promise ignores the
+         second answer. */
+      if(typeof onClose==="function") try{ onClose(); }catch{} }
     return {close, el:m};
   }
 
   /* ---------- confirm ---------- */
   function confirm(msg, {title="Confirm", danger}={}){
     return new Promise(res=>{
-      const mo=modal({title, body:h("p",{class:"dim",style:"line-height:1.6",text:msg}),
+      const mo=modal({title, onClose:()=>res(false),
+        body:h("p",{class:"dim",style:"line-height:1.6",text:msg}),
         foot:[
-          h("button",{class:"btn ghost",onclick:()=>{mo.close();res(false);},text:"Cancel"}),
-          h("button",{class:"btn "+(danger?"primary":"primary"),style:danger?"background:linear-gradient(135deg,var(--danger),#b02418)":"",onclick:()=>{mo.close();res(true);},text:"Confirm"})
+          h("button",{class:"btn ghost",onclick:()=>{res(false);mo.close();},text:"Cancel"}),
+          h("button",{class:"btn "+(danger?"primary":"primary"),style:danger?"background:linear-gradient(135deg,var(--danger),#b02418)":"",onclick:()=>{res(true);mo.close();},text:"Confirm"})
+        ]});
+    });
+  }
+
+  /* THREE ANSWERS, not two. "You have unsaved work" is not a yes/no question:
+     the operator wants to keep the work, or to throw it away on purpose, or to
+     stay where they are. A two-button confirm forces the first and third
+     together and makes losing the work the only way forward. */
+  function confirmSave(msg, {title="Unsaved changes", saveText="Save", discardText="Don't save"}={}){
+    return new Promise(res=>{
+      const done=(v)=>{ res(v); mo.close(); };
+      const mo=modal({title, onClose:()=>res("cancel"),
+        body:h("p",{class:"dim",style:"line-height:1.6",text:msg}),
+        foot:[
+          h("button",{class:"btn ghost",onclick:()=>done("cancel"),text:"Cancel"}),
+          h("button",{class:"btn ghost ls-discard",
+            onclick:()=>done("discard"),text:discardText}),
+          h("button",{class:"btn primary",onclick:()=>done("save"),text:saveText}),
         ]});
     });
   }
@@ -342,5 +366,5 @@
     {id:"settings", icon:"⚙", label:"Settings", accent:"orange", adminOnly:true},
   ];
 
-  global.UI = { $, $$, h, esc, toast, modal, confirm, table, badge, meter, sparkEl, NAV };
+  global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV };
 })(window);

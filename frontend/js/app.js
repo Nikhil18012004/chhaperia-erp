@@ -304,12 +304,37 @@
       /* Same-module navigation is guarded too: the menu item for the screen you
          are already on re-renders it, which is just as destructive as leaving. */
       if(this._leaveGuard){
-        const msg=this._leaveGuard();
+        /* A guard may answer with a plain message (leave / stay) or with
+           {message, save} — the second says "I know how to keep this work",
+           and earns the operator a third answer. */
+        const g=this._leaveGuard();
+        const msg=(g&&typeof g==="object")?g.message:g;
+        const saveFn=(g&&typeof g==="object"&&typeof g.save==="function")?g.save:null;
+        // the hash may already have moved (someone edited the URL) — put it back
+        const stay=()=>{
+          if(location.hash.replace("#","")!==this.current) location.hash=this.current; };
+        if(msg&&saveFn){
+          UI.confirmSave(msg,{title:"Unsaved changes"}).then(async(answer)=>{
+            if(answer==="cancel") return stay();
+            if(answer==="save"){
+              try{ await saveFn(); }
+              catch(err){
+                /* the work is still here and still unsaved — staying put is
+                   the only honest outcome */
+                UI.toast("Could not save: "+((err&&err.message)||"unknown error")+
+                  " — you are still on this screen and nothing was lost",
+                  {type:"err",title:"Not saved",dur:8000});
+                return stay();
+              }
+            }
+            this._leaveGuard=null; this.go(id,params);
+          });
+          return;
+        }
         if(msg){
           UI.confirm(msg,{title:"Unsaved changes",danger:true}).then(ok=>{
             if(ok){ this._leaveGuard=null; this.go(id,params); }
-            // the hash may already have moved (someone edited the URL) — put it back
-            else if(location.hash.replace("#","")!==this.current) location.hash=this.current;
+            else stay();
           });
           return;
         }
@@ -412,7 +437,9 @@
       if(!this.isAdmin()) return; // theme/accent are system settings — admin only
       const s=this.settingsDoc();
       ENG.data.settings=s;
-      DB.saveSettings(s);
+      /* theme and accent are a preference, not the day’s work — a failed
+         write is worth a line in the console and nothing more */
+      DB.saveSettings(s).catch((e)=>console.warn("settings save failed",e));
       this.buildNav();
       this.refreshView();
     },

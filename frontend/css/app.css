@@ -2669,15 +2669,15 @@ select.ls-in{padding-left:3px;cursor:pointer}
    hand-mixed sheet are the same list of pages, so they look the
    same and are edited the same way.
    ============================================================ */
-.ls-pp{display:flex;flex-direction:column;gap:16px}
+.ls-pp{display:flex;flex-direction:column;gap:11px}
 
 /* ---- the answer, across the top ---- */
-.ls-pp-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:15px 20px;
+.ls-pp-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 13px;
   border-radius:var(--radius);border:1px solid var(--accent-line);
   background:linear-gradient(135deg,var(--accent-soft),transparent 66%),var(--panel-2)}
 .ls-pp-top.bad{border-color:var(--danger);background:var(--danger-soft)}
 .ls-pp-sum{display:flex;flex-direction:column;gap:1px}
-.ls-pp-sum b{font-size:25px;font-weight:800;color:var(--text);line-height:1.05;
+.ls-pp-sum b{font-size:19px;font-weight:800;color:var(--text);line-height:1.05;
   font-variant-numeric:tabular-nums}
 .ls-pp-sum span{font-size:11px;font-weight:600;color:var(--text-mut)}
 .ls-pp-arrow{font-size:17px;color:var(--text-mut);opacity:.55}
@@ -2687,44 +2687,100 @@ select.ls-in{padding-left:3px;cursor:pointer}
   background:var(--danger-soft);color:var(--danger);font-size:12.5px;font-weight:600;
   line-height:1.55}
 
-.ls-pp-main{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);
-  gap:24px;align-items:start}
-.ls-pp-side{display:flex;flex-direction:column;gap:11px;min-width:0}
-.ls-pp-right{display:flex;flex-direction:column;gap:11px;min-width:0}
-.ls-pp-sec{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-top:4px;
-  font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+.ls-pp-main{display:grid;grid-template-columns:minmax(0,286px) minmax(0,1fr);
+  gap:16px;align-items:start}
+/* the sticker and the sheet share a row — stacking them was the whole reason
+   the pages strip fell below the fold */
+.ls-pp-prevrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:14px;align-items:start}
+.ls-pp-prevcol{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ls-pp-side{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ls-pp-right{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ls-pp-sec{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding-top:0;
+  font-size:9.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
   color:var(--text-mut)}
 .ls-pp-sec:first-child{padding-top:0}
-.ls-pp-h{font-size:11px;font-weight:500;letter-spacing:0;text-transform:none;
-  color:var(--text-mut);line-height:1.45}
-.ls-pp-note{padding:11px 13px;border-radius:var(--radius);border:1px dashed var(--line-strong);
-  background:var(--panel-2);color:var(--text-mut);font-size:11.5px;line-height:1.6}
+.ls-pp-h{font-size:10px;font-weight:500;letter-spacing:0;text-transform:none;
+  color:var(--text-mut);line-height:1.35}
+.ls-pp-note{padding:7px 10px;border-radius:9px;border:1px dashed var(--line-strong);
+  background:var(--panel-2);color:var(--text-mut);font-size:10.5px;line-height:1.45}
 
-/* ---- the designs, and how many of each ---- */
+/* ---- the designs: one CARD each ----
+   The count and the start position live ON the card, under the design's own
+   colour — the tinted left edge and the dot are the same custom property, set
+   inline per card, so "the blue one" reads the same in the list and on any
+   future key. A count of zero IS the old untick: kept, greyed, unprinted. */
 .ls-pp-designs{display:flex;flex-direction:column;gap:5px}
-.ls-pp-d{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;
-  border:1px solid var(--line);background:var(--panel-2);cursor:pointer;transition:var(--tr)}
-.ls-pp-d:hover{border-color:var(--accent-line);background:var(--panel-3)}
-.ls-pp-d.on{border-color:var(--accent);background:var(--accent-soft);
-  box-shadow:inset 0 0 0 1px var(--accent)}
-/* the tick decides what prints; an unticked row stays, greyed, unprinted */
-.ls-pp-tick{flex:0 0 auto;width:16px;height:16px;margin:0;cursor:pointer;
-  accent-color:var(--accent)}
-.ls-pp-dn{flex:1 1 auto;min-width:0;font-size:12.5px;font-weight:700;color:var(--text);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ls-pp-d.off .ls-pp-dn,.ls-pp-d.off .ls-pp-at{color:var(--text-mut)}
-.ls-pp-d.off .ls-pp-in{opacity:.55}
-/* "from" — the word before the start-position box, so the number on a design
-   row cannot be read as a quantity */
-.ls-pp-at{flex:0 0 auto;font-size:10.5px;font-weight:700;letter-spacing:.04em;
+.ls-pp-card{position:relative;display:flex;flex-direction:column;gap:5px;
+  padding:7px 9px 7px 12px;border-radius:9px;
+  border:1px solid var(--line);background:var(--panel);cursor:pointer;
+  transition:var(--tr);overflow:hidden}
+.ls-pp-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;
+  background:var(--ppd,var(--accent))}
+.ls-pp-card:hover{border-color:var(--accent-line)}
+.ls-pp-card.on{border-color:var(--accent);box-shadow:var(--ring)}
+.ls-pp-card.off{background:var(--panel-2)}
+.ls-pp-card.off .ls-pp-dn{color:var(--text-mut)}
+.ls-pp-cardrow{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}
+.ls-pp-cardrow.sub{padding-left:17px;gap:5px}
+/* the two numbers share the line under the name — narrow, centred, each
+   behind its own small caption */
+.ls-pp-cardrow.sub .ls-pp-in{flex:0 1 58px;text-align:center}
+.ls-pp-dot{flex:0 0 10px;width:10px;height:10px;border-radius:50%;
+  background:var(--ppd,var(--accent))}
+/* THE WHOLE NAME, ALWAYS. An ellipsis hides the very thing being chosen
+   between — "BOX TEMPLATE copy" and "BOX TEMPLATE copy 2" read identically
+   once they are cut off. It wraps instead, however long it is. */
+.ls-pp-dn{flex:1 1 auto;min-width:0;font-size:12px;font-weight:700;color:var(--text);
+  white-space:normal;overflow-wrap:anywhere;line-height:1.3}
+.ls-pp-x{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--text-mut);
+  font-variant-numeric:tabular-nums}
+/* STARTS AT — small caps, and an input whose EMPTINESS is an answer */
+.ls-pp-sl{flex:0 0 auto;font-size:10px;font-weight:800;letter-spacing:.06em;
   text-transform:uppercase;color:var(--text-mut)}
+.ls-pp-card .ls-pp-startin{flex:0 1 74px;padding:4px 6px;font-size:11.5px;
+  text-align:center}
+.ls-pp-card .ls-pp-startin::placeholder{font-size:10px;color:var(--text-mut)}
+/* a design that does not exist yet — dashed, like every "add" here */
+.ls-pp-addlbl{display:flex;align-items:center;justify-content:center;gap:7px;
+  padding:7px 10px;border-radius:9px;border:1.5px dashed var(--line-strong);
+  background:transparent;color:var(--text-mut);font-family:inherit;font-size:12.5px;
+  font-weight:700;cursor:pointer;transition:var(--tr)}
+.ls-pp-addlbl:hover{border-color:var(--accent);color:var(--text)}
+.ls-pp-addlbl .ls-pp-plus{font-size:17px}
+/* the x that takes an added design back out of the run */
+.ls-pp-rmlbl{flex:0 0 auto;width:22px;height:22px;display:flex;align-items:center;
+  justify-content:center;border:0;border-radius:6px;background:transparent;
+  color:var(--text-mut);font-size:12px;cursor:pointer;transition:var(--tr)}
+.ls-pp-rmlbl:hover{background:var(--panel-3);color:var(--danger)}
+/* the chooser the add button unfolds into: same-stock designs, then new */
+.ls-pp-addmenu{display:flex;flex-direction:column;gap:4px;padding:9px;
+  border-radius:12px;border:1.5px dashed var(--line-strong);background:var(--panel-2)}
+.ls-pp-addhead{padding:2px 4px 6px;font-size:10.5px;font-weight:800;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--text-mut)}
+.ls-pp-addrow{display:flex;align-items:center;gap:7px;padding:6px 9px;
+  border-radius:8px;border:1px solid var(--line);background:var(--panel);
+  color:var(--text);font-family:inherit;font-size:11.5px;font-weight:700;
+  text-align:left;cursor:pointer;transition:var(--tr)}
+.ls-pp-addrow:hover{border-color:var(--accent);background:var(--accent-soft)}
+.ls-pp-addrow .ls-pp-dn{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere}
+.ls-pp-addrow .ls-pp-x{flex:0 0 auto}
+.ls-pp-addrow.new{border-style:dashed;color:var(--text-dim)}
+.ls-pp-addrow.new .ls-pp-plus{font-size:15px}
+.ls-pp-addrow.quiet{border-color:transparent;background:transparent;
+  color:var(--text-mut);font-weight:600;justify-content:center}
+.ls-pp-addrow.quiet:hover{background:var(--panel-3);border-color:transparent}
+
+/* the way into arranging pages by hand — the screen's one big decision */
+.ls-pp-arrange{width:100%;height:34px;border-radius:10px;font-size:12.5px;
+  font-weight:800;letter-spacing:.01em}
 
 /* ---- fields ---- */
-.ls-pp-f{display:flex;flex-direction:column;gap:5px;margin:0;min-width:0}
-.ls-pp-l{font-size:12px;font-weight:600;color:var(--text-dim)}
-.ls-pp-in{width:100%;min-width:0;padding:9px 12px;border-radius:10px;
+.ls-pp-f{display:flex;flex-direction:column;gap:3px;margin:0;min-width:0}
+.ls-pp-l{font-size:11px;font-weight:600;color:var(--text-dim)}
+.ls-pp-in{width:100%;min-width:0;padding:6px 9px;border-radius:8px;
   border:1px solid var(--line);background:var(--panel-2);color:var(--text);
-  font-family:inherit;font-size:13.5px;font-variant-numeric:tabular-nums;transition:var(--tr)}
+  font-family:inherit;font-size:12.5px;font-variant-numeric:tabular-nums;transition:var(--tr)}
 .ls-pp-in:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring);
   background:var(--panel)}
 .ls-pp-d .ls-pp-in{flex:0 0 64px;padding:6px 8px;font-size:12.5px;text-align:right}
@@ -2749,10 +2805,10 @@ select.ls-in{padding-left:3px;cursor:pointer}
    Both are iframes of the REAL print HTML, so they carry the label's own white
    ground rather than the studio's chrome. The number badges sit over the sheet
    and are pointer-transparent — the iframe underneath must stay inert. */
-.ls-pp-one{display:flex;justify-content:center;padding:10px 0 4px}
-.ls-pp-cap{font-size:11px;color:var(--text-mut);text-align:center;
+.ls-pp-one{display:flex;justify-content:center;padding:2px 0 0}
+.ls-pp-cap{font-size:10px;color:var(--text-mut);text-align:center;
   font-variant-numeric:tabular-nums;padding-bottom:4px}
-.ls-pp-sheetwrap{display:flex;justify-content:center;padding:8px 0 4px}
+.ls-pp-sheetwrap{display:flex;justify-content:center;padding:2px 0 0}
 .ls-pp-sheet{position:relative;overflow:hidden;background:#fff;
   border:1px solid #b9bec4;box-shadow:0 1px 6px rgba(0,0,0,.22)}
 .ls-pp-sheet iframe{border:0;display:block;pointer-events:none}
@@ -2772,15 +2828,32 @@ select.ls-in{padding-left:3px;cursor:pointer}
    and writes straight into the plan the printer reads. The states are drawn
    on the BOX (a border over the sheet), never by moving the number — the
    number is the print order and holds still while stickers change hands. */
-.ls-pp-handbtn{margin-left:auto;height:24px;padding:0 10px;border-radius:7px;
-  border:1px solid var(--line);background:var(--panel);color:var(--text-dim);
-  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0;
-  text-transform:none;cursor:pointer;transition:var(--tr)}
-.ls-pp-handbtn:hover{border-color:var(--accent);color:var(--text)}
-.ls-pp-handbtn.on{border-color:transparent;background:var(--accent-grad);color:#fff}
 .ls-pp-sheet.hand .ls-pp-num{pointer-events:auto;cursor:pointer;border-radius:3px;
   touch-action:none}
 .ls-pp-sheet.hand .ls-pp-num.free{border:1.5px dashed rgba(20,22,26,.25)}
+
+/* ---- THE PAGES — every page of a hand-arranged run ----
+   Thumbnails the composeHtml renderer draws, so a page's little picture is
+   the very thing the printer gets. The selected one wears the accent ring;
+   Add page is a card-shaped button so the strip reads as one row of pages. */
+.ls-pp-pgs{display:flex;flex-wrap:wrap;gap:7px;align-items:stretch}
+.ls-pp-pgc{display:flex;flex-direction:column;gap:3px;padding:5px;border-radius:9px;
+  border:1px solid var(--line);background:var(--panel-2);cursor:pointer;
+  transition:var(--tr)}
+.ls-pp-pgc:hover{border-color:var(--accent-line)}
+.ls-pp-pgc:focus-visible{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+.ls-pp-pgc.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.ls-pp-pgn{display:flex;align-items:center;gap:4px;font-size:10px;font-weight:700;
+  color:var(--text-dim)}
+.ls-pp-pgn span:first-child{flex:1 1 auto}
+.ls-pp-pgi{font-size:11px;opacity:.6}
+.ls-pp-pgadd{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;min-width:70px;border-radius:9px;border:1.5px dashed var(--line-strong);
+  background:transparent;color:var(--text-mut);font-family:inherit;font-size:12px;
+  font-weight:700;cursor:pointer;transition:var(--tr)}
+.ls-pp-pgadd:hover{border-color:var(--accent);color:var(--text)}
+.ls-pp-plus{font-size:20px;line-height:1;font-weight:400}
+.ls-pp-pgact{display:flex;gap:6px;flex-wrap:wrap}
 /* the sheet is white label stock whatever the app theme, so the hover tints
    are fixed light-ink values rather than theme variables — see the .ls rule
    that the studio paints its own chrome */
@@ -2792,30 +2865,7 @@ select.ls-in{padding-left:3px;cursor:pointer}
 .ls-pp-sheet.hand .ls-pp-num.over{border:2px solid var(--accent);
   background:rgba(232,113,10,.14)}
 
-/* ---- STEP 2: every page of the run ----
-   Each page is an iframe of the real print HTML at page scale, so the run is
-   checked against what the printer will do rather than a drawing of it. */
-.ls-pp-pages{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;
-  padding:12px;border-radius:var(--radius);border:1px solid var(--line);
-  background:var(--surface-2)}
-.ls-pp-pg{display:flex;flex-direction:column;gap:7px;align-items:center}
-.ls-pp-pg .wz-frame{box-shadow:0 2px 10px rgba(0,0,0,.2)}
-.ls-pp-pg .ls-pp-cap{padding-bottom:0}
-.ls-pp-pg .ls-pp-cap b{color:var(--text);font-weight:800}
-
-/* ---- the slide between the two steps ----
-   Set-up slides out to the left and the preview comes in from the right, so
-   "there is more of this dialog that way" is shown rather than written down. */
 .ls-pp-pane{min-width:0}
-.ls-pp-pane.from-right{animation:lsPaneR .26s cubic-bezier(.22,.61,.36,1) both}
-.ls-pp-pane.from-left{animation:lsPaneL .26s cubic-bezier(.22,.61,.36,1) both}
-@keyframes lsPaneR{from{opacity:0;transform:translateX(26px)}
-  to{opacity:1;transform:none}}
-@keyframes lsPaneL{from{opacity:0;transform:translateX(-26px)}
-  to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){
-  .ls-pp-pane.from-right,.ls-pp-pane.from-left{animation:none}
-}
 
 @media (max-width:1000px){
   .ls-pp-main{grid-template-columns:1fr}
@@ -2855,6 +2905,9 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .ls-stage{padding:14px}
   .ls-docbox{margin-left:6px;padding:4px}
   .ls-dmode{display:none}
+}
+@media (max-width:760px){
+  .ls-pp-prevrow{grid-template-columns:1fr}
 }
 @media (max-width:900px){
   .ls-props-dlg,.ls-setup2{grid-template-columns:1fr;gap:14px}

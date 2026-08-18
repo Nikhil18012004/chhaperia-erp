@@ -95,7 +95,7 @@
       }, 250);
     });
   }
-  function saveSettings(settings) { return http("PATCH", "/settings", settings).catch((e) => console.warn("settings save failed", e)); }
+  function saveSettings(settings) { return http("PATCH", "/settings", settings); }
   function reset() { return http("POST", "/reset"); }
 
   /* ---- auth ---- */
