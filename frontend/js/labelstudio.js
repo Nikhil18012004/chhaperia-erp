@@ -1913,12 +1913,28 @@
       /* ribbon · Tools | canvas | Object Properties · document tabs · status
          bar — the four bands the designer is read in, top to bottom. */
       root.appendChild(ribbon());
-      const cols=[], kids=[];
-      if(showTools){ cols.push("var(--ls-toolsw)"); kids.push(toolsPanel()); }
-      cols.push("minmax(0,1fr)"); kids.push(centrePane());
-      if(showProps){ cols.push("var(--ls-rightw)"); kids.push(rightRail()); }
-      root.appendChild(h("div",{class:"ls-body",
-        style:"grid-template-columns:"+cols.join(" ")},kids));
+      /* ---- ON A PHONE THE PANEL TAKES SPACE, IT DOES NOT TAKE THE LABEL ----
+         A panel floating over the canvas hides the very thing it is there to
+         edit — half the label sat behind Tools. Under 780px the body is one
+         column with the open panel as a second ROW beneath the canvas. The
+         stage keeps what is left and the label is re-fitted into it, so
+         opening Tools makes the label SMALLER instead of half-covered.
+         One row, so one panel: which is why the toggles are exclusive here. */
+      if(global.innerWidth<=780){
+        const kids=[centrePane()];
+        if(showTools) kids.push(toolsPanel());
+        else if(showProps) kids.push(rightRail());
+        root.appendChild(h("div",{class:"ls-body ls-stack",
+          style:"grid-template-columns:minmax(0,1fr);grid-template-rows:"+
+            (kids.length>1?"minmax(0,1fr) minmax(0,46%)":"minmax(0,1fr)")},kids));
+      } else {
+        const cols=[], kids=[];
+        if(showTools){ cols.push("var(--ls-toolsw)"); kids.push(toolsPanel()); }
+        cols.push("minmax(0,1fr)"); kids.push(centrePane());
+        if(showProps){ cols.push("var(--ls-rightw)"); kids.push(rightRail()); }
+        root.appendChild(h("div",{class:"ls-body",
+          style:"grid-template-columns:"+cols.join(" ")},kids));
+      }
       root.appendChild(docTabs());
       root.appendChild(statusBar());
       fitStudio();
@@ -1952,8 +1968,37 @@
       const floor=global.innerWidth<=820?300:520;
       root.style.height=Math.max(floor,Math.round(global.innerHeight-top-18))+"px";
     }
+    /* ---- WHICH BAND THE WINDOW IS IN ----
+       Above 1040 both panels are columns; between 780 and 1040 the rail is a
+       sheet; below 780 both are. showTools/showProps were read ONCE at start-up,
+       so a window that CHANGED band kept the other band's answer: narrowing a
+       desktop left both panels open — and they are sheets now, so the label sat
+       behind them on both sides, which is the one thing the sheet treatment
+       exists to avoid. Rotating a tablet the other way left them shut with the
+       room to show them.
+
+       So the default is re-read whenever the window crosses a boundary, and
+       only then: inside a band the operator's own toggling is theirs to keep. */
+    const bandOf=(w)=>w>1040?"wide":(w>780?"tablet":"phone");
+    let band=bandOf(global.innerWidth);
+    /* Opening or closing a panel on a phone takes a row out of the stage, so
+       the label has to be measured into what is left — without this it keeps
+       the size it had and the stage simply scrolls, which is the covered-up
+       label all over again with an extra scrollbar. fitOnce() waits a frame,
+       so it reads the layout that the repaint actually produced. On a wider
+       screen the panels are columns beside the canvas: nothing about the
+       label's size changes, and the zoom is left exactly where it was put. */
+    const panelPaint=()=>{ paint(); if(global.innerWidth<=780) fitOnce(); };
     const onResize=()=>{
       if(!root.isConnected){ global.removeEventListener("resize",onResize); return; }
+      const now=bandOf(global.innerWidth);
+      if(now!==band){
+        band=now;
+        showTools=global.innerWidth>780;
+        showProps=global.innerWidth>1040;
+        /* paint() ends in fitStudio(), so the height is measured too. */
+        if(screen==="design"&&opened){ paint(); return; }
+      }
       fitStudio();
     };
     global.addEventListener("resize",onResize);
@@ -3818,6 +3863,12 @@
        ============================================================ */
     function armTool(t){
       tool={key:t.v,type:t.t,extra:t.extra||null};
+      /* On a phone the Tools sheet covers the bottom half of the label, and
+         the very next thing an armed tool asks for is a tap on that label.
+         Picking the tool is the sheet's whole errand, so it closes behind
+         you. On a wider screen Tools is a column beside the canvas, nothing
+         is in the way, and it stays where it was put. */
+      if(global.innerWidth<=780){ showTools=false; panelPaint(); return; }
       paint();
     }
     function toolsPanel(){
@@ -3825,7 +3876,7 @@
       box.appendChild(h("div",{class:"ls-ph"},[
         h("span",{text:"Tools"}),
         h("button",{class:"ls-px",type:"button",title:"Hide the Tools panel",
-          onclick:()=>{showTools=false;paint();}},ico("close",13)),
+          onclick:()=>{showTools=false;panelPaint();}},ico("close",13)),
       ]));
       const list=h("div",{class:"ls-tlist"});
       TOOLS.forEach(t=>{
@@ -4193,18 +4244,20 @@
             bg.style.height=Math.max(6,(d.bgH>0?d.bgH:d.h)*k).toFixed(1)+"px";
           };
           const up=()=>{
-            document.removeEventListener("mousemove",move);
-            document.removeEventListener("mouseup",up);
+            document.removeEventListener("pointermove",move);
+            document.removeEventListener("pointerup",up);
+            document.removeEventListener("pointercancel",up);
             if(moved) touch();
             paint();
           };
-          document.addEventListener("mousemove",move);
-          document.addEventListener("mouseup",up);
+          document.addEventListener("pointermove",move);
+          document.addEventListener("pointerup",up);
+          document.addEventListener("pointercancel",up);
         };
-        bg.addEventListener("mousedown",(e)=>dragBg(e,null));
+        bg.addEventListener("pointerdown",(e)=>dragBg(e,null));
         ["nw","ne","se","sw"].forEach(dir=>{
           const hd=h("div",{class:"ls-h ls-h-"+dir});
-          hd.addEventListener("mousedown",(e)=>dragBg(e,dir));
+          hd.addEventListener("pointerdown",(e)=>dragBg(e,dir));
           bg.appendChild(hd);
         });
         skin.appendChild(bg);
@@ -4229,7 +4282,7 @@
           style:`left:${(o.x*k).toFixed(1)}px;top:${(o.y*k).toFixed(1)}px;`+
             `width:${Math.max(3,o.w*k).toFixed(1)}px;height:${Math.max(3,o.h*k).toFixed(1)}px;`+
             (o.rot?`transform:rotate(${o.rot}deg);`:"")});
-        el.addEventListener("mousedown",(e)=>{
+        el.addEventListener("pointerdown",(e)=>{
           if(tool) return;                       // a tool is armed: draw, don't drag
           e.preventDefault();
           /* Taking hold of an object ends any background adjusting — you have
@@ -4271,7 +4324,7 @@
         if(isSel(o)&&selIds.length===1&&!tool)
           ["nw","n","ne","e","se","s","sw","w"].forEach(dir=>{
             const hd=h("div",{class:"ls-h ls-h-"+dir});
-            hd.addEventListener("mousedown",(e)=>{ e.preventDefault(); e.stopPropagation();
+            hd.addEventListener("pointerdown",(e)=>{ e.preventDefault(); e.stopPropagation();
               startDrag(e,o,dir); });
             el.appendChild(hd);
           });
@@ -4425,8 +4478,9 @@
           quickPaint(movers);
         };
         const up=()=>{
-          document.removeEventListener("mousemove",move);
-          document.removeEventListener("mouseup",up);
+          document.removeEventListener("pointermove",move);
+          document.removeEventListener("pointerup",up);
+          document.removeEventListener("pointercancel",up);
           guides.innerHTML="";
           /* A click that moved nothing on an already-selected text field puts
              the caret in it, right there on the label. */
@@ -4441,8 +4495,9 @@
           if(moved) touch();
           paint();
         };
-        document.addEventListener("mousemove",move);
-        document.addEventListener("mouseup",up);
+        document.addEventListener("pointermove",move);
+        document.addEventListener("pointerup",up);
+        document.addEventListener("pointercancel",up);
       }
       /* Re-render only what moved while the mouse is down — repainting the
          whole screen on every mousemove made dragging feel like treacle. */
@@ -4465,7 +4520,7 @@
 
       /* Drawing a newly armed object, BarTender-style: click for a default
          size, or drag out the rectangle you want it to fill. */
-      cv.addEventListener("mousedown",(e)=>{
+      cv.addEventListener("pointerdown",(e)=>{
         if(!tool){
           if(e.target!==cv&&e.target!==skin&&e.target!==guides) return;
           /* ---- RUBBER-BAND SELECTION ----
@@ -4498,14 +4553,16 @@
             });
           };
           const bup=()=>{
-            document.removeEventListener("mousemove",bmove);
-            document.removeEventListener("mouseup",bup);
+            document.removeEventListener("pointermove",bmove);
+            document.removeEventListener("pointerup",bup);
+            document.removeEventListener("pointercancel",bup);
             band.remove();
             if(!dragged) selIds=keep.length?keep:[];   // a bare click clears
             paint();
           };
-          document.addEventListener("mousemove",bmove);
-          document.addEventListener("mouseup",bup);
+          document.addEventListener("pointermove",bmove);
+          document.addEventListener("pointerup",bup);
+          document.addEventListener("pointercancel",bup);
           return;
         }
         e.preventDefault();
@@ -4523,13 +4580,15 @@
           band.style.height=(Math.abs(y1-y0)*k).toFixed(1)+"px";
         };
         const up=()=>{
-          document.removeEventListener("mousemove",move);
-          document.removeEventListener("mouseup",up);
+          document.removeEventListener("pointermove",move);
+          document.removeEventListener("pointerup",up);
+          document.removeEventListener("pointercancel",up);
           band.remove();
           placeTool(Math.min(x0,x1),Math.min(y0,y1),Math.abs(x1-x0),Math.abs(y1-y0));
         };
-        document.addEventListener("mousemove",move);
-        document.addEventListener("mouseup",up);
+        document.addEventListener("pointermove",move);
+        document.addEventListener("pointerup",up);
+        document.addEventListener("pointercancel",up);
       });
       /* The right button over bare label: the same menu, with the object
          commands greyed and the view and page commands live. */
@@ -5105,7 +5164,7 @@
            home for "what colour is the sticker itself". */
         h("span",{text:o?"Object Properties":"Label Properties"}),
         h("button",{class:"ls-px",type:"button",title:"Hide the properties panel",
-          onclick:()=>{showProps=false;paint();}},ico("close",13)),
+          onclick:()=>{showProps=false;panelPaint();}},ico("close",13)),
       ]));
       const b=h("div",{class:"ls-pbody"});
       box.appendChild(b);
@@ -5334,9 +5393,21 @@
             : (o?`X ${o.x.toFixed(1)}  Y ${o.y.toFixed(1)}  W ${o.w.toFixed(1)}  H ${o.h.toFixed(1)} mm`
                 :(tool?"Draw the new object on the label"
                       :"Click to select · again to type · drag the label to pick out several"))}),
-        vbtn("panelleft","Tools panel",showTools,()=>{showTools=!showTools;paint();}),
+        /* ⚠ ON A PHONE THE TWO PANELS SHARE THE BOTTOM EDGE. Both are sheets
+           anchored to it below 780px, so opening the second on top of the
+           first stacks one over the other and the pair reads as one broken
+           panel. Opening either closes the other. Above 780px they are a
+           column and a sheet, or two columns — they do not collide, and both
+           may be open exactly as before. */
+        vbtn("panelleft","Tools panel",showTools,()=>{
+          showTools=!showTools;
+          if(showTools&&global.innerWidth<=780) showProps=false;
+          panelPaint();}),
         vbtn("panelright","Object Properties and Object Layers",showProps,
-          ()=>{showProps=!showProps;paint();}),
+          ()=>{
+            showProps=!showProps;
+            if(showProps&&global.innerWidth<=780) showTools=false;
+            panelPaint();}),
         vbtn("panelrule","Rulers",rulers,()=>{rulers=!rulers;paint();}),
         h("span",{class:"ls-zpc",text:zpc+"%"}),
         sl,

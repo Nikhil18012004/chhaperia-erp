@@ -2190,10 +2190,16 @@ canvas{display:block;width:100%}
     0 12px 28px rgba(60,64,67,.14)}
 .ls-canvas:focus-visible{box-shadow:0 1px 3px rgba(60,64,67,.28),0 6px 14px rgba(60,64,67,.14),
   0 0 0 2px var(--lssoft2)}
-.ls-canvas.arm{cursor:crosshair}
+.ls-canvas.arm{cursor:crosshair;touch-action:none}
 .ls-layer{position:absolute;left:0;top:0;overflow:hidden;pointer-events:none}
 .ls-skin{position:absolute;inset:0}
-.ls-hit{position:absolute;cursor:move;border:1px dashed transparent}
+/* ---- A DRAG ON THE LABEL BELONGS TO THE LABEL ----
+   Move, resize and draw are pointer gestures. On a touch screen the browser
+   claims a drag for panning unless it is told otherwise, and it claims it
+   from the first millimetre — so the object never moved on any phone or
+   tablet. Only the parts that are dragged say none: bare label keeps its
+   pan, which is how a label wider than the screen is reached at all. */
+.ls-hit{position:absolute;cursor:move;border:1px dashed transparent;touch-action:none}
 .ls-hit:hover{border-color:rgba(26,115,232,.5)}
 .ls-hit.on{border:1px dashed var(--lsblue)}
 .ls-canvas.arm .ls-hit{pointer-events:none}
@@ -2241,7 +2247,10 @@ canvas{display:block;width:100%}
 .ls-imp-a{display:flex;flex-wrap:wrap;gap:7px;margin-top:1px}
 .ls-imp-a .btn{height:28px;padding:0 11px;font-size:11.5px}
 /* the eight grips, on the selected object only */
-.ls-h{position:absolute;width:7px;height:7px;background:var(--lsblue);
+/* 7px is a mouse's target. A thumb cannot find it, so resizing did not
+   exist on touch. The dot stays 7px to the eye — ::after grows only the
+   reachable area around it, and only where the pointer is coarse. */
+.ls-h{position:absolute;width:7px;height:7px;background:var(--lsblue);touch-action:none;
   border:1px solid #fff;border-radius:1px;box-shadow:0 0 1px rgba(0,0,0,.35)}
 .ls-h-nw{left:-4px;top:-4px;cursor:nwse-resize}
 .ls-h-n {left:calc(50% - 3.5px);top:-4px;cursor:ns-resize}
@@ -2251,6 +2260,10 @@ canvas{display:block;width:100%}
 .ls-h-s {left:calc(50% - 3.5px);bottom:-4px;cursor:ns-resize}
 .ls-h-sw{left:-4px;bottom:-4px;cursor:nesw-resize}
 .ls-h-w {left:-4px;top:calc(50% - 3.5px);cursor:ew-resize}
+@media (pointer:coarse){
+  .ls-h::after{content:"";position:absolute;left:50%;top:50%;width:32px;height:32px;
+    transform:translate(-50%,-50%)}
+}
 
 /* ---- rulers ----
    A two-by-two grid: corner, horizontal rule, vertical rule, label. Because
@@ -2953,13 +2966,44 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .ls-zsl{width:84px}
 }
 
-/* ---- phone: the Tools panel, as a sheet ---- */
+/* ---- phone: BOTH panels, as sheets along the bottom ----
+
+   A side sheet is the tablet's answer and the wrong one here. 300px of
+   panel over a 390px screen leaves a sliver of label, so you are editing
+   something you cannot see; and the rail stacks Properties above Layers,
+   which in a workspace around 200px tall is two scrolling boxes of about
+   ninety pixels each. That is the mess, and it is fairly earned.
+
+   Along the bottom instead: full width, a little over half the height,
+   the label still visible above it. A field row gets the phone's whole
+   390px instead of 300, so a name and its control stop fighting over the
+   same line, and Tools goes into two columns — a vertical list of ten was
+   the only reason that panel ever had to be tall.
+
+   Both sheets own the bottom edge, so only one may be open at a time; the
+   status-bar toggles close the other (see the note on them). */
 @media (max-width:780px){
-  .ls-tools{display:flex;position:absolute;top:0;left:0;bottom:0;z-index:30;
-    width:min(244px,80%);border-right:1px solid var(--lsline);
-    box-shadow:2px 0 10px rgba(32,33,36,.18),0 0 30px rgba(32,33,36,.22)}
-  /* a panel that opens over the canvas is dismissed by its own ×, so the
-     × has to be worth aiming a thumb at */
+  /* NOT position:absolute — the panel is the body's second ROW here, and it
+     has to occupy the grid cell paint() gave it. The ≤1040 rule above floats
+     the rail over the canvas for a tablet, which is right when the canvas is
+     wide; this undoes it, because on a phone that float IS the problem. */
+  .ls-tools,.ls-right{display:flex;position:static;left:auto;right:auto;
+    top:auto;bottom:auto;width:auto;max-height:none;min-height:0;
+    border:0;border-top:1px solid var(--lsline);border-radius:0;box-shadow:none}
+
+  /* Ten tools down a single column is a panel as tall as the screen. Two
+     fixed columns, not auto-fill: the row is the full width of the phone,
+     and stating the count means it cannot resolve to one on a narrow one. */
+  .ls-tlist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:4px;align-content:start}
+  .ls-tooll{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* Properties is what was asked for; Layers is the list you glance at —
+     so Layers takes a third and Properties keeps everything else */
+  .ls-layers{max-height:34%}
+
+  /* the × is how a panel is put away, so it has to be worth aiming a thumb
+     at — and the header is the only handle the row has */
   .ls-ph{height:34px}
   .ls-px{width:26px;height:26px}
   .ls-tool{height:34px}
@@ -2974,6 +3018,18 @@ select.ls-in{padding-left:3px;cursor:pointer}
   /* both strips scroll sideways by design — let them do it like a phone */
   .ls-ctb,.ls-tabs{-webkit-overflow-scrolling:touch;scrollbar-width:none}
   .ls-ctb::-webkit-scrollbar,.ls-tabs::-webkit-scrollbar{display:none}
+}
+
+/* ---- a SHORT window: a phone on its side, or a split screen ----
+   The rail divides its height between Properties and Layers, and 44% to
+   Layers is right when there is 500px of rail. A phone in landscape gives
+   it about 150px, where the same 44% leaves Properties three fields and a
+   scrollbar — the same mess as the phone, arrived at from the other side.
+   Layers gives way: it keeps a strip worth reading and Properties takes
+   what is left. Width is not the thing that is short here, so this is a
+   height query and applies to the side sheet and the column alike. */
+@media (max-height:560px){
+  .ls-layers{max-height:96px}
 }
 
 /* ---- touch: the per-label buttons on a gallery card ----
