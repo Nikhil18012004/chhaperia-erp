@@ -156,11 +156,17 @@ function poolOptions(cfg) {
 
 /* Applying the schema: split on statement boundaries and send them
    one at a time, because multipleStatements is off and staying off.
-   Line comments go first so a `--` never swallows a delimiter. */
+   Line comments go first so a `--` never swallows a delimiter.
+
+   The comment pattern must not be anchored with `$`: a CRLF checkout
+   (git's core.autocrlf on Windows) leaves a \r that `.` will not cross
+   and `$` will not sit before, so an anchored match fails and EVERY
+   comment survives — comment prose then splits on its own semicolons
+   and no statement parses. Unanchored, `.` stops at the \r by itself. */
 function splitStatements(sql) {
   return sql
-    .split("\n")
-    .map((l) => l.replace(/--.*$/, ""))
+    .split(/\r?\n/)
+    .map((l) => l.replace(/--.*/, ""))
     .join("\n")
     .split(";")
     .map((s) => s.trim())
