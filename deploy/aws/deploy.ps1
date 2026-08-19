@@ -16,6 +16,7 @@ param(
   [string]$InstanceType = "t3.small",
   [string]$RepoUrl     = "",
   [string]$RepoBranch  = "main",
+  [string]$GitHubToken = "",               # required while the repository is private
   [switch]$Delete
 )
 $ErrorActionPreference = 'Stop'
@@ -78,6 +79,29 @@ if ($RepoUrl -match '^git@|^ssh://') {
 }
 Write-Output "  repo $RepoUrl ($RepoBranch)"
 
+# A private repository cloned without a token fails ON THE INSTANCE, long after
+# CloudFormation has reported success -- you get a stack that built and a site
+# that never answers. Find out here instead, while nothing has been created.
+if (-not $GitHubToken -and $RepoUrl -match '^https://github\.com/') {
+  $ErrorActionPreference = 'Continue'
+  $probe = $null
+  try {
+    $api = ($RepoUrl -replace '^https://github\.com/', 'https://api.github.com/repos/') -replace '\.git$', ''
+    $probe = Invoke-WebRequest -Uri $api -TimeoutSec 15 -UseBasicParsing
+  } catch { $probe = $null }
+  $ErrorActionPreference = 'Stop'
+  if (-not $probe) {
+    Write-Output ""
+    Write-Output "  This repository is private (or unreachable) and no -GitHubToken was given."
+    Write-Output "  The instance would clone nothing and the site would never answer."
+    Write-Output ""
+    Write-Output "  Make a fine-grained token with read access to it at"
+    Write-Output "    https://github.com/settings/personal-access-tokens/new"
+    Write-Output "  then re-run with:  -GitHubToken github_pat_..."
+    throw "private repository needs -GitHubToken"
+  }
+}
+
 # ---- 3. deploy ----
 Write-Output "deploying $StackName ... (first run takes ~12 minutes; the database is most of it)"
 Aws cloudformation deploy `
@@ -91,6 +115,7 @@ Aws cloudformation deploy `
     "InstanceType=$InstanceType" `
     "RepoUrl=$RepoUrl" `
     "RepoBranch=$RepoBranch" `
+    "GitHubToken=$GitHubToken" `
   --no-fail-on-empty-changeset
 if ($LASTEXITCODE -ne 0) {
   Write-Output ""

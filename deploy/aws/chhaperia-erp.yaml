@@ -69,6 +69,16 @@ Parameters:
   RepoBranch:
     Type: String
     Default: main
+  GitHubToken:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      A GitHub fine-grained token with read access to the repository. REQUIRED
+      while the repository is private — without it the instance's clone fails
+      and the stack finishes "successfully" onto a service that will not start.
+      It is used for the clone and then scrubbed from the checkout, so it does
+      not linger in .git/config.
 
 Conditions:
   HasDomain: !Not [!Equals [!Ref DomainName, ""]]
@@ -308,7 +318,22 @@ Resources:
             echo "$SITE" > /etc/chhaperia-site
 
             useradd -r -m -d /opt/chhaperia -s /usr/sbin/nologin chhaperia || true
-            git clone --depth 1 --branch '${RepoBranch}' '${RepoUrl}' /opt/chhaperia/app
+
+            # A private repository needs a token to clone. It goes into the URL
+            # for that one command and is then scrubbed out of .git/config, so
+            # the checkout on disk carries no credential.
+            REPO='${RepoUrl}'
+            TOKEN='${GitHubTokenValue}'
+            CLONE_URL="$REPO"
+            if [ -n "$TOKEN" ]; then
+              CLONE_URL=$(echo "$REPO" | sed -E "s#^https://#https://x-access-token:$TOKEN@#")
+            fi
+            if ! git clone --depth 1 --branch '${RepoBranch}' "$CLONE_URL" /opt/chhaperia/app; then
+              echo "CLONE FAILED. If the repository is private, redeploy with a GitHubToken." >&2
+              exit 1
+            fi
+            git -C /opt/chhaperia/app remote set-url origin "$REPO"
+            unset TOKEN CLONE_URL
             cd /opt/chhaperia/app
             npm install --prefix backend --omit=dev
             chown -R chhaperia:chhaperia /opt/chhaperia
@@ -368,6 +393,7 @@ Resources:
             AuthSecretArn: !Ref AuthSecret
             DbEndpoint: !GetAtt Database.Endpoint.Address
             DomainOrEmpty: !If [HasDomain, !Ref DomainName, ""]
+            GitHubTokenValue: !Ref GitHubToken
 
 Outputs:
   Url:
