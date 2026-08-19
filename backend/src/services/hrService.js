@@ -399,7 +399,17 @@ async function runPayroll(period, opts) {
   const cfg = await getConfig();
   const st = await repo.getState();
   const existing = await repo.getPayrun("PR-" + period);
-  if (existing && existing.status === "Finalized" && !opts.force) throw err("Pay run for " + period + " is finalized", 400);
+  /* ⚠ NO `force` ESCAPE HERE. `opts` is the request body, so a finalized pay
+     run used to be reopened by anyone who put {"force":true} in it — and a
+     re-run writes the row back as a Draft, quietly un-finalizing sealed wages.
+     That is not only an audit problem: advance recovery counts instalments
+     only from FINALIZED runs, so a run that slips back to draft lets the same
+     instalment be taken off a worker twice. Reopening is now a deliberate,
+     separate act — see reopenPayrun below. */
+  if (existing && existing.status === "Finalized") {
+    throw err("Pay run for " + period + " is finalized. Reopen it first if it genuinely "
+      + "has to be recalculated — that is recorded against the run.", 409);
+  }
   /* Payroll normally covers every active worker. `workerIds` narrows it to a
      chosen few — the clerk who settles the coating floor today and the rest on
      Friday. An explicit pick outranks the active filter, so someone who has
@@ -470,8 +480,28 @@ async function finalizePayrun(id) {
   pr.status = "Finalized";
   return await repo.putPayrun(pr);
 }
+/* The deliberate way back out of Finalized. Separate from runPayroll so it can
+   never be a side effect of a flag in a request body, and it records who
+   reopened it and when — the run's own history of having been sealed once. */
+async function reopenPayrun(id, user, reason) {
+  const pr = await repo.getPayrun(id);
+  if (!pr) throw err("Pay run not found", 404);
+  if (pr.status !== "Finalized") throw err("Pay run " + id + " is not finalized", 400);
+  pr.status = "Draft";
+  pr.reopenedAt = new Date().toISOString();
+  pr.reopenedBy = (user && user.username) || "";
+  pr.reopenReason = reason ? String(reason).slice(0, 300) : "";
+  return await repo.putPayrun(pr);
+}
 async function deletePayrun(id) {
-  if (!await repo.getPayrun(id)) throw err("Pay run not found", 404);
+  const pr = await repo.getPayrun(id);
+  if (!pr) throw err("Pay run not found", 404);
+  /* Deleting a pay run takes its payslips with it. A finalized run is wages
+     that have been signed off, so it is not something to remove on a whim. */
+  if (pr.status === "Finalized") {
+    throw err("Pay run " + id + " is finalized and cannot be deleted. Reopen it first if it "
+      + "really has to go.", 409);
+  }
   return await repo.deletePayrun(id);
 }
 /** Adjust one payslip's advances/manual lines and recompute net.
@@ -559,6 +589,6 @@ module.exports = {
   listWorkers, createWorker, updateWorker, deleteWorker,
   ingestPunch, setAttendance, recomputeAttendance, recentPunches,
   saveLeaveType, deleteLeaveType, leaveBalances, applyLeave, decideLeave, deleteLeave,
-  runPayroll, finalizePayrun, deletePayrun, updatePayslip, payslips, computeSlip,
+  runPayroll, finalizePayrun, reopenPayrun, deletePayrun, updatePayslip, payslips, computeSlip,
   setAdvance, advanceStatus, advanceForPeriod,
 };

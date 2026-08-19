@@ -384,12 +384,33 @@ async function upsertItem(item) {
 const MOVE_TYPES = ["OPEN", "GRN", "ISSUE", "PROD", "SALE", "ADJ", "RET", "SCRAP", "XFER"];
 
 /** Append one stock movement (manual receipt / adjustment). */
+/* Which way each type is allowed to point. The ledger stores an outbound
+   movement as a NEGATIVE quantity, so the sign is not cosmetic — it is the
+   direction. Without this check a receipt of −5000 was accepted as an
+   undocumented write-off, and an "issue" of +9,000,000,000 was accepted as a
+   receipt. ADJ and XFER are deliberately absent: an adjustment goes either way
+   by definition, and a transfer is a signed pair. A zero is allowed through
+   because creating an item posts an OPEN of 0 to mark its arrival. */
+const MOVE_INBOUND = ["OPEN", "GRN", "PROD", "RET"];
+const MOVE_OUTBOUND = ["ISSUE", "SALE", "SCRAP"];
+
 async function addMovement(m) {
   if (!m || !m.itemId || !m.type) throw err("Movement needs itemId and type", 400);
   if (m.qty == null || isNaN(+m.qty)) throw err("Movement needs a numeric qty", 400);
   if (!MOVE_TYPES.includes(m.type)) throw err("Invalid movement type '" + m.type + "'", 400);
+  const q = +m.qty;
+  if (q < 0 && MOVE_INBOUND.includes(m.type))
+    throw err("A " + m.type + " movement brings stock IN, so its quantity cannot be negative. "
+      + "Use an adjustment (ADJ) to write stock off.", 400);
+  if (q > 0 && MOVE_OUTBOUND.includes(m.type))
+    throw err("A " + m.type + " movement takes stock OUT, so its quantity must be negative.", 400);
   const mvItem = await repo.getItem(m.itemId);
   if (!mvItem) throw err("Unknown item " + m.itemId, 400);
+  /* An unknown store is not a harmless label: the stock lands at an address no
+     warehouse view will ever show, so it is invisible everywhere but the raw
+     ledger. */
+  if (m.wh && !await repo.getWarehouse(m.wh))
+    throw err("Unknown warehouse " + m.wh, 400);
   // WIP items are stage-engine plumbing — a receipt into one silently hides
   // the stock from every work order (which consumes the RAW material).
   // This actually happened: 2000 m of mica tape got booked to WIP-CP25G-08-S,
@@ -410,12 +431,12 @@ async function addMovement(m) {
 /* GRN numbers run in an April–March fiscal-year series: GRN/26-27/0001.
    Issued here, inside the receive path, so both receiving screens share one
    sequence and two browsers can never mint the same number. */
-async function nextGrnNo(dateISO) {
+async function nextGrnNo(dateISO, x) {
   const [y, m] = String(dateISO).split("-").map(Number);
   const startYY = (m >= 4 ? y : y - 1) % 100;
   const fy = String(startYY).padStart(2, "0") + "-" + String((startYY + 1) % 100).padStart(2, "0");
   let max = 0;
-  (await repo.getGrns()).forEach((g) => {
+  (await repo.getGrns(x)).forEach((g) => {
     const match = new RegExp("^GRN/" + fy + "/(\\d+)$").exec(String(g.id || ""));
     if (match) max = Math.max(max, +match[1]);
   });
@@ -431,9 +452,23 @@ const strOr = (v, n) => (v == null ? "" : String(v).slice(0, n || 80));
     to a real person. Only the ACCEPTED quantity (received − rejected) posts
     to stock and advances the order — a rejected lot goes back on the truck,
     so the line stays owed; the rejection lives on the GRN for the debit note. */
+/* ⚠ ONE TRANSACTION, and the order is read FOR UPDATE inside it.
+   Receiving is a read-modify-write: it reads what is still outstanding,
+   decides what to post, and writes the movements, the goods receipt and the
+   order's progress. Split across three commits — which is what it used to be
+   — two receipts arriving together both read the same outstanding quantity
+   and both post it in full, and a failure part-way left stock in the ledger
+   with the order still reading as un-received. Measured before this changed:
+   two simultaneous receipts of a 100-unit order booked 200 units, 3 runs out
+   of 3. The lock is what makes the second request wait and then see the first
+   one's work; the single transaction is what makes the three writes land or
+   vanish together. */
 async function receivePurchaseOrder(poId, body, user) {
+  return await repo.withTx(async (x) => receiveInTx(x, poId, body, user));
+}
+async function receiveInTx(x, poId, body, user) {
   body = body || {};
-  const po = await repo.getPurchaseOrder(poId);
+  const po = await repo.getPurchaseOrderForUpdate(poId, x);
   if (!po) throw err("Purchase order not found", 404);
   const wh = body.wh || "WH-PNY";
   const date = body.date || todayISO();
@@ -494,16 +529,16 @@ async function receivePurchaseOrder(poId, body, user) {
   });
   if (!grnLines.length) throw err("No quantity to receive", 400);
   const grn = {
-    id: await nextGrnNo(date), date, poId: po.id, poDate: po.date || "",
+    id: await nextGrnNo(date, x), date, poId: po.id, poDate: po.date || "",
     supplierId: po.supplierId, company: po.company || "", wh, by, status: "Posted",
     invNo: strOr(body.invNo), invDate: strOr(body.invDate, 20),
     vehicle: strOr(body.vehicle, 20), lrNo: strOr(body.lrNo, 40),
     remarks: strOr(body.remarks, 500), lines: grnLines,
   };
-  if (moves.length) await repo.addMovements(moves);
-  await repo.putGrn(grn);
+  if (moves.length) await repo.addMovements(moves, x);
+  await repo.insertGrn(grn, x);
   po.status = po.lines.every((l) => (l.recd || 0) >= l.qty - 0.0001) ? "Received" : "Partially Received";
-  await repo.putPurchaseOrder(po);
+  await repo.putPurchaseOrder(po, x);
   return { ok: true, posted: moves.length, grn, po: { id: po.id, status: po.status, lines: po.lines } };
 }
 
@@ -518,10 +553,28 @@ function nextId(list, prefix) {
 }
 function num(v) { return v == null || v === "" || isNaN(+v) ? 0 : +v; }
 
+/* ---- referential checks shared by both order types ----
+   An order naming a party or a material that does not exist is accepted
+   happily by the database (the schema declares almost no foreign keys), and
+   the breakage only shows up later on a screen that cannot render it. These
+   two run at the door instead. `upsertItem` already validates its category
+   the same way; this is that rule applied to the orders. */
+async function assertLinesReferenceRealItems(lines, what) {
+  for (const l of (lines || [])) {
+    const id = l && l.itemId;
+    if (!id) throw err("Every " + what + " line needs a material", 400);
+    if (!await repo.getItem(id)) throw err("Unknown item " + id, 400);
+    if (num(l.qty) <= 0) throw err("Line quantity for " + id + " must be greater than zero", 400);
+  }
+}
+
 /* ---- Purchase orders (create / update / delete) ---- */
 async function createPurchaseOrder(po) {
   po = po || {};
   if (!Array.isArray(po.lines) || !po.lines.length) throw err("A purchase order needs at least one line", 400);
+  if (!po.supplierId) throw err("A purchase order needs a supplier", 400);
+  if (!await repo.getSupplier(po.supplierId)) throw err("Unknown supplier " + po.supplierId, 400);
+  await assertLinesReferenceRealItems(po.lines, "purchase order");
   if (!po.id) po.id = nextId((await repo.getState()).purchaseorders, "PO-");
   else if (await repo.getPurchaseOrder(po.id)) throw err("Purchase order " + po.id + " already exists", 409);
   po.date = po.date || todayISO();
@@ -529,11 +582,31 @@ async function createPurchaseOrder(po) {
   po.value = num(po.value) || po.lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0);
   return await repo.putPurchaseOrder(po);
 }
+/* ⚠ An order that has taken delivery of anything is CLOSED to edits.
+   Receiving works out what is still outstanding from the order's own `recd`
+   figures, so rewriting the lines wipes the record of what already arrived:
+   the order reopens as though nothing had been delivered and the same goods
+   can be booked into stock a second time. Measured before this changed: 1600
+   units and two goods receipts against a 1000-unit order.
+   The UI already hides its Edit button once anything is received — that check
+   lived only in the browser, which is exactly why it needed to live here. */
+async function assertNothingReceived(po, verb) {
+  const recd = (po.lines || []).reduce((s, l) => s + num(l.recd), 0);
+  if (recd > 0) {
+    throw err("Cannot " + verb + " " + po.id + ": " + (+recd.toFixed(3))
+      + " unit(s) have already been received against it. Raise a return or a stock "
+      + "adjustment instead — editing the order would let the same delivery be booked twice.", 409);
+  }
+}
 async function updatePurchaseOrder(id, patch) {
   const existing = await repo.getPurchaseOrder(id);
   if (!existing) throw err("Purchase order not found", 404);
+  await assertNothingReceived(existing, "edit");
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A purchase order needs at least one line", 400);
+  if (merged.supplierId && !await repo.getSupplier(merged.supplierId))
+    throw err("Unknown supplier " + merged.supplierId, 400);
+  await assertLinesReferenceRealItems(merged.lines, "purchase order");
   return await repo.putPurchaseOrder(merged);
 }
 async function deletePurchaseOrder(id) {
@@ -545,6 +618,9 @@ async function deletePurchaseOrder(id) {
 async function createSalesOrder(so) {
   so = so || {};
   if (!Array.isArray(so.lines) || !so.lines.length) throw err("A sales order needs at least one line", 400);
+  if (!so.customerId) throw err("A sales order needs a customer", 400);
+  if (!await repo.getCustomer(so.customerId)) throw err("Unknown customer " + so.customerId, 400);
+  await assertLinesReferenceRealItems(so.lines, "sales order");
   if (!so.id) so.id = nextId((await repo.getState()).salesorders, "SO-");
   else if (await repo.getSalesOrder(so.id)) throw err("Sales order " + so.id + " already exists", 409);
   so.date = so.date || todayISO();
@@ -553,11 +629,24 @@ async function createSalesOrder(so) {
   so.value = num(so.value) || so.lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0);
   return await repo.putSalesOrder(so);
 }
+/* A dispatched order has already moved stock and has an invoice printed from
+   this very document, so its lines are sealed the way a received PO's are.
+   Everything else about it — transporter, remarks, the paperwork fields —
+   stays editable, because those are routinely filled in after the lorry goes. */
 async function updateSalesOrder(id, patch) {
   const existing = await repo.getSalesOrder(id);
   if (!existing) throw err("Sales order not found", 404);
-  const merged = Object.assign({}, existing, patch || {}, { id });
+  patch = patch || {};
+  if (existing.status === "Dispatched" && patch.lines
+      && JSON.stringify(patch.lines) !== JSON.stringify(existing.lines || [])) {
+    throw err("Cannot change the lines of " + id + ": it has been dispatched and its stock "
+      + "movements and invoice are already issued against these figures.", 409);
+  }
+  const merged = Object.assign({}, existing, patch, { id });
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A sales order needs at least one line", 400);
+  if (merged.customerId && !await repo.getCustomer(merged.customerId))
+    throw err("Unknown customer " + merged.customerId, 400);
+  await assertLinesReferenceRealItems(merged.lines, "sales order");
   return await repo.putSalesOrder(merged);
 }
 async function deleteSalesOrder(id) {
@@ -567,22 +656,33 @@ async function deleteSalesOrder(id) {
 /** Dispatch a sales order: post SALE (outbound) movements for every line and
     mark it Dispatched — in one shot, server-side (mirrors receivePurchaseOrder).
     `user` is the actor from the auth token. */
+/* ⚠ ONE TRANSACTION, order read FOR UPDATE — same reasoning as
+   receivePurchaseOrder above. The "already dispatched" check is worthless if
+   it runs outside the write it guards: two dispatches arriving together both
+   passed it before either wrote the status, and the order shipped twice.
+   Measured before this changed: 6 shipping movements for a 3-line order.
+   NOTE this deliberately does NOT check stock on hand. Dispatching into
+   negative finished stock is expected here — production books nothing in
+   (ruled 2026-07-30), so the ledger goes negative by design until somebody
+   runs "Add to Finished Stock". Blocking it would stop real dispatches. */
 async function dispatchSalesOrder(soId, body, user) {
-  body = body || {};
-  const so = await repo.getSalesOrder(soId);
-  if (!so) throw err("Sales order not found", 404);
-  if (so.status === "Dispatched") throw err("Sales order already dispatched", 400);
-  const date = body.date || todayISO();
-  const wh = body.wh || "WH-FG";
-  const by = (user && user.username) || "sales";
-  const moves = (so.lines || []).map((l) => ({
-    id: mvId(), date, itemId: l.itemId, wh, type: "SALE",
-    qty: -Math.abs(num(l.qty)), rate: l.rate || 0, ref: so.id, note: "Dispatch vs SO", by,
-  }));
-  if (moves.length) await repo.addMovements(moves);
-  so.status = "Dispatched";
-  await repo.putSalesOrder(so);
-  return { ok: true, posted: moves.length, so: { id: so.id, status: so.status } };
+  return await repo.withTx(async (x) => {
+    body = body || {};
+    const so = await repo.getSalesOrderForUpdate(soId, x);
+    if (!so) throw err("Sales order not found", 404);
+    if (so.status === "Dispatched") throw err("Sales order already dispatched", 400);
+    const date = body.date || todayISO();
+    const wh = body.wh || "WH-FG";
+    const by = (user && user.username) || "sales";
+    const moves = (so.lines || []).map((l) => ({
+      id: mvId(), date, itemId: l.itemId, wh, type: "SALE",
+      qty: -Math.abs(num(l.qty)), rate: l.rate || 0, ref: so.id, note: "Dispatch vs SO", by,
+    }));
+    if (moves.length) await repo.addMovements(moves, x);
+    so.status = "Dispatched";
+    await repo.putSalesOrder(so, x);
+    return { ok: true, posted: moves.length, so: { id: so.id, status: so.status } };
+  });
 }
 
 /* ---- BOM (save recipe / delete) ---- */
@@ -818,9 +918,31 @@ async function ensureDispatch() {
   return { changed: false, count: ((await repo.getState()).transporters || []).length };
 }
 
-/* ---- Deletes for item / work order ---- */
+/* ---- Deletes for item / work order ----
+   Guarded the way deleteSupplier and deleteCustomer already are. Without this
+   an item could be deleted while orders, recipes and its whole stock ledger
+   still pointed at it: the frontend silently SKIPS movements whose item has
+   gone, so the material's history and its valuation vanished from every report
+   with no error at all, and the Sales Orders screen threw on the first line
+   that named it. Nothing underneath catches this — the schema declares almost
+   no foreign keys. */
 async function deleteItem(id) {
   if (!await repo.getItem(id)) throw err("Item not found", 404);
+  const st = await repo.getState();
+  const moves = (st.movements || []).filter((m) => m.itemId === id).length;
+  const pos = (st.purchaseorders || []).filter((p) => (p.lines || []).some((l) => l.itemId === id)).length;
+  const sos = (st.salesorders || []).filter((s) => (s.lines || []).some((l) => l.itemId === id)).length;
+  const wos = (st.workorders || []).filter((w) => w.itemId === id).length;
+  const boms = Object.entries(st.boms || {})
+    .filter(([k, b]) => k === id || (b.lines || []).some((l) => (Array.isArray(l) ? l[0] : l && l.id) === id)).length;
+  const blocks = [
+    [moves, "stock movement(s)"], [pos, "purchase order(s)"], [sos, "sales order(s)"],
+    [wos, "work order(s)"], [boms, "bill(s) of materials"],
+  ].filter(([n]) => n > 0).map(([n, w]) => n + " " + w);
+  if (blocks.length) {
+    throw err("Cannot delete " + id + ": " + blocks.join(", ") + " still reference it. "
+      + "Deactivate the item instead — deleting it would erase its stock history from every report.", 400);
+  }
   return await repo.deleteItem(id);
 }
 async function deleteWorkOrder(id) {
