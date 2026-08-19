@@ -5,7 +5,7 @@
       powershell -ExecutionPolicy Bypass -File tools/build-apk.ps1 -Release
 
   Expects a JDK 17, the Android SDK and a Gradle distribution under the
-  toolchain directory below. None of them are on PATH deliberately — this
+  toolchain directory below. None of them are on PATH deliberately -- this
   machine has no system-wide Java, and putting one there would be a change
   to the laptop rather than to this project.
 #>

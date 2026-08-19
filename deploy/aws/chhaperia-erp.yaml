@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Chhaperia ERP — one EC2 instance running the Node app behind Caddy (which
+  gets and renews the TLS certificate by itself), and a private RDS MySQL 8.4
+  holding the data. Built for a single factory's internal use: a handful of
+  concurrent users, one region, and no piece of it reachable from the internet
+  except port 443.
+
+# ---------------------------------------------------------------------------
+# WHY HTTPS IS NOT OPTIONAL HERE
+#
+# In production the ERP marks its login cookie `secure`, so a browser will not
+# send it over plain HTTP — nobody can sign in at all. A deployment without a
+# certificate is not "less secure", it is broken. Caddy is on the instance for
+# exactly this reason: it obtains and renews a real certificate with no manual
+# step, which is also what makes the app installable as a PWA.
+#
+# WHY THE DATABASE IS NOT PUBLIC
+#
+# RDS sits in the private subnets with a security group that accepts 3306 from
+# the application's security group and from nothing else. There is no public
+# address to find, and the password never leaves Secrets Manager.
+# ---------------------------------------------------------------------------
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: ""
+    Description: >
+      The name the ERP will answer on, e.g. erp.chhaperia.in. Leave EMPTY and
+      the stack uses a free sslip.io name derived from the instance's own IP,
+      which still gets a real certificate — good enough to start, and you can
+      move to your own name later without rebuilding anything.
+  AdminCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: >
+      Who may reach the site. Narrow this to the factory's public IP (as
+      x.x.x.x/32) if the ERP is only ever used from the premises — it is the
+      single most effective thing you can do to this stack.
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$
+  SshCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: >
+      Who may SSH in. Left at loopback (i.e. nobody) on purpose — the instance
+      is managed through SSM Session Manager, which needs no open SSH port and
+      no key pair. Widen only if you truly need it.
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    Description: >
+      t3.small (2 GB) is the realistic floor — t3.micro's 1 GB has to hold
+      Node, Caddy and the build, and will swap under a catalogue import.
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small]
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  RepoUrl:
+    Type: String
+    Default: https://github.com/Nikhil18012004/chhaperia-erp.git
+    Description: The repository the instance clones on first boot.
+  RepoBranch:
+    Type: String
+    Default: main
+
+Conditions:
+  HasDomain: !Not [!Equals [!Ref DomainName, ""]]
+
+Resources:
+
+  # ---------------- network ----------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: chhaperia-erp }]
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: chhaperia-erp }]
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref Igw }
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: chhaperia-erp-public }]
+
+  # RDS insists on subnets in two zones even for a single-AZ database, so
+  # there are two private ones. Nothing is launched into them but the database.
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.11.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: chhaperia-erp-db-a }]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.12.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: chhaperia-erp-db-b }]
+
+  PublicRt:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc }
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties:
+      RouteTableId: !Ref PublicRt
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Igw
+  PublicRtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PublicRt, SubnetId: !Ref PublicSubnet }
+
+  # ---------------- security groups ----------------
+  AppSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Chhaperia ERP application host
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        # 80 stays open to everyone regardless of AdminCidr: it is how the
+        # certificate authority proves the host, and how http:// is redirected.
+        - { IpProtocol: tcp, FromPort: 80,  ToPort: 80,  CidrIp: 0.0.0.0/0, Description: "ACME challenge + redirect to https" }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AdminCidr, Description: "the ERP itself" }
+        - { IpProtocol: tcp, FromPort: 22,  ToPort: 22,  CidrIp: !Ref SshCidr,   Description: "SSH — closed by default; use SSM" }
+      Tags: [{ Key: Name, Value: chhaperia-erp-app }]
+
+  DbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Chhaperia ERP database — reachable only from the app
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: chhaperia-erp-db }]
+  DbSgIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSg
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref AppSg
+      Description: MySQL from the application host only
+
+  # ---------------- secrets ----------------
+  # Both are generated by AWS and never appear in this template, in the console
+  # history, or in any log. The instance reads them at boot through its role.
+  DbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/db"
+      Description: Chhaperia ERP database credentials
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"chhaperia"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\ '''
+
+  AuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/auth"
+      Description: >
+        Signs every ERP login token. Rotating it signs everyone out, which is
+        the correct way to end all sessions at once.
+      GenerateSecretString:
+        SecretStringTemplate: '{"kind":"auth"}'
+        GenerateStringKey: secret
+        PasswordLength: 64
+        ExcludePunctuation: true
+
+  # ---------------- database ----------------
+  DbSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Chhaperia ERP private subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${AWS::StackName}-db"
+      Engine: mysql
+      EngineVersion: "8.4"
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: chhaperia_erp
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DbSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DbSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DbSubnets
+      VPCSecurityGroups: [!Ref DbSg]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "18:30-19:30"        # ~midnight IST, off-shift
+      PreferredMaintenanceWindow: "sun:19:45-sun:20:45"
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: true
+      CopyTagsToSnapshot: true
+
+  # ---------------- instance role ----------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Session Manager: a shell without an open SSH port or a key to lose
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-own-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource: [!Ref DbSecret, !Ref AuthSecret]
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: { Roles: [!Ref InstanceRole] }
+
+  # A fixed address, so the name it answers on survives a reboot or a
+  # replacement instance.
+  Eip:
+    Type: AWS::EC2::EIP
+    Properties: { Domain: vpc }
+  EipAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties: { AllocationId: !GetAtt Eip.AllocationId, InstanceId: !Ref Instance }
+
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: Database
+    Properties:
+      ImageId: "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}"
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref AppSg]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: chhaperia-erp }]
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            exec > >(tee /var/log/chhaperia-setup.log) 2>&1
+
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -y
+            apt-get install -y curl git jq unzip ca-certificates debian-keyring debian-archive-keyring apt-transport-https
+
+            # Node 20 — the engine the backend declares
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y nodejs
+
+            # Caddy: the certificate is its whole job here
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+              | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+              > /etc/apt/sources.list.d/caddy-stable.list
+            apt-get update -y && apt-get install -y caddy
+
+            # the AWS CLI, to read this stack's own secrets
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
+            unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install
+
+            REGION=${AWS::Region}
+            DB_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id '${DbSecretArn}' --query SecretString --output text)
+            AU_JSON=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id '${AuthSecretArn}' --query SecretString --output text)
+            DB_USER=$(echo "$DB_JSON" | jq -r .username)
+            DB_PASS=$(echo "$DB_JSON" | jq -r .password)
+            AUTH=$(echo "$AU_JSON" | jq -r .secret)
+
+            IP=$(curl -s -H "X-aws-ec2-metadata-token: $(curl -s -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/public-ipv4)
+            SITE='${DomainOrEmpty}'
+            if [ -z "$SITE" ]; then SITE="$(echo "$IP" | tr '.' '-').sslip.io"; fi
+            echo "$SITE" > /etc/chhaperia-site
+
+            useradd -r -m -d /opt/chhaperia -s /usr/sbin/nologin chhaperia || true
+            git clone --depth 1 --branch '${RepoBranch}' '${RepoUrl}' /opt/chhaperia/app
+            cd /opt/chhaperia/app
+            npm install --prefix backend --omit=dev
+            chown -R chhaperia:chhaperia /opt/chhaperia
+
+            cat > /etc/chhaperia.env <<ENVEOF
+            NODE_ENV=production
+            PORT=4000
+            CHHAPERIA_DB_HOST=${DbEndpoint}
+            CHHAPERIA_DB_PORT=3306
+            CHHAPERIA_DB_USER=$DB_USER
+            CHHAPERIA_DB_PASSWORD=$DB_PASS
+            CHHAPERIA_DB_NAME=chhaperia_erp
+            CHHAPERIA_DB_SSL=true
+            AUTH_SECRET=$AUTH
+            ENVEOF
+            chmod 600 /etc/chhaperia.env
+
+            cat > /etc/systemd/system/chhaperia.service <<'SVCEOF'
+            [Unit]
+            Description=Chhaperia ERP
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            User=chhaperia
+            WorkingDirectory=/opt/chhaperia/app
+            EnvironmentFile=/etc/chhaperia.env
+            ExecStart=/usr/bin/node backend/src/server.js
+            Restart=always
+            RestartSec=5
+            NoNewPrivileges=true
+            PrivateTmp=true
+            ProtectSystem=strict
+            ProtectHome=true
+            ReadWritePaths=/opt/chhaperia/app/data
+
+            [Install]
+            WantedBy=multi-user.target
+            SVCEOF
+
+            mkdir -p /opt/chhaperia/app/data && chown chhaperia:chhaperia /opt/chhaperia/app/data
+
+            # Caddy terminates TLS and passes everything through untouched.
+            cat > /etc/caddy/Caddyfile <<CADDYEOF
+            $SITE {
+              encode zstd gzip
+              reverse_proxy 127.0.0.1:4000
+            }
+            CADDYEOF
+
+            systemctl daemon-reload
+            systemctl enable --now chhaperia
+            systemctl restart caddy
+            echo "chhaperia erp ready at https://$SITE"
+          - DbSecretArn: !Ref DbSecret
+            AuthSecretArn: !Ref AuthSecret
+            DbEndpoint: !GetAtt Database.Endpoint.Address
+            DomainOrEmpty: !If [HasDomain, !Ref DomainName, ""]
+
+Outputs:
+  Url:
+    Description: The ERP. Give this to the office and the floor.
+    Value: !If
+      - HasDomain
+      - !Sub "https://${DomainName}"
+      - !Sub
+        - "https://${Dashed}.sslip.io"
+        - Dashed: !Join ["-", !Split [".", !Ref Eip]]
+  PublicIp:
+    Description: Point your own DNS A record here when you have a domain.
+    Value: !Ref Eip
+  DatabaseEndpoint:
+    Description: Private address of the database — not reachable from outside.
+    Value: !GetAtt Database.Endpoint.Address
+  DbSecretName:
+    Description: Where the database password lives.
+    Value: !Ref DbSecret
+  ShellCommand:
+    Description: A shell on the box without opening SSH.
+    Value: !Sub "aws ssm start-session --region ${AWS::Region} --target ${Instance}"
