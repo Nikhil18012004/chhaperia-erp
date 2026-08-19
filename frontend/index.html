@@ -7,6 +7,15 @@
   <meta name="description" content="Chhaperia Cable Material ERP — inventory, production, procurement & sales with automated stock, usage and pending calculations." />
   <link rel="icon" type="image/png" href="assets/favicon.png" />
   <link rel="apple-touch-icon" href="assets/favicon-180.png" />
+  <!-- Installable on the floor tablets and phones. The manifest and the
+       service worker are what turn this page into an app the launcher can
+       hold; the APK wrapper loads this same page. -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#090b11" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Chhaperia" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -147,5 +156,18 @@
   <script src="js/mod-users.js?v=9"></script>
   <script src="js/mod-supervisor.js?v=10"></script>
   <script src="js/app.js?v=14"></script>
+  <script>
+    /* Registered last and only over a secure origin — a service worker is
+       refused on plain http anyway, except on localhost. Failing to register
+       is not an error worth shouting about: the app runs exactly the same
+       without it, it just cannot be installed to a home screen. */
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+      addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function (e) {
+          console.info("[pwa] not installable here:", e && e.message);
+        });
+      });
+    }
+  </script>
 </body>
 </html>

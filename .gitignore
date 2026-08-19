@@ -41,6 +41,11 @@ build/
 # Local DB backups & test copies (safety snapshots, not part of the app)
 _backup/
 _testdata/
+# the SQLite file the MySQL migration was taken from, and any snapshot of it —
+# real company data, and a database is not source
+data/chhaperia.db
+data/*.db
+data/chhaperia.db.premysql-*.bak
 
 # Demo-layer manifests: a record of which rows THIS machine's database holds,
 # written by tools/temp-demo and tools/demo-data.js. Local state, not source.
@@ -53,3 +58,9 @@ data/demo-manifest.json
 data/bartender/
 run-local.cmd
 backups/
+
+# Android app build outputs and machine-specific SDK path
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

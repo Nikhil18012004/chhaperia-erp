@@ -1,0 +1,56 @@
+plugins {
+  id "com.android.application"
+}
+
+android {
+  namespace "in.chhaperia.erp"
+  compileSdk 34
+
+  defaultConfig {
+    applicationId "in.chhaperia.erp"
+    /* Android 7.0. The floor tablets are not new, and nothing in this app
+       needs anything more recent than a WebView that speaks modern JS. */
+    minSdk 24
+    targetSdk 34
+    versionCode 1
+    versionName "1.0"
+  }
+
+  buildTypes {
+    debug {
+      /* The debug APK is what gets sideloaded onto the tablets. It keeps the
+         .debug suffix off so it does not install alongside a release build
+         under a different name and confuse everyone about which is which. */
+      minifyEnabled false
+    }
+    release {
+      minifyEnabled true
+      shrinkResources true
+      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+    }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  /* No BuildConfig, no resource shrinking surprises — this app has one screen. */
+  buildFeatures {
+    buildConfig false
+  }
+}
+
+dependencies {
+  /* ⚠ Keep this BOM. Kotlin 1.8 folded the old kotlin-stdlib-jdk7/jdk8
+     artifacts into kotlin-stdlib itself, so when one AndroidX library drags
+     in a pre-1.8 jdk8 stdlib alongside a 1.8 one, every class that moved is
+     declared twice and the build dies on "Duplicate class kotlin.*". The BOM
+     pins every Kotlin module to one version, which is the documented fix —
+     this app writes no Kotlin at all, it only inherits it. */
+  implementation platform("org.jetbrains.kotlin:kotlin-bom:1.8.22")
+
+  implementation "androidx.appcompat:appcompat:1.7.0"
+  implementation "androidx.activity:activity:1.9.2"        // OnBackPressedDispatcher
+  implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
+}

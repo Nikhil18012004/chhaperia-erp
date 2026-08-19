@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">Chhaperia ERP</string>
+  <string name="action_reload">Reload</string>
+  <string name="action_server">Change server</string>
+</resources>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Chhaperia ERP — no connection</title>
+<style>
+  :root{ --bg:#090b11; --card:#11141c; --ink:#e7ebf3; --ink-2:#98a2b6; --line:#222836; --accent:#F06820; }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    display:grid; place-items:center; padding:24px; line-height:1.6;
+  }
+  .card{
+    max-width:460px; width:100%; background:var(--card);
+    border:1px solid var(--line); border-radius:14px; padding:32px 28px;
+  }
+  .mark{width:56px;height:56px;display:block;margin:0 0 20px}
+  h1{font-size:21px;margin:0 0 10px;letter-spacing:-.01em}
+  p{margin:0 0 14px;color:var(--ink-2);font-size:15px}
+  ul{margin:0 0 22px;padding-left:20px;color:var(--ink-2);font-size:14.5px}
+  li{margin:5px 0}
+  button{
+    font:inherit;font-weight:600;cursor:pointer;
+    background:var(--accent);color:#1a0e05;border:0;border-radius:9px;
+    padding:11px 20px;width:100%;
+  }
+  button:hover{filter:brightness(1.07)}
+  button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <img class="mark" src="assets/icon-192.png" alt="" />
+    <h1>Can't reach the ERP server</h1>
+    <p>The app is installed and working — it just can't get to the server right now, so there is no live data to show.</p>
+    <ul>
+      <li>Check this device is on the factory Wi-Fi.</li>
+      <li>Check the office PC that runs the ERP is switched on.</li>
+      <li>If the network changed, the server's address may have changed with it.</li>
+    </ul>
+    <button onclick="location.replace('./')">Try again</button>
+  </div>
+  <script>
+    /* Come back on our own as soon as the device sees a network again. */
+    addEventListener("online", function () { location.replace("./"); });
+  </script>
+</body>
+</html>
