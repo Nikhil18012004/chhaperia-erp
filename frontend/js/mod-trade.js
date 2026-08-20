@@ -100,7 +100,7 @@
     ]));
     const pos=ENG.data.purchaseorders;
     const open=pos.filter(p=>p.status!=="Received");
-    const pendVal=open.reduce((s,p)=>s+p.lines.reduce((a,l)=>a+(l.qty-(l.recd||0))*l.rate,0),0);
+    const pendVal=open.reduce((s,p)=>s+p.lines.reduce((a,l)=>a+Math.max(0,l.qty-(l.recd||0))*l.rate,0),0);
     const overdue=open.filter(p=>p.eta<DB.helpers.iso(DB.helpers.today())).length;
     /* QC's headline is its own worklist, not the buyer's money. Rates and order
        values are withheld from this role throughout the screen — they are here
@@ -233,7 +233,13 @@
           {key:"hsn",label:"HSN",render:r=>{const it=ENG.item(r.itemId)||{};return esc(r.hsn||it.hsn||"—");},noSort:true},
           {key:"qty",label:"Ordered",num:true,render:r=>ENG.num(r.qty),noSort:true},
           {key:"recd",label:"Received",num:true,render:r=>ENG.num(r.recd||0),noSort:true},
-          {key:"pend",label:"Pending",num:true,render:r=>{const p=r.qty-(r.recd||0);return p>0?`<span class="badge-s s-warn">${ENG.num(p)}</span>`:'<span class="muted">—</span>';},noSort:true},
+          /* Over-received lines read "+44 over", not a blank: taking more than
+             the order asked for is the one thing on this row worth a second
+             look, and a dash would hide it. */
+          {key:"pend",label:"Pending",num:true,render:r=>{const p=+(r.qty-(r.recd||0)).toFixed(3);
+            if(p>0) return `<span class="badge-s s-warn">${ENG.num(p)}</span>`;
+            if(p<0) return `<span class="badge-s s-violet">+${ENG.num(-p)} over</span>`;
+            return '<span class="muted">—</span>';},noSort:true},
           qcOnly?null:{key:"rate",label:"Rate",num:true,render:r=>"₹"+ENG.num(r.rate,2),noSort:true},
           qcOnly?null:{key:"gst",label:"GST %",num:true,render:r=>lineGstPct(r,ENG.item(r.itemId)),noSort:true},
           qcOnly?null:{key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true},

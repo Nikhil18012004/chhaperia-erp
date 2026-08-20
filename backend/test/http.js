@@ -260,6 +260,74 @@ async function run() {
       JSON.stringify(gAfter || {}).slice(0, 90));
   }
 
+  /* WHAT ARRIVED goes into stock, not what was ordered. The receipt used to
+     clamp the entered quantity down to the outstanding balance, so an
+     over-delivery was booked as the ORDERED figure — silently, with a goods
+     receipt that read as though that were what came off the truck. The clamp
+     was also what made a replayed receipt harmless, so the two halves are
+     tested together: the excess must go in when it is declared, and must be
+     refused when it is not. */
+  section("Over-receipt — the delivered quantity is what lands in stock");
+  {
+    const stockOf = (s, id) => +(s.movements || []).filter((m) => m.itemId === id)
+      .reduce((a, m) => a + (+m.qty || 0), 0).toFixed(3);
+    const poO = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
+    const before = stockOf((await call("GET", "/state", A)).d, rm);
+    /* a deleted PO frees its id, and the GRNs it left behind keep pointing at
+       it — so count what is there NOW rather than expecting none */
+    const grnsFor = (s) => (s.grns || []).filter((g) => g.poId === poO.id).length;
+    const grns0 = grnsFor((await call("GET", "/state", A)).d);
+
+    const blind = await call("POST", "/purchase-orders/" + poO.id + "/receive", A,
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 144 }] });
+    ok("receiving more than was ordered is refused without confirmation", blind.status === 400,
+      blind.status + " " + JSON.stringify(blind.d).slice(0, 120));
+    ok("the refusal names what is still outstanding", /still outstanding/.test(JSON.stringify(blind.d)),
+      JSON.stringify(blind.d).slice(0, 160));
+    const stB = (await call("GET", "/state", A)).d;
+    ok("a refused over-receipt books nothing at all", stockOf(stB, rm) === before,
+      stockOf(stB, rm) + " vs " + before);
+    ok("and issues no GRN", grnsFor(stB) === grns0, grnsFor(stB) + " vs " + grns0);
+
+    const over = await call("POST", "/purchase-orders/" + poO.id + "/receive", A,
+      { wh: "WH-PNY", allowOver: true, lines: [{ i: 0, qty: 144 }] });
+    const stO = (await call("GET", "/state", A)).d;
+    ok("a confirmed over-receipt is accepted", over.status === 200, JSON.stringify(over.d).slice(0, 120));
+    ok("stock rises by the RECEIVED quantity, not the ordered one",
+      stockOf(stO, rm) - before === 144, "delta " + (stockOf(stO, rm) - before) + ", ordered 100");
+    ok("the GRN line records the delivered qty and the excess",
+      over.d.grn.lines[0].qty === 144 && over.d.grn.lines[0].over === 44,
+      JSON.stringify(over.d.grn.lines[0]));
+    ok("the ledger note spells the over-delivery out",
+      /OVER the 100 ordered/.test(String((stO.movements || []).find((m) => m.ref === poO.id).note)),
+      String(((stO.movements || []).find((m) => m.ref === poO.id) || {}).note).slice(0, 120));
+    const poAfter = stO.purchaseorders.find((p) => p.id === poO.id);
+    ok("the order closes as Received with recd past the ordered qty",
+      poAfter.status === "Received" && poAfter.lines[0].recd === 144,
+      poAfter.status + " recd=" + poAfter.lines[0].recd);
+
+    /* the replay guard the old clamp used to provide, kept */
+    const replay = await call("POST", "/purchase-orders/" + poO.id + "/receive", A,
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 144 }] });
+    ok("replaying the same receipt is refused", replay.status === 400, JSON.stringify(replay.d).slice(0, 120));
+    ok("the replay refusal says the line is already fully received",
+      /already fully received/.test(JSON.stringify(replay.d)), JSON.stringify(replay.d).slice(0, 160));
+    ok("the replay changes no stock", stockOf((await call("GET", "/state", A)).d, rm) - before === 144);
+
+    /* a receipt WITHIN the order still needs no flag */
+    const poU = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
+    const b2 = stockOf((await call("GET", "/state", A)).d, rm);
+    const under = await call("POST", "/purchase-orders/" + poU.id + "/receive", A,
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 30 }] });
+    ok("a short delivery posts exactly what was entered, no flag needed",
+      under.status === 200 && stockOf((await call("GET", "/state", A)).d, rm) - b2 === 30,
+      under.status + " delta " + (stockOf((await call("GET", "/state", A)).d, rm) - b2));
+    await call("DELETE", "/purchase-orders/" + poO.id, A);
+    await call("DELETE", "/purchase-orders/" + poU.id, A);
+  }
+
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
 
   // Warehouse master-data edit (rename) — admin/office only
@@ -2132,9 +2200,19 @@ async function run() {
     const poAfter = (await call("GET", "/state", A)).d.purchaseorders.find((p) => p.id === poE.id);
     ok("…and the received quantity is untouched",
       Math.abs((poAfter.lines[0].recd || 0) - 600) < 0.001, String(poAfter.lines[0].recd));
-    await call("POST", "/purchase-orders/" + poE.id + "/receive", A, { lines: [{ i: 0, qty: 1000 }], wh });
+    /* The second receipt asks for the full 1000 again when only 400 is still
+       owed. It used to be silently shrunk to 400 — the total came to 1000, so
+       nothing was double-booked, but the operator was never told the figure
+       had been rewritten. Now the request is refused outright and the delivery
+       has to be re-entered as what actually arrived, which protects the same
+       invariant without quietly changing anyone's numbers. */
+    const dupE = await call("POST", "/purchase-orders/" + poE.id + "/receive", A, { lines: [{ i: 0, qty: 1000 }], wh });
+    ok("re-receiving the whole order over a part-receipt is refused", dupE.status === 400, String(dupE.status));
+    ok("…so a 1000-unit order still cannot book more than it ordered",
+      Math.abs((await stockOf("RM-XMOD-1")) - 600) < 0.001, "booked " + (await stockOf("RM-XMOD-1")));
+    await call("POST", "/purchase-orders/" + poE.id + "/receive", A, { lines: [{ i: 0, qty: 400 }], wh });
     const totalE = await stockOf("RM-XMOD-1");
-    ok("…so a 1000-unit order can never book more than 1000",
+    ok("…and the outstanding 400 completes it at exactly 1000",
       Math.abs(totalE - 1000) < 0.001, "booked " + totalE);
 
     /* ---- one order, two receipts at the same instant ----

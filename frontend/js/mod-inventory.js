@@ -28,7 +28,7 @@
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
-      MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
+      MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
       MW.select([{value:"all",label:"All Status"},{value:"instock",label:"In Stock"},{value:"low",label:"Low Stock"},{value:"out",label:"Out of Stock"}], v=>{filter.state=v;draw();}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
     ]);
@@ -46,12 +46,16 @@
         const st=ENG.status(it.id), u=ENG.usage(it.id), stock=ENG.stock(it.id);
         return {it, st, u, stock};
       }).filter(r=>{
-        // WIP items are auto-generated stage plumbing (the server re-creates
-        // them per product at boot) — keep them out of the list until they
-        // actually carry stock, unless the WIP category is explicitly chosen
-        // WIP is never stocked now — a stage hands its output to the next stage,
-        // so the leftover WIP plumbing items stay out of the list entirely
-        if(r.it.cat==="WIP") return false;
+        /* WIP items are auto-generated stage plumbing — the server re-creates
+           one per product at boot, and in normal running they hold nothing,
+           because a stage hands its output straight to the next stage. Dozens
+           of empty rows would bury the materials someone actually came here
+           for, so they stay out of the default list.
+           They are NOT hidden outright, though: "Work in Process" is a
+           category on the filter like any other and shows every one of them,
+           and a WIP item carrying stock appears everywhere — stock that
+           exists is never invisible, whatever put it there. */
+        if(r.it.cat==="WIP" && filter.cat!=="WIP" && !(Math.abs(r.st.onHand)>0.0001)) return false;
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
         if(filter.state!=="all" && stockClass(r.st)!==filter.state) return false;
         if(filter.q){ const s=(r.it.name+" "+r.it.id+" "+(r.it.hsn||"")+" "+r.it.cat).toLowerCase(); if(!s.includes(filter.q)) return false; }
@@ -276,7 +280,11 @@
     const body=h("div",{class:"form-grid"},[
       field("Item Code",`<input class="input" id="f_id" value="${esc(f('id',''))}" ${edit?'disabled':''} placeholder="e.g. RM-XYZ">`),
       field("Item Name",`<input class="input" id="f_name" value="${esc(f('name',''))}" placeholder="Descriptive name">`),
-      field("Category",selectHTML("f_cat",ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({v:c.id,l:c.name})),it.cat)),
+      /* Work in Process is offered here too. It has to be: a WIP item reached
+         from the Stock Items list would otherwise open on a picker that does
+         not contain its own category, and saving would quietly re-file it as
+         Raw Material. */
+      field("Category",selectHTML("f_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),it.cat)),
       field("Unit of Measure",`<input class="input" id="f_uom" value="${esc(f('uom','KG'))}">`),
       field("Reorder Point",`<input class="input" id="f_reorder" type="number" value="${f('reorder',0)}">`),
       field("Safety Stock",`<input class="input" id="f_safety" type="number" value="${f('safety',0)}">`),
@@ -379,12 +387,26 @@
       ]));
       po.lines.forEach((l,idx)=>{
         const pend=+(l.qty-(l.recd||0)).toFixed(3), it=ENG.item(l.itemId)||{};
+        /* The quantity that goes into stock is the one typed here, whatever
+           the order says — so when it runs past what is still outstanding the
+           form says so, in the line, before the receipt is posted. A silent
+           over-receipt would be a stock figure nobody could account for. */
+        const overNote=h("div",{class:"cell-sub",style:"color:var(--warn);display:none"});
+        const qtyIn=h("input",{class:"input",id:"r_qty_"+idx,type:"number",step:"0.001",style:"flex:1",value:pend>0?pend:0});
+        qtyIn.oninput=()=>{
+          const over=+((+qtyIn.value||0)-Math.max(0,pend)).toFixed(3);
+          overNote.textContent = over>0
+            ? "▲ "+ENG.num(over)+" "+(it.uom||"")+" more than "+po.id+" has outstanding — books as an over-receipt"
+            : "";
+          overNote.style.display = over>0?"":"none";
+        };
         host.appendChild(h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"+(pend<=0?";opacity:.5":"")},[
           h("div",{style:"flex:2;min-width:0"},[
             h("div",{class:"cell-main",text:trim(it.name||l.itemId,30)}),
             h("div",{class:"cell-sub",text:l.itemId+" · ordered "+ENG.num(l.qty)+", pending "+ENG.num(pend)}),
+            overNote,
           ]),
-          h("input",{class:"input",id:"r_qty_"+idx,type:"number",step:"0.001",style:"flex:1",value:pend>0?pend:0}),
+          qtyIn,
           h("input",{class:"input",id:"r_rej_"+idx,type:"number",step:"0.001",min:"0",style:"flex:1",value:0}),
           h("div",{class:"muted",style:"flex:1;font-size:12px",text:"@ ₹"+ENG.num(l.rate,2)+" / "+(it.uom||"")})
         ]));
@@ -394,12 +416,15 @@
     function save(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const wh=UI.$("#r_wh").value, date=DB.helpers.iso(DB.helpers.today());
-      const recvLines=[]; let touched=0;
+      const recvLines=[]; let touched=0, over=0;
       po.lines.forEach((l,idx)=>{
         const el=UI.$("#r_qty_"+idx); let rq=+((el&&el.value)||0);
         const re=UI.$("#r_rej_"+idx); let rej=+((re&&re.value)||0);
         const pend=l.qty-(l.recd||0);
-        if(rq>pend) rq=pend;
+        /* NOT clamped to `pend` any more: what the delivery actually brought
+           is what gets booked. The excess is declared to the server instead,
+           so a receipt replayed by a double-click is still refused there. */
+        if(rq>pend) over=+(over+(rq-Math.max(0,pend))).toFixed(3);
         if(rej<0) rej=0; if(rej>rq) rej=rq;
         if(rq>0){
           recvLines.push({i:idx, qty:rq, rejected:rej});
@@ -414,7 +439,7 @@
       });
       if(!touched){ toast("Enter a quantity to receive on at least one line",{type:"warn"}); return; }
       po.status = po.lines.every(l=>(l.recd||0) >= l.qty-0.0001) ? "Received" : "Partially Received";
-      const head={ wh, date, lines:recvLines,
+      const head={ wh, date, lines:recvLines, allowOver:over>0,
         invNo:UI.$("#r_inv").value.trim(), invDate:UI.$("#r_invd").value,
         vehicle:UI.$("#r_veh").value.trim(), lrNo:UI.$("#r_lr").value.trim(),
         remarks:UI.$("#r_rem").value.trim() };
@@ -424,6 +449,7 @@
         if(r&&r.grn){
           (ENG.data.grns=ENG.data.grns||[]).push(r.grn);
           toast(`${r.grn.id} issued — reprint it any time from ${po.id}`,{type:"ok",title:"GRN posted"});
+          if(over>0) toast(`${ENG.num(over)} received over ${po.id} — the extra is in stock and noted on the GRN`,{type:"warn",title:"Over-receipt"});
         }
       });
     }

@@ -452,6 +452,19 @@ const strOr = (v, n) => (v == null ? "" : String(v).slice(0, n || 80));
     to a real person. Only the ACCEPTED quantity (received − rejected) posts
     to stock and advances the order — a rejected lot goes back on the truck,
     so the line stays owed; the rejection lives on the GRN for the debit note. */
+/* ⚠ WHAT ARRIVED is what goes into stock — never what was ordered.
+   This used to clamp the entered quantity down to whatever the line still
+   had outstanding (`if (rq > pend) rq = pend`), so a supplier who delivered
+   200 kg against a 156 kg order had 156 booked, silently: HTTP 200, and a
+   goods receipt that read 156 as though that were what came off the truck.
+   An over-delivery is a real event and the ledger has to show it.
+   It must still be DELIBERATE, though. That same clamp was what made a
+   replayed receipt harmless — the second copy found nothing outstanding,
+   shrank to zero and was refused. With the clamp gone, a double-submitted
+   request would book the delivery twice. So an over-receipt is accepted only
+   when the caller says it meant one (`allowOver`), which the receiving form
+   sets once the operator has been shown the excess on screen. Everything
+   within the outstanding quantity is unaffected and needs no flag. */
 /* ⚠ ONE TRANSACTION, and the order is read FOR UPDATE inside it.
    Receiving is a read-modify-write: it reads what is still outstanding,
    decides what to post, and writes the movements, the goods receipt and the
@@ -484,18 +497,28 @@ async function receiveInTx(x, poId, body, user) {
     const l = po.lines[i];
     if (l && !(l.itemId in itemById)) itemById[l.itemId] = await repo.getItem(l.itemId);
   }
+  const allowOver = body.allowOver === true || body.allowOver === "true";
   (body.lines || []).forEach(({ i, qty, rejected }) => {
     const l = po.lines[i];
     if (!l) return;
-    let rq = +qty || 0;
-    const pend = l.qty - (l.recd || 0);
-    if (rq > pend) rq = pend;
+    const rq = +qty || 0;
     if (rq <= 0) return;
+    const item0 = itemById[l.itemId] || {};
+    const pend = +(l.qty - (l.recd || 0)).toFixed(3);
+    const over = +(rq - Math.max(0, pend)).toFixed(3);
+    if (over > 0.0001 && !allowOver) {
+      const unit = BC.normUnit(l.uom || item0.uom) || "";
+      throw err("Cannot receive " + rq + (unit ? " " + unit : "") + " of "
+        + (item0.name || l.itemId) + " against " + po.id + ": only "
+        + Math.max(0, pend) + " of the " + l.qty + " ordered is still outstanding"
+        + (pend <= 0 ? " (the line is already fully received)" : "")
+        + ". Confirm the over-receipt to book the extra " + over + " into stock.", 400);
+    }
     let rej = +rejected || 0;
     if (rej < 0) rej = 0;
     if (rej > rq) rej = rq;
     const acc = +(rq - rej).toFixed(3);
-    const item = itemById[l.itemId] || {};
+    const item = item0;
     const from = l.uom || item.uom;
     let stockQty = acc;
     let note = "Goods receipt vs PO";
@@ -517,6 +540,12 @@ async function receiveInTx(x, poId, body, user) {
         note = "Goods receipt vs PO — " + acc + " " + BC.normUnit(from)
           + " received as " + stockQty + " " + BC.normUnit(item.uom);
       }
+      /* An over-delivery is spelt out on the movement itself: the ledger is
+         where someone asks "why is there more of this than we ordered?" */
+      if (over > 0.0001) {
+        note += " — " + over + " " + (BC.normUnit(from) || "") + " OVER the "
+          + l.qty + " ordered";
+      }
       moves.push({ id: mvId(), date, itemId: l.itemId, wh,
         type: "GRN", qty: stockQty, rate: l.rate || 0, ref: po.id, note,
         supplierId: po.supplierId, by });
@@ -525,6 +554,7 @@ async function receiveInTx(x, poId, body, user) {
     grnLines.push({ itemId: l.itemId, name: item.name || l.itemId,
       uom: BC.normUnit(from) || item.uom || "", hsn: l.hsn || item.hsn || "",
       ordered: l.qty, qty: rq, rejected: rej, accepted: acc,
+      over: over > 0.0001 ? over : 0,
       rate: l.rate || 0, stockQty: acc > 0 ? stockQty : 0 });
   });
   if (!grnLines.length) throw err("No quantity to receive", 400);

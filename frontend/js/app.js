@@ -236,6 +236,12 @@
       const nav=$("#nav"); nav.innerHTML="";
       const isAdmin = this.user && this.user.role === "admin";
       const isLab = this.isLab();
+      /* ONE set of figures for the whole bar. The pills used to ask for them
+         per nav item — six pillKeys plus the low-stock badge, so seven full
+         passes over every purchase order, sales order and work order in the
+         business. buildNav runs on every save, which is what made a change
+         anywhere in the app sit for a second before the screen came back. */
+      const k = ENG.kpis();
       UI.NAV.forEach(n=>{
         // the lab incharge gets an explicit allowlist, not "everything minus
         // admin-only" — the server enforces the same shape (viewService.stateForLab)
@@ -250,9 +256,9 @@
           h("span",{class:"lbl",text:n.label}),
         ]);
         // pills (open counts / alerts)
-        if(n.pillKey){ const v=ENG.kpis()[n.pillKey];
+        if(n.pillKey){ const v=k[n.pillKey];
           if(v) item.appendChild(h("span",{class:"pill",text:v})); }
-        if(n.id==="inventory"){ const low=ENG.kpis().lowStock; if(low) item.appendChild(h("span",{class:"pill danger",text:low})); }
+        if(n.id==="inventory"){ const low=k.lowStock; if(low) item.appendChild(h("span",{class:"pill danger",text:low})); }
         nav.appendChild(item);
       });
     },
