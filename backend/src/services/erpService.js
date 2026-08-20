@@ -645,12 +645,55 @@ async function deletePurchaseOrder(id) {
 }
 
 /* ---- Sales orders (create / update / delete) ---- */
+/* ---- A FINISHED JOB CAN ONLY BE SOLD ONCE ----------------------------------
+   A sales line names the work order it is served from ("Batch No." on the
+   invoice). Nothing stopped a second order naming the same one: the picker
+   listed every finished job whether or not it had already been claimed, and
+   the server never looked at the field at all — so one batch could be sold to
+   two customers and both invoices would print the same batch number.
+   What a job has to sell is what it has MADE less what has already left the
+   building; what is left is that, less every claim standing against it on
+   another live order. A cancelled order claims nothing. Editing an order
+   ignores its own lines, or a line would be read as competing with itself. */
+async function batchClaims(exceptSoId) {
+  const claimed = {};
+  ((await repo.getState()).salesorders || []).forEach((so) => {
+    if (!so || so.status === "Cancelled" || (exceptSoId && so.id === exceptSoId)) return;
+    (so.lines || []).forEach((l) => {
+      if (l && l.batch) claimed[l.batch] = (claimed[l.batch] || 0) + num(l.qty);
+    });
+  });
+  return claimed;
+}
+async function assertBatchesAreFree(lines, exceptSoId) {
+  const wanted = {};
+  (lines || []).forEach((l) => { if (l && l.batch) wanted[l.batch] = (wanted[l.batch] || 0) + num(l.qty); });
+  const ids = Object.keys(wanted);
+  if (!ids.length) return;
+  const claimed = await batchClaims(exceptSoId);
+  for (const woId of ids) {
+    const wo = await repo.getWorkOrder(woId);
+    if (!wo) throw err("Unknown work order " + woId + " on a sales line", 400);
+    const partial = (wo.runQty != null || wo.completedQty != null || wo.pendingQty != null);
+    const made = partial
+      ? Math.round(((+wo.completedQty || 0) + (+wo.runQty || 0)) * 1000) / 1000
+      : (+wo.qty || 0);
+    const free = Math.max(0, made - (+wo.dispatchedQty || 0) - (claimed[woId] || 0));
+    if (wanted[woId] - free > 1e-6) {
+      throw err(free <= 1e-6
+        ? woId + " has already been sold — raise the order against another finished job."
+        : "Only " + (+free.toFixed(3)) + " of " + woId + " is still unsold, and this order asks for "
+          + (+wanted[woId].toFixed(3)) + ".", 409);
+    }
+  }
+}
 async function createSalesOrder(so) {
   so = so || {};
   if (!Array.isArray(so.lines) || !so.lines.length) throw err("A sales order needs at least one line", 400);
   if (!so.customerId) throw err("A sales order needs a customer", 400);
   if (!await repo.getCustomer(so.customerId)) throw err("Unknown customer " + so.customerId, 400);
   await assertLinesReferenceRealItems(so.lines, "sales order");
+  await assertBatchesAreFree(so.lines, so.id);
   if (!so.id) so.id = nextId((await repo.getState()).salesorders, "SO-");
   else if (await repo.getSalesOrder(so.id)) throw err("Sales order " + so.id + " already exists", 409);
   so.date = so.date || todayISO();
@@ -677,6 +720,7 @@ async function updateSalesOrder(id, patch) {
   if (merged.customerId && !await repo.getCustomer(merged.customerId))
     throw err("Unknown customer " + merged.customerId, 400);
   await assertLinesReferenceRealItems(merged.lines, "sales order");
+  await assertBatchesAreFree(merged.lines, id);
   return await repo.putSalesOrder(merged);
 }
 async function deleteSalesOrder(id) {
