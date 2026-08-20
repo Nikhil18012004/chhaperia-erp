@@ -1904,14 +1904,15 @@
          appear, each with the quantity still unclaimed, so an order is filled
          from what the floor has actually produced. */
       function batchOpts(itemId){
-        /* A JOB ALREADY SOLD IS NOT ON OFFER. `free` is what the run made,
-           less anything shipped, less every claim standing against it on
-           another live order — so once a sales order has taken a batch it
-           stops being listed here and cannot be sold to a second customer.
-           A part-claimed run stays, showing only what is left of it. The
-           server refuses an over-claim as well; this just keeps the desk from
-           reaching for something that is already spoken for. */
-        const ready=ENG.readyBatches(itemId).filter(b=>b.free>0.0001);
+        /* A JOB ALREADY ON AN ORDER IS NOT ON OFFER — whatever quantity that
+           order was for. The batch says which goods this line is served from,
+           so it belongs to one order; the quantity is the customer's business
+           and may be far larger than the run (the balance is made to order).
+           Filtering on what is left over would keep a batch on the list after
+           a small order had taken it, which is the thing being fixed. The
+           server refuses a second claim as well; this keeps the desk from
+           reaching for something already spoken for. */
+        const ready=ENG.readyBatches(itemId).filter(b=>!(b.claimed>0.0001));
         const uom=(ENG.item(itemId)||{}).uom||"kg";
         // the batch reads as its plain number, carrying the run's size and the
         // quantity still free, so the operator picks the right ready stock
@@ -1921,8 +1922,8 @@
              unit is stated once, on the first figure — the desk was reading
              bare numbers and could not tell kg from metres. */
           return {v:b.id, l:batchNo(b.id)+(size?" · "+size:"")
-            +" · "+ENG.num(b.ordered,1)+" "+uom+" ordered · "+ENG.num(b.made,1)+" produced · "
-            +ENG.num(b.free,1)+" free"};
+            +" · "+ENG.num(b.ordered,1)+" "+uom+" ordered · "+ENG.num(b.made,1)+" produced"
+            +(b.pending>0.001?" · "+ENG.num(b.pending,1)+" pending":"")};
         });
         // keep a batch that is already on this order even once fully claimed
         (editSo&&editSo.lines||[]).forEach(l=>{
@@ -1936,9 +1937,9 @@
          order is broken out — total, made, pending — rather than quoting the
          ordered figure as if it were all standing ready. */
       function readyHint(itemId){
-        /* the same list the picker offers — a job already sold is not standing
-           ready for anybody, so quoting it here would contradict the box */
-        const ready=ENG.readyBatches(itemId).filter(b=>b.free>0.0001);
+        /* the same list the picker offers — a job already on an order is not
+           standing ready for anybody, so quoting it would contradict the box */
+        const ready=ENG.readyBatches(itemId).filter(b=>!(b.claimed>0.0001));
         const uom=(ENG.item(itemId)||{}).uom||"kg";
         if(!ready.length) return "No finished job for this product yet — it can still be ordered and made to order.";
         /* One wording for every job, part-made or complete — a finished order

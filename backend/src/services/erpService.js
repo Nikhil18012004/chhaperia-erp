@@ -645,45 +645,40 @@ async function deletePurchaseOrder(id) {
 }
 
 /* ---- Sales orders (create / update / delete) ---- */
-/* ---- A FINISHED JOB CAN ONLY BE SOLD ONCE ----------------------------------
-   A sales line names the work order it is served from ("Batch No." on the
-   invoice). Nothing stopped a second order naming the same one: the picker
-   listed every finished job whether or not it had already been claimed, and
-   the server never looked at the field at all — so one batch could be sold to
-   two customers and both invoices would print the same batch number.
-   What a job has to sell is what it has MADE less what has already left the
-   building; what is left is that, less every claim standing against it on
-   another live order. A cancelled order claims nothing. Editing an order
-   ignores its own lines, or a line would be read as competing with itself. */
-async function batchClaims(exceptSoId) {
-  const claimed = {};
+/* ---- A FINISHED JOB BELONGS TO ONE ORDER ----------------------------------
+   A sales line names the work order it is served from, and that number is what
+   prints on the invoice as the batch. Nothing stopped a second order naming
+   the same one: the picker listed every finished run whether or not an order
+   had already taken it, and the server never looked at the field at all — so
+   two customers could be sent the same batch number for goods that exist once.
+   A batch is claimed by ONE live order, and that is the whole rule.
+
+   ⚠ THE QUANTITY IS DELIBERATELY NOT CHECKED against what the run produced.
+   An order for 500 kg against a 20 kg batch is ordinary trade: the batch says
+   which goods the order is served from, the balance is made to order. An
+   earlier version of this refused the excess and was wrong — it would have
+   blocked every make-to-order sale. The batch is traceability, not a ceiling.
+
+   A cancelled order claims nothing, so cancelling puts the batch back on the
+   shelf. Editing an order ignores its own lines, or a line would be read as
+   competing with itself. */
+async function batchOwners(exceptSoId) {
+  const owner = {};
   ((await repo.getState()).salesorders || []).forEach((so) => {
     if (!so || so.status === "Cancelled" || (exceptSoId && so.id === exceptSoId)) return;
-    (so.lines || []).forEach((l) => {
-      if (l && l.batch) claimed[l.batch] = (claimed[l.batch] || 0) + num(l.qty);
-    });
+    (so.lines || []).forEach((l) => { if (l && l.batch && !owner[l.batch]) owner[l.batch] = so.id; });
   });
-  return claimed;
+  return owner;
 }
 async function assertBatchesAreFree(lines, exceptSoId) {
-  const wanted = {};
-  (lines || []).forEach((l) => { if (l && l.batch) wanted[l.batch] = (wanted[l.batch] || 0) + num(l.qty); });
-  const ids = Object.keys(wanted);
+  const ids = [...new Set((lines || []).map((l) => l && l.batch).filter(Boolean))];
   if (!ids.length) return;
-  const claimed = await batchClaims(exceptSoId);
+  const owner = await batchOwners(exceptSoId);
   for (const woId of ids) {
-    const wo = await repo.getWorkOrder(woId);
-    if (!wo) throw err("Unknown work order " + woId + " on a sales line", 400);
-    const partial = (wo.runQty != null || wo.completedQty != null || wo.pendingQty != null);
-    const made = partial
-      ? Math.round(((+wo.completedQty || 0) + (+wo.runQty || 0)) * 1000) / 1000
-      : (+wo.qty || 0);
-    const free = Math.max(0, made - (+wo.dispatchedQty || 0) - (claimed[woId] || 0));
-    if (wanted[woId] - free > 1e-6) {
-      throw err(free <= 1e-6
-        ? woId + " has already been sold — raise the order against another finished job."
-        : "Only " + (+free.toFixed(3)) + " of " + woId + " is still unsold, and this order asks for "
-          + (+wanted[woId].toFixed(3)) + ".", 409);
+    if (!await repo.getWorkOrder(woId)) throw err("Unknown work order " + woId + " on a sales line", 400);
+    if (owner[woId]) {
+      throw err(woId + " is already on " + owner[woId]
+        + " — raise this order against another finished job.", 409);
     }
   }
 }

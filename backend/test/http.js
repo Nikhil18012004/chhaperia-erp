@@ -267,11 +267,12 @@ async function run() {
      was also what made a replayed receipt harmless, so the two halves are
      tested together: the excess must go in when it is declared, and must be
      refused when it is not. */
-  /* A finished job is a batch of real goods. Selling it twice would put the
-     same batch number on two customers' invoices, and the picker used to list
-     a job whether or not an order had already claimed it — while the server
-     never looked at the field at all. */
-  section("A finished job can only be sold once");
+  /* A finished job is a batch of real goods, and its number prints on the
+     invoice. Selling it twice would put the same batch on two customers'
+     invoices. The QUANTITY, though, is the customer's business: an order for
+     far more than the run produced is ordinary make-to-order trade, and the
+     batch only says which goods the order is served from. */
+  section("A finished job belongs to one order — but the quantity is free");
   {
     const woB = (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d;
     ok("a work order to sell from exists", !!(woB && woB.id), JSON.stringify(woB).slice(0, 80));
@@ -281,43 +282,45 @@ async function run() {
       so1.status + " " + JSON.stringify(so1.d).slice(0, 120));
 
     const so2 = await call("POST", "/sales-orders", A, { customerId: cust,
-      lines: [{ itemId: fg, qty: 6, rate: 100, batch: woB.id }] });
-    ok("a second order cannot claim more of it than is left", so2.status === 409,
+      lines: [{ itemId: fg, qty: 1, rate: 100, batch: woB.id }] });
+    ok("a second order cannot have the same job, however small", so2.status === 409,
       so2.status + " " + JSON.stringify(so2.d).slice(0, 140));
-    ok("  ...and says how much is actually unsold", /still unsold|already been sold/.test(JSON.stringify(so2.d)),
+    ok("  ...and names the order already holding it", /is already on SO-/.test(JSON.stringify(so2.d)),
       JSON.stringify(so2.d).slice(0, 160));
 
-    const so3 = await call("POST", "/sales-orders", A, { customerId: cust,
-      lines: [{ itemId: fg, qty: 4, rate: 100, batch: woB.id }] });
-    ok("what IS left can still be sold", so3.status === 200 || so3.status === 201,
-      so3.status + " " + JSON.stringify(so3.d).slice(0, 120));
-    const so4 = await call("POST", "/sales-orders", A, { customerId: cust,
-      lines: [{ itemId: fg, qty: 1, rate: 100, batch: woB.id }] });
-    ok("once nothing is left the job is closed to new orders", so4.status === 409,
-      so4.status + " " + JSON.stringify(so4.d).slice(0, 140));
+    /* THE QUANTITY IS NOT A CEILING — the balance is made to order */
+    const woC = (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d;
+    const big = await call("POST", "/sales-orders", A, { customerId: cust,
+      lines: [{ itemId: fg, qty: 500, rate: 100, batch: woC.id }] });
+    ok("an order may ask for far more than the batch produced",
+      big.status === 200 || big.status === 201, big.status + " " + JSON.stringify(big.d).slice(0, 140));
 
     /* an order editing ITS OWN line must not be read as competing with itself */
     const edit = await call("PATCH", "/sales-orders/" + so1.d.id, A,
       { lines: [{ itemId: fg, qty: 5, rate: 100, batch: woB.id }] });
-    ok("an order may be edited down without tripping its own claim", edit.status === 200,
+    ok("an order may be edited without tripping its own claim", edit.status === 200,
       edit.status + " " + JSON.stringify(edit.d).slice(0, 140));
-    const grab = await call("PATCH", "/sales-orders/" + so1.d.id, A,
-      { lines: [{ itemId: fg, qty: 9, rate: 100, batch: woB.id }] });
-    ok("but not up into quantity another order holds", grab.status === 409,
-      grab.status + " " + JSON.stringify(grab.d).slice(0, 140));
+    const up = await call("PATCH", "/sales-orders/" + so1.d.id, A,
+      { lines: [{ itemId: fg, qty: 900, rate: 100, batch: woB.id }] });
+    ok("  ...including well past what the run made", up.status === 200,
+      up.status + " " + JSON.stringify(up.d).slice(0, 140));
+    const steal = await call("PATCH", "/sales-orders/" + so1.d.id, A,
+      { lines: [{ itemId: fg, qty: 5, rate: 100, batch: woC.id }] });
+    ok("but never onto a job another order holds", steal.status === 409,
+      steal.status + " " + JSON.stringify(steal.d).slice(0, 140));
 
     ok("an unknown work order on a line is refused", (await call("POST", "/sales-orders", A,
       { customerId: cust, lines: [{ itemId: fg, qty: 1, rate: 100, batch: "WO-NOPE" }] })).status === 400);
 
     /* a cancelled order releases what it held */
-    await call("PATCH", "/sales-orders/" + so3.d.id, A, { status: "Cancelled" });
+    await call("PATCH", "/sales-orders/" + so1.d.id, A, { status: "Cancelled" });
     const so5 = await call("POST", "/sales-orders", A, { customerId: cust,
       lines: [{ itemId: fg, qty: 4, rate: 100, batch: woB.id }] });
     ok("cancelling an order puts its batch back on the shelf",
       so5.status === 200 || so5.status === 201, so5.status + " " + JSON.stringify(so5.d).slice(0, 120));
 
-    for (const s of [so1, so3, so5]) if (s.d && s.d.id) await call("DELETE", "/sales-orders/" + s.d.id, A);
-    await call("DELETE", "/production/wo/" + woB.id, A);
+    for (const s of [so1, big, so5]) if (s.d && s.d.id) await call("DELETE", "/sales-orders/" + s.d.id, A);
+    for (const w of [woB, woC]) if (w && w.id) await call("DELETE", "/production/wo/" + w.id, A);
   }
 
   section("Over-receipt — the delivered quantity is what lands in stock");
