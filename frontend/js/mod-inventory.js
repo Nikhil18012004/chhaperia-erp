@@ -143,6 +143,27 @@
         ["Lead Time", it.lead+" days"],["ABC Class", it.abc],["Days Cover", st.cover>900?"∞":st.cover+" days"],
         ["Suggested Order", st.suggest? ENG.num(st.suggest)+" "+it.uom : "—"],
       ]),
+      /* WHERE IT IS. "On hand" answers how much and never which store, so a
+         drum booked into the wrong bay reads as missing to anyone standing in
+         the right one — there was no screen in the app that named the stores
+         holding one material. Every store with a balance is listed. */
+      (()=>{
+        const rows=Object.entries(s.byWh||{}).map(([wh,q])=>({wh,q:+(+q).toFixed(3)}))
+          .filter(r=>Math.abs(r.q)>0.0001).sort((a,b)=>b.q-a.q);
+        return h("div",{class:"card",style:"margin-top:16px;box-shadow:none;background:var(--panel-2)"},[
+          h("div",{class:"card-head"},h("h3",{text:"Where it is"})),
+          rows.length
+            ? h("div",{},rows.map(r=>h("div",{class:"flex between aic",
+                style:"gap:12px;padding:8px 0;border-bottom:1px solid var(--line)"},[
+                h("div",{style:"min-width:0"},[
+                  h("div",{text:whName(r.wh)}),
+                  h("div",{class:"cell-sub",text:r.wh}),
+                ]),
+                h("div",{class:"strong",text:ENG.num(r.q,2)+" "+(it.uom||"")}),
+              ])))
+            : h("div",{class:"muted",style:"padding:4px 0",text:"No stock standing in any store."}),
+        ]);
+      })(),
       h("div",{class:"card",style:"margin-top:16px;box-shadow:none;background:var(--panel-2)"},[
         h("div",{class:"card-head"},h("h3",{text:"30-Day Movement"})),
         (()=>{ const cv=h("canvas",{"data-h":140}); const box=h("div",{class:"chart-box"},cv);
@@ -458,6 +479,7 @@
   /* ----- FEATURE 2: add stock manually (existing item OR create new) ----- */
   function addStockForm(){
     const whs=ENG.data.warehouses;
+    let whTouched=false;   // set once the operator picks a store by hand
     /* Manual stock intake covers RAW materials, WORK IN PROCESS and FINISHED
        GOODS. FG/WIP normally arrive through production, but opening balances
        and hand-counted rolls have to be enterable somewhere — this is it.
@@ -508,13 +530,15 @@
           field("Reorder Point",`<input class="input" id="s_reorder" type="number" value="0">`),
           field("HSN Code",`<input class="input" id="s_hsn" placeholder="e.g. 74102100">`),
           field("Rate (₹ per unit)",`<input class="input" id="s_rate" type="number" step="0.01" placeholder="0">`),
-          field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),whs[0]&&whs[0].id)),
+          field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),defaultWh("RM"))
+            +`<div class="muted" id="s_whnote" style="font-size:11px;margin-top:4px"></div>`),
         ])
       ])
     ]);
     const mo=modal({title:"Add Stock", sub:"Add / update an item and post a receipt", wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:"Add to Inventory"})]});
+    { const w=UI.$("#s_wh"); if(w) w.addEventListener("change",()=>{ whTouched=true; }); }
     const sel=UI.$("#s_item");
     const setVal=(id,v)=>{const el=UI.$("#"+id); if(el) el.value=v;};
     const setSel=(id,v)=>{const el=UI.$("#"+id); if(!el) return;
@@ -549,6 +573,51 @@
       if(sel.value==="__new") return (UI.$("#s_cat")||{}).value||"RM";
       return (ENG.item(sel.value)||{}).cat||"RM";
     }
+    /* THE STORE THE MATERIAL BELONGS IN, not simply the first one on the list.
+       This box used to default to whichever warehouse came back first, which
+       is the Finished Goods Bay — so a drum of resin taken in through this
+       form was filed under finished goods. The total on hand was right and the
+       ledger had the line, but the stock was standing in the wrong store, and
+       anyone looking at the main store could not find what they had just
+       booked in. Matched on the warehouse's TYPE, so a renamed store still
+       works; if nothing matches, the list order is all there is to fall back
+       on. (Quarantine is never a default — stock is only ever moved there by
+       a rejection.) */
+    function defaultWh(cat){
+      const want={FG:"Finished Goods", WIP:"WIP"}[cat] || "Raw Material";
+      const hit=whs.find(w=>String(w.type||"").toLowerCase()===want.toLowerCase());
+      return (hit||whs.find(w=>!/quarantine/i.test(String(w.type||"")))||whs[0]||{}).id;
+    }
+    /* WHICH STORES THIS MATERIAL IS ALREADY IN, named on the box itself.
+       Guessing a store from the category is still a guess; what the storeman
+       needs to see is where the stuff actually lives, so each option carries
+       the quantity of THIS item standing in that store and the line below
+       spells the same out in words. The box opens on the store already
+       holding the most of it — the one a new drum almost always joins — and
+       falls back to the category's own store when the item is new to the
+       building. Anything picked by hand is left exactly as picked. */
+    function heldIn(itemId){
+      if(!itemId || itemId==="__new") return [];
+      const byWh=((ENG.stock(itemId)||{}).byWh)||{};
+      return Object.entries(byWh).map(([wh,q])=>({wh,q:+(+q).toFixed(3)}))
+        .filter(r=>Math.abs(r.q)>0.0001).sort((a,b)=>b.q-a.q);
+    }
+    function drawWh(){
+      const el=UI.$("#s_wh"); if(!el) return;
+      const id=sel?sel.value:"__new", held=heldIn(id);
+      const uom=(ENG.item(id)||{}).uom||"";
+      const qOf=wh=>{ const r=held.find(x=>x.wh===wh); return r?r.q:0; };
+      const keep=whTouched?el.value:null;
+      el.innerHTML="";
+      whs.forEach(w=>{ const q=qOf(w.id);
+        el.appendChild(h("option",{value:w.id,
+          text:w.name+(q?"  —  "+ENG.num(q,2)+" "+uom+" here":"")})); });
+      el.value = keep || (held.length? held[0].wh : defaultWh(catNow()));
+      const note=UI.$("#s_whnote");
+      if(note) note.textContent = held.length
+        ? "Already in "+held.map(r=>whName(r.wh)+" ("+ENG.num(r.q,2)+" "+uom+")").join(" · ")
+        : (id==="__new" ? "" : "This item is not in any store yet.");
+    }
     /* Thickness, GSM and the unit of quantity are ALWAYS offered — they are
        real parameters of the stock being taken in, not fabric-only trivia.
        Web width + derived length still belong to metre-tracked webs, and the
@@ -566,6 +635,7 @@
       [widField,lenField].forEach(f=>{ f.style.display=fabNow?"":"none"; });
       // webs default to the standard 1000 mm width
       if(fabNow){ const w=UI.$("#s_wid"); if(w && !w.value) w.value=1000; }
+      drawWh();
       calcLen();
     }
     /* the width the quantity is measured across: a finished good is the slit
