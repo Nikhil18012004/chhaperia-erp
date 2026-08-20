@@ -9,6 +9,7 @@
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
+const compression = require("compression");
 const apiRoutes = require("./routes/api");
 const hrRoutes = require("./routes/hr");
 const { router: authRoutes, getToken } = require("./routes/auth");
@@ -23,6 +24,18 @@ const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
 
 const app = express();
+/* EVERYTHING that leaves this server is gzipped, and it has to be first in the
+   chain to catch both the API and the static frontend.
+   The plant does not browse this from the machine it runs on — it comes in over
+   the factory LAN, and until this was added every byte went out raw: 2.4 MB of
+   JavaScript on a cold load, and 0.55 MB of `GET /state` EVERY time a screen
+   reloads its data (raising a work order does exactly that). Measured locally
+   the same fetch is 227 ms; over a slow wireless link the operators were
+   watching it for the best part of ten seconds after every click. JSON of this
+   shape compresses to roughly a tenth of its size.
+   The default threshold (1 KB) leaves small replies alone, where the CPU spent
+   compressing would cost more than the bytes saved. */
+app.use(compression());
 // Lab test-certificate uploads carry embedded images and keep the old 25 MB
 // allowance; everything else gets a tight 1 MB body cap (the JSON payloads
 // are small — a huge body anywhere else is an attack, not a feature).
