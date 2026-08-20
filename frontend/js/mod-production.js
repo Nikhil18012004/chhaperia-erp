@@ -2414,10 +2414,35 @@ recalc(); },50);
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       // components a person picks by hand — WIP is inserted by the stage engine
       const rms=ENG.data.items.filter(i=>i.cat==="RM"||i.cat==="PKG"||i.cat==="CON");
-      if(!fgs.length){ toast("Create a finished-good product first",{type:"warn"}); return; }
-      let curFg = fgId || fgs[0].id;
+      let curFg = fgId || (fgs[0] && fgs[0].id) || "";
       const existing = fgId? ENG.data.boms[fgId] : null;
       const editing = !!existing;
+      /* A recipe for a product that does not exist YET used to be impossible
+         here: the picker offered the catalogue and nothing else, so a new tape
+         had to be created over in Stock Items and the recipe written on a
+         second trip. The product can be defined in this form now. With an
+         empty catalogue it opens straight in that mode — there is nothing to
+         pick — which is also why the old "create a product first" refusal is
+         gone. */
+      /* "Create BOM" MEANS a new product. Pressed from the page header (or the
+         ⌘K action) the form opens straight on the new-product fields — that is
+         what the button is for; writing a recipe for something already in the
+         catalogue is the exception, and it is one click away on
+         "↩ Pick an existing product".
+         Opened WITH a product (`fgId` — a catalogue row that has no recipe yet,
+         or Edit BOM) it stays on that product: the operator already said which
+         one they meant. */
+      let newMode = !editing && !fgId;
+      const draft = { id:"FG-", name:"", group:"", thicknessMM:null, gsm:null,
+                      uom:"KG", cost:0, price:0, hsn:"" };
+      /* the roll-up reads GSM and thickness off the product; in new-product
+         mode that product is the half-typed draft, not a catalogue row */
+      const fgItem = () => newMode
+        ? { id:draft.id, name:draft.name, productName:draft.name, cat:"FG", uom:draft.uom,
+            typeCode:draft.id.replace(/^FG-/,""), group:draft.group,
+            thicknessMM:draft.thicknessMM, gsm:draft.gsm,
+            cost:draft.cost, price:draft.price, hsn:draft.hsn }
+        : (ENG.item(curFg)||{});
       let altIdx = 0;                 // which alternate approved recipe is open
       let lines = [];
       let seq = 0;                    // stable per-row id for the material picker
@@ -2432,6 +2457,15 @@ recalc(); },50);
         if(!lines.length) lines=[blank()];
       }
       loadLines();
+      /* The catalogue product's components, PARKED while a new product is being
+         defined. Without this, looking at the new-product fields and changing
+         your mind emptied the recipe you already had on screen, and the form
+         came back blank — which reads as "this can only make new products". */
+      let parkedLines = null;
+      /* Opened as "Create BOM" the components start EMPTY — a new product must
+         not inherit whichever catalogue product the picker happened to default
+         to. Its recipe is parked, so switching over to it costs nothing. */
+      if(newMode){ parkedLines = lines; lines = [blank()]; }
 
       const basisHost=h("div",{class:"muted",style:"font-size:12px;margin:2px 0 12px"});
       const altHost=h("div",{style:"margin-bottom:10px"});
@@ -2442,12 +2476,14 @@ recalc(); },50);
       const lockedLabel=(U.familyCode(curItem.typeCode,curItem.thicknessMM)||curItem.typeCode||curFg)
         +" — "+(curItem.productName||curItem.name||curFg)
         +(curItem.thicknessMM!=null?" · "+curItem.thicknessMM+" mm":"");
+      const prodHost=h("div",{style:"display:contents"});
+      /* bound ONCE on the host, not per render — re-rendering the row inside
+         it would otherwise stack a fresh listener on every toggle. GSM and
+         thickness feed the roll-up, so the totals follow what is typed. */
+      prodHost.addEventListener("input",()=>{ if(newMode){ syncDraft(); draw(); } });
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
-          editing
-            ? U.field("Product (Finished Good)",
-                `<input type="hidden" id="bm_fg" value="${esc(curFg)}"><input class="input is-locked" readonly value="${esc(lockedLabel)}">`,"full")
-            : fgPicker("bm_fg", fgs, curFg),
+          prodHost,
           U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
         ]),
         basisHost, altHost,
@@ -2463,13 +2499,80 @@ recalc(); },50);
       const mo=modal({title: editing?("Edit BOM · "+curFg):"Create BOM",
         // xwide: the components table needs the room, else it side-scrolls
         sub:"Material recipe, pickup % and production roll-up", xwide:true, body, foot});
-      if(!editing){ const fgHid=UI.$("#bm_fg");
-        if(fgHid) fgHid.addEventListener("change",()=>{ const v=fgHid.value; if(v&&v!==curFg){ curFg=v; altIdx=0; loadLines(); draw(); } }); }
+      drawProduct();
+
+      /* The product row: a locked label when editing, otherwise either the
+         catalogue picker or the fields that define a product that does not
+         exist yet. Switching between the two re-renders only this row, so
+         nothing typed into the components table below is lost. */
+      function drawProduct(){
+        prodHost.innerHTML="";
+        if(editing){
+          prodHost.appendChild(U.field("Product (Finished Good)",
+            `<input type="hidden" id="bm_fg" value="${esc(curFg)}"><input class="input is-locked" readonly value="${esc(lockedLabel)}">`,"full"));
+          return;
+        }
+        if(newMode){
+          const series=[...new Set(ENG.data.items.filter(i=>i.cat==="FG"&&i.group).map(i=>i.group))].sort();
+          prodHost.appendChild(U.field("Product Code",
+            `<input class="input" id="bm_np_id" value="${esc(draft.id)}" placeholder="FG-CCM25GE-10">`));
+          prodHost.appendChild(U.field("Product Name",
+            `<input class="input" id="bm_np_name" value="${esc(draft.name)}" placeholder="Name as it reads on the label">`));
+          prodHost.appendChild(U.field("Series",
+            `<input class="input" id="bm_np_group" list="bm_np_series" value="${esc(draft.group)}" placeholder="e.g. MICA SERIES">`
+            +`<datalist id="bm_np_series">${series.map(s=>`<option value="${esc(s)}"></option>`).join("")}</datalist>`));
+          prodHost.appendChild(U.field("Thickness (mm)",
+            `<input class="input" id="bm_np_thk" type="number" step="0.001" min="0" value="${draft.thicknessMM==null?"":draft.thicknessMM}" placeholder="0.100">`));
+          prodHost.appendChild(U.field("GSM",
+            `<input class="input" id="bm_np_gsm" type="number" step="1" min="0" value="${draft.gsm==null?"":draft.gsm}" placeholder="finished weight per m²">`));
+          prodHost.appendChild(U.field("Unit", U.selectHTML("bm_np_uom",
+            [{v:"KG",l:"Kilogram (kg)"},{v:"SQM",l:"Square Meter (sqm)"},{v:"MTR",l:"Meter (m)"}], draft.uom)));
+          prodHost.appendChild(U.field("Cost / unit (₹)",
+            `<input class="input" id="bm_np_cost" type="number" step="0.01" min="0" value="${draft.cost||0}">`));
+          prodHost.appendChild(U.field("Selling Price (₹)",
+            `<input class="input" id="bm_np_price" type="number" step="0.01" min="0" value="${draft.price||0}">`));
+          prodHost.appendChild(U.field("HSN",
+            `<input class="input" id="bm_np_hsn" value="${esc(draft.hsn)}" placeholder="optional">`));
+          prodHost.appendChild(h("div",{class:"field full"},[
+            h("div",{class:"flex aic gap"},[
+              h("span",{class:"muted",style:"font-size:12px",
+                text:"The product is created with this recipe when you press Create BOM."}),
+              h("button",{class:"btn sm ghost",style:"margin-left:auto",
+                onclick:()=>{ newMode=false;
+                  if(parkedLines){ lines=parkedLines; parkedLines=null; } else loadLines();
+                  drawProduct(); draw(); },
+                text:"↩ Pick an existing product"})])]));
+          return;
+        }
+        prodHost.appendChild(fgPicker("bm_fg", fgs, curFg));
+        const fgHid=UI.$("#bm_fg");
+        if(fgHid) fgHid.addEventListener("change",()=>{ const v=fgHid.value; if(v&&v!==curFg){ curFg=v; altIdx=0; loadLines(); draw(); } });
+        prodHost.appendChild(h("div",{class:"field full"},[
+          h("div",{class:"flex aic gap"},[
+            h("span",{class:"muted",style:"font-size:12px",text:"Making something new? Define the product here instead of creating it first."}),
+            h("button",{class:"btn sm",style:"margin-left:auto",
+              onclick:()=>{ newMode=true; altIdx=0;
+                parkedLines=lines; lines=[blank()];
+                drawProduct(); draw(); },
+              html:"＋ New product"})])]));
+      }
+      function syncDraft(){
+        const g=id=>{ const el=UI.$("#"+id); return el?el.value:""; };
+        draft.id=g("bm_np_id").trim().toUpperCase();
+        draft.name=g("bm_np_name").trim();
+        draft.group=g("bm_np_group").trim();
+        draft.thicknessMM=g("bm_np_thk")===""?null:+g("bm_np_thk");
+        draft.gsm=g("bm_np_gsm")===""?null:+g("bm_np_gsm");
+        draft.uom=g("bm_np_uom")||"KG";
+        draft.cost=+g("bm_np_cost")||0;
+        draft.price=+g("bm_np_price")||0;
+        draft.hsn=g("bm_np_hsn").trim();
+      }
 
       const n=(v,d)=> v==null||isNaN(v) ? "—" : ENG.num(v,d);
 
       function draw(){
-        const fg=ENG.item(curFg)||{};
+        const fg=fgItem();
         const meta=BOMCALC.metaFromItem(fg);
         const c=BOMCALC.compute({lines}, meta);
 
@@ -2626,7 +2729,7 @@ recalc(); },50);
       /* Recompute derived cells + totals in place (no re-render, so typing
          never loses focus). */
       function refresh(){
-        const fg=ENG.item(curFg)||{};
+        const fg=fgItem();
         const c=BOMCALC.compute({lines}, BOMCALC.metaFromItem(fg));
         c.lines.forEach((cl,i)=>{
           const l=lines[i]; if(!l||!l._cKg) return;
@@ -2664,7 +2767,13 @@ recalc(); },50);
       draw();
 
       function save(){
-        const fg2=UI.$("#bm_fg").value || curFg;
+        if(newMode) syncDraft();
+        const fg2 = newMode ? draft.id : (UI.$("#bm_fg").value || curFg);
+        if(newMode){
+          if(!fg2 || fg2==="FG-"){ toast("The new product needs a code",{type:"warn"}); return; }
+          if(!draft.name){ toast("The new product needs a name",{type:"warn"}); return; }
+          if(ENG.item(fg2)){ toast(fg2+" already exists — pick it from the product list instead",{type:"danger"}); return; }
+        }
         const yld=Math.min(100,Math.max(1,+UI.$("#bm_yield").value||100))/100;
         // pull the material picker back for non-ranged rows, keep every other
         // field (rm/type/thickness/GSM/options) exactly as loaded
@@ -2685,9 +2794,33 @@ recalc(); },50);
         if(prev && prev.alternates && prev.alternates.length){
           next.alternates=prev.alternates.map((a,i)=> i===altIdx? {label:a.label, lines:out} : a);
         }
+        /* The product is written BEFORE its recipe — a BOM whose finished good
+           does not exist is a row nothing can render. Both go out in the one
+           saveDelta, so a failure reloads the server's truth and neither is
+           left behind on its own. */
+        let newItem=null, openMove=null;
+        if(newMode){
+          newItem={ id:fg2, name:draft.name, productName:draft.name, cat:"FG",
+            uom:draft.uom||"KG", group:draft.group||null,
+            typeCode:fg2.replace(/^FG-/,""), thicknessMM:draft.thicknessMM, gsm:draft.gsm,
+            cost:draft.cost, price:draft.price, hsn:draft.hsn,
+            reorder:0, safety:0, lead:7, abc:"B", moq:0, active:true,
+            barcode:"890"+Math.floor(Math.random()*1e7) };
+          ENG.data.items.push(newItem);
+          openMove={ id:U.genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:fg2,
+            wh:"WH-FG", type:"OPEN", qty:0, rate:newItem.cost, ref:"NEW",
+            note:"Product created with its BOM" };
+          ENG.data.movements.push(openMove);
+        }
         ENG.data.boms[fg2]=next;
-        mo.close(); toast(editing?("BOM updated for "+fg2):("BOM created for "+fg2),{type:"ok"});
-        App.saveDelta(()=>DB.boms.save(fg2,next));
+        mo.close();
+        toast(editing?("BOM updated for "+fg2)
+          :(newMode?(draft.name+" created with its BOM"):("BOM created for "+fg2)),
+          {type:"ok",title:newMode?"New product":undefined});
+        App.saveDelta(async()=>{
+          if(newItem){ await DB.items.put(newItem); await DB.movements.add(openMove); }
+          await DB.boms.save(fg2,next);
+        });
       }
       async function delBom(){
         if(!await confirm(`Delete the BOM for ${curFg}? The product stays — only its recipe is removed.`,{title:"Delete BOM",danger:true})) return;
