@@ -339,16 +339,43 @@
   /* ---- legacy bridge -------------------------------------
      Existing consumers (stage planning, finished-goods posting)
      want [rawItemId, qtyPerUnitOfFG]. Batch-based BOMs convert
-     via fgKgPerBatch; unit-based ones pass straight through. */
-  function toLegacy(bom, meta, choices) {
+     via fgKgPerBatch; unit-based ones pass straight through.
+
+     ⚠ THE FIGURE THAT COMES OUT IS IN THE MATERIAL'S OWN STOCKING UNIT.
+     Every caller treats it that way — it is compared against stock on hand,
+     multiplied by the average cost, and posted as an ISSUE — but the line it
+     comes from carries its OWN unit, and the recipe sheet mixes them: this
+     factory's real BOMs hold 54 lines whose unit differs from the unit the
+     material is stocked in, 36 of them "so many MG" of something kept in KG.
+     Read raw, a line asking for 70 mg of methanol demanded 70 KILOGRAMS —
+     a million times the truth. The store then looked hopelessly short, and a
+     work order raised for 100 kg ran a few kilos and held the rest pending.
+     So each line is restated into the material's unit here, which is why the
+     lookup is wanted. Both a map and a function are accepted, since half the
+     callers hold one and half the other.
+     A pair that cannot be reconciled (no GSM or width to turn metres into
+     kilos) is LEFT ALONE rather than dropped: an unconvertible line is a
+     material that still has to be issued, and silently zeroing it would take
+     a requirement off the shop floor altogether. */
+  function toLegacy(bom, meta, choices, items) {
     bom = bom || {};
     meta = meta || bom.meta || {};
     var lines = choices ? resolve(bom, choices) : normalize(bom.lines);
     var c = compute({ lines: lines }, meta);
     var perUnitBasis = String(meta.basis || bom.basis || "").toLowerCase() === "batch" || !!c.fgKgPerBatch;
+    var look = typeof items === "function"
+      ? items
+      : function (id) { return items ? items[id] : null; };
     return lines.map(function (l) {
       if (!l.id) return null;
-      var per = (perUnitBasis && c.fgKgPerBatch) ? l.qty / c.fgKgPerBatch : l.qty;
+      var qty = l.qty;
+      var rm = look(l.id);
+      var from = normUnit(l.unit), to = rm ? normUnit(rm.uom) : "";
+      if (from && to && from !== to) {
+        var conv = convertQty(qty, from, to, rm);
+        if (conv != null) qty = conv;
+      }
+      var per = (perUnitBasis && c.fgKgPerBatch) ? qty / c.fgKgPerBatch : qty;
       return [l.id, per];
     }).filter(function (x) { return x && x[1] > 0; });
   }

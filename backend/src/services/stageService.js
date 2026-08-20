@@ -140,12 +140,21 @@ const SPEC_BY_FAMILY = {
   CHCWSCWBT: { key: "copperWires", label: "Copper wires (per tape)", hint: "as per order" },
 };
 
+/* The material catalogue as a lookup, for BC.toLegacy — see the note there:
+   a recipe line's quantity is only meaningful once it has been restated into
+   the unit its material is stocked in. */
+function itemsOf(data) {
+  const by = {};
+  ((data || {}).items || []).forEach((i) => { if (i && i.id) by[i.id] = i; });
+  return by;
+}
+
 /* how many raw materials the product's recipe actually consumes */
 function bomMaterialCount(fgId, data) {
   const bom = ((data || {}).boms || {})[fgId];
   if (!bom) return 0;
   const fg = ((data || {}).items || []).find((i) => i && i.id === fgId) || {};
-  try { return BC.toLegacy(bom, BC.metaFromItem(fg)).length; }
+  try { return BC.toLegacy(bom, BC.metaFromItem(fg), null, itemsOf(data)).length; }
   catch { return (bom.lines || []).length; }
 }
 
@@ -159,7 +168,7 @@ function materialCheck(fgId, qty, data, choices) {
   ((data || {}).movements || []).forEach((m) => { onHand[m.itemId] = (onHand[m.itemId] || 0) + (+m.qty || 0); });
   const Y = bom.yield || 1;
   const need = {};
-  BC.toLegacy(bom, BC.metaFromItem(fg), choices || {}).forEach(([rid, per]) => {
+  BC.toLegacy(bom, BC.metaFromItem(fg), choices || {}, itemsOf(data)).forEach(([rid, per]) => {
     need[rid] = (need[rid] || 0) + (per * (+qty || 0)) / Y;
   });
   Object.keys(need).forEach((rid) => {
@@ -460,7 +469,7 @@ function computeStagePlan(fgId, qty, data, choices, netting) {
   // form the real BOM import produces, so neither shape can reach the
   // array-destructuring below unconverted.
   if (rawQty > 0) {
-    BC.toLegacy(bom, BC.metaFromItem(itemsById[fgId]), choices).forEach(([rid, per]) => {
+    BC.toLegacy(bom, BC.metaFromItem(itemsById[fgId]), choices, itemsById).forEach(([rid, per]) => {
       const role = materialRole(rid);
       let si = stages.findIndex((s) => (s.roles || []).includes(role));
       if (si < 0) si = 0;

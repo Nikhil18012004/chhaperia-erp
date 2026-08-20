@@ -57,7 +57,7 @@
     const bom=(ENG.data.boms||{})[itemId];
     if(!bom) return true;
     let lines=[];
-    try{ lines=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(itemId)||{})); }
+    try{ lines=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(ENG.item(itemId)||{}),null,ENG.item); }
     catch(e){ return true; }
     const Y=bom.yield||1;
     return lines.every(([rid,per])=>{
@@ -1905,7 +1905,7 @@ recalc(); },50);
           conv.textContent = !gsm ? "" : unit==="SQM" ? ("= "+ENG.num(raw*gsm/1000,1)+" kg · FG "+gsm+" g/m²")
                                                       : ("= "+ENG.num(raw*1000/gsm,0)+" sqm · FG "+gsm+" g/m²"); }
         const qty = unit==="SQM" ? raw*gsm/1000 : raw;
-        const rows=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg)).map(([rid,per])=>{ const need=per*qty/bom.yield; const st=ENG.stock(rid)||{}; const have=st.onHand||0;
+        const rows=BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg),null,ENG.item).map(([rid,per])=>{ const need=per*qty/bom.yield; const st=ENG.stock(rid)||{}; const have=st.onHand||0;
           const r=ENG.item(rid)||{}; return {rid, name:r.name||rid, uom:r.uom||"", per, need, have, short:Math.max(0,need-have), avgCost:st.avgCost||r.cost||0}; });
         const totCost=rows.reduce((s,x)=>s+x.need*x.avgCost,0);
         out.appendChild(h("div",{class:"flex between aic wrap",style:"margin-bottom:10px;gap:8px"},[
@@ -1930,7 +1930,7 @@ recalc(); },50);
        edits (or adds) the recipe. */
     function matCostOf(fg){
       const bom=ENG.data.boms[fg.id]; let c=0;
-      if(bom) BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg)).forEach(([rid,per])=>{ c+=per*ENG.stock(rid).avgCost/bom.yield; });
+      if(bom) BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg),null,ENG.item).forEach(([rid,per])=>{ c+=per*ENG.stock(rid).avgCost/bom.yield; });
       return c;
     }
     function marginOf(fg){ return fg.price? ((fg.price-fg.cost)/fg.price*100):0; }
@@ -2059,7 +2059,7 @@ recalc(); },50);
           c.fabricGsm==null?"—":n(c.fabricGsm,1)+" g/m²"));
         box.appendChild(row("Pickup GSM  (FG − fabric)", c.pickupGsm==null?"—":n(c.pickupGsm,1)+" g/m²"));
         box.appendChild(row("TOTAL PRODUCTION", c.totalProductionSqm==null?"—":n(c.totalProductionSqm,0)+" sqm", true));
-        let cost=0; BOMCALC.toLegacy({lines:src.lines},meta).forEach(([rid,per])=>{ cost+=per*(ENG.stock(rid).avgCost||0)/bom.yield; });
+        let cost=0; BOMCALC.toLegacy({lines:src.lines},meta,null,ENG.item).forEach(([rid,per])=>{ cost+=per*(ENG.stock(rid).avgCost||0)/bom.yield; });
         box.appendChild(row("Est. material cost — per kg of FG","₹"+n(cost,2)));
         totHost.appendChild(box);
       }

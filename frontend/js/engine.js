@@ -129,7 +129,7 @@
       const bom = D.boms[wo.itemId]; if(!bom) return;
       // BOM lines may be legacy tuples or rich imported objects — toLegacy
       // flattens both to [rawId, perUnitOfFG].
-      BOMCALC.toLegacy(bom, BOMCALC.metaFromItem(item(wo.itemId))).forEach(([rid,per])=>{
+      BOMCALC.toLegacy(bom, BOMCALC.metaFromItem(item(wo.itemId)), null, item).forEach(([rid,per])=>{
         if(rid===itemId){
           const remaining = wo.qty * (1 - (wo.progress||0)/100);
           q += per*remaining/bom.yield;
