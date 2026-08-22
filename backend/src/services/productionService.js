@@ -683,6 +683,26 @@ async function createWorkOrder(user, body) {
   const makeQty = plan.makeQty || 0;
   const inHouse = !!S.productOwner(item.id, data);
   let runQty = makeQty, pendingQty = 0, shortage = [];
+  /* A material the store has NONE of is a hard stop, not a shortage to
+     confirm (ruled 2026-08-22, widened the same day). A shortage means part
+     of the run starts and the rest pends; zero means nothing can start at
+     all, and an order that exists only as a pending balance misleads everyone
+     reading the board. This binds in-house products too — coating our own
+     jumbo still needs the fabric and the paste to exist; the in-house
+     exemption below stays only for the PARTIAL-shortage arithmetic. */
+  if (makeQty > 0) {
+    const perNeed = perUnitNeed(data, item, body.materialChoices) || {};
+    const held = await onHandMap(data);
+    const none = Object.keys(perNeed).filter((rid) => perNeed[rid] > 1e-9 && (held[rid] || 0) <= 1e-9);
+    if (none.length) {
+      const names = none.map((rid) => {
+        const m = (data.items || []).find((i) => i.id === rid);
+        return (m && m.name) || rid;
+      });
+      throw err("Cannot raise this order — the store has none of: " + names.join(", ")
+        + ". Receive the material first; the order can be created the moment any of it is in stock.", 400);
+    }
+  }
   if (makeQty > 0 && !inHouse) {
     const cap = await maxMakeable(data, item, body.materialChoices);
     if (isFinite(cap) && cap < makeQty - 1e-6) {

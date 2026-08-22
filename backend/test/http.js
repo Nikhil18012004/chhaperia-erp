@@ -1075,6 +1075,12 @@ async function run() {
     await call("POST", "/items", A, rmC);
     await call("POST", "/items", A, fgC);
     await call("PUT", "/boms/" + fgC.id, A, { yield: 100, lines: [[rmC.id, 1.2]] });
+    /* Since 2026-08-22 a material the store has NONE of refuses the order
+       outright, so the gate scenario stocks its fabric — the routing is
+       unchanged (in-house products coat regardless of stock, per the
+       2026-08-03 ruling), and what this section tests is the LAB gate. */
+    await call("POST", "/movements", A, { id: "MV-LABGATE-1", itemId: rmC.id, type: "GRN",
+      qty: 100, rate: 20, wh: "WH-PNY", date: "2026-01-01", manual: true });
 
     // the lab product that tests it: linked to the item, tested on TWO
     // parameters even though its type would imply more
@@ -1377,6 +1383,14 @@ async function run() {
   const scarce = { id: "RM-TEST-SCARCE", name: "Scarce fabric", cat: "RM", uom: "KG", cost: 50 };
   await call("POST", "/items", A, scarce);
   await call("PUT", "/boms/" + gaut.id, A, { yield: 100, lines: [[scarce.id, 1.2]] });
+  /* Since 2026-08-22 a material the store has NONE of refuses the order
+     outright, and an in-house create ISSUES its materials at creation — so
+     each routing create below is seeded with exactly what it draws (60 =
+     50 x 1.2), leaving the balance at zero for the next scenario, the same
+     end state the section always had. The routes asserted are unchanged:
+     routing has not depended on stock since 2026-08-03. */
+  await call("POST", "/movements", A, { id: "MV-SCARCE-1", itemId: scarce.id, type: "GRN",
+    qty: 60, rate: 50, wh: "WH-PNY", date: "2026-01-01", manual: true });
   const woMake = await call("POST", "/production/wo", A, { itemId: gaut.id, qty: 50 });
   const rMake = (woMake.d && woMake.d.route) || [];
   ok("material short + we make it -> starts at RM production",
@@ -1417,6 +1431,8 @@ async function run() {
     typeCode: "CHN-99 WS", group: "WATER BLOCKING SERIES", cost: 100, price: 200 };
   await call("POST", "/items", A, gan);
   await call("PUT", "/boms/" + gan.id, A, { yield: 100, lines: [[scarce.id, 1.2]] });
+  await call("POST", "/movements", A, { id: "MV-SCARCE-2", itemId: scarce.id, type: "GRN",
+    qty: 60, rate: 50, wh: "WH-PNY", date: "2026-01-01", manual: true });
   const woGan = await call("POST", "/production/wo", A, { itemId: gan.id, qty: 50 });
   ok("a woven semi-conductive tape goes to the other RM line",
     woGan.d.route[0].owner === "coating2" && /Ganesh/.test(woGan.d.route[0].name),
@@ -1427,6 +1443,8 @@ async function run() {
     uom: "KG", typeCode: "CHCWSCWBT-99", group: "WATER BLOCKING SERIES", cost: 100, price: 200 };
   await call("POST", "/items", A, cu);
   await call("PUT", "/boms/" + cu.id, A, { yield: 100, lines: [[scarce.id, 1.2]] });
+  await call("POST", "/movements", A, { id: "MV-SCARCE-3", itemId: scarce.id, type: "GRN",
+    qty: 60, rate: 50, wh: "WH-PNY", date: "2026-01-01", manual: true });
   const woCu = await call("POST", "/production/wo", A, { itemId: cu.id, qty: 50 });
   const rCu = woCu.d.route || [];
   ok("copper woven: weaving → RM production → slitting → packing",
@@ -1441,6 +1459,10 @@ async function run() {
     typeCode: "CH-PTFE-99", group: "OTHER TAPE SERIES", cost: 100, price: 200 };
   await call("POST", "/items", A, bought);
   await call("PUT", "/boms/" + bought.id, A, { yield: 100, lines: [[scarce.id, 1.2]] });
+  /* short means SOME: zero now refuses outright (tested in the partial-order
+     section), so the consent flow is exercised with 5 kg against a 60 kg need */
+  await call("POST", "/movements", A, { id: "MV-SCARCE-4", itemId: scarce.id, type: "GRN",
+    qty: 5, rate: 50, wh: "WH-PNY", date: "2026-01-01", manual: true });
   const woBuy = await call("POST", "/production/wo", A, { itemId: bought.id, qty: 50 });
   ok("a shortage answers 409, not a silent create", woBuy.status === 409,
     woBuy.status + " " + JSON.stringify(woBuy.d).slice(0, 90));
@@ -1653,8 +1675,28 @@ async function run() {
       await call("DELETE", "/production/wo/" + pid, A);
     }
 
+    /* NEW RULE (2026-08-22): a material the store has NONE of refuses the
+       order outright — no allowShortage override. Zero is not a shortage to
+       confirm; nothing could start and the order would only mislead.
+       Deleting the previous order ROLLED BACK its issues, so the store is
+       drained to a measured zero first — the refusal below must fire on a
+       genuinely empty shelf. */
+    {
+      const balNow = ((await call("GET", "/state", A)).d.movements || [])
+        .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+      if (Math.abs(balNow) > 1e-9) await call("POST", "/movements", A, { id: "MV-PART-DRAIN", itemId: rm.id,
+        type: "ADJ", qty: -balNow, rate: 10, wh: "WH-PNY", date: "2026-03-01", manual: true });
+      const refused = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 80, allowShortage: true });
+      ok("an order on a material at ZERO is refused even with consent",
+        refused.status === 400 && /none of/i.test((refused.d || {}).error || ""),
+        refused.status + " " + JSON.stringify((refused.d || {}).error || ""));
+    }
+
     /* a partial order must reach the floor flagged, and must NOT be
-       dispatchable while it still owes quantity */
+       dispatchable while it still owes quantity — 30 in store against 80
+       ordered (stock must be PARTIAL now: zero refuses outright, above) */
+    await call("POST", "/movements", A, { id: "MV-PART-5", itemId: rm.id, type: "GRN",
+      qty: 30, rate: 10, wh: "WH-PNY", date: "2026-03-02", manual: true });
     const wo2 = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 80, allowShortage: true });
     ok("a second partial order is raised", wo2.status === 201 && wo2.d.pendingQty > 0,
       "pending=" + (wo2.d || {}).pendingQty);
@@ -1918,6 +1960,11 @@ async function run() {
     // yield 1 so the recipe is a plain 1 kg of base per 1 kg of tape and the
     // quantity drawn from the store can be read directly
     await call("PUT", "/boms/" + cfg, A, { yield: 1, lines: [[crm, 1]] });
+    /* the base has to EXIST since the 2026-08-22 zero rule — plenty of it, so
+       this section keeps measuring what it always measured: how much each
+       run DRAWS, never whether it may start */
+    await call("POST", "/movements", A, { id: "MV-NET-COAT-1", itemId: crm, type: "GRN",
+      qty: 2000, rate: 10, wh: "WH-PNY", date: "2026-01-01", manual: true });
 
     // CONTROL: the same order with nothing on the shelf, driven to completion,
     // so the netted run below can be compared against a real full draw rather
