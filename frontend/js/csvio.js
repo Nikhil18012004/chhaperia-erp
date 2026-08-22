@@ -35,6 +35,7 @@
     t[parts[parts.length - 1]] = val;
   }
   function getVal(o, col) {
+    if (col.get) { try { const g = col.get(o); return g == null ? "" : String(g); } catch (_) { return ""; } }
     const v = col.path ? readPath(o, col.path) : o[col.k];
     if (col.type === "json") return v == null ? "" : JSON.stringify(v);
     if (col.type === "list") return Array.isArray(v) ? v.join("|") : (v == null ? "" : String(v));
@@ -80,7 +81,13 @@
   }
   const colAt = (idx, col) => {
     const byLabel = idx[norm(col.label)];
-    return byLabel != null ? byLabel : idx[norm(col.k)];
+    if (byLabel != null) return byLabel;
+    const byKey = idx[norm(col.k)];
+    if (byKey != null) return byKey;
+    /* aliases: the page-toolbar EXPORT writes short headings ("Code") while
+       the template writes full ones ("Item Code") — both must round-trip */
+    for (const a of (col.alts || [])) { const i = idx[norm(a)]; if (i != null) return i; }
+    return null;
   };
 
   /* ---- entity registry ----
@@ -109,7 +116,19 @@
   const ENTITIES = {
     items: {
       label: "Stock Items", idKey: "id", kind: "array", path: "items",
-      cols: [C("id", "Item Code"), C("name", "Item Name"), C("cat", "Category"), C("uom", "Unit of Measure"), C("cost", "Std Cost (Rs)", "num"), C("price", "Selling Price (Rs)", "num"),
+      cols: [Object.assign(C("id", "Item Code"), { alts: ["Code"] }), C("name", "Item Name"), C("cat", "Category"), C("uom", "Unit of Measure"),
+        /* On Hand is NOT a field on the item — stock lives in movements. On
+           export it is read live from the ledger (in the unit the screen
+           shows); on import it lands in a side channel the preview turns into
+           stock ADJUSTMENTS, so a stock-take typed into the exported sheet
+           actually reaches the store. */
+        Object.assign(C("onHand", "On Hand", "num", "_onHand"), {
+          get: (o) => { const E = global.ENG;
+            if (!E || !E.status || !o.id) return "";
+            const it = E.item(o.id) || o; const st = E.status(o.id);
+            return st ? String(Math.round(E.dispQty(it, st.onHand) * 100) / 100) : ""; },
+        }),
+        C("cost", "Std Cost (Rs)", "num"), C("price", "Selling Price (Rs)", "num"),
         C("reorder", "Reorder Point", "num"), C("safety", "Safety Stock", "num"), C("lead", "Lead Time (days)", "num"), C("hsn", "HSN Code"), C("gstRate", "GST Rate (%)", "num"),
         C("barcode", "Barcode"), C("abc", "ABC Class"), C("supplierId", "Supplier ID"), C("group", "Group"), C("typeCode", "Type Code"), C("std", "Standard"),
         C("flameC", "Flame Class", "num"), C("widthMM", "Width (mm)", "list")],
@@ -371,7 +390,7 @@
       return id;
     }
 
-    const add = [], update = [], unchanged = [], errors = [];
+    const add = [], update = [], unchanged = [], errors = [], qty = [];
     for (let r = 1; r < parsed.length; r++) {
       const row = parsed[r];
       // read the row's columns first — a composite id is built from them
@@ -388,6 +407,7 @@
       const after = prev ? JSON.parse(JSON.stringify(prev)) : {};
       ent.cols.forEach((c) => {
         if (!(c.k in colIndex)) return;
+        if (c.path && c.path[0] === "_") return;  // side channel, never a field
         const raw = cellAt(row, colIndex[c.k]);
         // On an UPDATE an empty cell means "leave this value alone". The import
         // template carries every column, so a half-filled row must never wipe
@@ -396,11 +416,33 @@
         setVal(after, c, raw);
       });
       after[ent.idKey] = id;                     // blank / generated / composite
+      /* THE SHEET SPEAKS THE SCREEN'S LANGUAGE. Since metre-bought material is
+         READ in kilograms, the exported sheet says "kg" and writes kg figures —
+         and importing that sheet back must not re-file the item under kg or
+         store kilogram thresholds in a metre-unit field. So a uom that merely
+         echoes the DISPLAY unit is kept as stored, and reorder/safety figures
+         on a weighable web convert back to the stocking unit. */
+      const E = global.ENG;
+      if (key === "items" && prev && E && E.dispUom) {
+        if (after.uom != null && norm(after.uom) === norm(E.dispUom(prev))) after.uom = prev.uom;
+        if (E.readsAsKg && E.readsAsKg(prev)) {
+          const per = E.kgPerUnit(prev);
+          if (per) ["reorder", "safety"].forEach((f) => {
+            if (f in colIndex && cellAt(row, colIndex[f]) !== "")
+              after[f] = Math.round((+after[f] || 0) / per * 1000) / 1000;
+          });
+        }
+      }
+      /* an On Hand figure travels beside the row, in display units */
+      if (key === "items" && ("onHand" in colIndex)) {
+        const rawQ = cellAt(row, colIndex.onHand);
+        if (rawQ !== "" && isFinite(+rawQ)) qty.push({ id, shown: +rawQ, isNew: !prev });
+      }
       if (!prev) add.push({ id, after });
       else if (JSON.stringify(prev) !== JSON.stringify(after)) update.push({ id, before: prev, after });
       else unchanged.push({ id });
     }
-    return { key, ent, add, update, unchanged, errors };
+    return { key, ent, add, update, unchanged, errors, qty };
   }
 
   /* ---- apply an approved diff to ENG.data (mutates in place) ---- */
