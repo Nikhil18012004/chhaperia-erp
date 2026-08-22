@@ -94,7 +94,7 @@
           h("div",{class:"muted",style:"font-size:11px",text:x.it.id}) ]),
         h("div",{class:"right"},[
           h("div",{html:`<span class="badge-s s-ok">▲ ${ENG.num(x.st.pIn)}</span> <span class="badge-s s-warn">▼ ${ENG.num(x.st.pOut)}</span>`}),
-          h("div",{class:"muted",style:"font-size:10.5px;margin-top:3px",text:"ATP "+ENG.num(x.st.atp)+" "+x.it.uom})
+          h("div",{class:"muted",style:"font-size:10.5px;margin-top:3px",text:"ATP "+ENG.qtyText(x.it,x.st.atp,0)})
         ])
       ])))
     ]);
@@ -129,7 +129,7 @@
             h("div",{class:"flex between",style:"font-size:11px;margin-bottom:6px"},[
               h("span",{class:"muted",text:w.line}), h("span",{class:"muted",text:"Due "+w.due}) ]),
             h("div",{html:meter(w.progress, w.progress>66?"ok":w.progress>33?"warn":"danger")}),
-            h("div",{class:"right muted",style:"font-size:11px;margin-top:4px",text:w.progress+"% · "+ENG.num(w.qty)+" "+it.uom})
+            h("div",{class:"right muted",style:"font-size:11px;margin-top:4px",text:w.progress+"% · "+ENG.qtyText(it,w.qty,0)})
           ]);
         }))
       ]);
@@ -204,7 +204,7 @@
       abcTableWrap(table(abc, [
         {key:"name", label:"Item", render:r=>`<div class="cell-main">${esc(trim(r.it.name,40))}</div><div class="cell-sub">${r.it.id}</div>`, sort:r=>r.it.name},
         {key:"class", label:"Class", render:r=>badge(r.class==="A"?"danger":r.class==="B"?"warn":"ok", "Class "+r.class), sort:r=>r.class},
-        {key:"vol90", label:"90d Volume", num:true, render:r=>ENG.num(r.vol90,1)+" "+(r.it.uom||""), sort:r=>r.vol90},
+        {key:"vol90", label:"90d Volume", num:true, render:r=>esc(ENG.qtyText(r.it,r.vol90,1)), sort:r=>r.vol90},
         {key:"annualVal", label:"Annual Value", num:true, render:r=>ENG.money(r.annualVal), sort:r=>r.annualVal},
         {key:"onHandVal", label:"On-hand Value", num:true, render:r=>ENG.money(r.onHandVal), sort:r=>r.onHandVal},
         {key:"cumPct", label:"Cumulative %", num:true, render:r=>r.cumPct.toFixed(1)+"%", sort:r=>r.cumPct},
@@ -234,10 +234,10 @@
           ["Item Code", it.id],
           ["Category", catLabel(it.cat)],
           ["Classification", clsName],
-          ["90d Purchase + Sales Volume", ENG.num(r.vol90,1)+" "+(it.uom||"")],
+          ["90d Purchase + Sales Volume", ENG.qtyText(it,r.vol90,1)],
           ["Annualised Activity Value", ENG.money(r.annualVal)],
           ["On-hand Value", ENG.money(r.onHandVal)],
-          ["On-hand Qty", ENG.num(st.onHand,2)+" "+(it.uom||"")],
+          ["On-hand Qty", ENG.qtyText(it,st.onHand,2)],
           ["Cumulative %", r.cumPct.toFixed(1)+"%"],
           ["Unit Cost", ENG.money(it.cost||0)],
         ])
@@ -252,7 +252,7 @@
       const it=ENG.item(topItem.id); const fc=ENG.forecast(it.id,30);
       const fcLabels=[]; const base=DB.helpers.today().getTime();
       for(let i=1;i<=30;i++) fcLabels.push(DB.helpers.iso(base+i*DB.helpers.DAY));
-      const fcCard=chartCard(`Demand Forecast — ${trim(it.name,28)}`,`Projected next 30 days · avg ${ENG.num(fc.avg,1)} ${it.uom}/day · total ${ENG.num(fc.projTotal)} ${it.uom}`,null,240);
+      const fcCard=chartCard(`Demand Forecast — ${trim(it.name,28)}`,`Projected next 30 days · avg ${ENG.qtyText(it,fc.avg,1)}/day · total ${ENG.qtyText(it,fc.projTotal,0)}`,null,240);
       fcCard.style.marginTop="16px";
       root.appendChild(fcCard);
       requestAnimationFrame(()=>Charts.line(fcCard._canvas,{labels:fcLabels,series:[

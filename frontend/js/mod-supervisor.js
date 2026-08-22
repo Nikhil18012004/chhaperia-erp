@@ -249,7 +249,7 @@
           H("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px", text: "Top items" }),
           H("div", {}, top.length ? top.map((r) => H("div", { class: "flex between", style: "font-size:12.5px;padding:4px 0" }, [
             H("span", { text: trim(r.name, 30) }),
-            H("span", { class: "mono muted", text: fmtQty(r.qty) + " " + (r.uom || "") }),
+            H("span", { class: "mono muted", text: supQty(r, r.qty, r.uom) }),
           ])) : [H("div", { class: "muted", text: "No stock" })]),
           H("div", { class: "muted", style: "font-size:11.5px;margin-top:10px;text-align:right", text: "View all materials →" }),
         ]));
@@ -269,7 +269,7 @@
           tableHost.appendChild(UI.table(data, [
             { key: "item", label: "Material", render: (r) => `<div class="cell-main">${esc(trim(r.name, 36))}</div><div class="cell-sub">${esc(r.id)}</div>`, sort: (r) => r.name },
             { key: "cat", label: "Category", render: (r) => `<span class="muted">${esc(CAT_LABEL[r.cat] || r.cat || "—")}</span>`, sort: (r) => r.cat },
-            { key: "qty", label: "Quantity", num: true, render: (r) => `<span style="font-weight:700">${fmtQty(r.qty)}</span> <span class="muted">${esc(r.uom || "")}</span>`, sort: (r) => r.qty },
+            { key: "qty", label: "Quantity", num: true, render: (r) => `<span style="font-weight:700">${esc(supQty(r, r.qty, ""))}</span> <span class="muted">${esc(ENG.item(r.id) ? ENG.dispUom(ENG.item(r.id)) : (r.uom || ""))}</span>`, sort: (r) => r.qty },
           ], { empty: q ? "No materials match" : "No stock in this warehouse", sort: "qty", dir: -1 }));
         }
         const body = H("div", {}, [
@@ -373,7 +373,7 @@
       ]);
 
       const facts = H("div", { class: "sup-facts" }, [
-        fact("Make", H("b", { text: fmtQty(w.qty) + " " + (p.uom || "") })),
+        fact("Make", H("b", { text: supQty(p, w.qty, p.uom) })),
         w.spec ? fact(w.spec.label, H("b", { style: w.spec.value == null ? "color:var(--danger)" : "", text: w.spec.value == null ? "— not set" : String(w.spec.value) })) : null,
         w.customer ? fact("Customer", w.customer) : null,
         /* Where the coated jumbo was put down. Nothing was booked into stock —
@@ -418,7 +418,7 @@
                 H("span", { text: m.name || m.id }),
                 m.whName ? H("span", { class: "sup-mat-wh", text: "🏬 " + m.whName }) : null,
               ].filter(Boolean)),
-              H("b", { text: fmtQty(m.required) + " " + (m.uom || "") }),
+              H("b", { text: supQty(m, m.required, m.uom) }),
             ]))),
         ]);
       }
@@ -1049,8 +1049,10 @@
         } else {
           /* the very same list New Work Order shows, from the very same
              renderer — need, in store, and short, against live stock */
+          /* the id is what lets the shared renderer weigh a metre-bought
+             material — without it the floor saw metres and the office kilograms */
           const rows = p.recipe.map((r) => ({
-            name: r.name, code: r.id !== r.name ? r.id : null, uom: r.uom || "",
+            id: r.id, name: r.name, code: r.id !== r.name ? r.id : null, uom: r.uom || "",
             need: r.perUnit * qty, have: onHandOf(r.id),
           }));
           if (U.materialsList) U.materialsList(preview, [{ label: null, lines: rows }],
@@ -1199,6 +1201,18 @@
     ]);
   }
   function fmtQty(n) { n = +n || 0; return n % 1 === 0 ? n.toLocaleString("en-IN") : n.toLocaleString("en-IN", { maximumFractionDigits: 1 }); }
+  /* The floor reads everything by weight, so a material bought by the metre is
+     shown in kilograms. `row` is whatever the caller has — a stock row, a work
+     order's material, a product — and only its id is used, to find the width
+     and GSM the conversion needs. A row naming nothing keeps the unit it was
+     handed, because an unlabelled number on a shop-floor screen is worse than
+     a metre. */
+  function supQty(row, n, uom) {
+    const it = row && (ENG.item(row.id) || ENG.item(row.itemId) || ENG.item(row.code));
+    if (!it) return fmtQty(n) + (uom ? " " + uom : "");
+    const u = ENG.dispUom(it);
+    return fmtQty(ENG.dispQty(it, n)) + (u ? " " + u : "");
+  }
   /* has this job been through coating? Only then is there a roll whose
      whereabouts anyone can be told — and only then is a missing store a gap
      worth printing rather than a stage that has not happened yet. */

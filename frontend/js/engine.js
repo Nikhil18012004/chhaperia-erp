@@ -524,15 +524,68 @@
   function isKg(it){ return String((it&&it.uom)||"").trim().toUpperCase() === "KG"; }
   /** " · 24 kg" to append after a quantity, or "" when kg adds nothing */
   function kgSuffix(it, qty){
-    if(isKg(it)) return "";
+    /* Nothing to append when the figure in front of it is ALREADY a weight —
+       whether the material is kept in kilograms or is web read as kilograms
+       by qtyText() below. "204 kg · 204 kg" helps nobody. */
+    if(isKg(it) || readsAsKg(it)) return "";
     const w = kg(it, qty);
     return w == null ? "" : " · " + num(w, w < 10 ? 2 : 0) + " kg";
+  }
+
+  /* ============================================================
+     HOW A QUANTITY IS READ
+
+     The factory buys web by the metre and stocks it that way, but
+     everyone who handles it — the store, the floor, the office —
+     thinks in kilograms. So a length is RESTATED as a weight
+     wherever a quantity is shown: screens and printed documents
+     alike. What is stored never changes; only what is read.
+
+     Only LENGTH is restated. A material kept in rolls, pallets,
+     boxes, grams or millilitres keeps its own unit, because that
+     is how the floor counts it.
+
+     A metre-stocked material carrying no width or GSM cannot be
+     weighed, so it goes on reading in metres. An honest metre
+     beats an invented kilogram.
+     ============================================================ */
+  const LEN_UNITS = { MTR:1, MTRS:1, M:1, METER:1, METERS:1, METRE:1, METRES:1 };
+  /** true when the item is stocked by length */
+  function isLen(it){ return LEN_UNITS[String((it&&it.uom)||"").trim().toUpperCase()] === 1; }
+  /** true when a length-stocked item carries enough geometry to be weighed */
+  function readsAsKg(it){ return isLen(it) && kgPerUnit(it) != null; }
+  /** the unit a quantity of `it` is SHOWN in.
+     Kilograms are written "kg" whether the material is KEPT in kilograms or is
+     web restated into them — a ledger printing "-2 KG" on one row and
+     "-9.45 kg" on the next reads as two different units to the person checking
+     it. Everything else keeps the unit as the catalogue spells it.
+     Printed documents upper-case this themselves; they are a different
+     register from the screen. */
+  function dispUom(it){ return (readsAsKg(it) || isKg(it)) ? "kg" : ((it && it.uom) || ""); }
+  /** `qty` restated into the unit dispUom() names; unchanged when it cannot be */
+  function dispQty(it, qty){
+    if(!readsAsKg(it)) return +qty;
+    const w = kg(it, qty);
+    return w == null ? +qty : w;
+  }
+  /** a rate per metre restated per kilogram, so qty × rate is unchanged */
+  function dispRate(it, rate, uom){
+    const u = String(uom || (it&&it.uom) || "").trim().toUpperCase();
+    if(!readsAsKg(it) || LEN_UNITS[u] !== 1) return +rate;
+    const per = kgPerUnit(it);
+    return per ? (+rate) / per : +rate;
+  }
+  /** "204.00 kg" — a quantity written with the unit it is read in */
+  function qtyText(it, qty, dp){
+    const u = dispUom(it);
+    return num(dispQty(it, qty), dp == null ? 2 : dp) + (u ? " " + u : "");
   }
 
   const E = {
     init, rebuild,
     money, moneyFull, num, item,
     kg, kgPerUnit, kgSuffix, isKg,
+    isLen, readsAsKg, dispUom, dispQty, dispRate, qtyText,
     get data(){return D;},
     stock:(id)=>STOCK[id], usage:(id)=>USAGE[id], ledger:(id)=>LEDGER[id],
     status, pendingIn, pendingOut, wipRawDemand, readyBatches, readyQty,

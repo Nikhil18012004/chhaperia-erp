@@ -391,7 +391,7 @@
         out.push({ id: w.id, date: w.due, source: "wo", raw: w,
           icon: "⚙️", color: srcColor("wo"), done: false, chaseable: true,
           title: trim(it.name || w.itemId, 30) + " due",
-          sub: w.id + " · " + ENG.num(w.qty) + " " + (it.uom || "kg") + " · " + (w.status || ""),
+          sub: w.id + " · " + (it.id ? ENG.qtyText(it, w.qty, 0) : ENG.num(w.qty) + " kg") + " · " + (w.status || ""),
           go: "production" });
       });
 

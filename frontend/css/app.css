@@ -257,6 +257,15 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
    (e.g. the Stage column, which belongs with Status/Progress) */
 .tbl tbody td.ctr{text-align:center}
 .tbl .mono{font-family:var(--mono);font-size:12px;white-space:nowrap}
+/* A CODE is mono but must be allowed to break on its own hyphens. Left to
+   nowrap, the longest item code in the catalogue (44 characters) claimed 347px
+   of an 1128px table and squeezed the material name — the one thing on the row
+   worth reading — down to 128px and five wrapped lines. */
+.tbl .mono.code{white-space:normal;overflow-wrap:anywhere;line-height:1.35}
+/* Declared column widths are hints under `table-layout:auto`; this keeps the
+   name column from being squeezed below what a name needs to read as one. */
+.tbl th[style*="width"]{box-sizing:border-box}
+.tbl tbody td:has(.cell-main){min-width:150px}
 .tbl .strong{font-weight:700}
 .row-click{cursor:pointer}
 .cell-main{font-weight:700}
