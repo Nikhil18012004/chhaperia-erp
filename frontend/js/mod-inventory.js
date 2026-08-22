@@ -775,6 +775,24 @@
     }
   }
 
+  /* Where a movement's reference leads: the section and the document. Only a
+     reference whose document still EXISTS counts — a deleted order's ref stays
+     plain text rather than a click that lands nowhere. */
+  function refTarget(m){
+    const ref=String(m.ref||"");
+    if(/^WO-/i.test(ref) && (ENG.data.workorders||[]).some(w=>w.id===ref)) return {sec:"production", id:ref};
+    if(/^SO-/i.test(ref) && (ENG.data.salesorders||[]).some(s=>s.id===ref)) return {sec:"sales", id:ref};
+    if(/^PO-/i.test(ref) && (ENG.data.purchaseorders||[]).some(p=>p.id===ref)) return {sec:"purchase", id:ref};
+    return null;
+  }
+  /* A ledger row opens what it points at: its document when it has one the
+     user may see, otherwise the material itself — a row is never a dead end. */
+  function openMove(m){
+    const doc=refTarget(m);
+    if(doc && App.canAccess && App.canAccess(doc.sec)){ App.go(doc.sec,{open:doc.id}); return; }
+    if(m.itemId && ENG.item(m.itemId)) itemDetail(m.itemId);
+  }
+
   /* ============== STOCK LEDGER ============== */
   M.ledger = { title:"Stock Ledger", sub:"Every movement, running balance", render(root, params){
     /* .toLowerCase() matters: the row test lower-cases what it searches, so an
@@ -812,7 +830,15 @@
         ...matCols(r=>ENG.item(r.itemId)||{name:r.itemId,id:r.itemId},{cat:false}),
         {key:"type",label:"Type",width:"92px",render:r=>moveBadge(r.type),sort:r=>r.type},
         {key:"wh",label:"Warehouse",cls:"nm",width:"104px",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
-        {key:"ref",label:"Reference",width:"96px",render:r=>`<span class="mono code">${esc(r.ref||"—")}</span>`,sort:r=>r.ref},
+        /* the reference is the movement's own story — a receipt names its PO,
+           an issue its work order, a sale its sales order. Rows that lead to a
+           document say so; the row click below takes you there. */
+        {key:"ref",label:"Reference",width:"96px",render:r=>{
+          const doc=refTarget(r);
+          return doc
+            ? `<span class="mono code" style="color:var(--accent);font-weight:600">${esc(r.ref)}</span>`
+            : `<span class="mono code">${esc(r.ref||"—")}</span>`;
+        },sort:r=>r.ref},
         /* the weight rides under the quantity where the quantity is not one
            already, instead of a column that reads "—" on almost every row */
         {key:"qty",label:"Qty",num:true,width:"106px",render:r=>{const it=ENG.item(r.itemId)||{};
@@ -821,7 +847,7 @@
             +(sfx?`<div class="cell-sub">${esc(sfx)}</div>`:"");},sort:r=>r.qty},
         {key:"rate",label:"Rate",num:true,width:"86px",render:r=>r.rate?"₹"+ENG.num(ENG.dispRate(ENG.item(r.itemId),r.rate),2):"—",sort:r=>r.rate||0},
         {key:"value",label:"Value",num:true,width:"86px",render:r=>r.rate?ENG.money(Math.abs(r.qty*r.rate)):"—",sort:r=>Math.abs(r.qty*(r.rate||0))},
-      ],{empty:"No movements match"}));
+      ],{onRow:openMove,empty:"No movements match"}));
     }
     draw();
 

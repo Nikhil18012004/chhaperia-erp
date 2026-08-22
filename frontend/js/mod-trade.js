@@ -191,6 +191,8 @@
     // ⌘K "New Purchase Order" lands here with openNew; consume the flag so a
     // later re-render (saveDelta) doesn't reopen the form.
     if(params&&params.openNew){ params.openNew=false; poForm(); }
+    /* arriving from a ledger row (or anywhere else) with a document named */
+    if(params&&params.open){ const po=pos.find(p=>p.id===params.open); params.open=null; if(po) poDetail(po); }
 
     /* Receiving goes through the shared goods-receipt form (the Inventory
        module owns it): per-line accepted/rejected, the supplier's invoice and
@@ -1831,6 +1833,7 @@
     }
     draw();
     if(params&&params.openNew){ params.openNew=false; soForm(); }
+    if(params&&params.open){ const so=sos.find(x=>x.id===params.open); params.open=null; if(so) soDetail(so); }
 
     function fulfillBadge(so){
       const ok=so.lines.every(l=>ENG.stock(l.itemId).onHand>=l.qty);
