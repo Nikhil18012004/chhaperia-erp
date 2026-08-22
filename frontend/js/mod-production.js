@@ -216,6 +216,37 @@
     return "base";
   }
 
+  /* ---- OPTIONAL MATERIALS (ink on an aluminium tape) --------------------
+     Part of the recipe, not of every run: some customers want the print,
+     some do not. Nothing is assigned until it is TICKED here; the tick is
+     stored as "use:<line index>" in the same choices object as the ranged
+     picks, so it reaches the server on the work order and the stage issues
+     exactly what this screen showed. */
+  function optionalPicker(host, bom, choices, qty, redraw){
+    const norm=BOMCALC.normalize(bom.lines);
+    const opts=norm.map((l,i)=>({l,i})).filter(x=>x.l.optional);
+    if(!opts.length) return;
+    host.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",
+      text:"\u2661 Optional materials \u2014 tick what this run should use"}));
+    const cc=BOMCALC.compute({lines:norm},null);
+    opts.forEach(({l,i})=>{
+      const key="use:"+i, on=!!choices[key];
+      const mat=l.id?ENG.item(l.id):null;
+      const box=h("input",{type:"checkbox",style:"width:16px;height:16px;accent-color:var(--accent)"});
+      box.checked=on;
+      box.addEventListener("change",()=>{ if(box.checked) choices[key]=true; else delete choices[key]; redraw(); });
+      const nm=(mat&&mat.name)||l.rm||l.id||"?";
+      const have=l.id?((ENG.stock(l.id)||{}).onHand||0):0;
+      host.appendChild(h("label",{class:"flex aic",style:"gap:10px;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px"},[
+        box,
+        h("span",{style:"font-weight:600",text:nm}),
+        l.id?h("span",{class:"muted mono",style:"font-size:11px",text:l.id}):null,
+        h("span",{class:"muted",style:"margin-left:auto;white-space:nowrap",
+          text:ENG.num(l.qty,2)+" "+(l.unit||"")+" per batch \u00b7 in store "+(mat?ENG.qtyText(mat,have,1):ENG.num(have,1))}),
+      ]));
+    });
+  }
+
   /* ---- THE materials list, used everywhere a recipe is previewed ----------
      New Work Order and both Add-to-Finished-Stock forms render the same
      thing: a layer heading where the product has layers, then one row per
@@ -1374,6 +1405,7 @@
            CLOFT 913") or a span ("0.08-0.10") rather than one material; which
            is actually issued is decided here, against live stock, and travels
            to the server so the issue posts the material that was chosen. */
+        optionalPicker(matHost, bom, fsChoices, qty, drawMaterials);
         const norm=BOMCALC.normalize(bom.lines);
         const ranged=norm.map((l,i)=>({l,i})).filter(x=>x.l.ranged);
         if(ranged.length){
@@ -1731,6 +1763,7 @@
            The BOM records a choice ("CLOFT 912 / CLOFT 913") or a span
            ("0.08-0.10") rather than one material. Which is actually issued is
            decided here, against live stock. */
+        optionalPicker(matHost, bom, matChoices, qty, recalc);
         const norm=BOMCALC.normalize(bom.lines);
         const ranged=norm.map((l,i)=>({l,i})).filter(x=>x.l.ranged);
         if(ranged.length){
@@ -1782,21 +1815,31 @@
               uom: r.uom||l.unit||"" };
           }),
         })), {outputKg: makeQty});
-        /* A short material no longer blocks the order. The factory makes what
-           the store covers and carries the rest as pending, so this WARNS and
-           the button stays live — the server answers with the exact shortage
-           and the office confirms before anything is written. */
+        /* A SHORT material does not block the order — what the store covers
+           runs, the balance pends, the office confirms. A material at ZERO is
+           different (ruled 2026-08-22): nothing can start, so the order cannot
+           be raised at all. Products we make in-house are exempt, exactly as
+           on the server — their material comes off our own line, not a truck. */
         shortages=Object.entries(needBy)
           .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
           .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
-        if(makeQty>0 && shortages.length){
+        const noneAtAll = Object.entries(needBy)
+          .filter(([rid,n])=>n>1e-9 && (ENG.stock(rid).onHand||0)<=1e-9)
+          .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
+        if(makeQty>0 && noneAtAll.length){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600"},[
+            h("div",{text:"⛔ The store has NONE of: "+noneAtAll.join(", ")}),
+            h("div",{style:"font-weight:500;margin-top:3px;font-size:11.5px",
+              text:"This order cannot be raised until the material is received — raise a purchase order first."}),
+          ]));
+        } else if(makeQty>0 && shortages.length){
           matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--warn);border-radius:8px;color:var(--warn);font-size:12.5px;font-weight:600"},[
             h("div",{text:"⚠ Short of: "+shortages.join(", ")}),
             h("div",{style:"font-weight:500;margin-top:3px;font-size:11.5px",
               text:"The order can still be raised — what the store covers goes to the floor and the balance is held as pending until the material arrives."}),
           ]));
         }
-        if(createBtn) createBtn.disabled=false;
+        if(createBtn) createBtn.disabled = makeQty>0 && noneAtAll.length>0;
       };
       const createBtn=h("button",{class:"btn primary",onclick:save,text:"Create Work Order"});
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
@@ -2648,10 +2691,11 @@ recalc(); },50);
 
         /* ---- component rows ---- */
         tblHost.innerHTML="";
-        const head=["Raw material","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm",""];
+        const head=["Raw material","Qty / batch","Opt?","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm",""];
         const tbl=h("table",{class:"tbl bom-edit-tbl"});
         tbl.appendChild(h("thead",{},[h("tr",{},head.map((t,i)=>
-          h("th",{style:"font-size:11px;"+(i>=1&&i<=6?"text-align:right":""),text:t})))]));
+          h("th",{style:"font-size:11px;"+(i>=1&&i<=7?"text-align:right":""),text:t,
+            title:t==="Opt?"?"Optional — each work order chooses whether to use this line":null})))]));
         const tb=h("tbody");
         /* layer names render as heading rows inside the editable table; a
            single-layer product gets the same heading so it reads like a
@@ -2661,7 +2705,7 @@ recalc(); },50);
         grpIdx.forEach((g,gi)=>{ if(g.lines.length) heads[g.lines[0]._i]=g.label||(grpIdx.length>1?"LAYER "+(gi+1):"LAYER 1"); });
         c.lines.forEach((cl,i)=>{
           const l=lines[i];
-          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"8",
+          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"9",
             style:"font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
             text:heads[i]})]));
           const nameCell=h("td",{class:"nm bom-nm"});
@@ -2702,6 +2746,12 @@ recalc(); },50);
             style:"width:96px;text-align:right",
             oninput:reclass(e=>{ const v=e.target.value.trim(); l.rmGsm = v===""?null:v; })});
           gsmIn.title="Give a fabric its GSM (with unit MTR) to count it as a layer in the pickup-GSM calculation";
+          /* optional = offered per order, never assumed. The ink lines on the
+             aluminium tapes are the reason this exists. */
+          const optIn=h("input",{type:"checkbox",title:"Optional \u2014 each work order chooses whether to use this line",
+            style:"width:15px;height:15px;accent-color:var(--accent)"});
+          optIn.checked=!!l.optional;
+          optIn.addEventListener("change",()=>{ l.optional=optIn.checked||undefined; });
           const pickIn=h("input",{class:"input",type:"number",step:"1",min:"0",max:"100",
             value:(l.pickupPct==null?"":l.pickupPct), placeholder:cl.fabric?"n/a":"set",
             style:"width:84px;text-align:right",
@@ -2713,6 +2763,7 @@ recalc(); },50);
           tb.appendChild(h("tr",{},[
             nameCell,
             h("td",{style:"text-align:right"},[qtyIn]),
+            h("td",{style:"text-align:right",title:"Optional per order"},[optIn]),
             h("td",{style:"text-align:right"},[unitIn]),
             h("td",{style:"text-align:right"}, isMtr?[gsmIn]:[h("span",{class:"muted",title:"GSM applies only to fabrics and tapes (unit MTR)",text:"—"})]),
             h("td",{style:"text-align:right"},[pickIn]),
@@ -2830,6 +2881,7 @@ recalc(); },50);
             rm:l.rm, rmType:l.rmType, rmThk:l.rmThk, rmGsm:l.rmGsm,
             qty:+l.qty||0, unit:l.unit||"KG",
             pickupPct: l.pickupPct==null?null:+l.pickupPct,
+            optional: l.optional?true:undefined,
             ranged:!!l.ranged, options:l.options||[], layer:l.layer||null };
           return o;
         }).filter(l=>(l.id||l.options.length) && l.qty>0);
