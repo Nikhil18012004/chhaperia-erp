@@ -1,0 +1,6 @@
+// Root build file. The Android Gradle Plugin version is pinned here and the
+// modules below inherit it — AGP 8.5 is the last line that builds cleanly on
+// Gradle 8.7, which is what tools/build-apk.ps1 fetches.
+plugins {
+  id "com.android.application" version "8.5.2" apply false
+}

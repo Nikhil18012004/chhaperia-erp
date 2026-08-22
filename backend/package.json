@@ -14,6 +14,7 @@
     "test:ui": "node test/ui-boot.js && node test/ui-print.js"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "express": "^4.19.2",
     "mysql2": "^3.23.3"
   },

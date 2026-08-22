@@ -417,9 +417,14 @@ async function putWorkOrder(w, x0) {
 }
 
 /** Append stock movements (used when a stage posts its consumption/output). */
-async function addMovements(moves) {
+/* Pass `x0` when these movements must land in the SAME transaction as the
+   document they belong to — a goods receipt or a dispatch. Without it the
+   movements commit on their own, which is what let a crash (or a second
+   overlapping request) leave stock posted against an order that still reads
+   as un-received. */
+async function addMovements(moves, x0) {
   if (!moves || !moves.length) return 0;
-  await withTx(async (x) => {
+  const write = async (x) => {
     const MV = "INSERT INTO `movements` " +
       "(`id`,`date`,`item_id`,`wh`,`type`,`qty`,`rate`,`ref`,`note`,`by_who`,`supplier_id`) " +
       "VALUES(:id,:date,:item_id,:wh,:type,:qty,:rate,:ref,:note,:by_who,:supplier_id)";
@@ -429,8 +434,34 @@ async function addMovements(moves) {
         qty: m.qty, rate: m.rate || 0, ref: m.ref || null, note: m.note || null,
         by_who: m.by || null, supplier_id: m.supplierId || null,
       });
-  });
+  };
+  if (x0) await write(x0); else await withTx(write);
   return moves.length;
+}
+
+/* ---- locking reads ----
+   `SELECT … FOR UPDATE` inside a transaction. The row stays locked until that
+   transaction ends, so a second request wanting the same order waits for the
+   first to commit and then reads what it actually wrote — instead of both
+   reading the same pending quantity and both posting it. Only meaningful with
+   a transaction executor; called without one it is an ordinary read. */
+async function getPurchaseOrderForUpdate(id, x0) {
+  const x = await ex(x0);
+  const p = await x.one("SELECT * FROM `purchase_orders` WHERE `id`=? FOR UPDATE", [id]);
+  if (!p) return null;
+  return Object.assign({}, P(p.doc, {}), {
+    id: p.id, date: p.date, supplierId: p.supplier_id, status: p.status,
+    eta: p.eta, value: p.value, lines: P(p.lines, []),
+  });
+}
+async function getSalesOrderForUpdate(id, x0) {
+  const x = await ex(x0);
+  const s = await x.one("SELECT * FROM `sales_orders` WHERE `id`=? FOR UPDATE", [id]);
+  if (!s) return null;
+  return Object.assign({}, P(s.doc, {}), {
+    id: s.id, date: s.date, customerId: s.customer_id, status: s.status,
+    promised: s.promised, priority: s.priority, value: s.value, lines: P(s.lines, []),
+  });
 }
 
 /** Append a single stock movement (hot path for manual receipts/adjustments). */
@@ -524,6 +555,27 @@ async function putGrn(g, x0) {
   const { id, ...rest } = g;
   await x.run("INSERT INTO `grns`(`id`,`doc`) VALUES(:id,:doc) AS `new` " +
     "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", { id, doc: J(rest) });
+  return g;
+}
+/* Writing a NEWLY NUMBERED goods receipt. Deliberately a plain INSERT, not the
+   upsert above: a goods receipt is a numbered statutory document, and if two
+   receipts ever compute the same number the upsert would silently destroy one
+   of them. A duplicate key here aborts the whole receipt transaction instead,
+   so nothing is half-written and the operator retries onto the next number. */
+async function insertGrn(g, x0) {
+  const x = await ex(x0);
+  const { id, ...rest } = g;
+  try {
+    await x.run("INSERT INTO `grns`(`id`,`doc`) VALUES(:id,:doc)", { id, doc: J(rest) });
+  } catch (e) {
+    if (e && (e.code === "ER_DUP_ENTRY" || e.errno === 1062)) {
+      const dup = new Error("Goods receipt " + id + " was just issued by another receipt. "
+        + "Nothing was saved — try again and it will take the next number.");
+      dup.status = 409;
+      throw dup;
+    }
+    throw e;
+  }
   return g;
 }
 async function getGrn(id, x0) {
@@ -1021,9 +1073,11 @@ async function hrIsEmpty(x0) {
 
 module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
-  deletePurchaseOrder, getGrns, putGrn, getGrn,
+  deletePurchaseOrder, getGrns, putGrn, insertGrn, getGrn,
   getGrnTests, getGrnTest, getGrnTestFor, putGrnTest, deleteGrnTest,
   getSalesOrder, putSalesOrder, deleteSalesOrder,
+  // transaction plumbing for flows that must post document + stock together
+  withTx, getPurchaseOrderForUpdate, getSalesOrderForUpdate,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
   getCustomer, putCustomer, deleteCustomer,
   getSupplier, putSupplier, deleteSupplier,

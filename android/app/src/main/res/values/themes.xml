@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <!-- NoActionBar: the ERP draws its own header and nav, so a native title
+       bar on top would be a second one saying the same thing. -->
+  <style name="Theme.Chhaperia" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <item name="colorPrimary">@color/erp_accent</item>
+    <item name="colorAccent">@color/erp_accent</item>
+    <item name="android:windowBackground">@color/erp_bg</item>
+    <item name="android:statusBarColor">@color/erp_bg</item>
+    <item name="android:navigationBarColor">@color/erp_bg</item>
+    <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+  </style>
+</resources>

@@ -395,12 +395,36 @@ async function labStatusForWO(wo, data) {
     params: params.map((p) => ({ key: p.key, label: p.label, unit: p.unit })),
     reportId: report ? report.id : null,
     prodValues, labValues,
+    /* The graded verdict, not just whether the boxes are filled. The gates
+       below need this: "measured" and "within spec" are different questions,
+       and for a long time only the first one was being asked. */
+    prodResult: (report && report.prodResult) || "",
+    labResult: (report && report.labResult) || "",
+    prodResults: (report && report.prodResults) || {},
+    labResults: (report && report.labResults) || {},
     prodComplete: setComplete(prodValues, params),
     labComplete: setComplete(labValues, params),
     missingProd: missingParams(prodValues, params).map((p) => p.label),
     missingLab: missingParams(labValues, params).map((p) => p.label),
     coating: hasCoatingStage(wo),
   };
+}
+
+/* A batch counts as failed when EITHER reading set graded Fail. The two sets
+   are graded independently against the same limits, so one of them failing is
+   enough — a good lab reading does not cancel a bad production one. */
+function failedVerdict(st) {
+  return st.prodResult === "Fail" || st.labResult === "Fail";
+}
+/* Which parameters actually fell outside their limits, for the message. */
+function failedParams(st) {
+  const out = [];
+  for (const p of (st.params || [])) {
+    const bad = (st.prodResults && st.prodResults[p.key] === "fail")
+      || (st.labResults && st.labResults[p.key] === "fail");
+    if (bad) out.push(p.label);
+  }
+  return out.length ? out : ["one or more readings outside the stated limits"];
 }
 
 /* ============================================================
@@ -420,7 +444,23 @@ async function coatingGate(wo, data) {
     return { ok: true, reason: "no-lab-product", status: st };
   }
   if (!st.params.length) return { ok: true, reason: "no-parameters", status: st };
-  if (st.prodComplete || st.labComplete) return { ok: true, reason: "measured", status: st };
+  if (st.prodComplete || st.labComplete) {
+    /* MEASURED IS NOT THE SAME AS PASSED. For a long time this gate returned
+       ok the moment every box carried a value, and never looked at the grade
+       it had just computed — so a batch whose certificate read Fail coated,
+       slit, packed and shipped exactly like a good one. A failed batch stops
+       here and needs a deliberate ruling from an admin, the same way a failed
+       goods receipt does. */
+    if (failedVerdict(st)) {
+      return {
+        ok: false, reason: "failed", status: st,
+        message: "Batch " + st.batchNo + " (" + (st.product.code || st.product.name)
+          + ") FAILED its test: " + failedParams(st).join(", ")
+          + ". Coating cannot be closed on a failed batch — an administrator must rule on it.",
+      };
+    }
+    return { ok: true, reason: "measured", status: st };
+  }
   const missing = st.reportId ? st.missingProd : st.params.map((p) => p.label);
   return {
     ok: false,
@@ -464,7 +504,18 @@ async function finishedStockGate(itemId, body, data) {
   const existing = await findByRef(product.id, refNo, reports);
   const already = existing
     && (setComplete(existing.prodValues, params) || setComplete(existing.labValues, params));
-  if (already) return Object.assign({ ok: true, reason: "already-measured", refNo, reportId: existing.id }, base);
+  if (already) {
+    /* Measured, but measured how? A batch already on the books as a Fail must
+       not be bookable into a finished store just because its certificate is
+       complete — that was the same blind spot the coating gate had. */
+    if (existing.prodResult === "Fail" || existing.labResult === "Fail") {
+      return Object.assign({ ok: false, reason: "failed", refNo, reportId: existing.id }, base, {
+        message: "Batch " + refNo + " FAILED its test — it cannot be booked into finished stock. "
+          + "An administrator must rule on the batch first.",
+      });
+    }
+    return Object.assign({ ok: true, reason: "already-measured", refNo, reportId: existing.id }, base);
+  }
 
   const supplied = body.labValues || body.values || null;
   const missing = missingParams(supplied || {}, params);
@@ -474,6 +525,17 @@ async function finishedStockGate(itemId, body, data) {
       message: "Enter the lab report for batch " + refNo + " before booking this stock — "
         + missing.length + " reading" + (missing.length === 1 ? "" : "s") + " missing: "
         + missing.map((p) => p.label).join(", ") + ".",
+    });
+  }
+  /* A complete reading is not automatically an acceptable one — grade the
+     figures the caller just supplied before letting the stock into a store. */
+  const graded = evaluate(supplied, product.spec, params);
+  if (graded.result === "Fail") {
+    const bad = params.filter((p) => graded.results[p.key] === "fail").map((p) => p.label);
+    return Object.assign({ ok: false, reason: "failed", refNo }, base, {
+      message: "These readings put batch " + refNo + " outside its limits ("
+        + (bad.join(", ") || "one or more parameters")
+        + ") — it cannot be booked into finished stock. An administrator must rule on the batch first.",
     });
   }
   return Object.assign({ ok: true, reason: "supplied", refNo, values: pickValues(supplied, params),

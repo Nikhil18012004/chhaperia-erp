@@ -34,13 +34,23 @@
   let STOCK = {};       // itemId -> {onHand, value, avgCost, byWh:{}, lastMove}
   let LEDGER = {};      // itemId -> [movements with running balance]
   let USAGE = {};       // itemId -> {used30, used90, recv90, prod90, sold90, avgDailyUse}
+  /* Derived-on-demand answers, remembered until the next rebuild.
+     `status()` walks every purchase order, sales order and work order to
+     work one item's position out, and `kpis()` calls it for all of them —
+     so the screens that ask repeatedly (the inventory table asks once per
+     row, the nav bar asked SEVEN times for its pills) were paying for the
+     same arithmetic over and over. Nothing here can go stale behind the
+     app's back: every path that changes the data calls rebuild() or init()
+     before anything is drawn from it, and both empty these. */
+  let STATUS = {};      // itemId -> status(), memoised
+  let KPIS = null;      // kpis(), memoised
 
   function rebuild(){
     // keep the item index in sync with the dataset so newly added /
     // removed items are resolvable immediately (no full reload needed)
     for(const k in idx) delete idx[k];
     D.items.forEach(it => idx[it.id] = it);
-    STOCK = {}; LEDGER = {}; USAGE = {};
+    STOCK = {}; LEDGER = {}; USAGE = {}; STATUS = {}; KPIS = null;
     const moves = D.movements.slice().sort((a,b)=> a.date<b.date?-1:a.date>b.date?1:(a.id<b.id?-1:1));
 
     D.items.forEach(it=>{
@@ -96,7 +106,11 @@
     let q=0;
     D.purchaseorders.forEach(po=>{
       if(po.status==="Received") return;
-      po.lines.forEach(l=>{ if(l.itemId===itemId) q += (l.qty - (l.recd||0)); });
+      /* A line can be OVER-received (the truck brought more than the order
+         asked for), and a negative outstanding on one line must not cancel
+         out a real one still owed on another order. Nothing is owed below
+         zero, so each line is floored there. */
+      po.lines.forEach(l=>{ if(l.itemId===itemId) q += Math.max(0, l.qty - (l.recd||0)); });
     });
     return Math.max(0,q);
   }
@@ -115,7 +129,7 @@
       const bom = D.boms[wo.itemId]; if(!bom) return;
       // BOM lines may be legacy tuples or rich imported objects — toLegacy
       // flattens both to [rawId, perUnitOfFG].
-      BOMCALC.toLegacy(bom, BOMCALC.metaFromItem(item(wo.itemId))).forEach(([rid,per])=>{
+      BOMCALC.toLegacy(bom, BOMCALC.metaFromItem(item(wo.itemId)), null, item).forEach(([rid,per])=>{
         if(rid===itemId){
           const remaining = wo.qty * (1 - (wo.progress||0)/100);
           q += per*remaining/bom.yield;
@@ -129,6 +143,10 @@
      Available To Promise & reorder logic
      ============================================================ */
   function status(itemId){
+    const memo = STATUS[itemId];
+    return memo !== undefined ? memo : (STATUS[itemId] = computeStatus(itemId));
+  }
+  function computeStatus(itemId){
     const it = idx[itemId]; const s = STOCK[itemId]; const u = USAGE[itemId];
     const onHand = s.onHand;
     const pIn = pendingIn(itemId);
@@ -366,10 +384,13 @@
 
   /* KPIs for dashboard cards */
   function kpis(){
+    return KPIS || (KPIS = computeKpis());
+  }
+  function computeKpis(){
     const inv = inventoryValue();
     const openPO = D.purchaseorders.filter(p=>p.status!=="Received");
     const openSO = D.salesorders.filter(s=>s.status!=="Dispatched");
-    const poValue = openPO.reduce((s,p)=> s + p.lines.reduce((a,l)=>a+(l.qty-(l.recd||0))*l.rate,0),0);
+    const poValue = openPO.reduce((s,p)=> s + p.lines.reduce((a,l)=>a+Math.max(0,l.qty-(l.recd||0))*l.rate,0),0);
     const soValue = openSO.reduce((s,o)=>s+o.value,0);
     const low = D.items.filter(it=>["warn","danger"].includes(status(it.id).state)).length;
     const ser = dailySeries(30);

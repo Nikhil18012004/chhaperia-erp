@@ -6656,25 +6656,37 @@
         const colS=h("div",{class:"ls-pp-prevcol"});
         prevRow.appendChild(colL); prevRow.appendChild(colS);
         right.appendChild(prevRow);
+        /* WHICH sticker this shows: the one the panel is editing, not always
+           the one that happened to be open. A run can hold several designs cut
+           to the same stock, and adding one selects it — so if this frame kept
+           drawing the open design, adding a second label showed you the first
+           label's artwork and called it "as it prints". Falls back to the open
+           design when the selection is stale or was taken out of the run. */
+        const oneDoc=(sel&&sel!==d.id&&runIds.indexOf(sel)>=0
+          ? docs.find(x=>x.id===sel) : null)||d;
         colL.appendChild(h("div",{class:"ls-pp-sec"},[
           h("span",{text:"The label"}),
-          h("span",{class:"ls-pp-h",text:"one sticker, as it prints"}),
+          h("span",{class:"ls-pp-h",text:shownCount>1
+            ? "“"+oneDoc.name+"”, as it prints"
+            : "one sticker, as it prints"}),
         ]));
         {
           const ctx0={index:0,now:new Date(),prompts:runOpts.prompts,
             bind:bindRecords(),serialStart:runOpts.serialStart};
           const vw=global.innerWidth||1200;
           const wide=vw>1000;
-          const k=Math.min((wide?190:210)/(d.w*PX_MM),(wide?130:150)/(d.h*PX_MM),1.5);
+          const k=Math.min((wide?190:210)/(oneDoc.w*PX_MM),(wide?130:150)/(oneDoc.h*PX_MM),1.5);
           colL.appendChild(h("div",{class:"ls-pp-one"},[
             h("div",{class:"wz-frame",
-              style:`width:${(d.w*PX_MM*k).toFixed(1)}px;height:${(d.h*PX_MM*k).toFixed(1)}px`},
-              h("iframe",{srcdoc:oneHtml(d,ctx0),scrolling:"no","aria-hidden":"true",
+              style:`width:${(oneDoc.w*PX_MM*k).toFixed(1)}px;height:${(oneDoc.h*PX_MM*k).toFixed(1)}px`},
+              h("iframe",{srcdoc:oneHtml(oneDoc,ctx0),scrolling:"no","aria-hidden":"true",
                 tabindex:"-1",
-                style:`width:${d.w}mm;height:${d.h}mm;transform:scale(${k.toFixed(4)});`+
+                style:`width:${oneDoc.w}mm;height:${oneDoc.h}mm;transform:scale(${k.toFixed(4)});`+
                       `transform-origin:top left`})),
           ]));
-          colL.appendChild(h("div",{class:"ls-pp-cap",text:sizeS(d.w,d.h)}));
+          colL.appendChild(h("div",{class:"ls-pp-cap",
+            text:shownCount>1?oneDoc.name+" · "+sizeS(oneDoc.w,oneDoc.h)
+                             :sizeS(oneDoc.w,oneDoc.h)}));
         }
 
         /* THE FIRST SHEET, as the plan actually lays it out — so the empty run

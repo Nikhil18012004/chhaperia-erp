@@ -364,7 +364,7 @@
       // --- purchase orders: goods we are waiting on ---------------------
       (D.purchaseorders || []).forEach((p) => {
         if (!p.eta || p.status === "Received") return;
-        const pend = (p.lines || []).reduce((s, l) => s + (l.qty - (l.recd || 0)) * l.rate, 0);
+        const pend = (p.lines || []).reduce((s, l) => s + Math.max(0, l.qty - (l.recd || 0)) * l.rate, 0);
         out.push({ id: p.id, date: p.eta, source: "po", raw: p,
           icon: "🛒", color: srcColor("po"), done: false, chaseable: true,
           title: ENG.sup(p.supplierId) + " arriving", value: pend,

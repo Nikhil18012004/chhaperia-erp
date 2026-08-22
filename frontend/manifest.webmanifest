@@ -1,0 +1,26 @@
+{
+  "name": "Chhaperia ERP",
+  "short_name": "Chhaperia",
+  "description": "Inventory, production, procurement, sales and payroll for Chhaperia Cable Material.",
+  "id": "/",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090b11",
+  "theme_color": "#090b11",
+  "dir": "ltr",
+  "lang": "en-IN",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Stock Items", "url": "./#inventory", "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Production", "url": "./#production", "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Procurement", "url": "./#purchase", "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

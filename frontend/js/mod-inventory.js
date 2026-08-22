@@ -28,7 +28,7 @@
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
-      MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
+      MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
       MW.select([{value:"all",label:"All Status"},{value:"instock",label:"In Stock"},{value:"low",label:"Low Stock"},{value:"out",label:"Out of Stock"}], v=>{filter.state=v;draw();}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
     ]);
@@ -46,12 +46,16 @@
         const st=ENG.status(it.id), u=ENG.usage(it.id), stock=ENG.stock(it.id);
         return {it, st, u, stock};
       }).filter(r=>{
-        // WIP items are auto-generated stage plumbing (the server re-creates
-        // them per product at boot) — keep them out of the list until they
-        // actually carry stock, unless the WIP category is explicitly chosen
-        // WIP is never stocked now — a stage hands its output to the next stage,
-        // so the leftover WIP plumbing items stay out of the list entirely
-        if(r.it.cat==="WIP") return false;
+        /* WIP items are auto-generated stage plumbing — the server re-creates
+           one per product at boot, and in normal running they hold nothing,
+           because a stage hands its output straight to the next stage. Dozens
+           of empty rows would bury the materials someone actually came here
+           for, so they stay out of the default list.
+           They are NOT hidden outright, though: "Work in Process" is a
+           category on the filter like any other and shows every one of them,
+           and a WIP item carrying stock appears everywhere — stock that
+           exists is never invisible, whatever put it there. */
+        if(r.it.cat==="WIP" && filter.cat!=="WIP" && !(Math.abs(r.st.onHand)>0.0001)) return false;
         if(filter.cat!=="all" && r.it.cat!==filter.cat) return false;
         if(filter.state!=="all" && stockClass(r.st)!==filter.state) return false;
         if(filter.q){ const s=(r.it.name+" "+r.it.id+" "+(r.it.hsn||"")+" "+r.it.cat).toLowerCase(); if(!s.includes(filter.q)) return false; }
@@ -139,6 +143,27 @@
         ["Lead Time", it.lead+" days"],["ABC Class", it.abc],["Days Cover", st.cover>900?"∞":st.cover+" days"],
         ["Suggested Order", st.suggest? ENG.num(st.suggest)+" "+it.uom : "—"],
       ]),
+      /* WHERE IT IS. "On hand" answers how much and never which store, so a
+         drum booked into the wrong bay reads as missing to anyone standing in
+         the right one — there was no screen in the app that named the stores
+         holding one material. Every store with a balance is listed. */
+      (()=>{
+        const rows=Object.entries(s.byWh||{}).map(([wh,q])=>({wh,q:+(+q).toFixed(3)}))
+          .filter(r=>Math.abs(r.q)>0.0001).sort((a,b)=>b.q-a.q);
+        return h("div",{class:"card",style:"margin-top:16px;box-shadow:none;background:var(--panel-2)"},[
+          h("div",{class:"card-head"},h("h3",{text:"Where it is"})),
+          rows.length
+            ? h("div",{},rows.map(r=>h("div",{class:"flex between aic",
+                style:"gap:12px;padding:8px 0;border-bottom:1px solid var(--line)"},[
+                h("div",{style:"min-width:0"},[
+                  h("div",{text:whName(r.wh)}),
+                  h("div",{class:"cell-sub",text:r.wh}),
+                ]),
+                h("div",{class:"strong",text:ENG.num(r.q,2)+" "+(it.uom||"")}),
+              ])))
+            : h("div",{class:"muted",style:"padding:4px 0",text:"No stock standing in any store."}),
+        ]);
+      })(),
       h("div",{class:"card",style:"margin-top:16px;box-shadow:none;background:var(--panel-2)"},[
         h("div",{class:"card-head"},h("h3",{text:"30-Day Movement"})),
         (()=>{ const cv=h("canvas",{"data-h":140}); const box=h("div",{class:"chart-box"},cv);
@@ -276,7 +301,11 @@
     const body=h("div",{class:"form-grid"},[
       field("Item Code",`<input class="input" id="f_id" value="${esc(f('id',''))}" ${edit?'disabled':''} placeholder="e.g. RM-XYZ">`),
       field("Item Name",`<input class="input" id="f_name" value="${esc(f('name',''))}" placeholder="Descriptive name">`),
-      field("Category",selectHTML("f_cat",ENG.data.categories.filter(c=>c.id!=="WIP").map(c=>({v:c.id,l:c.name})),it.cat)),
+      /* Work in Process is offered here too. It has to be: a WIP item reached
+         from the Stock Items list would otherwise open on a picker that does
+         not contain its own category, and saving would quietly re-file it as
+         Raw Material. */
+      field("Category",selectHTML("f_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),it.cat)),
       field("Unit of Measure",`<input class="input" id="f_uom" value="${esc(f('uom','KG'))}">`),
       field("Reorder Point",`<input class="input" id="f_reorder" type="number" value="${f('reorder',0)}">`),
       field("Safety Stock",`<input class="input" id="f_safety" type="number" value="${f('safety',0)}">`),
@@ -379,12 +408,26 @@
       ]));
       po.lines.forEach((l,idx)=>{
         const pend=+(l.qty-(l.recd||0)).toFixed(3), it=ENG.item(l.itemId)||{};
+        /* The quantity that goes into stock is the one typed here, whatever
+           the order says — so when it runs past what is still outstanding the
+           form says so, in the line, before the receipt is posted. A silent
+           over-receipt would be a stock figure nobody could account for. */
+        const overNote=h("div",{class:"cell-sub",style:"color:var(--warn);display:none"});
+        const qtyIn=h("input",{class:"input",id:"r_qty_"+idx,type:"number",step:"0.001",style:"flex:1",value:pend>0?pend:0});
+        qtyIn.oninput=()=>{
+          const over=+((+qtyIn.value||0)-Math.max(0,pend)).toFixed(3);
+          overNote.textContent = over>0
+            ? "▲ "+ENG.num(over)+" "+(it.uom||"")+" more than "+po.id+" has outstanding — books as an over-receipt"
+            : "";
+          overNote.style.display = over>0?"":"none";
+        };
         host.appendChild(h("div",{class:"flex gap",style:"margin-bottom:8px;align-items:center"+(pend<=0?";opacity:.5":"")},[
           h("div",{style:"flex:2;min-width:0"},[
             h("div",{class:"cell-main",text:trim(it.name||l.itemId,30)}),
             h("div",{class:"cell-sub",text:l.itemId+" · ordered "+ENG.num(l.qty)+", pending "+ENG.num(pend)}),
+            overNote,
           ]),
-          h("input",{class:"input",id:"r_qty_"+idx,type:"number",step:"0.001",style:"flex:1",value:pend>0?pend:0}),
+          qtyIn,
           h("input",{class:"input",id:"r_rej_"+idx,type:"number",step:"0.001",min:"0",style:"flex:1",value:0}),
           h("div",{class:"muted",style:"flex:1;font-size:12px",text:"@ ₹"+ENG.num(l.rate,2)+" / "+(it.uom||"")})
         ]));
@@ -394,12 +437,15 @@
     function save(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const wh=UI.$("#r_wh").value, date=DB.helpers.iso(DB.helpers.today());
-      const recvLines=[]; let touched=0;
+      const recvLines=[]; let touched=0, over=0;
       po.lines.forEach((l,idx)=>{
         const el=UI.$("#r_qty_"+idx); let rq=+((el&&el.value)||0);
         const re=UI.$("#r_rej_"+idx); let rej=+((re&&re.value)||0);
         const pend=l.qty-(l.recd||0);
-        if(rq>pend) rq=pend;
+        /* NOT clamped to `pend` any more: what the delivery actually brought
+           is what gets booked. The excess is declared to the server instead,
+           so a receipt replayed by a double-click is still refused there. */
+        if(rq>pend) over=+(over+(rq-Math.max(0,pend))).toFixed(3);
         if(rej<0) rej=0; if(rej>rq) rej=rq;
         if(rq>0){
           recvLines.push({i:idx, qty:rq, rejected:rej});
@@ -414,7 +460,7 @@
       });
       if(!touched){ toast("Enter a quantity to receive on at least one line",{type:"warn"}); return; }
       po.status = po.lines.every(l=>(l.recd||0) >= l.qty-0.0001) ? "Received" : "Partially Received";
-      const head={ wh, date, lines:recvLines,
+      const head={ wh, date, lines:recvLines, allowOver:over>0,
         invNo:UI.$("#r_inv").value.trim(), invDate:UI.$("#r_invd").value,
         vehicle:UI.$("#r_veh").value.trim(), lrNo:UI.$("#r_lr").value.trim(),
         remarks:UI.$("#r_rem").value.trim() };
@@ -424,6 +470,7 @@
         if(r&&r.grn){
           (ENG.data.grns=ENG.data.grns||[]).push(r.grn);
           toast(`${r.grn.id} issued — reprint it any time from ${po.id}`,{type:"ok",title:"GRN posted"});
+          if(over>0) toast(`${ENG.num(over)} received over ${po.id} — the extra is in stock and noted on the GRN`,{type:"warn",title:"Over-receipt"});
         }
       });
     }
@@ -432,6 +479,7 @@
   /* ----- FEATURE 2: add stock manually (existing item OR create new) ----- */
   function addStockForm(){
     const whs=ENG.data.warehouses;
+    let whTouched=false;   // set once the operator picks a store by hand
     /* Manual stock intake covers RAW materials, WORK IN PROCESS and FINISHED
        GOODS. FG/WIP normally arrive through production, but opening balances
        and hand-counted rolls have to be enterable somewhere — this is it.
@@ -482,13 +530,15 @@
           field("Reorder Point",`<input class="input" id="s_reorder" type="number" value="0">`),
           field("HSN Code",`<input class="input" id="s_hsn" placeholder="e.g. 74102100">`),
           field("Rate (₹ per unit)",`<input class="input" id="s_rate" type="number" step="0.01" placeholder="0">`),
-          field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),whs[0]&&whs[0].id)),
+          field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),defaultWh("RM"))
+            +`<div class="muted" id="s_whnote" style="font-size:11px;margin-top:4px"></div>`),
         ])
       ])
     ]);
     const mo=modal({title:"Add Stock", sub:"Add / update an item and post a receipt", wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:"Add to Inventory"})]});
+    { const w=UI.$("#s_wh"); if(w) w.addEventListener("change",()=>{ whTouched=true; }); }
     const sel=UI.$("#s_item");
     const setVal=(id,v)=>{const el=UI.$("#"+id); if(el) el.value=v;};
     const setSel=(id,v)=>{const el=UI.$("#"+id); if(!el) return;
@@ -523,6 +573,51 @@
       if(sel.value==="__new") return (UI.$("#s_cat")||{}).value||"RM";
       return (ENG.item(sel.value)||{}).cat||"RM";
     }
+    /* THE STORE THE MATERIAL BELONGS IN, not simply the first one on the list.
+       This box used to default to whichever warehouse came back first, which
+       is the Finished Goods Bay — so a drum of resin taken in through this
+       form was filed under finished goods. The total on hand was right and the
+       ledger had the line, but the stock was standing in the wrong store, and
+       anyone looking at the main store could not find what they had just
+       booked in. Matched on the warehouse's TYPE, so a renamed store still
+       works; if nothing matches, the list order is all there is to fall back
+       on. (Quarantine is never a default — stock is only ever moved there by
+       a rejection.) */
+    function defaultWh(cat){
+      const want={FG:"Finished Goods", WIP:"WIP"}[cat] || "Raw Material";
+      const hit=whs.find(w=>String(w.type||"").toLowerCase()===want.toLowerCase());
+      return (hit||whs.find(w=>!/quarantine/i.test(String(w.type||"")))||whs[0]||{}).id;
+    }
+    /* WHICH STORES THIS MATERIAL IS ALREADY IN, named on the box itself.
+       Guessing a store from the category is still a guess; what the storeman
+       needs to see is where the stuff actually lives, so each option carries
+       the quantity of THIS item standing in that store and the line below
+       spells the same out in words. The box opens on the store already
+       holding the most of it — the one a new drum almost always joins — and
+       falls back to the category's own store when the item is new to the
+       building. Anything picked by hand is left exactly as picked. */
+    function heldIn(itemId){
+      if(!itemId || itemId==="__new") return [];
+      const byWh=((ENG.stock(itemId)||{}).byWh)||{};
+      return Object.entries(byWh).map(([wh,q])=>({wh,q:+(+q).toFixed(3)}))
+        .filter(r=>Math.abs(r.q)>0.0001).sort((a,b)=>b.q-a.q);
+    }
+    function drawWh(){
+      const el=UI.$("#s_wh"); if(!el) return;
+      const id=sel?sel.value:"__new", held=heldIn(id);
+      const uom=(ENG.item(id)||{}).uom||"";
+      const qOf=wh=>{ const r=held.find(x=>x.wh===wh); return r?r.q:0; };
+      const keep=whTouched?el.value:null;
+      el.innerHTML="";
+      whs.forEach(w=>{ const q=qOf(w.id);
+        el.appendChild(h("option",{value:w.id,
+          text:w.name+(q?"  —  "+ENG.num(q,2)+" "+uom+" here":"")})); });
+      el.value = keep || (held.length? held[0].wh : defaultWh(catNow()));
+      const note=UI.$("#s_whnote");
+      if(note) note.textContent = held.length
+        ? "Already in "+held.map(r=>whName(r.wh)+" ("+ENG.num(r.q,2)+" "+uom+")").join(" · ")
+        : (id==="__new" ? "" : "This item is not in any store yet.");
+    }
     /* Thickness, GSM and the unit of quantity are ALWAYS offered — they are
        real parameters of the stock being taken in, not fabric-only trivia.
        Web width + derived length still belong to metre-tracked webs, and the
@@ -540,6 +635,7 @@
       [widField,lenField].forEach(f=>{ f.style.display=fabNow?"":"none"; });
       // webs default to the standard 1000 mm width
       if(fabNow){ const w=UI.$("#s_wid"); if(w && !w.value) w.value=1000; }
+      drawWh();
       calcLen();
     }
     /* the width the quantity is measured across: a finished good is the slit

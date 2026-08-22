@@ -1,0 +1,525 @@
+<title>Interlink Test Certificate</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ---------- tokens: light is the base set ---------- */
+  :root{
+    --ground:#F1F4F3;
+    --surface:#FFFFFF;
+    --surface-2:#E9EEEC;
+    --ink:#16211F;
+    --ink-2:#4E5C59;
+    --ink-3:#778481;
+    --rule:#D2DAD8;
+    --rule-strong:#A9B5B2;
+    --accent:#1B6B58;      /* copper patina — the verdigris on their own copper wire */
+    --crit:#A3331D;
+    --serious:#8C5D06;
+    --clear:#1B6B58;
+    --idle:#6C7A77;
+    --stamp-bg:rgba(163,51,29,.07);
+    --shadow:0 1px 2px rgba(22,33,31,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#111917;
+      --surface:#18211F;
+      --surface-2:#1F2A28;
+      --ink:#E5EBE9;
+      --ink-2:#A7B4B1;
+      --ink-3:#8A9794;
+      --rule:#2A3735;
+      --rule-strong:#3E4E4B;
+      --accent:#54BC9E;
+      --crit:#EC7A61;
+      --serious:#DCA946;
+      --clear:#54BC9E;
+      --idle:#8A9794;
+      --stamp-bg:rgba(236,122,97,.10);
+      --shadow:0 1px 2px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#111917;
+    --surface:#18211F;
+    --surface-2:#1F2A28;
+    --ink:#E5EBE9;
+    --ink-2:#A7B4B1;
+    --ink-3:#8A9794;
+    --rule:#2A3735;
+    --rule-strong:#3E4E4B;
+    --accent:#54BC9E;
+    --crit:#EC7A61;
+    --serious:#DCA946;
+    --clear:#54BC9E;
+    --idle:#8A9794;
+    --stamp-bg:rgba(236,122,97,.10);
+    --shadow:0 1px 2px rgba(0,0,0,.3);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--ink);
+    font-family:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+    font-size:16px;line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:ui-monospace,"Cascadia Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 24px 96px}
+  .prose{max-width:68ch}
+
+  /* ---------- masthead ---------- */
+  header.top{border-bottom:2px solid var(--ink);margin-bottom:0;padding:56px 0 20px}
+  .eyebrow{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-3);margin:0 0 14px
+  }
+  h1{
+    font-size:clamp(30px,5.2vw,50px);line-height:1.04;margin:0 0 16px;
+    font-weight:700;letter-spacing:-.022em;text-wrap:balance;max-width:16ch;
+  }
+  .dek{font-size:18px;color:var(--ink-2);margin:0;max-width:60ch;text-wrap:pretty}
+
+  .specimen{
+    display:grid;gap:0 40px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    border-top:1px solid var(--rule);margin-top:32px;padding-top:20px
+  }
+  .spec-k{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);
+    margin:0 0 4px
+  }
+  .spec-v{margin:0 0 16px;font-size:14.5px;line-height:1.45}
+
+  /* ---------- verdict stamp ---------- */
+  .verdict{
+    display:flex;flex-wrap:wrap;align-items:center;gap:20px;
+    border:2px solid var(--crit);background:var(--stamp-bg);
+    padding:18px 22px;margin:28px 0 0
+  }
+  .verdict .mark{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:26px;font-weight:700;letter-spacing:.06em;color:var(--crit);line-height:1
+  }
+  .verdict.pass{border-color:var(--clear);background:transparent}
+  .verdict.pass .mark{color:var(--clear)}
+  .verdict p{margin:0;font-size:14.5px;color:var(--ink-2);max-width:56ch}
+  .fixed-tag{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--clear);border:1px solid var(--clear);padding:3px 9px;
+    white-space:nowrap;font-weight:600
+  }
+
+  /* ---------- summary tiles ---------- */
+  .tiles{
+    display:grid;gap:1px;background:var(--rule);
+    grid-template-columns:repeat(auto-fit,minmax(155px,1fr));
+    border:1px solid var(--rule);margin:44px 0 0
+  }
+  .tile{background:var(--surface);padding:18px 18px 16px}
+  .tile .n{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:34px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
+    display:block;margin-bottom:8px
+  }
+  .tile .l{font-size:12.5px;color:var(--ink-2);line-height:1.4;display:block}
+  .n-crit{color:var(--crit)} .n-ser{color:var(--serious)}
+  .n-idle{color:var(--idle)} .n-ok{color:var(--clear)}
+
+  /* ---------- sections ---------- */
+  section{margin-top:64px}
+  h2{
+    font-size:12px;letter-spacing:.15em;text-transform:uppercase;font-weight:700;
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    color:var(--ink);margin:0 0 6px;padding-bottom:10px;border-bottom:1px solid var(--ink)
+  }
+  .sec-note{font-size:14.5px;color:var(--ink-2);margin:14px 0 30px;max-width:66ch}
+  h3{font-size:19px;line-height:1.3;margin:0;font-weight:650;letter-spacing:-.012em;text-wrap:balance}
+
+  /* ---------- finding records ---------- */
+  .rec{border-bottom:1px solid var(--rule);padding:24px 0}
+  .rec:first-of-type{border-top:1px solid var(--rule)}
+  .rec-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 14px;margin-bottom:10px}
+  .code{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:11px;letter-spacing:.08em;color:var(--ink-3);
+    border:1px solid var(--rule-strong);padding:2px 7px;white-space:nowrap
+  }
+  .chip{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    padding:3px 9px;white-space:nowrap;border:1px solid currentColor;font-weight:600
+  }
+  .c-crit{color:var(--crit)} .c-ser{color:var(--serious)}
+  .c-idle{color:var(--idle)} .c-ok{color:var(--clear)}
+  .rec p{margin:0 0 12px;max-width:70ch}
+  .rec p:last-child{margin-bottom:0}
+
+  .ev{
+    background:var(--surface);border-left:3px solid var(--rule-strong);
+    padding:13px 16px;margin:12px 0 0;overflow-x:auto;
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:12.5px;line-height:1.7;color:var(--ink-2);white-space:pre;
+    font-variant-numeric:tabular-nums
+  }
+  .ev b{color:var(--ink);font-weight:600}
+  .ev.crit{border-left-color:var(--crit)}
+
+  code{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:.885em;background:var(--surface-2);padding:1px 5px;
+    color:var(--ink);word-break:break-word
+  }
+
+  /* ---------- tables ---------- */
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--rule);background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:520px;font-size:14.5px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--rule);vertical-align:top}
+  thead th{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);
+    border-bottom:1px solid var(--rule-strong);font-weight:600;white-space:nowrap
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.who{white-space:nowrap;font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+
+  ol.fix{counter-reset:f;list-style:none;padding:0;margin:0}
+  ol.fix li{
+    counter-increment:f;position:relative;padding:0 0 20px 42px;margin:0;
+    border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:18px;max-width:72ch
+  }
+  ol.fix li:last-child{border-bottom:none;margin-bottom:0}
+  ol.fix li::before{
+    content:counter(f);position:absolute;left:0;top:1px;
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+    font-size:12px;font-weight:700;color:var(--accent);
+    border:1px solid var(--accent);width:24px;height:24px;
+    display:grid;place-items:center
+  }
+  ol.fix b{font-weight:650}
+
+  footer{margin-top:72px;padding-top:22px;border-top:1px solid var(--rule);
+    font-size:13.5px;color:var(--ink-3);max-width:70ch}
+  a{color:var(--accent)}
+  a:focus-visible,li:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  @media (max-width:560px){
+    .wrap{padding:0 18px 72px}
+    header.top{padding-top:36px}
+    .ev{font-size:11.5px}
+  }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <p class="eyebrow">Chhaperia ERP · adversarial cross-module audit · 19 Aug 2026</p>
+  <h1>Interlink Test Certificate</h1>
+  <p class="dek">The ERP grades every batch that crosses its floor against a spec. This is the same treatment applied to the ERP itself — driving the live API across the seams between menu modules to find where one screen's data stops agreeing with another's.</p>
+
+  <div class="specimen">
+    <div>
+      <p class="spec-k">Specimen</p>
+      <p class="spec-v"><span class="mono">b081d73</span> + the fixes this report describes</p>
+    </div>
+    <div>
+      <p class="spec-k">Method</p>
+      <p class="spec-v">Live HTTP against a throwaway database, seeded fresh</p>
+    </div>
+    <div>
+      <p class="spec-k">Coverage</p>
+      <p class="spec-v">24 menu screens, 68 API routes, 7 probe rounds</p>
+    </div>
+    <div>
+      <p class="spec-k">Production data</p>
+      <p class="spec-v">Untouched — verified 293 / 30 / 378 rows after</p>
+    </div>
+  </div>
+
+  <div class="verdict pass">
+    <span class="mark">RESOLVED</span>
+    <p>Eight genuine defects were reproduced against a running server; all eight are now fixed, re-tested green, and covered by 23 new regression tests. A ninth flagged item turned out to be a deliberate design decision and was left alone. The access-control layer held everywhere it was pushed.</p>
+  </div>
+</header>
+
+<div class="tiles">
+  <div class="tile"><span class="n n-ok">8</span><span class="l">Defects fixed &amp; re-tested</span></div>
+  <div class="tile"><span class="n n-ok">23</span><span class="l">New regression tests</span></div>
+  <div class="tile"><span class="n n-idle">1</span><span class="l">By design, left as-is</span></div>
+  <div class="tile"><span class="n n-idle">1</span><span class="l">Claimed, failed to reproduce</span></div>
+</div>
+
+<section>
+  <h2>Critical — proved on a running server, now fixed</h2>
+  <p class="sec-note">Each of these was executed end to end and the damage measured in the resulting data. None needed a crafted request; every one was reachable from the ordinary interface. Each now carries the fix that closed it and the re-test that proves it.</p>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">RCV-01</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>Editing a part-received purchase order lets the same delivery be taken into stock twice</h3>
+    </div>
+    <p>Procurement → Inventory. Receiving resets a line's received quantity from the order document itself, so editing that document wipes the record of what already arrived. The order reopens as if nothing had been delivered, and the clamp that normally stops over-receipt now measures against zero.</p>
+    <p>The Edit button is hidden once anything is received — but that check lived in the browser only, and <code>PATCH /purchase-orders/:id</code> accepted the write from any office account.</p>
+    <div class="ev crit">PO-0032  ordered 1000, received 600   → recd=600, status "Partially Received"
+PATCH {status:"Open", recd:0}       → HTTP 200, recd is now 0
+receive again, 1000                 → HTTP 200
+<b>total booked against a 1000-unit order: 1600 units, 2 goods receipts</b></div>
+    <p><b>The fix.</b> An order that has taken delivery of anything is now closed to edits server-side, which is where the browser's rule should have been all along. The refusal says how much has already arrived and points at a return or a stock adjustment instead. Deleting a received order still works — the UI offers it deliberately as the reversal path, and it reverses the stock with it.</p>
+    <div class="ev">received 600 of 1000, then PATCH {status:"Open", recd:0}  → <b>HTTP 409</b>
+                       recd is still 600, status unchanged
+receive the rest                    → <b>total 1000 against a 1000-unit order</b></div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">QC-01</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>A batch whose certificate reads FAIL still passes the coating gate</h3>
+    </div>
+    <p>Production → Lab Reports. The gate that is supposed to stop unmeasured material asks only whether every box has been filled in — never whether the readings were inside their limits. <code>coatingGate</code> returns <code>ok</code> the moment the reading set is complete, and the stored verdict is never consulted.</p>
+    <p>I linked a lab product to an open work order, set limits, and filed readings far outside every one of them. The certificate graded <span class="mono">Fail</span> on both parameters. The stage completed anyway.</p>
+    <div class="ev crit">spec       tensile 50–100, thickness 0.05–0.1
+filed      99999 on both                         → HTTP 201
+certificate  result=<b>Fail</b>  {tensile:"fail", thickness:"fail"}
+advance stage, action "complete"                 → <b>HTTP 200</b></div>
+    <p><b>The fix.</b> The graded verdict is now carried alongside the readings, and both gates — closing a coating stage, and booking into a finished store — refuse a batch that graded <span class="mono">Fail</span>, naming the parameters that failed. A failed batch needs a deliberate ruling from an administrator, the same way a failed goods receipt already did. Freshly-supplied readings are graded before the stock is allowed in, not only readings already on file.</p>
+    <div class="ev">spec       tensile 50–100, thickness 0.05–0.1
+filed      99999 on both              → certificate <b>Fail</b>
+close the coating stage               → <b>HTTP 409</b>  "Batch 0075 FAILED its test:
+                                        Tensile, Thickness"
+book it into finished stock           → <b>HTTP 409</b>
+still refused when unmeasured         → HTTP 409 (the original rule, intact)</div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">RACE-01</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>Two simultaneous receipts of one order book the stock twice</h3>
+    </div>
+    <p>Receiving reads the outstanding quantity, decides what to post, and writes — with no transaction and no lock around the three steps. Two requests that overlap both read the same outstanding figure and both post in full. A double-click on a slow connection is enough.</p>
+    <div class="ev crit">three fresh 100-unit orders, two concurrent receipts each
+PO-0029  200 &amp; 200 → +200      PO-0030  200 &amp; 200 → +200
+PO-0031  200 &amp; 200 → +200
+<b>3 of 3 runs double-booked — deterministic, not a narrow window</b></div>
+    <p>Run sequentially the same replay is refused, which is why this hid in normal testing.</p>
+    <p><b>The fix.</b> The whole receipt is now one transaction, and the order is read inside it with a row lock. The second request waits for the first to commit, then sees the quantity it actually booked and finds nothing left to receive. The movements, the goods receipt and the order's progress now land together or not at all, which also closes the crash windows that used to leave stock in the ledger against an order still reading as un-received.</p>
+    <div class="ev">three fresh 100-unit orders, two concurrent receipts each
+PO-0027  200/400 → +100      PO-0028  200/400 → +100
+PO-0029  200/400 → +100
+<b>0 of 3 double-booked; the loser is told why, not silently ignored</b></div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">RACE-02</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>The same sales order can ship twice</h3>
+    </div>
+    <p>Sales → Dispatch, the same shape of fault. The "already dispatched" check passes in both requests before either writes its status, so both post their shipping movements against finished stock.</p>
+    <div class="ev crit">SO-0024, 3 order lines, two concurrent dispatches → HTTP 200 &amp; 200
+<b>6 shipping movements written for 3 order lines</b>
+line 1: 271 ordered, 542 units left stock</div>
+    <p><b>The fix.</b> Dispatch got the same treatment — one transaction, the order locked and re-read inside it, so the "already dispatched" check now runs against what the other request actually wrote. It deliberately still does <em>not</em> check stock on hand: production books nothing in by design, so finished stock is expected to go negative until somebody runs Add to Finished Stock. Blocking that would stop real lorries leaving.</p>
+    <div class="ev">two concurrent dispatches of one order → HTTP 200 &amp; 400
+<b>1 shipping movement per order line, 78 units for an ordered 78</b></div>
+  </article>
+</section>
+
+<section>
+  <h2>Serious — also reproduced, also fixed</h2>
+  <p class="sec-note">Real and measured, but each needed either a direct API call or an unusual sequence rather than an ordinary mis-click.</p>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">HR-01</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>A finalized payroll run can be reopened by a flag, or deleted outright</h3>
+    </div>
+    <p>Payroll. Finalizing is meant to seal a run — payslip edits are correctly refused once it is Finalized. But the re-run endpoint takes its options straight from the request body, so <code>force</code> regenerates the run and writes it back as a draft. Deletion has no status check at all.</p>
+    <div class="ev">POST /hr/payroll/run {period}          → PR-2026-07
+POST /hr/payroll/PR-2026-07/finalize   → status <b>Finalized</b>
+POST /hr/payroll/run {period, force:true} → status <b>Draft</b>
+DELETE /hr/payroll/PR-2026-07          → HTTP 200, run and payslips gone</div>
+    <p>This costs money rather than data: advance recovery counts instalments only from finalized runs, so a run that quietly returns to draft lets the same advance be recovered from a worker a second time.</p>
+    <p><b>The fix.</b> The <code>force</code> escape is gone — a finalized run cannot be re-run at all, and cannot be deleted. Reopening is now its own deliberate act, restricted to an administrator (office may run and finalize, but not unseal), and it records who reopened it, when, and why. Nobody is trapped: there is still a way back, it just cannot happen as a side effect of a flag in a request body.</p>
+    <div class="ev">POST /hr/payroll/run {period, force:true}  → <b>HTTP 409</b>, still Finalized
+DELETE /hr/payroll/PR-2026-03              → <b>HTTP 409</b>
+POST  …/reopen  as office                  → HTTP 403
+POST  …/reopen  as admin {reason}          → Draft, reopenedBy=admin</div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">LEDG-01</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>The stock ledger accepts negative receipts, impossible issues, and unknown warehouses</h3>
+    </div>
+    <p>Stock Ledger. Movement validation checks that the item and type exist and that the quantity parses as a number — nothing else. There is no stock-on-hand check anywhere in the write path, and the warehouse is never validated at all, so stock can be parked at an address no screen will ever show.</p>
+    <div class="ev">GRN   qty −5000                    → HTTP 201, an undocumented write-off
+ISSUE qty 9,000,000,000            → HTTP 201, stock now <b>−9,000,002,581</b>
+GRN   wh "WH-DOES-NOT-EXIST"       → HTTP 201, invisible to every warehouse view</div>
+    <p><b>The fix.</b> A movement's sign is its direction, so it now has to agree with its type: a receipt cannot be negative, an issue cannot be positive, and the warehouse has to exist. Adjustments and transfers are deliberately exempt — an adjustment goes either way by definition and a transfer is a signed pair. A stock-on-hand check was deliberately <em>not</em> added: negative finished stock is expected here until Add to Finished Stock is run.</p>
+    <div class="ev">GRN   qty −5000                    → <b>HTTP 400</b> "brings stock IN, cannot be negative"
+ISSUE qty +50                      → <b>HTTP 400</b> "takes stock OUT, must be negative"
+GRN   wh "WH-NOPE"                 → <b>HTTP 400</b> "Unknown warehouse"
+ADJ   qty −5                       → HTTP 201  (either direction, as intended)</div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">REF-01</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>Items can be deleted out from under the orders and ledger that reference them</h3>
+    </div>
+    <p>Stock Items → everything downstream. Suppliers and customers are properly protected — deletion is refused with a count of what still points at them. Items get no such guard, and the database carries only two foreign keys in the entire schema, so nothing catches it underneath.</p>
+    <div class="ev">DELETE /items/RM-COPPER-WIRE  → HTTP 200
+              still referenced by <b>5 purchase orders, 19 movements</b>
+DELETE /items/RM-AL-FOIL      → HTTP 200
+              still a component of <b>2 bills of materials</b></div>
+    <p>Downstream the frontend skips movements whose item has vanished, so the material's entire history and valuation disappeared from reports silently rather than erroring.</p>
+    <p><b>The fix.</b> Item deletion is now guarded exactly the way supplier and customer deletion already was — the pattern was in the same file, it had just never been applied here. The refusal counts what still points at the item across movements, purchase orders, sales orders, work orders and recipes, and suggests deactivating it instead. An item nothing references still deletes.</p>
+    <div class="ev">DELETE /items/RM-XMOD-1  → <b>HTTP 400</b>  "2 stock movement(s), 1 purchase order(s)
+                           still reference it. Deactivate the item instead"
+DELETE an unreferenced item → HTTP 200</div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">REF-02</span>
+      <span class="fixed-tag">✓ Fixed</span>
+      <h3>Orders can be raised against suppliers and customers that do not exist</h3>
+    </div>
+    <p>Procurement and Sales validate that an order has at least one line, but never that the party or the line items are real. A work order, by contrast, does check its product — so the validation exists in the codebase, just not on these two paths.</p>
+    <div class="ev">POST /purchase-orders  supplierId "SUP-GHOST"  → HTTP 201  PO-0023
+POST /sales-orders     customerId "CUS-GHOST"  → HTTP 201  SO-0067
+POST /purchase-orders  line qty −50            → HTTP 201, order value <b>−5000</b>
+POST /production/wo    itemId "FG-GHOST"       → HTTP 400  ✓ guarded</div>
+    <p><b>The fix.</b> Both order types now check that the party and every line's material actually exist, and that each line quantity is above zero — on creation and on edit. This is the check work orders already made, applied to the two paths that had been missed.</p>
+    <div class="ev">supplierId "SUP-GHOST"  → <b>HTTP 400</b>  "Unknown supplier SUP-GHOST"
+customerId "CUS-GHOST"  → <b>HTTP 400</b>  "Unknown customer CUS-GHOST"
+line itemId "GHOST-MAT" → <b>HTTP 400</b>  "Unknown item GHOST-MAT"
+line qty −50            → <b>HTTP 400</b>  "must be greater than zero"</div>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">PROD-01</span>
+      <span class="chip c-idle">Withdrawn — by design</span>
+      <h3>Finishing a work order books nothing into finished stock</h3>
+    </div>
+    <p>The observation was right and the conclusion was wrong. Driving a work order through its stages issues raw material and never produces output — outside the seed there is exactly one place in the backend that writes a production movement, and it is the separate <em>Add to Finished Stock</em> action.</p>
+    <p><b>But that is the design, not a defect.</b> It was ruled on 30 July 2026, in three escalating instructions — "after coating also and after slitting also… and after packing also" — that <em>no production stage books anything into stock</em>. Goods travel stage to stage and out of the door; a finished job is held ready for a sales order rather than being received into a store, and output reporting was deliberately moved off stock movements onto completed work orders. Nothing here was changed.</p>
+    <div class="ev">grep 'type: "PROD"' backend/src/  →  1 hit  productionService.js:909
+grep 'type: "ISSUE"' backend/src/ →  5 hits across the stage engine
+<b>the shape the design calls for — stages consume, they do not receive</b></div>
+    <p>One real consequence does remain open, and it is the one the original ruling already flagged: dispatch still deducts finished stock, so shipping without an explicit Add to Finished Stock drives that item negative. The natural fix — dispatch consuming the reservation instead — is a decision that was deliberately left open, so the dispatch fix above pointedly does not touch it.</p>
+  </article>
+
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">GRN-01</span>
+      <span class="chip c-idle">Noted, not changed</span>
+      <h3>Goods receipt numbers contain slashes, so their own routes only resolve when encoded</h3>
+    </div>
+    <p>A receipt is numbered <span class="mono">GRN/26-27/0009</span> in the fiscal-year series. Any REST route keyed by that id breaks unless every caller encodes it, which makes the failure depend on which screen you came from rather than on the data.</p>
+    <div class="ev">POST /grns/GRN/26-27/0009/tests        → <b>HTTP 404</b>
+POST /grns/GRN%2F26-27%2F0009/tests    → HTTP 201</div>
+    <p><b>Left as it is, deliberately.</b> Every screen that calls this route already encodes the id, so nothing is broken in the running app — and the alternative, renumbering goods receipts, would change a statutory document series that the fiscal-year format exists to satisfy. Recorded here so the next person to add a route keyed by a receipt number knows to encode it.</p>
+  </article>
+</section>
+
+<section>
+  <h2>What held</h2>
+  <p class="sec-note">Devil's advocate cuts both ways. These were attacked directly and refused correctly — worth recording so the fixes above don't disturb them.</p>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Probe</th><th>Result</th><th>Response</th></tr></thead>
+      <tbody>
+        <tr><td>Delete a supplier with 7 open purchase orders</td><td class="who">refused</td><td>400, names the count</td></tr>
+        <tr><td>Delete a customer with 8 sales orders</td><td class="who">refused</td><td>400, names the count</td></tr>
+        <tr><td>Lab account writing POs, items, work orders, settings, movements</td><td class="who">refused</td><td>403 on all six</td></tr>
+        <tr><td>Supervisor booking a stock receipt directly</td><td class="who">refused</td><td>403</td></tr>
+        <tr><td>Work order for a product that doesn't exist</td><td class="who">refused</td><td>400</td></tr>
+        <tr><td>Sequential replay of a completed receipt</td><td class="who">refused</td><td>400, no quantity pending</td></tr>
+        <tr><td>Sequential second dispatch of one order</td><td class="who">refused</td><td>400</td></tr>
+        <tr><td>15 concurrent stock movements</td><td class="who">clean</td><td>exactly 15 rows, +150, no lost update</td></tr>
+        <tr><td>Unauthenticated read of application state</td><td class="who">refused</td><td>401</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="sec-note" style="margin-top:24px">One over-receipt behaviour sits in between: claiming 99,999 against a 100-unit order is silently <em>clamped</em> to 100 rather than rejected. Nothing is corrupted, but the operator is never told the figure they typed was ignored.</p>
+</section>
+
+<section>
+  <h2>Claimed but not reproduced</h2>
+  <p class="sec-note">Recorded because a report that only lists hits isn't an audit.</p>
+  <article class="rec">
+    <div class="rec-h">
+      <span class="code">LAB-01</span>
+      <span class="chip c-ok">Not reproduced</span>
+      <h3>The lab incharge could not clear its own failed lot</h3>
+    </div>
+    <p>Static analysis flagged this as the most severe access-control hole: the parameter list that drives grading is writable by any role, and writing it re-grades every stored test for that material — so the measured party appeared able to delete the parameter they failed and escape the admin's quarantine ruling.</p>
+    <p>The permission gap is real: a lab account does write the list, and the re-grade does run. But the verdict did not move and the lot never left the queue.</p>
+    <div class="ev">lab files solids=5 / viscosity=9999 / density=0.01 → result <b>Fail</b>, queued for ruling
+lab PUT qc params ["density"]   → HTTP 200, regraded, result still <b>Fail</b>, still queued
+lab PUT qc params []            → HTTP 200, result still <b>Fail</b>, still queued</div>
+    <p>Still worth closing the write, but it is not the escalation it looked like on paper.</p>
+  </article>
+</section>
+
+<section>
+  <h2>Found in code, not exercised</h2>
+  <p class="sec-note">These came out of reading the diff rather than driving the server. I did not reproduce them, so treat them as leads with a file reference rather than as established defects.</p>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Area</th><th>Lead</th></tr></thead>
+      <tbody>
+        <tr><td class="who">Receiving</td><td>A receipt is three unrelated commits — movements, then the receipt document, then the order status. A failure between any two leaves stock in with no receipt to test against, or a numbered receipt with the order still open.</td></tr>
+        <tr><td class="who">Receipt numbers</td><td>The next number is computed in JavaScript outside any transaction, and the write is an upsert — so two concurrent receipts can mint the same number and one silently overwrites the other's statutory document.</td></tr>
+        <tr><td class="who">Quarantine</td><td>Deleting a purchase order reverses its receipt movements but not the quarantine transfer, which is filed under the receipt's reference. Both warehouses end up wrong at once.</td></tr>
+        <tr><td class="who">Work orders</td><td>Rename and delete update movements and the order row, but miss lab reports and any movement filed under the excess-material, ad-hoc or finished-production prefixes.</td></tr>
+        <tr><td class="who">Recipes</td><td>A work order stores quantities, not the recipe. Editing a BOM or an item's GSM retroactively changes what historical orders are held to have consumed.</td></tr>
+        <tr><td class="who">Roles</td><td>The <span class="mono">adminOnly</span> nav flag is cosmetic against the office role, which already receives the full dataset — payslips included — and may write settings, org details and full state.</td></tr>
+        <tr><td class="who">QC specs</td><td>Office reads a redacted state but may write state back wholesale, which would persist the redaction and wipe every QC limit in the system. No current screen does this.</td></tr>
+        <tr><td class="who">Lab</td><td>The production lab routes return the computed grade to the person who filed the reading; the lab routes deliberately strip it.</td></tr>
+        <tr><td class="who">Leave</td><td>Approving leave writes muster rows that reversing it never removes, and an unpaid leave type falls back to paid once its record is gone.</td></tr>
+        <tr><td class="who">Workers</td><td>Deleting a worker cascades nowhere — attendance, leave and payslips are orphaned, and an orphaned payslip loses the clamp that bounds advances.</td></tr>
+        <tr><td class="who">Attendance</td><td>Payslips are snapshots. Editing attendance afterwards never updates them, and re-running the period overwrites manual payslip edits.</td></tr>
+        <tr><td class="who">Punches</td><td>Punch ingestion authenticates on a device key passed in the query string, with no session.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>One cause under most of it</h2>
+  <p class="sec-note">The individual defects are symptoms of the same three structural gaps, which is also why they are cheaper to fix together than one at a time.</p>
+  <div class="prose">
+    <p>The migration to MySQL made every layer below the routes asynchronous, but the <em>service</em> layer never gained transactions — it has none at all. The repository has seven, so the machinery exists and is correctly built; it simply isn't reached from the flows that need it. Under SQLite this was largely hidden, because a single-writer file serialised what a connection pool now genuinely runs at the same time.</p>
+    <p>On top of that, every invariant in the system is checked <em>outside</em> the write it protects: read the order, decide, then write. And the schema declares only two foreign keys in total, so when a service-layer guard is missing there is nothing underneath to catch it.</p>
+  </div>
+
+  <div class="prose" style="margin-top:22px">
+    <p>The fixes above address that directly. Receiving and dispatch are each one transaction now, with the order locked and re-read inside it, so the invariant is finally checked in the same breath as the write it protects. That single change is what closed both races and most of the partial-write exposure at once.</p>
+  </div>
+
+  <h2 style="margin-top:44px">Still open</h2>
+  <p class="sec-note">Honestly scoped: what was deliberately not done, and why.</p>
+  <ol class="fix" style="margin-top:26px">
+    <li><b>Dispatch versus finished stock.</b> Shipping still drives finished goods negative when Add to Finished Stock has not been run. That is the consequence of the no-stock-production rule, and the fix — dispatch consuming the reservation instead — is a decision that was left open on purpose. It needs a call, not a patch.</li>
+    <li><b>Foreign keys.</b> The schema still declares only two. Adding them for the references that are plain strings today would mean the next missing service-layer guard fails loudly instead of silently. It is a migration against live data, so it wants its own change and its own backup.</li>
+    <li><b>The twelve code-only leads.</b> None were reproduced, so none were fixed. The quarantine transfer surviving a purchase-order delete, and rename/delete of a work order missing its lab reports, are the two most worth chasing next.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>Every probe ran against a throwaway database on a separate port, seeded from scratch and dropped afterwards. Production data was verified unchanged at 293 movements, 30 purchase orders and 378 items — the same counts as the migration. The fixes were then re-tested the same way, and the project's own suite runs 524 passing with one known environmental failure unrelated to any of this.</p>
+</footer>
+
+</div>

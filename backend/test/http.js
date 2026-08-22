@@ -131,7 +131,7 @@ async function run() {
       const poR = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
         lines: [{ itemId: roll.id, qty: 100, rate: 5, recd: 0, uom: "KG" }] })).d;
       const rec = await call("POST", "/purchase-orders/" + poR.id + "/receive", A,
-        { wh: "WH-RM", lines: [{ i: 0, qty: 100 }] });
+        { wh: "WH-PNY", lines: [{ i: 0, qty: 100 }] });
       ok("a receipt in KG against a MTR-stocked roll is accepted", rec.status === 200,
         rec.status + " " + JSON.stringify(rec.d).slice(0, 80));
       const st = (await call("GET", "/state", A)).d;
@@ -152,7 +152,7 @@ async function run() {
       const poN = (await call("POST", "/purchase-orders", A, { supplierId: sup,
         lines: [{ itemId: opaque.id, qty: 10, rate: 1, recd: 0, uom: "KG" }] })).d;
       const recN = await call("POST", "/purchase-orders/" + poN.id + "/receive", A,
-        { wh: "WH-RM", lines: [{ i: 0, qty: 10 }] });
+        { wh: "WH-PNY", lines: [{ i: 0, qty: 10 }] });
       ok("an unconvertible unit is refused rather than posted wrong", recN.status === 400,
         recN.status + " " + JSON.stringify(recN.d).slice(0, 90));
       await call("DELETE", "/purchase-orders/" + poN.id, A);
@@ -180,7 +180,7 @@ async function run() {
     const poD = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
       lines: [{ itemId: rm, qty: 30, rate: 20, recd: 0 }, { itemId: rm, qty: 70, rate: 22, recd: 0 }] })).d;
     const recD = await call("POST", "/purchase-orders/" + poD.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 30 }, { i: 1, qty: 70 }] });
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 30 }, { i: 1, qty: 70 }] });
     ok("a PO naming one item on two lines receives both at once", recD.status === 200 && recD.d.posted === 2,
       recD.status + " " + JSON.stringify(recD.d).slice(0, 90));
     const stD = (await call("GET", "/state", A)).d;
@@ -204,7 +204,7 @@ async function run() {
     const poG = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
       lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
     const rec1 = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 60, rejected: 10 }],
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 60, rejected: 10 }],
         invNo: "SM/1287/26-27", invDate: "2026-08-05", vehicle: "KA-51-AE-4471", remarks: "two spools damp" });
     const g1 = rec1.d.grn;
     ok("a receipt returns a GRN in the fiscal-year series", rec1.status === 200
@@ -225,7 +225,7 @@ async function run() {
 
     // a second receipt on the same series takes the NEXT number
     const rec2 = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 20 }] });
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 20 }] });
     const g2 = rec2.d.grn;
     const seq = (id) => +String(id || "").split("/").pop();
     ok("a second receipt increments the series", g2 && seq(g2.id) === seq(g1.id) + 1,
@@ -234,7 +234,7 @@ async function run() {
     // a delivery turned away in full is still a receipt EVENT: the note is
     // issued (the debit note quotes it) but nothing lands in stock
     const rec3 = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 30, rejected: 30 }], remarks: "whole lot damp" });
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 30, rejected: 30 }], remarks: "whole lot damp" });
     ok("a fully-rejected delivery still gets its GRN", rec3.status === 200 && rec3.d.grn
       && rec3.d.grn.lines[0].accepted === 0 && rec3.d.posted === 0, JSON.stringify(rec3.d).slice(0, 110));
     const st3 = (await call("GET", "/state", A)).d;
@@ -244,7 +244,7 @@ async function run() {
 
     // rejected can never exceed received, and a supervisor cannot receive at all
     const recX = await call("POST", "/purchase-orders/" + poG.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 10, rejected: 99 }] });
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 10, rejected: 99 }] });
     ok("rejected is clamped to the received quantity", recX.status === 200
       && recX.d.grn.lines[0].rejected === 10 && recX.d.grn.lines[0].accepted === 0,
       JSON.stringify(recX.d.grn && recX.d.grn.lines));
@@ -258,6 +258,130 @@ async function run() {
     const gAfter = (st4.grns || []).find((g) => g.id === g1.id);
     ok("its GRNs survive, marked Cancelled", !!gAfter && gAfter.status === "Cancelled",
       JSON.stringify(gAfter || {}).slice(0, 90));
+  }
+
+  /* WHAT ARRIVED goes into stock, not what was ordered. The receipt used to
+     clamp the entered quantity down to the outstanding balance, so an
+     over-delivery was booked as the ORDERED figure — silently, with a goods
+     receipt that read as though that were what came off the truck. The clamp
+     was also what made a replayed receipt harmless, so the two halves are
+     tested together: the excess must go in when it is declared, and must be
+     refused when it is not. */
+  /* A finished job is a batch of real goods, and its number prints on the
+     invoice. Selling it twice would put the same batch on two customers'
+     invoices. The QUANTITY, though, is the customer's business: an order for
+     far more than the run produced is ordinary make-to-order trade, and the
+     batch only says which goods the order is served from. */
+  section("A finished job belongs to one order — but the quantity is free");
+  {
+    const woB = (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d;
+    ok("a work order to sell from exists", !!(woB && woB.id), JSON.stringify(woB).slice(0, 80));
+    const so1 = await call("POST", "/sales-orders", A, { customerId: cust,
+      lines: [{ itemId: fg, qty: 6, rate: 100, batch: woB.id }] });
+    ok("the first order can claim it", so1.status === 200 || so1.status === 201,
+      so1.status + " " + JSON.stringify(so1.d).slice(0, 120));
+
+    const so2 = await call("POST", "/sales-orders", A, { customerId: cust,
+      lines: [{ itemId: fg, qty: 1, rate: 100, batch: woB.id }] });
+    ok("a second order cannot have the same job, however small", so2.status === 409,
+      so2.status + " " + JSON.stringify(so2.d).slice(0, 140));
+    ok("  ...and names the order already holding it", /is already on SO-/.test(JSON.stringify(so2.d)),
+      JSON.stringify(so2.d).slice(0, 160));
+
+    /* THE QUANTITY IS NOT A CEILING — the balance is made to order */
+    const woC = (await call("POST", "/production/wo", A, { itemId: fg, qty: 10 })).d;
+    const big = await call("POST", "/sales-orders", A, { customerId: cust,
+      lines: [{ itemId: fg, qty: 500, rate: 100, batch: woC.id }] });
+    ok("an order may ask for far more than the batch produced",
+      big.status === 200 || big.status === 201, big.status + " " + JSON.stringify(big.d).slice(0, 140));
+
+    /* an order editing ITS OWN line must not be read as competing with itself */
+    const edit = await call("PATCH", "/sales-orders/" + so1.d.id, A,
+      { lines: [{ itemId: fg, qty: 5, rate: 100, batch: woB.id }] });
+    ok("an order may be edited without tripping its own claim", edit.status === 200,
+      edit.status + " " + JSON.stringify(edit.d).slice(0, 140));
+    const up = await call("PATCH", "/sales-orders/" + so1.d.id, A,
+      { lines: [{ itemId: fg, qty: 900, rate: 100, batch: woB.id }] });
+    ok("  ...including well past what the run made", up.status === 200,
+      up.status + " " + JSON.stringify(up.d).slice(0, 140));
+    const steal = await call("PATCH", "/sales-orders/" + so1.d.id, A,
+      { lines: [{ itemId: fg, qty: 5, rate: 100, batch: woC.id }] });
+    ok("but never onto a job another order holds", steal.status === 409,
+      steal.status + " " + JSON.stringify(steal.d).slice(0, 140));
+
+    ok("an unknown work order on a line is refused", (await call("POST", "/sales-orders", A,
+      { customerId: cust, lines: [{ itemId: fg, qty: 1, rate: 100, batch: "WO-NOPE" }] })).status === 400);
+
+    /* a cancelled order releases what it held */
+    await call("PATCH", "/sales-orders/" + so1.d.id, A, { status: "Cancelled" });
+    const so5 = await call("POST", "/sales-orders", A, { customerId: cust,
+      lines: [{ itemId: fg, qty: 4, rate: 100, batch: woB.id }] });
+    ok("cancelling an order puts its batch back on the shelf",
+      so5.status === 200 || so5.status === 201, so5.status + " " + JSON.stringify(so5.d).slice(0, 120));
+
+    for (const s of [so1, big, so5]) if (s.d && s.d.id) await call("DELETE", "/sales-orders/" + s.d.id, A);
+    for (const w of [woB, woC]) if (w && w.id) await call("DELETE", "/production/wo/" + w.id, A);
+  }
+
+  section("Over-receipt — the delivered quantity is what lands in stock");
+  {
+    const stockOf = (s, id) => +(s.movements || []).filter((m) => m.itemId === id)
+      .reduce((a, m) => a + (+m.qty || 0), 0).toFixed(3);
+    const poO = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
+    const before = stockOf((await call("GET", "/state", A)).d, rm);
+    /* a deleted PO frees its id, and the GRNs it left behind keep pointing at
+       it — so count what is there NOW rather than expecting none */
+    const grnsFor = (s) => (s.grns || []).filter((g) => g.poId === poO.id).length;
+    const grns0 = grnsFor((await call("GET", "/state", A)).d);
+
+    const blind = await call("POST", "/purchase-orders/" + poO.id + "/receive", A,
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 144 }] });
+    ok("receiving more than was ordered is refused without confirmation", blind.status === 400,
+      blind.status + " " + JSON.stringify(blind.d).slice(0, 120));
+    ok("the refusal names what is still outstanding", /still outstanding/.test(JSON.stringify(blind.d)),
+      JSON.stringify(blind.d).slice(0, 160));
+    const stB = (await call("GET", "/state", A)).d;
+    ok("a refused over-receipt books nothing at all", stockOf(stB, rm) === before,
+      stockOf(stB, rm) + " vs " + before);
+    ok("and issues no GRN", grnsFor(stB) === grns0, grnsFor(stB) + " vs " + grns0);
+
+    const over = await call("POST", "/purchase-orders/" + poO.id + "/receive", A,
+      { wh: "WH-PNY", allowOver: true, lines: [{ i: 0, qty: 144 }] });
+    const stO = (await call("GET", "/state", A)).d;
+    ok("a confirmed over-receipt is accepted", over.status === 200, JSON.stringify(over.d).slice(0, 120));
+    ok("stock rises by the RECEIVED quantity, not the ordered one",
+      stockOf(stO, rm) - before === 144, "delta " + (stockOf(stO, rm) - before) + ", ordered 100");
+    ok("the GRN line records the delivered qty and the excess",
+      over.d.grn.lines[0].qty === 144 && over.d.grn.lines[0].over === 44,
+      JSON.stringify(over.d.grn.lines[0]));
+    ok("the ledger note spells the over-delivery out",
+      /OVER the 100 ordered/.test(String((stO.movements || []).find((m) => m.ref === poO.id).note)),
+      String(((stO.movements || []).find((m) => m.ref === poO.id) || {}).note).slice(0, 120));
+    const poAfter = stO.purchaseorders.find((p) => p.id === poO.id);
+    ok("the order closes as Received with recd past the ordered qty",
+      poAfter.status === "Received" && poAfter.lines[0].recd === 144,
+      poAfter.status + " recd=" + poAfter.lines[0].recd);
+
+    /* the replay guard the old clamp used to provide, kept */
+    const replay = await call("POST", "/purchase-orders/" + poO.id + "/receive", A,
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 144 }] });
+    ok("replaying the same receipt is refused", replay.status === 400, JSON.stringify(replay.d).slice(0, 120));
+    ok("the replay refusal says the line is already fully received",
+      /already fully received/.test(JSON.stringify(replay.d)), JSON.stringify(replay.d).slice(0, 160));
+    ok("the replay changes no stock", stockOf((await call("GET", "/state", A)).d, rm) - before === 144);
+
+    /* a receipt WITHIN the order still needs no flag */
+    const poU = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01",
+      lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
+    const b2 = stockOf((await call("GET", "/state", A)).d, rm);
+    const under = await call("POST", "/purchase-orders/" + poU.id + "/receive", A,
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 30 }] });
+    ok("a short delivery posts exactly what was entered, no flag needed",
+      under.status === 200 && stockOf((await call("GET", "/state", A)).d, rm) - b2 === 30,
+      under.status + " delta " + (stockOf((await call("GET", "/state", A)).d, rm) - b2));
+    await call("DELETE", "/purchase-orders/" + poO.id, A);
+    await call("DELETE", "/purchase-orders/" + poU.id, A);
   }
 
   ok("delete PO 200", (await call("DELETE", "/purchase-orders/" + po.id, A)).status === 200);
@@ -649,7 +773,7 @@ async function run() {
     ok("an order still in transit owes no test", !early.some((p) => p.poId === poQ.id));
 
     const recQ = await call("POST", "/purchase-orders/" + poQ.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 100 }], invNo: "QC/INV/9" });
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 100 }], invNo: "QC/INV/9" });
     const gq = recQ.d.grn;
     ok("the goods are received and a GRN issued", recQ.status === 200 && !!gq, JSON.stringify(recQ.d).slice(0, 100));
 
@@ -785,7 +909,7 @@ async function run() {
     const poF = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-22",
       lines: [{ itemId: rm, qty: 40, rate: 30 }] })).d;
     const gF = (await call("POST", "/purchase-orders/" + poF.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 40 }] })).d.grn;
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 40 }] })).d.grn;
     const failed = await call("POST", "/grns/" + encodeURIComponent(gF.id) + "/tests", LB,
       { itemId: rm, values: { thickness: 0.02, visual: "very thin" } });
     ok("a failing reading raises a decision rather than making one",
@@ -804,7 +928,7 @@ async function run() {
 
     // stock is STILL in the receiving store while the ruling is outstanding
     const preRule = (await call("GET", "/state", A)).d;
-    const inStore = (preRule.movements || []).filter((m) => m.itemId === rm && m.wh === "WH-RM")
+    const inStore = (preRule.movements || []).filter((m) => m.itemId === rm && m.wh === "WH-PNY")
       .reduce((s, m) => s + (+m.qty || 0), 0);
     ok("the lot stays in the receiving store until the admin decides", inStore > 0, "on hand " + inStore);
 
@@ -814,7 +938,7 @@ async function run() {
     ok("admin approving the rejection quarantines the lot", ruled.status === 200
       && ruled.d.test.decision === "quarantined", JSON.stringify(ruled.d.test && ruled.d.test.decision));
     ok("…by TRANSFERRING it, not writing it off", ruled.d.moved
-      && Math.abs(ruled.d.moved.qty - 40) < 0.001 && ruled.d.moved.from === "WH-RM",
+      && Math.abs(ruled.d.moved.qty - 40) < 0.001 && ruled.d.moved.from === "WH-PNY",
       JSON.stringify(ruled.d.moved));
     const post = (await call("GET", "/state", A)).d;
     const holdWh = (post.warehouses || []).find((w) => /quarantine/i.test(String(w.type || "") + String(w.name || "")));
@@ -858,7 +982,7 @@ async function run() {
     const poR = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-23",
       lines: [{ itemId: rm, qty: 25, rate: 30 }] })).d;
     const gR = (await call("POST", "/purchase-orders/" + poR.id + "/receive", A,
-      { wh: "WH-RM", lines: [{ i: 0, qty: 25 }] })).d.grn;
+      { wh: "WH-PNY", lines: [{ i: 0, qty: 25 }] })).d.grn;
     await call("POST", "/grns/" + encodeURIComponent(gR.id) + "/tests", LB,
       { itemId: rm, values: { thickness: 0.02, visual: "thin" } });
     const q2 = ((await call("GET", "/grn-tests/decisions", A)).d.pending || []).find((x) => x.grnId === gR.id);
@@ -1000,6 +1124,24 @@ async function run() {
     const half = await call("POST", "/production/wo/" + woLid + "/lab", C, { values: { thickness: 0.25 } });
     ok("a half-filled sheet is refused", half.status === 400 && /Tensile/.test(half.d.error || ""),
       JSON.stringify(half.d).slice(0, 120));
+
+    /* MEASURED IS NOT THE SAME AS PASSED.
+       This gate used to return ok the moment every box carried a value, and
+       never looked at the grade it had just computed — so a batch whose
+       certificate read Fail coated, slit, packed and shipped exactly like a
+       good one. Reproduced against a running server before it was fixed:
+       certificate "Fail" on every parameter, stage completed with HTTP 200. */
+    const bad = await call("POST", "/production/wo/" + woLid + "/lab", C,
+      { values: { thickness: 0.9, tensile: 5 } });
+    ok("an out-of-spec reading is still recorded", bad.status === 201, String(bad.status));
+    ok("…and graded Fail", bad.d.report.prodResult === "Fail", String(bad.d.report.prodResult));
+    const failClose = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "complete" });
+    ok("a FAILED batch cannot close coating (409)", failClose.status === 409, String(failClose.status));
+    ok("…and is told which parameters failed",
+      /FAILED its test/.test(failClose.d.error || "") && /Thickness/.test(failClose.d.error || ""),
+      JSON.stringify(failClose.d).slice(0, 170));
+    ok("the failed stage really did not move",
+      (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].status === "In Production");
 
     const rec = await call("POST", "/production/wo/" + woLid + "/lab", C, { values: { thickness: 0.25, tensile: 44 } });
     ok("a complete reading is accepted", rec.status === 201, JSON.stringify(rec.d).slice(0, 120));
@@ -1179,7 +1321,7 @@ async function run() {
     await call("POST", "/items", A, fgS);
     await call("PUT", "/boms/" + fgS.id, A, { yield: 100, lines: [[rmS.id, 1]] });
     await call("POST", "/movements", A, { id: "MV-NOGATE", itemId: rmS.id, type: "GRN",
-      qty: 500, rate: 20, wh: "WH-RM", date: "2026-01-01", manual: true });
+      qty: 500, rate: 20, wh: "WH-PNY", date: "2026-01-01", manual: true });
     await call("POST", "/lab/products", A, { id: "LP-NOGATE", name: "No gate tape", code: "CH-NOGATE",
       itemId: fgS.id, spec: { thickness: { min: 0.1, max: 0.2 } } });
     const woS = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 20 });
@@ -1322,7 +1464,7 @@ async function run() {
     await call("PUT", "/boms/" + fgP.id, A, { yield: 100, lines: [[rm.id, 1]] });
     // the store holds 50 kg; the order will be for 100 kg
     await call("POST", "/movements", A, { id: "MV-PART-1", itemId: rm.id, type: "GRN",
-      qty: 50, rate: 10, wh: "WH-RM", date: "2026-01-01", manual: true });
+      qty: 50, rate: 10, wh: "WH-PNY", date: "2026-01-01", manual: true });
 
     // this product runs on a slitting line, so that floor's supervisor sees it
     const S1x = (await login("slitting1", "slitting1@123")).token;
@@ -1374,7 +1516,7 @@ async function run() {
        the 50 outstanding — and leave the rest pending, rather than being
        refused until the whole balance turns up. */
     await call("POST", "/movements", A, { id: "MV-PART-1B", itemId: rm.id, type: "GRN",
-      qty: 20, rate: 10, wh: "WH-RM", date: "2026-01-20", manual: true });
+      qty: 20, rate: 10, wh: "WH-PNY", date: "2026-01-20", manual: true });
     const half = await call("POST", "/production/wo/" + woId + "/resume", A, {});
     ok("a part delivery resumes what it can cover", half.status === 200 && Math.abs(half.d.runQty - 20) < 0.01,
       half.status + " run=" + (half.d || {}).runQty);
@@ -1387,7 +1529,7 @@ async function run() {
 
     // material arrives — but it is NOT reserved until somebody resumes
     await call("POST", "/movements", A, { id: "MV-PART-2", itemId: rm.id, type: "GRN",
-      qty: 30, rate: 10, wh: "WH-RM", date: "2026-02-01", manual: true });
+      qty: 30, rate: 10, wh: "WH-PNY", date: "2026-02-01", manual: true });
     const freeStock = await call("POST", "/production/wo/preview", A, { itemId: fgP.id, qty: 30 });
     ok("refilled stock stays free for other orders until the pending one is resumed",
       freeStock.d.pendingQty === 0 && Math.abs(freeStock.d.canMake - 30) < 0.01,
@@ -1416,7 +1558,7 @@ async function run() {
        response to a shortage: release part now, ship it, release the next. */
     {
       await call("POST", "/movements", A, { id: "MV-BATCH-1", itemId: rm.id, type: "GRN",
-        qty: 100, rate: 10, wh: "WH-RM", date: "2026-05-01", manual: true });
+        qty: 100, rate: 10, wh: "WH-PNY", date: "2026-05-01", manual: true });
       const b = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 100, releaseQty: 30 });
       ok("an order can be raised with only part released", b.status === 201, b.status + " " + JSON.stringify(b.d).slice(0, 70));
       ok("30 goes to the floor", Math.abs(b.d.runQty - 30) < 0.01, String(b.d.runQty));
@@ -1443,7 +1585,7 @@ async function run() {
         .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
       if (onShelf > 0.001) {
         await call("POST", "/movements", A, { id: "MV-BATCH-Z", itemId: rm.id, type: "ADJ",
-          qty: -onShelf, wh: "WH-RM", date: "2026-05-02", manual: true });
+          qty: -onShelf, wh: "WH-PNY", date: "2026-05-02", manual: true });
       }
       const after = ((await call("GET", "/state", A)).d.movements || [])
         .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
@@ -1455,7 +1597,7 @@ async function run() {
     {
       // 40 kg of material against a 60 kg order, so 40 is made and 20 pends
       await call("POST", "/movements", A, { id: "MV-PART-3", itemId: rm.id, type: "GRN",
-        qty: 40, rate: 10, wh: "WH-RM", date: "2026-03-01", manual: true });
+        qty: 40, rate: 10, wh: "WH-PNY", date: "2026-03-01", manual: true });
       const p = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 60, allowShortage: true });
       const pid = p.d.id;
       const made = +p.d.runQty || 0;
@@ -1480,7 +1622,7 @@ async function run() {
       /* THE CYCLE: material arrives -> the balance goes back on the floor ->
          it is made -> that portion ships too -> and the order finally closes. */
       await call("POST", "/movements", A, { id: "MV-PART-4", itemId: rm.id, type: "GRN",
-        qty: 20, rate: 10, wh: "WH-RM", date: "2026-04-01", manual: true });
+        qty: 20, rate: 10, wh: "WH-PNY", date: "2026-04-01", manual: true });
       const again = await call("POST", "/production/wo/" + pid + "/resume", A, {});
       ok("resuming puts the balance back on the floor",
         again.status === 200 && Math.abs(again.d.runQty - 20) < 0.01 && again.d.pendingQty === 0,
@@ -2082,6 +2224,146 @@ async function run() {
   ok("BOM for unknown product → 400", (await call("PUT", "/boms/NOPE-ID", A, { lines: [[rm, 1]] })).status === 400);
   ok("movement for unknown item → 400", (await call("POST", "/movements", A, { itemId: "GHOST", type: "GRN", qty: 1 })).status === 400);
   ok("item with unknown category → 400", (await call("POST", "/items", A, { id: "RM-BADCAT", name: "x", cat: "NOPE" })).status === 400);
+
+  /* ============================================================
+     CROSS-MODULE INTEGRITY
+     Every case below was REPRODUCED against a running server before it was
+     fixed; the measured damage is quoted with each one. They are grouped
+     here rather than beside their features because what they guard is the
+     seam BETWEEN two modules, which is where all of them hid.
+     ============================================================ */
+  section("Cross-module integrity (regressions)");
+  {
+    const wh = "WH-PNY";
+    const mkItem = async (id) => (await call("POST", "/items", A,
+      { id, name: id, cat: "RM", uom: "KG", cost: 10, price: 20 })).d;
+    const supX = (await call("GET", "/state", A)).d.suppliers[0].id;
+    const cusX = (await call("GET", "/state", A)).d.customers[0].id;
+    const stockOf = async (id) => ((await call("GET", "/state", A)).d.movements || [])
+      .filter((m) => m.itemId === id).reduce((s, m) => s + (+m.qty || 0), 0);
+
+    /* ---- a received order is closed to edits ----
+       Before: rewriting the lines reset `recd` to 0 and reopened the order,
+       so the same delivery was booked twice — measured at 1600 units and two
+       goods receipts against a 1000-unit order. */
+    await mkItem("RM-XMOD-1");
+    const poE = (await call("POST", "/purchase-orders", A, { supplierId: supX, date: "2026-01-02",
+      eta: "2026-02-01", lines: [{ itemId: "RM-XMOD-1", qty: 1000, rate: 10 }] })).d;
+    await call("POST", "/purchase-orders/" + poE.id + "/receive", A, { lines: [{ i: 0, qty: 600 }], wh });
+    const edit = await call("PATCH", "/purchase-orders/" + poE.id, A,
+      { status: "Open", lines: [{ itemId: "RM-XMOD-1", qty: 1000, rate: 10, recd: 0 }] });
+    ok("editing a part-received PO is refused (409)", edit.status === 409, String(edit.status));
+    const poAfter = (await call("GET", "/state", A)).d.purchaseorders.find((p) => p.id === poE.id);
+    ok("…and the received quantity is untouched",
+      Math.abs((poAfter.lines[0].recd || 0) - 600) < 0.001, String(poAfter.lines[0].recd));
+    /* The second receipt asks for the full 1000 again when only 400 is still
+       owed. It used to be silently shrunk to 400 — the total came to 1000, so
+       nothing was double-booked, but the operator was never told the figure
+       had been rewritten. Now the request is refused outright and the delivery
+       has to be re-entered as what actually arrived, which protects the same
+       invariant without quietly changing anyone's numbers. */
+    const dupE = await call("POST", "/purchase-orders/" + poE.id + "/receive", A, { lines: [{ i: 0, qty: 1000 }], wh });
+    ok("re-receiving the whole order over a part-receipt is refused", dupE.status === 400, String(dupE.status));
+    ok("…so a 1000-unit order still cannot book more than it ordered",
+      Math.abs((await stockOf("RM-XMOD-1")) - 600) < 0.001, "booked " + (await stockOf("RM-XMOD-1")));
+    await call("POST", "/purchase-orders/" + poE.id + "/receive", A, { lines: [{ i: 0, qty: 400 }], wh });
+    const totalE = await stockOf("RM-XMOD-1");
+    ok("…and the outstanding 400 completes it at exactly 1000",
+      Math.abs(totalE - 1000) < 0.001, "booked " + totalE);
+
+    /* ---- one order, two receipts at the same instant ----
+       Before: both requests read the same outstanding quantity and both
+       posted it — 3 of 3 runs booked 200 units against a 100-unit order. */
+    await mkItem("RM-XMOD-2");
+    const poR = (await call("POST", "/purchase-orders", A, { supplierId: supX, date: "2026-01-02",
+      eta: "2026-02-01", lines: [{ itemId: "RM-XMOD-2", qty: 100, rate: 10 }] })).d;
+    const both = await Promise.all([
+      call("POST", "/purchase-orders/" + poR.id + "/receive", A, { lines: [{ i: 0, qty: 100 }], wh }),
+      call("POST", "/purchase-orders/" + poR.id + "/receive", A, { lines: [{ i: 0, qty: 100 }], wh }),
+    ]);
+    const gotR = await stockOf("RM-XMOD-2");
+    ok("two simultaneous receipts of one PO book it ONCE",
+      Math.abs(gotR - 100) < 0.001, "booked " + gotR + " statuses " + both.map((b) => b.status).join("/"));
+    ok("…the loser is told why, not silently ignored",
+      both.some((b) => b.status >= 400), both.map((b) => b.status).join("/"));
+
+    /* ---- one order, two dispatches at the same instant ----
+       Before: 6 shipping movements for a 3-line order. */
+    const fgD = (await call("GET", "/state", A)).d.items.find((i) => i.cat === "FG");
+    const soD = (await call("POST", "/sales-orders", A, { customerId: cusX, date: "2026-01-02",
+      promised: "2026-02-01", lines: [{ itemId: fgD.id, qty: 7, rate: 100 }] })).d;
+    const bothD = await Promise.all([
+      call("POST", "/sales-orders/" + soD.id + "/dispatch", A, {}),
+      call("POST", "/sales-orders/" + soD.id + "/dispatch", A, {}),
+    ]);
+    const saleRows = ((await call("GET", "/state", A)).d.movements || [])
+      .filter((m) => m.type === "SALE" && m.ref === soD.id).length;
+    ok("two simultaneous dispatches ship the order ONCE", saleRows === 1,
+      saleRows + " shipping movements, statuses " + bothD.map((b) => b.status).join("/"));
+
+    /* ---- the ledger's direction and address ----
+       Before: a GRN of −5000 was an undocumented write-off, an ISSUE of
+       +9,000,000,000 was accepted as a receipt, and stock could be parked in
+       a warehouse that did not exist, invisible to every warehouse view. */
+    await mkItem("RM-XMOD-3");
+    ok("a receipt cannot carry a negative quantity",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "GRN", qty: -50, wh })).status === 400);
+    ok("an issue cannot carry a positive one",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "ISSUE", qty: 50, wh })).status === 400);
+    ok("stock cannot be booked into a warehouse that does not exist",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "GRN", qty: 5, wh: "WH-NOPE" })).status === 400);
+    ok("an adjustment may still go either way",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "ADJ", qty: -5, wh })).status === 201);
+
+    /* ---- orders must name things that exist ---- */
+    ok("a PO against an unknown supplier is refused",
+      (await call("POST", "/purchase-orders", A, { supplierId: "SUP-GHOST", date: "2026-01-02",
+        lines: [{ itemId: "RM-XMOD-3", qty: 5, rate: 1 }] })).status === 400);
+    ok("an SO against an unknown customer is refused",
+      (await call("POST", "/sales-orders", A, { customerId: "CUS-GHOST", date: "2026-01-02",
+        lines: [{ itemId: fgD.id, qty: 5, rate: 1 }] })).status === 400);
+    ok("an order line naming an unknown material is refused",
+      (await call("POST", "/purchase-orders", A, { supplierId: supX, date: "2026-01-02",
+        lines: [{ itemId: "GHOST-MAT", qty: 5, rate: 1 }] })).status === 400);
+    ok("a negative order quantity is refused",
+      (await call("POST", "/purchase-orders", A, { supplierId: supX, date: "2026-01-02",
+        lines: [{ itemId: "RM-XMOD-3", qty: -50, rate: 1 }] })).status === 400);
+
+    /* ---- an item with history cannot be deleted ----
+       Before: it deleted cleanly, and the frontend then SKIPPED every
+       movement whose item had gone — the material's whole ledger and its
+       valuation vanished from every report with no error at all. */
+    const delUsed = await call("DELETE", "/items/RM-XMOD-1", A);
+    ok("an item with stock history cannot be deleted", delUsed.status === 400, String(delUsed.status));
+    ok("…and the refusal says what still references it",
+      /movement|purchase order|bill/.test(String(delUsed.d && delUsed.d.error)),
+      JSON.stringify(delUsed.d).slice(0, 120));
+    await mkItem("RM-XMOD-FREE");
+    ok("an item nothing references still deletes",
+      (await call("DELETE", "/items/RM-XMOD-FREE", A)).status === 200);
+
+    /* ---- finalized wages stay finalized ----
+       Before: {"force":true} in the request body silently returned a
+       finalized run to Draft, and DELETE removed it with no status check —
+       and advance recovery counts only finalized runs, so the same
+       instalment could be taken off a worker twice. */
+    const per = "2026-03";
+    await call("POST", "/hr/payroll/run", A, { period: per });
+    await call("POST", "/hr/payroll/PR-" + per + "/finalize", A, {});
+    const forced = await call("POST", "/hr/payroll/run", A, { period: per, force: true });
+    ok("a finalized pay run cannot be re-run by a flag in the body", forced.status === 409, String(forced.status));
+    const prNow = (await call("GET", "/state", A)).d.hrPayruns.find((p) => p.id === "PR-" + per);
+    ok("…and it is still Finalized afterwards", prNow && prNow.status === "Finalized",
+      String(prNow && prNow.status));
+    ok("a finalized pay run cannot be deleted",
+      (await call("DELETE", "/hr/payroll/PR-" + per, A)).status === 409);
+    ok("office cannot reopen it — that is an admin act",
+      (await call("POST", "/hr/payroll/PR-" + per + "/reopen", O, {})).status === 403);
+    const reop = await call("POST", "/hr/payroll/PR-" + per + "/reopen", A, { reason: "correction" });
+    ok("an admin can reopen it deliberately, and it is recorded",
+      reop.status === 200 && reop.d.status === "Draft" && reop.d.reopenedBy === "admin",
+      JSON.stringify({ s: reop.status, st: reop.d && reop.d.status, by: reop.d && reop.d.reopenedBy }));
+  }
 
   // restore the BOM change we made so a re-run against a persisted DB stays clean
   await call("DELETE", "/items/RM-HTTP", A);

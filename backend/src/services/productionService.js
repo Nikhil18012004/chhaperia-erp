@@ -414,7 +414,7 @@ async function assertMaterialsAvailable(data, item, qty, materialChoices) {
   if (S.productOwner(item.id, data)) return;        // made in-house → route, don't block
   const onHand = await onHandMap(data);                   // quarantined lots excluded
   const need = {};
-  BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}).forEach(([rid, per]) => {
+  BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}, itemsOf(data)).forEach(([rid, per]) => {
     need[rid] = (need[rid] || 0) + (per * qty) / (bom.yield || 1);
   });
   const short = Object.entries(need)
@@ -449,12 +449,22 @@ async function assertMaterialsAvailable(data, item, qty, materialChoices) {
    then (see resumeWorkOrder).
    ============================================================ */
 
+/* The material catalogue as a lookup, for BC.toLegacy — a recipe line's
+   quantity only means something once it is restated into the unit the
+   material is actually stocked in. Built per call; the arrays here are a few
+   hundred rows and every caller already holds the whole dataset. */
+function itemsOf(data) {
+  const by = {};
+  ((data || {}).items || []).forEach((i) => { if (i && i.id) by[i.id] = i; });
+  return by;
+}
+
 /* per-unit material requirement of a product, wastage (yield) included */
 function perUnitNeed(data, item, materialChoices) {
   const bom = (data.boms || {})[item.id];
   if (!bom) return null;
   const per = {};
-  BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}).forEach(([rid, p]) => {
+  BC.toLegacy(bom, BC.metaFromItem(item), materialChoices || {}, itemsOf(data)).forEach(([rid, p]) => {
     per[rid] = (per[rid] || 0) + p / (bom.yield || 1);
   });
   return per;
@@ -893,7 +903,7 @@ async function produceFinished(user, body) {
   });
   // 1) deduct each raw material from the store, scaled by the BOM + overall yield
   //    (toLegacy handles both legacy tuples and rich imported lines)
-  BC.toLegacy(bom, BC.metaFromItem(recipeOwner), picks).forEach(([rid, per]) => {
+  BC.toLegacy(bom, BC.metaFromItem(recipeOwner), picks, itemsOf(data)).forEach(([rid, per]) => {
     // half-made stock has not been slit or packed, so it never draws the
     // packaging materials — only what the coating stage puts into the web
     if (isWip && !["base", "paste"].includes(S.materialRole(rid))) return;
@@ -1197,7 +1207,7 @@ async function createAdhocProduction(user, body) {
   if (bom && (bom.lines || []).length) {
     const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
     const Y = bom.yield || 1;
-    BC.toLegacy(bom, BC.metaFromItem(item)).forEach(([rid, per]) => {
+    BC.toLegacy(bom, BC.metaFromItem(item), null, itemsById).forEach(([rid, per]) => {
       const need = r2(per * kg / Y);
       if (!need || !itemsById[rid]) return;
       moves.push({ id: mvId(), date: todayISO(), itemId: rid, wh: RAW_STORE, type: "ISSUE",

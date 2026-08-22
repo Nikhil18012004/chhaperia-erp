@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The ERP is served over plain HTTP on the factory LAN, so cleartext has to be
+  permitted for the app to work at all.
+
+  ⚠ This file cannot be the thing that limits it to the LAN. Android matches
+  <domain> entries as literal host names — it does NOT understand CIDR, so a
+  "192.168.0.0/16" entry here would match nothing at all and quietly do
+  nothing. And the server's address is typed in by whoever sets the tablet up,
+  so there is no fixed list to enumerate anyway.
+
+  The restriction is enforced in MainActivity.normalise() instead, where the
+  address can actually be parsed: a private or loopback address may be plain
+  HTTP, and anything on the public internet must be HTTPS. Change that method,
+  not this file, if the rule ever needs to move.
+-->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -91,6 +91,13 @@ router.post("/payroll/run", requireAuth, office, async (req, res, next) => {
 router.post("/payroll/:id/finalize", requireAuth, office, async (req, res, next) => {
   try { res.json(await hr.finalizePayrun(req.params.id)); } catch (e) { next(e); }
 });
+/* Unsealing a finalized pay run is an ADMIN act, not an office one: it puts
+   already-signed-off wages back into play. Office may run and finalize; only
+   an admin may reopen. */
+router.post("/payroll/:id/reopen", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.json(await hr.reopenPayrun(req.params.id, req.user, (req.body || {}).reason)); }
+  catch (e) { next(e); }
+});
 router.delete("/payroll/:id", requireAuth, office, async (req, res, next) => {
   try { res.json(await hr.deletePayrun(req.params.id)); } catch (e) { next(e); }
 });

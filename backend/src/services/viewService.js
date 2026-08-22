@@ -282,7 +282,7 @@ async function stateForSupervisor(area, username, opts) {
     const Y = bom.yield || 1;
     // Lines may be legacy [id, qty] tuples OR rich objects from the real
     // BOM import — toLegacy() flattens both to [id, perUnitOfFG].
-    return BC.toLegacy(bom, BC.metaFromItem(owner))
+    return BC.toLegacy(bom, BC.metaFromItem(owner), null, itemById)
       .filter(([rid]) => (roleFilter ? roleFilter(rid) : true))
       .map(([rid, per]) => ({
         id: rid, name: (itemById[rid] || {}).name || rid,
