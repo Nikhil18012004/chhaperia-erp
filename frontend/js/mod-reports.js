@@ -41,7 +41,9 @@
       MW.dataPreview({title, head, rows, name:xlsxName, sheet:title});
       return ()=>{}; // legacy direct-download hook — everything previews now
     }
-    function repStock(dl){ const rows=ENG.data.items.map(it=>{const s=ENG.stock(it.id);return [it.id,it.name,it.thicknessMM!=null?it.thicknessMM:"",U.catName(it.cat),it.uom,s.onHand.toFixed(2),s.avgCost.toFixed(2),s.value.toFixed(0)];});
+    /* the sheet carries what the screen shows — web in kilograms — so a
+       printed stock report and Stock Items cannot disagree */
+    function repStock(dl){ const rows=ENG.data.items.map(it=>{const s=ENG.stock(it.id);return [it.id,it.name,it.thicknessMM!=null?it.thicknessMM:"",U.catName(it.cat),ENG.dispUom(it),(+ENG.dispQty(it,s.onHand)).toFixed(2),(+ENG.dispRate(it,s.avgCost)).toFixed(2),s.value.toFixed(0)];});
       const c=show("Stock Valuation Report",["Code","Name","Thickness (mm)","Category","UoM","OnHand","AvgCost","Value"],rows,"stock_valuation.csv"); if(dl===true)c(); }
     function repReorder(dl){ const rows=ENG.data.items.map(it=>({it,st:ENG.status(it.id)})).filter(x=>x.st.suggest>0||["warn","danger"].includes(x.st.state))
         .map(x=>[x.it.id,x.it.name,x.st.onHand.toFixed(1),x.it.reorder,x.it.safety,x.st.suggest,x.st.label,ENG.sup(x.it.supplierId)]);

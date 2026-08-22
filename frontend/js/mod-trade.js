@@ -1306,9 +1306,9 @@
           {key:"item",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div>`
             +`<div class="cell-sub">${r.it.id}</div>`
             +`<div class="cell-sub">${ENG.sup(r.it.supplierId)}</div>`,noSort:true},
-          {key:"onHand",label:"On Hand",num:true,render:r=>ENG.num(r.st.onHand,1),noSort:true},
-          {key:"reorder",label:"Reorder Pt",num:true,render:r=>ENG.num(r.it.reorder),noSort:true},
-          {key:"suggest",label:"Suggested",num:true,render:r=>`<span class="strong" style="color:var(--accent)">${ENG.num(r.st.suggest)} ${r.it.uom}</span><span class="muted">${esc(ENG.kgSuffix(r.it,r.st.suggest))}</span>`,noSort:true},
+          {key:"onHand",label:"On Hand",num:true,render:r=>ENG.num(ENG.dispQty(r.it,r.st.onHand),1),noSort:true},
+          {key:"reorder",label:"Reorder Pt",num:true,render:r=>ENG.num(ENG.dispQty(r.it,r.it.reorder)),noSort:true},
+          {key:"suggest",label:"Suggested",num:true,render:r=>`<span class="strong" style="color:var(--accent)">${esc(ENG.qtyText(r.it,r.st.suggest,0))}</span><span class="muted">${esc(ENG.kgSuffix(r.it,r.st.suggest))}</span>`,noSort:true},
           {key:"abc",label:"Class",render:r=>badge(r.it.abc==="A"?"danger":r.it.abc==="B"?"warn":"ok","Class "+r.it.abc),noSort:true},
         ],{empty:"All stocked"})
       ]) : h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),h("div",{text:"Everything is above reorder level — no action needed."})]);
@@ -1426,10 +1426,109 @@
         ENG.data.items.forEach(i=>{ const u=String(i.uom||"").trim().toUpperCase(); if(u&&u!=="-") s.add(u); });
         return [...s].sort();
       })();
+      /* A purchase order buys RAW MATERIAL. Work-in-process is made here, not
+         bought, and the 102 WIP entries were burying the materials that can
+         actually be ordered. A line already carrying something else — an older
+         order raised before this rule — keeps its own item in the list, so
+         editing that order never silently swaps what was bought. */
+      const NEW_MAT="__new_material__";
+      function rmOptions(keepId){
+        const list=ENG.data.items.filter(i=>i.cat==="RM");
+        const kept=keepId&&!list.some(i=>i.id===keepId)?ENG.item(keepId):null;
+        return (kept?[kept]:[]).concat(list);
+      }
+      /* The code IS the name here — HARDNER LX 75 H is RM-HARDNER-LX-75-H — so
+         printing both put the same words on the row twice. The code alone is
+         what the store and the supplier's challan use. Searching still matches
+         the name, because the name is inside the code. */
+      function rmLabel(i){ return i.id; }
+      /* ---- creating a material without leaving the order ----
+         UI.modal() empties its host, so opening the Stock Items dialog from
+         here would take the half-typed order down with it. This panel opens
+         INSIDE the line instead: the few things a purchase order actually
+         needs to know about a material, and — for anything bought by the
+         metre — the width and GSM, without which the new material would be
+         the only one in the catalogue that could not be read in kilograms. */
+      function openNewMaterial(row, idx, typedName, onCancel){
+        const old=row.querySelector(".pl-newmat"); if(old) old.remove();
+        const inp=(id,ph,type)=>h("input",{class:"input",id:"nm_"+id+"_"+idx,placeholder:ph||"",type:type||"text"});
+        const nameEl=inp("name","e.g. HARDNER LX 90 K");
+        const codeEl=inp("code","RM-…");
+        const uomEl=h("select",{class:"select",id:"nm_uom_"+idx},
+          UOMS.map(u=>h("option",{value:u,text:u,selected:u==="KG"?"selected":null})));
+        const gsmEl=inp("gsm","g/m²","number"), widEl=inp("wid","mm across the web","number");
+        const hsnEl=inp("hsn","HSN"), gstEl=inp("gst","18","number"), costEl=inp("cost","0.00","number");
+        nameEl.value=typedName||"";
+
+        /* the code is the name in capitals behind RM-, the way every code in
+           this catalogue was built — until somebody types their own */
+        let auto=true;
+        const suggest=()=>{ if(!auto) return;
+          const stem=String(nameEl.value||"").toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+          codeEl.value=stem?"RM-"+stem:""; };
+        codeEl.addEventListener("input",()=>{auto=false;});
+        nameEl.addEventListener("input",suggest);
+        suggest();
+
+        /* width and GSM are asked for only when they mean something */
+        const geo=h("div",{class:"doc-line-fields",style:"margin-top:6px"},[
+          h("div",{class:"doc-line-f"},[h("label",{text:"GSM (g/m²)"}),gsmEl]),
+          h("div",{class:"doc-line-f"},[h("label",{text:"Roll width (mm)"}),widEl]),
+        ]);
+        const syncGeo=()=>{ const len=["MTR","MTRS","M","METER","SQM"].includes(String(uomEl.value).toUpperCase());
+          geo.hidden=!len; if(len&&!widEl.value) widEl.value="1000"; };
+        uomEl.addEventListener("change",syncGeo);
+
+        const msg=h("div",{class:"muted",style:"font-size:11px;margin-top:6px"});
+        const panel=h("div",{class:"pl-newmat",style:"margin:8px 0 4px;padding:10px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--bg-soft,rgba(127,127,127,.06))"},[
+          h("div",{style:"font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);margin-bottom:8px",text:"New raw material"}),
+          h("div",{class:"doc-line-fields"},[
+            h("div",{class:"doc-line-f"},[h("label",{text:"Material name *"}),nameEl]),
+            h("div",{class:"doc-line-f"},[h("label",{text:"Item code *"}),codeEl]),
+            h("div",{class:"doc-line-f"},[h("label",{text:"Bought / stocked in"}),uomEl]),
+            h("div",{class:"doc-line-f"},[h("label",{text:"HSN"}),hsnEl]),
+            h("div",{class:"doc-line-f"},[h("label",{text:"GST %"}),gstEl]),
+            h("div",{class:"doc-line-f"},[h("label",{text:"Std cost (₹)"}),costEl]),
+          ]),
+          geo, msg,
+          h("div",{style:"display:flex;gap:8px;margin-top:10px"},[
+            h("button",{class:"btn sm primary",onclick:e=>{e.preventDefault();create();},text:"Create & use"}),
+            h("button",{class:"btn sm ghost",onclick:e=>{e.preventDefault();panel.remove();if(onCancel)onCancel();},text:"Cancel"}),
+          ]),
+        ]);
+        syncGeo();
+        row.insertBefore(panel, row.querySelector(".doc-line-fields"));
+        setTimeout(()=>{ try{nameEl.focus();}catch{} },20);
+
+        function create(){
+          const name=(nameEl.value||"").trim();
+          const code=(codeEl.value||"").trim().toUpperCase();
+          if(!name||!code){ msg.textContent="A name and a code are both needed."; msg.style.color="var(--danger)"; return; }
+          if(ENG.item(code)){ msg.textContent=code+" already exists — pick it from the list instead."; msg.style.color="var(--danger)"; return; }
+          const uom=String(uomEl.value||"KG").toUpperCase();
+          const obj={ id:code, name, cat:"RM", uom, active:true, moq:0,
+            reorder:0, safety:0, lead:7, abc:"B",
+            cost:+costEl.value||0, price:0, hsn:(hsnEl.value||"").trim(),
+            gstRate:gstEl.value===""?18:+gstEl.value,
+            barcode:"890"+Math.floor(Math.random()*1e7) };
+          if(!geo.hidden){ if(+gsmEl.value) obj.gsm=+gsmEl.value; if(+widEl.value) obj.width=+widEl.value; }
+          /* the same opening movement Stock Items writes, so the material has a
+             ledger from the moment it exists rather than from its first receipt */
+          const openMove={ id:U.genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:code,
+            wh:"WH-PNY", type:"OPEN", qty:0, rate:obj.cost, ref:"NEW", note:"Created from a purchase order" };
+          ENG.data.items.push(obj); ENG.data.movements.push(openMove);
+          App.saveDelta(async()=>{ await DB.items.put(obj); await DB.movements.add(openMove); });
+          U.ssAddOption("pl_item_",{v:obj.id,l:rmLabel(obj)});
+          panel.remove();
+          U.ssSet("pl_item_"+idx, obj.id);
+          toast(code+" created",{type:"ok",title:"New material"});
+        }
+      }
       function addLine(seed){
-        const rms=ENG.data.items.filter(i=>i.cat!=="FG");
         const idx=lines.length; lines.push({});
-        const itemId=seed?(seed.itemId||seed):(rms[0]&&rms[0].id);
+        const seedId=seed?(seed.itemId||seed):null;
+        const rms=rmOptions(seedId);
+        const itemId=seedId||(rms[0]&&rms[0].id);
         const it=ENG.item(itemId)||{};
         const qtyVal=(seed&&seed.qty!=null)?seed.qty:(typeof seed==="string"?ENG.status(seed).suggest:"");
         const rateVal=(seed&&seed.rate!=null)?seed.rate:(typeof seed==="string"?ENG.item(seed).cost:"");
@@ -1462,7 +1561,7 @@
           const hid=UI.$("#pl_item_"+idx), vis=UI.$("#pl_item_"+idx+"_s");
           if(!hid) return;
           hid.value=pick.id;
-          if(vis) vis.value=pick.name+" — "+pick.id;   // keep the search box honest
+          if(vis) vis.value=rmLabel(pick);   // keep the search box honest
           hid.dispatchEvent(new Event("change",{bubbles:true}));
         });
 
@@ -1509,7 +1608,9 @@
           }
         };
         const row=docLine(idx + 1,
-          h("div",{html:U.searchSelect("pl_item_"+idx,rms.map(i=>({v:i.id,l:i.name+" — "+i.id})),itemId,"Search material…")}),
+          h("div",{html:U.searchSelect("pl_item_"+idx,
+            [{v:NEW_MAT,l:"＋ Add a new raw material…"}].concat(rmOptions(itemId).map(i=>({v:i.id,l:rmLabel(i)}))),
+            itemId,"Search material…")}),
           [
             ["HSN",      h("input",{class:"input",id:"pl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
             ["Thk (mm)", thkEl],
@@ -1530,7 +1631,21 @@
         uomEl.addEventListener("change",()=>{ syncUom(cur()); syncConv(cur()); });
         // picking a material refreshes its HSN + GST defaults
         const hid=UI.$("#pl_item_"+idx);
-        if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{};
+        /* Materials turn up on a delivery that the catalogue has never seen, and
+           making the office abandon a half-typed order to go and create one is
+           how orders get raised against the wrong item. So the picker creates it
+           in place: the form opens on Raw Material with the name already typed,
+           and the new code drops into every line's list at once. */
+        /* what the line was on before "add a new material" was chosen, so a
+           cancelled panel puts it back where it was and not where it started */
+        let lastPick=it.id||"";
+        if(hid) hid.addEventListener("change",()=>{
+          if(hid.value!==NEW_MAT){ lastPick=hid.value; return; }
+          const typed=(UI.$("#pl_item_"+idx+"_s")||{}).value||"";
+          openNewMaterial(row, idx, typed==="＋ Add a new raw material…"?"":typed.trim(),
+            ()=>U.ssSet("pl_item_"+idx, lastPick));
+        });
+        if(hid) hid.addEventListener("change",()=>{ if(hid.value===NEW_MAT) return; const ni=ENG.item(hid.value)||{};
           UI.$("#pl_hsn_"+idx).value=ni.hsn||""; UI.$("#pl_gst_"+idx).value=lineGstPct(null,ni);
           syncThk(ni);
           const nu=String(ni.uom||"").trim().toUpperCase(); if(nu) uomEl.value=nu; syncUom(ni); syncConv(ni);
@@ -1569,6 +1684,20 @@
      the collect/save logic is untouched. */
   function docSec(title){
     return h("div",{class:"doc-sec"},[h("span",{class:"doc-sec-t",text:title}), h("span",{class:"doc-sec-l"})]);
+  }
+  /* ---- how a line PRINTS ----
+     Web that the plant weighs is printed in kilograms even when the order was
+     placed by the metre. The quantity and the rate are restated together, so
+     quantity x rate is the same money it always was — the tax figures are
+     still computed from the STORED pair, never from these, so nothing about
+     what the document is worth can drift.
+     A line already placed in kilograms, or a material with no width and GSM
+     to convert through, prints exactly as it was entered. */
+  function lineAsKg(l, it){
+    const qty=+l.qty||0, rate=+l.rate||0;
+    const uom=String(l.uom||(it&&it.uom)||"KG").trim().toUpperCase();
+    const per=ENG.readsAsKg(it)&&ENG.isLen({uom})?ENG.kgPerUnit(it):null;
+    return per ? {qty:qty*per, rate:rate/per, uom:"KG"} : {qty, rate, uom};
   }
   /* Sheet goods — fabric, film, mica tape, anything supplied as a roll or a
      sheet — are bought to a THICKNESS, and a supplier cannot fill the order
@@ -1708,18 +1837,52 @@
       const some=so.lines.some(l=>ENG.stock(l.itemId).onHand>0);
       return badge(ok?"ok":some?"warn":"danger", ok?"In stock":some?"Partial":"Make to order");
     }
+    /* A line carrying a BATCH ships that work order — recorded against the run
+       in Production Control, and nothing leaves the store, because nothing was
+       ever booked into it. Only a line without a batch comes out of finished
+       stock, and if it is not there the dispatch is refused rather than posted
+       into the negative. The server enforces both; this is what says so. */
     async function dispatchSO(so){
-      const short=so.lines.filter(l=>ENG.stock(l.itemId).onHand<l.qty)
-        .map(l=>`${ENG.item(l.itemId).name}: need ${ENG.num(l.qty)}, have ${ENG.num(ENG.stock(l.itemId).onHand,1)}`);
-      const msg=short.length?`⚠ Insufficient finished goods:\n\n${short.join("\n")}\n\nDispatch anyway (stock goes negative)?`
-        :`Dispatch ${so.id} to ${ENG.custName(so.customerId)}? Finished goods will be deducted from stock.`;
-      if(!await confirm(msg,{title:"Dispatch Order",danger:short.length>0})) return;
+      const fromStock=so.lines.filter(l=>!l.batch&&+l.qty>0);
+      const fromBatch=so.lines.filter(l=>l.batch&&+l.qty>0);
+      const short=fromStock.filter(l=>ENG.stock(l.itemId).onHand+1e-6<l.qty).map(l=>{
+        const it=ENG.item(l.itemId)||{};
+        return (it.name||l.itemId)+": need "+ENG.qtyText(it,l.qty,0)
+             +", in store "+ENG.qtyText(it,ENG.stock(l.itemId).onHand,1);
+      });
+      if(short.length){
+        const mo=modal({title:"Cannot dispatch "+so.id, sub:"Nothing has been posted",
+          body:h("div",{},[
+            h("div",{class:"qc-note bad",style:"font-size:13px;line-height:1.55"},[
+              h("div",{style:"font-weight:700;margin-bottom:6px",text:"There is not enough finished stock for these lines:"}),
+              h("ul",{style:"margin:0;padding-left:18px"},short.map(s=>h("li",{text:s}))),
+            ]),
+            h("p",{class:"muted",style:"font-size:13px;line-height:1.6;margin-top:14px",
+              text:"Two ways forward. Either add the finished stock first, or open the order and give each line the batch — the work order number — it ships from. A batch ships the run itself, so it takes nothing out of the store and shows up on that job in Production Control."}),
+          ]),
+          foot:[h("button",{class:"btn primary",onclick:()=>mo.close(),text:"Close"})]});
+        return;
+      }
+      const how=[ fromBatch.length?fromBatch.length+" line"+(fromBatch.length>1?"s":"")+" shipped from their batch — the store is not touched":null,
+                  fromStock.length?fromStock.length+" line"+(fromStock.length>1?"s":"")+" deducted from finished stock":null
+                ].filter(Boolean).join("\n");
+      if(!await confirm("Dispatch "+so.id+" to "+ENG.custName(so.customerId)+"?\n\n"+how,{title:"Dispatch Order"})) return;
       const date=DB.helpers.iso(DB.helpers.today());
-      so.lines.forEach(l=>{ ENG.data.movements.push({id:U.genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh:"WH-FG", type:"SALE",
+      /* mirror what the server is about to do, so the screen is right before
+         the next state reload rather than a second behind it */
+      fromStock.forEach(l=>{ ENG.data.movements.push({id:U.genMoveId()+"-"+l.itemId, date, itemId:l.itemId, wh:"WH-FG", type:"SALE",
         qty:-l.qty, rate:l.rate, ref:so.id, note:"Dispatch to "+ENG.custName(so.customerId), by:(App.user&&App.user.username)||"sales"}); });
+      fromBatch.forEach(l=>{ const w=(ENG.data.workorders||[]).find(x=>x.id===l.batch); if(!w) return;
+        const partial=(w.runQty!=null||w.completedQty!=null||w.pendingQty!=null);
+        const made=partial?Math.round(((+w.completedQty||0)+(+w.runQty||0))*1000)/1000:(+w.qty||0);
+        w.dispatchedQty=Math.min(made, Math.round(((+w.dispatchedQty||0)+(+l.qty||0))*1000)/1000);
+        w.dispatchedAt=new Date().toISOString(); w.dispatchedBy=(App.user&&App.user.username)||"sales";
+        w.dispatchedTo=so.id; w.dispatchedCustomer=ENG.custName(so.customerId);
+        if((+w.pendingQty||0)<=1e-6) w.dispatched=true; });
       so.status="Dispatched";
-      toast(`${so.id} dispatched — stock deducted`,{type:"ok",title:"Dispatch posted"});
-      App.saveDelta(()=>DB.sales.dispatch(so.id,{date}));  // server posts the SALE movements + sets status atomically
+      toast(so.id+" dispatched"+(fromBatch.length?" — "+fromBatch.length+" batch"+(fromBatch.length>1?"es":"")+" released, store untouched":" — stock deducted"),
+        {type:"ok",title:"Dispatch posted"});
+      App.saveDelta(()=>DB.sales.dispatch(so.id,{date}));  // the server is the authority; this only mirrored it
     }
     function soDetail(so){
       const {calc, interState}=docCalc("so",so);
@@ -1733,9 +1896,9 @@
       if(anyBatch) cols.push({key:"batch",label:"Batch No.",render:r=>r.batch?`<span class="mono">${esc(batchNo(r.batch))}</span>`:'<span class="muted">—</span>',noSort:true});
       cols.push(
         // the quantity is in the product's own unit — never assume kg
-        {key:"qty",label:"Qty",num:true,render:r=>ENG.num(r.qty)+" "+((ENG.item(r.itemId)||{}).uom||"kg")+ENG.kgSuffix(ENG.item(r.itemId),r.qty),noSort:true},
-        {key:"stock",label:"In Stock",num:true,render:r=>{const h2=ENG.stock(r.itemId).onHand;const u=(ENG.item(r.itemId)||{}).uom||"kg";
-          return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(h2,1)} ${esc(u)}${esc(ENG.kgSuffix(ENG.item(r.itemId),h2))}</span>`;},noSort:true},
+        {key:"qty",label:"Qty",num:true,render:r=>{const it=ENG.item(r.itemId);return it?ENG.qtyText(it,r.qty,0)+ENG.kgSuffix(it,r.qty):ENG.num(r.qty)+" kg";},noSort:true},
+        {key:"stock",label:"In Stock",num:true,render:r=>{const it=ENG.item(r.itemId)||{};const h2=ENG.stock(r.itemId).onHand;const u=ENG.dispUom(it)||"kg";
+          return `<span style="color:${h2>=r.qty?'var(--ok)':'var(--danger)'}">${ENG.num(ENG.dispQty(it,h2),1)} ${esc(u)}${esc(ENG.kgSuffix(it,h2))}</span>`;},noSort:true},
         {key:"rate",label:"Rate",num:true,render:r=>"₹"+ENG.num(r.rate),noSort:true},
         {key:"gst",label:"GST %",num:true,render:r=>lineGstPct(r,ENG.item(r.itemId)),noSort:true},
         {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true});
@@ -3091,7 +3254,7 @@
         text:q.itemName+" failed its incoming test on "+((q.failed||[]).join(", ")||"a measured parameter")
           +". The lot is in "+((wh&&wh.name)||q.wh||"the store")+" now and production can still draw it until you decide."}),
       MW.dl([["Material",q.itemName],["Code",q.itemId],
-        ["Quantity in question",ENG.num(q.acceptedQty,3)+" "+(q.uom||"")],
+        ["Quantity in question",ENG.qtyText(ENG.item(q.itemId),q.acceptedQty,3)||ENG.num(q.acceptedQty,3)+" "+(q.uom||"")],
         ["Goods Receipt",q.grnId],["Purchase Order",q.poId||"—"],
         ["Supplier",(sup&&sup.name)||q.supplierId||"—"],
         ["Out of limit",(q.failed||[]).join(", ")||"—"],
@@ -3145,7 +3308,7 @@
           +". Until then the material stays in the store and production can draw it."}),
       table(list,[
         {key:"item",label:"Material",cls:"nm",render:q=>`<div class="cell-main">${esc(q.itemName)}</div><div class="cell-sub">${esc(q.itemId)}</div>`,noSort:true},
-        {key:"qty",label:"Quantity",num:true,render:q=>ENG.num(q.acceptedQty,3)+" "+esc(q.uom||""),noSort:true},
+        {key:"qty",label:"Quantity",num:true,render:q=>{const it=ENG.item(q.itemId);return it?esc(ENG.qtyText(it,q.acceptedQty,3)):ENG.num(q.acceptedQty,3)+" "+esc(q.uom||"");},noSort:true},
         {key:"failed",label:"Out of limit",render:q=>esc((q.failed||[]).join(", ")||"—"),noSort:true},
         {key:"grn",label:"Receipt",render:q=>`<span class="mono">${esc(q.grnId)}</span>`,noSort:true},
         {key:"po",label:"Order",render:q=>esc(q.poId||"—"),noSort:true},
@@ -3180,7 +3343,7 @@
     });
     const body=h("div",{},[
       MW.dl([["Material",f.item.name],["Code",f.item.id],
-        ["Received",ENG.num(f.line.accepted,3)+" "+(f.item.uom||"")],
+        ["Received",ENG.qtyText(f.item,f.line.accepted,3)],
         ["Goods Receipt",f.grn.id],["Purchase Order",f.grn.poId||"—"],
         ["Supplier",(sup&&sup.name)||f.grn.supplierId||"—"],
         ["Supplier Inv.",f.grn.invNo||"—"]]),
@@ -3474,7 +3637,8 @@
          taken across the whole delivery, and a failure is only chargeable to a
          supplier if their batch number is on the paper. Each part is printed
          only when it is actually known. */
-      const lot=qty.accepted!=null?ENG.num(qty.accepted,2)+" "+(t.uom||qty.uom||""):null;
+      const lotIt=ENG.item(t.itemId||qty.itemId);
+      const lot=qty.accepted!=null?(lotIt?ENG.qtyText(lotIt,qty.accepted,2):ENG.num(qty.accepted,2)+" "+(t.uom||qty.uom||"")):null;
       const samp=[
         lot?`Lot size <b>${esc(lot)}</b>`:null,
         t.sampleSize!=null?`Sample <b>${ENG.num(t.sampleSize,2)} ${esc(t.uom||qty.uom||"")}</b>`:null,
@@ -3811,7 +3975,10 @@
     ];
 
     const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
+      /* the money is calculated from the STORED quantity and rate; pk only
+         changes how the same amount is written down */
       const lc=GST.calcLine({qty:l.qty,rate:l.rate,discPct:l.discPct||0,gstPct:lineGstPct(l,it)},interState);
+      const pk=lineAsKg(l,it);
       // the size a customer orders by — thickness × width, the width taken from
       // the work order this line is served from
       const size=lineSize(l,it);
@@ -3823,8 +3990,8 @@
            its own — it is in the product's stocking unit, which is what the
            dispatch movement posts, so mica tape invoices in MTR and printing
            a flat "KG" here mis-stated the consignment. */
-        `<td class="r">${ENG.num(l.qty,2)}</td><td class="c">${esc(isPO?(l.uom||it.uom||"KG"):(it.uom||"KG"))}</td>`+
-        `<td class="r">${IN(l.rate)}</td>`+
+        `<td class="r">${ENG.num(pk.qty,2)}</td><td class="c">${esc(isPO?pk.uom:(ENG.dispUom(it)||"KG").toUpperCase())}</td>`+
+        `<td class="r">${IN(isPO?pk.rate:ENG.dispRate(it,l.rate))}</td>`+
         (anyDisc?`<td class="r">${l.discPct?l.discPct+"%":"—"}</td>`:"")+
         `<td class="r">${lc.gstPct}%</td>`+
         `<td class="r">${IN(lc.taxable)}</td></tr>`; }).join("");

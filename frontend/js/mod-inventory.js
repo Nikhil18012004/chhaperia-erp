@@ -67,24 +67,28 @@
       UI.$("#invCount").textContent=data.length+" items";
       tableHost.innerHTML="";
       tableHost.appendChild(table(data,[
-        // each detail on its own line, not run together across the column
-        {key:"name",label:"Item",render:r=>`<div class="cell-main">${esc(r.it.name)}</div>`
-          +`<div class="cell-sub">${r.it.id}</div>`
-          +`<div class="cell-sub">${catName(r.it.cat)}</div>`
-          +`<div class="cell-sub">HSN ${r.it.hsn||"—"}</div>`,sort:r=>r.it.name},
-        {key:"thk",label:"Thickness",num:true,render:r=>r.it.thicknessMM!=null?`<span class="mono">${ENG.num(r.it.thicknessMM,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>',sort:r=>r.it.thicknessMM||0},
-        {key:"lastMove",label:"Last Move",render:r=>r.stock.lastMove||"—",sort:r=>r.stock.lastMove||""},
-        {key:"onHand",label:"On Hand",num:true,render:r=>`<span class="strong">${ENG.num(r.st.onHand,2)}</span> <span class="muted">${r.it.uom}</span>`,sort:r=>r.st.onHand},
-        /* weight in its own column: "—" where the item has no gsm/width yet,
-           which is the truth, rather than a zero that reads as "weighs nothing" */
-        {key:"kg",label:"Weight",num:true,render:r=>{const w=ENG.kg(r.it,r.st.onHand);return w==null?`<span class="muted">—</span>`:`<span class="strong">${ENG.num(w,2)}</span> <span class="muted">kg</span>`;},sort:r=>ENG.kg(r.it,r.st.onHand)||0},
-        {key:"pIn",label:"Pending In",num:true,render:r=>r.st.pIn?`<span class="badge-s s-ok">▲ ${ENG.num(r.st.pIn)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pIn},
-        {key:"pOut",label:"Pending Out",num:true,render:r=>r.st.pOut?`<span class="badge-s s-warn">▼ ${ENG.num(r.st.pOut)}</span>`:'<span class="muted">—</span>',sort:r=>r.st.pOut},
-        {key:"atp",label:"ATP / Net",num:true,render:r=>`<span class="mono ${r.st.atp<0?'':''}" style="color:${r.st.atp<0?'var(--danger)':'var(--text)'}">${ENG.num(r.st.atp,1)}</span>`,sort:r=>r.st.atp},
-        {key:"usage",label:"Used 30d",num:true,render:r=>`<span class="mono">${ENG.num(r.it.cat==="FG"?r.u.sold90/3:r.u.used30,1)}</span>`,sort:r=>r.it.cat==="FG"?r.u.sold90:r.u.used30},
-        {key:"cover",label:"Cover",num:true,render:r=>coverBadge(r.st.cover),sort:r=>r.st.cover},
-        {key:"value",label:"Value",num:true,render:r=>`<span class="strong">${ENG.money(r.st.value)}</span>`,sort:r=>r.st.value},
-        {key:"state",label:"Status",render:r=>statusCell(r),sort:r=>({danger:0,warn:1,ok:2,info:3})[r.st.state]},
+        ...matCols(r=>r.it,{hsn:true}),
+        {key:"lastMove",label:"Moved",width:"86px",render:r=>r.stock.lastMove?`<span class="mono" style="font-size:11px">${esc(r.stock.lastMove)}</span>`:'<span class="muted">—</span>',sort:r=>r.stock.lastMove||""},
+        /* On Hand carries its own weight where the quantity is not already one
+           (rolls, pallets, boxes) — a whole column that read "—" on 354 of 378
+           rows was costing more width than it earned */
+        {key:"onHand",label:"On Hand",num:true,width:"104px",render:r=>{
+          const sfx=ENG.kgSuffix(r.it,r.st.onHand).replace(/^\s*·\s*/,"");
+          return `<span class="strong">${ENG.num(ENG.dispQty(r.it,r.st.onHand),2)}</span> <span class="muted">${esc(ENG.dispUom(r.it))}</span>`
+            +(sfx?`<div class="cell-sub">${esc(sfx)}</div>`:"");},
+          sort:r=>ENG.dispQty(r.it,r.st.onHand)},
+        /* what is coming and what is owed, stacked in one column — they are
+           read together and neither is ever wide */
+        {key:"pend",label:"Pending",num:true,width:"88px",render:r=>{
+          const i=r.st.pIn?`<span class="badge-s s-ok">▲ ${ENG.num(ENG.dispQty(r.it,r.st.pIn))}</span>`:"";
+          const o=r.st.pOut?`<span class="badge-s s-warn">▼ ${ENG.num(ENG.dispQty(r.it,r.st.pOut))}</span>`:"";
+          return (i||o)?`<div style="display:flex;flex-direction:column;gap:3px;align-items:center">${i}${o}</div>`:'<span class="muted">—</span>';},
+          sort:r=>(r.st.pIn||0)-(r.st.pOut||0)},
+        {key:"atp",label:"ATP",num:true,width:"72px",render:r=>`<span class="mono" style="color:${r.st.atp<0?'var(--danger)':'var(--text)'}">${ENG.num(ENG.dispQty(r.it,r.st.atp),1)}</span>`,sort:r=>r.st.atp},
+        {key:"usage",label:"Used 30d",num:true,width:"74px",render:r=>`<span class="mono">${ENG.num(ENG.dispQty(r.it,r.it.cat==="FG"?r.u.sold90/3:r.u.used30),1)}</span>`,sort:r=>r.it.cat==="FG"?r.u.sold90:r.u.used30},
+        {key:"cover",label:"Cover",num:true,width:"64px",render:r=>coverBadge(r.st.cover),sort:r=>r.st.cover},
+        {key:"value",label:"Value",num:true,width:"86px",render:r=>`<span class="strong">${ENG.money(r.st.value)}</span>`,sort:r=>r.st.value},
+        {key:"state",label:"Status",width:"96px",render:r=>statusCell(r),sort:r=>({danger:0,warn:1,ok:2,info:3})[r.st.state]},
       ],{onRow:r=>itemDetail(r.it.id),empty:"No items match your filters"}));
     }
     draw();
@@ -92,9 +96,12 @@
     function exportCSV(){
       const data=rows();
       const head=["Code","Name","Thickness (mm)","Category","UoM","LastMove","OnHand","PendingIn","PendingOut","ATP","ReorderPt","Safety","AvgCost","Value","Status"];
+      /* the sheet carries the same figures the screen shows — web in kilograms,
+         everything else in its own unit — so a printed stock list and the app
+         cannot disagree */
       const out=data.map(r=>[
-        r.it.id, r.it.name, r.it.thicknessMM!=null?r.it.thicknessMM:"", r.it.cat, r.it.uom, r.stock.lastMove||"", r.st.onHand.toFixed(2), r.st.pIn, r.st.pOut, r.st.atp,
-        r.it.reorder, r.it.safety, r.st.avgCost.toFixed(2), r.st.value.toFixed(0), r.st.label
+        r.it.id, r.it.name, r.it.thicknessMM!=null?r.it.thicknessMM:"", r.it.cat, ENG.dispUom(r.it), r.stock.lastMove||"", (+ENG.dispQty(r.it,r.st.onHand)).toFixed(2), +ENG.dispQty(r.it,r.st.pIn), +ENG.dispQty(r.it,r.st.pOut), +ENG.dispQty(r.it,r.st.atp),
+        +ENG.dispQty(r.it,r.it.reorder), +ENG.dispQty(r.it,r.it.safety), (+ENG.dispRate(r.it,r.st.avgCost)).toFixed(2), r.st.value.toFixed(0), r.st.label
       ]);
       MW.dataPreview({title:"Stock Items", head, rows:out, name:"chhaperia_inventory.xlsx", sheet:"Stock Items"});
     }
@@ -127,11 +134,11 @@
       // statgrid: these six tiles are small enough to stay two-up on a phone
       // instead of collapsing to one per row (see app.css)
       h("div",{class:"grid cols-3 statgrid",style:"margin-bottom:16px"},[
-        miniStat("On Hand", ENG.num(st.onHand,2)+" "+it.uom+ENG.kgSuffix(it,st.onHand), st.state),
-        miniStat("Pending In", ENG.num(st.pIn)+" "+it.uom+ENG.kgSuffix(it,st.pIn), "ok"),
-        miniStat("Pending Out", ENG.num(st.pOut)+" "+it.uom+ENG.kgSuffix(it,st.pOut), "warn"),
-        miniStat("Available (ATP)", ENG.num(st.atp,1)+" "+it.uom+ENG.kgSuffix(it,st.atp), st.atp<0?"danger":"info"),
-        miniStat("Avg Cost", "₹"+ENG.num(st.avgCost,2), "mut"),
+        miniStat("On Hand", ENG.qtyText(it,st.onHand,2)+ENG.kgSuffix(it,st.onHand), st.state),
+        miniStat("Pending In", ENG.qtyText(it,st.pIn,2)+ENG.kgSuffix(it,st.pIn), "ok"),
+        miniStat("Pending Out", ENG.qtyText(it,st.pOut,2)+ENG.kgSuffix(it,st.pOut), "warn"),
+        miniStat("Available (ATP)", ENG.qtyText(it,st.atp,1)+ENG.kgSuffix(it,st.atp), st.atp<0?"danger":"info"),
+        miniStat("Avg Cost", "₹"+ENG.num(ENG.dispRate(it,st.avgCost),2)+"/"+(ENG.dispUom(it)||"unit"), "mut"),
         miniStat("Stock Value", ENG.money(st.value), "mut"),
       ]),
       MW.dl([
@@ -159,7 +166,7 @@
                   h("div",{text:whName(r.wh)}),
                   h("div",{class:"cell-sub",text:r.wh}),
                 ]),
-                h("div",{class:"strong",text:ENG.num(r.q,2)+" "+(it.uom||"")}),
+                h("div",{class:"strong",text:ENG.qtyText(it,r.q,2)}),
               ])))
             : h("div",{class:"muted",style:"padding:4px 0",text:"No stock standing in any store."}),
         ]);
@@ -167,15 +174,15 @@
       h("div",{class:"card",style:"margin-top:16px;box-shadow:none;background:var(--panel-2)"},[
         h("div",{class:"card-head"},h("h3",{text:"30-Day Movement"})),
         (()=>{ const cv=h("canvas",{"data-h":140}); const box=h("div",{class:"chart-box"},cv);
-          requestAnimationFrame(()=>Charts.line(cv,{labels:ser.labels,series:[{name:"Balance",data:ser.bal,color:cssv("--accent")}],fmt:v=>ENG.num(v)})); return box; })()
+          requestAnimationFrame(()=>Charts.line(cv,{labels:ser.labels,series:[{name:"Balance",data:ser.bal.map(v=>ENG.dispQty(it,v)),color:cssv("--accent")}],fmt:v=>ENG.num(v)})); return box; })()
       ]),
       h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Recent Ledger"}),
       table(led,[
         {key:"date",label:"Date",render:r=>r.date,noSort:true},
         {key:"type",label:"Type",render:r=>moveBadge(r.type),noSort:true},
         {key:"ref",label:"Reference",render:r=>`<span class="mono">${esc(r.ref||"—")}</span>`,noSort:true},
-        {key:"qty",label:"Qty",num:true,render:r=>`<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'}">${r.qty>0?"+":""}${ENG.num(r.qty,2)}</span>`,noSort:true},
-        {key:"balance",label:"Balance",num:true,render:r=>`<span class="strong mono">${ENG.num(r.balance,2)}</span>`,noSort:true},
+        {key:"qty",label:"Qty",num:true,render:r=>`<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'}">${r.qty>0?"+":""}${ENG.num(ENG.dispQty(it,r.qty),2)}</span>`,noSort:true},
+        {key:"balance",label:"Balance",num:true,render:r=>`<span class="strong mono">${ENG.num(ENG.dispQty(it,r.balance),2)}</span>`,noSort:true},
       ],{empty:"No movements"})
     ]);
     /* A role that may READ this section is not necessarily allowed to change
@@ -193,7 +200,7 @@
     modal({title:it.name, sub:it.id+" · "+catName(it.cat), wide:true, body,
       foot:[
         mayLedger?h("button",{class:"btn",onclick:()=>{App.go("ledger",{item:id});UI.$("#modalHost").hidden=true;},text:"📒 Full Ledger"}):null,
-        (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${ENG.num(st.suggest)} ${it.uom})`}):null,
+        (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${esc(ENG.qtyText(it,st.suggest,0))})`}):null,
         mayQc?h("button",{class:"btn",title:"Which parameters this material is tested on when it is received, and their pass/fail limits",
           onclick:()=>qcForm(it),text:"🧪 QC Parameters"}):null,
         mayEdit?h("button",{class:"btn ghost",onclick:()=>itemForm(it),text:"✎ Edit"}):null
@@ -295,8 +302,12 @@
   }
 
   /* ----- item create/edit form ----- */
-  function itemForm(it){
-    const edit=!!it; it=it||{cat:"RM",uom:"KG",abc:"B",lead:7};
+  /* `opts.seed` prefills a NEW item (the purchase order opens this with the
+     material name already typed into its search box), and `opts.onSaved` hands
+     the created item back so the caller can select it without a round trip. */
+  function itemForm(it, opts){
+    opts=opts||{};
+    const edit=!!it; it=it||Object.assign({cat:"RM",uom:"KG",abc:"B",lead:7}, opts.seed||{});
     const f=(k,v)=>it[k]!=null?it[k]:v;
     const body=h("div",{class:"form-grid"},[
       field("Item Code",`<input class="input" id="f_id" value="${esc(f('id',''))}" ${edit?'disabled':''} placeholder="e.g. RM-XYZ">`),
@@ -319,6 +330,24 @@
     const mo=modal({title:edit?"Edit Item":"New Item", sub:edit?it.id:"Create a stock item", body,
       foot:[ h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",onclick:save,text:edit?"Save Changes":"Create Item"}) ]});
+    /* Every material code in this catalogue is its name in capitals behind the
+       category — HARDNER LX 75 H is RM-HARDNER-LX-75-H. So a new item suggests
+       exactly that while the name is typed, and stops the moment the code is
+       edited by hand, because then it is the operator's to decide. */
+    if(!edit) setTimeout(()=>{
+      const nameEl=UI.$("#f_name"), codeEl=UI.$("#f_id"), catEl=UI.$("#f_cat");
+      if(!nameEl||!codeEl||!catEl) return;
+      let auto=!codeEl.value;
+      const suggest=()=>{ if(!auto) return;
+        const stem=String(nameEl.value||"").toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+        codeEl.value=stem?(catEl.value||"RM")+"-"+stem:"";
+      };
+      codeEl.addEventListener("input",()=>{ auto=false; });
+      nameEl.addEventListener("input",suggest);
+      catEl.addEventListener("change",suggest);
+      suggest();
+      nameEl.focus();
+    },30);
     function save(){
       const g=id=>UI.$("#"+id).value;
       const code=g("f_id").trim().toUpperCase();
@@ -337,6 +366,7 @@
       }
       mo.close(); toast(edit?"Item updated":"Item created",{type:"ok"});
       App.saveDelta(async()=>{ await DB.items.put(obj); if(openMove) await DB.movements.add(openMove); });
+      if(!edit && opts.onSaved) opts.onSaved(obj);
     }
   }
 
@@ -747,7 +777,11 @@
 
   /* ============== STOCK LEDGER ============== */
   M.ledger = { title:"Stock Ledger", sub:"Every movement, running balance", render(root, params){
-    let filter={q:params&&params.item?params.item:"", type:"all", wh:"all", from:"", to:""};
+    /* .toLowerCase() matters: the row test lower-cases what it searches, so an
+        item code arriving from a link — "RM-MICA-TAPE-CP25H-130MIC" — never
+        matched and the ledger opened on "No movements match" every time it was
+        reached from a material. */
+    let filter={q:params&&params.item?String(params.item).toLowerCase():"", type:"all", wh:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Ledger","Complete audit trail — receipts, issues, production, sales & adjustments with auto running balance"));
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
@@ -772,15 +806,21 @@
       UI.$("#ledCount").textContent=data.length+" entries";
       tableHost.innerHTML="";
       tableHost.appendChild(table(data,[
-        {key:"date",label:"Date",render:r=>r.date,sort:r=>r.date},
-        {key:"item",label:"Item",render:r=>{const it=ENG.item(r.itemId)||{};return `<div class="cell-main">${esc(trim(it.name||r.itemId,32))}</div><div class="cell-sub">${r.itemId}</div>`;},sort:r=>r.itemId},
-        {key:"type",label:"Type",render:r=>moveBadge(r.type),sort:r=>r.type},
-        {key:"wh",label:"Warehouse",cls:"nm",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
-        {key:"ref",label:"Reference",render:r=>`<span class="mono">${esc(r.ref||"—")}</span>`,sort:r=>r.ref},
-        {key:"qty",label:"Qty",num:true,render:r=>{const it=ENG.item(r.itemId)||{};return `<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(r.qty,2)}</span> <span class="muted">${it.uom||""}</span>`;},sort:r=>r.qty},
-        {key:"kg",label:"Weight",num:true,render:r=>{const it=ENG.item(r.itemId)||{};const w=ENG.kg(it,r.qty);return w==null?`<span class="muted">—</span>`:`<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(w,2)}</span> <span class="muted">kg</span>`;},sort:r=>ENG.kg(ENG.item(r.itemId)||{},r.qty)||0},
-        {key:"rate",label:"Rate",num:true,render:r=>r.rate?"₹"+ENG.num(r.rate,2):"—",sort:r=>r.rate||0},
-        {key:"value",label:"Value",num:true,render:r=>r.rate?ENG.money(Math.abs(r.qty*r.rate)):"—",sort:r=>Math.abs(r.qty*(r.rate||0))},
+        {key:"date",label:"Date",width:"88px",render:r=>`<span class="mono" style="font-size:11px">${esc(r.date||"—")}</span>`,sort:r=>r.date},
+        /* no Category here: a movement list is filtered by type, store and
+           date, and the material is already named, coded and sized */
+        ...matCols(r=>ENG.item(r.itemId)||{name:r.itemId,id:r.itemId},{cat:false}),
+        {key:"type",label:"Type",width:"92px",render:r=>moveBadge(r.type),sort:r=>r.type},
+        {key:"wh",label:"Warehouse",cls:"nm",width:"104px",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
+        {key:"ref",label:"Reference",width:"96px",render:r=>`<span class="mono code">${esc(r.ref||"—")}</span>`,sort:r=>r.ref},
+        /* the weight rides under the quantity where the quantity is not one
+           already, instead of a column that reads "—" on almost every row */
+        {key:"qty",label:"Qty",num:true,width:"106px",render:r=>{const it=ENG.item(r.itemId)||{};
+          const sfx=ENG.kgSuffix(it,r.qty).replace(/^s*·s*/,"");
+          return `<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(ENG.dispQty(it,r.qty),2)}</span> <span class="muted">${esc(ENG.dispUom(it))}</span>`
+            +(sfx?`<div class="cell-sub">${esc(sfx)}</div>`:"");},sort:r=>r.qty},
+        {key:"rate",label:"Rate",num:true,width:"86px",render:r=>r.rate?"₹"+ENG.num(ENG.dispRate(ENG.item(r.itemId),r.rate),2):"—",sort:r=>r.rate||0},
+        {key:"value",label:"Value",num:true,width:"86px",render:r=>r.rate?ENG.money(Math.abs(r.qty*r.rate)):"—",sort:r=>Math.abs(r.qty*(r.rate||0))},
       ],{empty:"No movements match"}));
     }
     draw();
@@ -884,7 +924,7 @@
         ]),
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Top items"}),
         h("div",{class:"barlist"}, top.length?top.map(x=>h("div",{class:"flex between",style:"font-size:12.5px;padding:4px 0"},[
-          h("span",{text:trim(x.it.name,30)}), h("span",{class:"mono muted",text:ENG.num(x.q,1)+" "+x.it.uom+ENG.kgSuffix(x.it,x.q)})
+          h("span",{text:x.it.name}), h("span",{class:"mono muted",style:"white-space:nowrap",text:ENG.qtyText(x.it,x.q,1)+ENG.kgSuffix(x.it,x.q)})
         ])):[h("div",{class:"muted",text:"Empty"})]),
         h("div",{class:"muted",style:"font-size:11.5px;margin-top:10px;text-align:right",text:"View all materials →"})
       ]));
@@ -911,17 +951,17 @@
         countChip.textContent=data.length+" materials · "+ENG.money(totalVal)+" total";
         tableHost.innerHTML="";
         tableHost.appendChild(table(data,[
-          {key:"item",label:"Material",render:r=>`<div class="cell-main">${esc(r.it.name)}</div>`,sort:r=>r.it.name},
-          {key:"code",label:"Code",render:r=>`<span class="mono muted">${esc(r.it.id)}</span>`,sort:r=>r.it.id},
-          {key:"cat",label:"Category",render:r=>`<span class="muted">${esc(catName(r.it.cat))}</span>`,sort:r=>r.it.cat},
-          {key:"qty",label:"Quantity",num:true,render:r=>`<span style="font-weight:700">${ENG.num(r.q,2)}</span> <span class="muted">${esc(r.it.uom||"")}</span>`,sort:r=>r.q},
+          ...matCols(r=>r.it),
+          {key:"qty",label:"Quantity",num:true,width:"104px",render:r=>{
+            const sfx=ENG.kgSuffix(r.it,r.q).replace(/^s*·s*/,"");
+            return `<span style="font-weight:700">${ENG.num(ENG.dispQty(r.it,r.q),2)}</span> <span class="muted">${esc(ENG.dispUom(r.it))}</span>`
+              +(sfx?`<div class="cell-sub">${esc(sfx)}</div>`:"");},sort:r=>r.q},
           /* weight gets its own column rather than being tacked onto the
              quantity — an item whose weight is not yet known reads "—", which
              a suffix could not say without looking like it weighed nothing */
-          {key:"kg",label:"Weight",num:true,render:r=>{const w=ENG.kg(r.it,r.q);return w==null?`<span class="muted">—</span>`:`<span style="font-weight:700">${ENG.num(w,2)}</span> <span class="muted">kg</span>`;},sort:r=>ENG.kg(r.it,r.q)||0},
-          {key:"cost",label:"Avg Cost",num:true,render:r=>"₹"+ENG.num(r.cost,2),sort:r=>r.cost},
-          {key:"val",label:"Value",num:true,render:r=>ENG.money(r.val),sort:r=>r.val},
-          {key:"share",label:"Share",num:true,render:r=>totalVal>0?ENG.num(r.val/totalVal*100,1)+"%":"—",sort:r=>r.val},
+          {key:"cost",label:"Avg Cost",num:true,width:"88px",render:r=>"₹"+ENG.num(ENG.dispRate(r.it,r.cost),2),sort:r=>r.cost},
+          {key:"val",label:"Value",num:true,width:"88px",render:r=>ENG.money(r.val),sort:r=>r.val},
+          {key:"share",label:"Share",num:true,width:"66px",render:r=>totalVal>0?ENG.num(r.val/totalVal*100,1)+"%":"—",sort:r=>r.val},
         ],{empty:q?"No materials match":"No stock in this warehouse"}));
       }
       const body=h("div",{},[
@@ -1027,6 +1067,47 @@
   function whName(id){ return (ENG.data.warehouses.find(w=>w.id===id)||{}).name||id; }
   function whIcon(t){ return {"Raw Material":"🧱","WIP":"⚙️","Finished Goods":"🎁","Quarantine":"🔬"}[t]||"🏬"; }
   function trim(s,n){ s=String(s||""); return s.length>n?s.slice(0,n-1)+"…":s; }
+
+  /* ---- how a material is WRITTEN DOWN, on every screen that lists one ----
+     Stock Items, the Stock Ledger and a warehouse's contents each used to
+     describe the same roll differently: one stacked the code and category
+     under the name, one cut the name off at 32 characters, one showed no
+     thickness at all. Read side by side they looked like three different
+     materials, and a figure that disagrees with the screen next to it is not
+     trusted even when it is right.
+     So the identity columns are defined once, here, and every list spreads
+     them in. `get` is how that list reaches the item from its own row. */
+  /* true only when a weight tells you something the quantity beside it does
+     not — a material already counted in kilograms, or web now read in
+     kilograms, would just print the same number twice */
+  function weighsSeparately(it){ return !!it && !ENG.isKg(it) && !ENG.readsAsKg(it); }
+  /* `opts.hsn` adds the HSN under the code (Stock Items wants it, a movement
+     list does not); `opts.cat` adds the Category column. Widths are declared
+     because without them the browser hands the widest NOWRAP cell whatever it
+     asks for — a 44-character item code took 347px and squeezed the material
+     name, the one thing on the row worth reading, down to 128. */
+  function matCols(get, opts){
+    opts=opts||{};
+    const it=r=>get(r)||{};
+    const cols=[
+      {key:"item",label:"Material",width:"230px",
+        render:r=>`<div class="cell-main">${esc(it(r).name||"—")}</div>`,sort:r=>it(r).name||""},
+      {key:"code",label:"Code",width:"148px",
+        render:r=>`<span class="mono muted code">${esc(it(r).id||"—")}</span>`
+          +(opts.hsn&&it(r).hsn?`<div class="cell-sub">HSN ${esc(it(r).hsn)}</div>`:""),
+        sort:r=>it(r).id||""},
+      /* thickness IS the identity of a sheet material — two mica tapes with
+         the same name and a different thickness are different stock */
+      {key:"thk",label:"Thk",num:true,width:"66px",
+        render:r=>{const t=it(r).thicknessMM!=null?it(r).thicknessMM:it(r).thickness;
+          return t!=null&&t!==""?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},
+        sort:r=>+(it(r).thicknessMM!=null?it(r).thicknessMM:it(r).thickness)||0},
+    ];
+    if(opts.cat!==false) cols.push(
+      {key:"cat",label:"Category",width:"84px",
+        render:r=>`<span class="muted">${esc(catName(it(r).cat))}</span>`,sort:r=>it(r).cat||""});
+    return cols;
+  }
   /* collision-free sequential id: take the highest numeric suffix already in
      use (NOT list.length, which drops after a delete and reuses live ids) and
      add 1, preserving the widest zero-pad width seen. */
@@ -1083,6 +1164,15 @@
       + ` role="combobox" aria-autocomplete="list" aria-expanded="false"`
       + ` placeholder="${esc(placeholder||"Search…")}" value="${esc(cur?cur.l:"")}">`
       + `<div class="ss-pop" hidden></div></div>`;
+  }
+  /* Add an option to every searchSelect whose id starts with `prefix`, so a
+     material created from one purchase-order line is immediately pickable on
+     all the others without rebuilding the form and losing what is typed in it. */
+  function ssAddOption(prefix, opt){
+    const o={v:String(opt.v), l:String(opt.l)};
+    _ssOpts.forEach((list,id)=>{
+      if(String(id).indexOf(prefix)===0 && !list.some(x=>x.v===o.v)) list.push(o);
+    });
   }
   function ssHidden(wrap){ return wrap.querySelector('input[type="hidden"]'); }
   function ssInput(wrap){ return wrap.querySelector(".ss-input"); }
@@ -1201,7 +1291,7 @@
      material master here, and the test report itself — the lab incharge notices
      a missing parameter while standing at the delivery, not while browsing
      Stock Items. One editor, both entry points. */
-  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, ssSet, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, receiveStockForm, qcForm});
+  window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, ssSet, ssAddOption, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, itemForm, receiveStockForm, qcForm});
 
   // register quick actions for the ⌘K command palette
   window.ERPActions = Object.assign(window.ERPActions||{}, {

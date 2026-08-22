@@ -216,6 +216,37 @@
     return "base";
   }
 
+  /* ---- OPTIONAL MATERIALS (ink on an aluminium tape) --------------------
+     Part of the recipe, not of every run: some customers want the print,
+     some do not. Nothing is assigned until it is TICKED here; the tick is
+     stored as "use:<line index>" in the same choices object as the ranged
+     picks, so it reaches the server on the work order and the stage issues
+     exactly what this screen showed. */
+  function optionalPicker(host, bom, choices, qty, redraw){
+    const norm=BOMCALC.normalize(bom.lines);
+    const opts=norm.map((l,i)=>({l,i})).filter(x=>x.l.optional);
+    if(!opts.length) return;
+    host.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:14px 0 8px",
+      text:"\u2661 Optional materials \u2014 tick what this run should use"}));
+    const cc=BOMCALC.compute({lines:norm},null);
+    opts.forEach(({l,i})=>{
+      const key="use:"+i, on=!!choices[key];
+      const mat=l.id?ENG.item(l.id):null;
+      const box=h("input",{type:"checkbox",style:"width:16px;height:16px;accent-color:var(--accent)"});
+      box.checked=on;
+      box.addEventListener("change",()=>{ if(box.checked) choices[key]=true; else delete choices[key]; redraw(); });
+      const nm=(mat&&mat.name)||l.rm||l.id||"?";
+      const have=l.id?((ENG.stock(l.id)||{}).onHand||0):0;
+      host.appendChild(h("label",{class:"flex aic",style:"gap:10px;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px"},[
+        box,
+        h("span",{style:"font-weight:600",text:nm}),
+        l.id?h("span",{class:"muted mono",style:"font-size:11px",text:l.id}):null,
+        h("span",{class:"muted",style:"margin-left:auto;white-space:nowrap",
+          text:ENG.num(l.qty,2)+" "+(l.unit||"")+" per batch \u00b7 in store "+(mat?ENG.qtyText(mat,have,1):ENG.num(have,1))}),
+      ]));
+    });
+  }
+
   /* ---- THE materials list, used everywhere a recipe is previewed ----------
      New Work Order and both Add-to-Finished-Stock forms render the same
      thing: a layer heading where the product has layers, then one row per
@@ -237,6 +268,15 @@
       (grp.lines||[]).forEach(l=>{
         const have=+l.have||0, agg=(l.agg!=null?l.agg:l.need)||0;
         const ok=have>=agg-1e-9;
+        /* Which material this line is. Callers disagree on the key — New Work
+           Order sets `id`, the floor's Add-to-Stock sets `code` — and one of
+           them may name a material that no longer exists. Without the item
+           there is no geometry to weigh with, so such a line keeps the unit
+           the caller handed over rather than losing its unit altogether. */
+        const li=ENG.item(l.id)||ENG.item(l.code)||null;
+        const q=(n,dp)=>li?ENG.qtyText(li,n,dp):ENG.num(n,dp)+" "+(l.uom||"");
+        const sfx=(n)=>li?ENG.kgSuffix(li,n):"";
+        const plain=(n)=>li?ENG.dispQty(li,n):n;
         host.appendChild(h("div",{class:"flex between aic",
           style:"gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
           h("div",{style:"min-width:0"},[
@@ -250,13 +290,40 @@
             l.wh?whChip(l.wh):null
           ]),
           h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
-            h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:ENG.num(l.need,2)+" "+(l.uom||"")+ENG.kgSuffix(ENG.item(l.id),l.need)})]),
-            h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:ENG.num(have,1)+" "+(l.uom||"")+ENG.kgSuffix(ENG.item(l.id),have)})]),
-            h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(agg-have,2))})
+            h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:q(l.need,2)+sfx(l.need)})]),
+            h("span",{class:"muted",text:"In store "},[h("b",{class:"mono",style:"color:"+(ok?"var(--text)":"var(--danger)"),text:q(have,1)+sfx(have)})]),
+            h("span",{html:badge(ok?"ok":"danger",ok?"OK":"Short by "+ENG.num(plain(agg-have),2))})
           ])
         ]));
       });
     });
+
+    /* ---- DOES THIS RECIPE WEIGH? ----------------------------------------
+       Material cannot be made on the floor. Coating adds mass and is a line of
+       its own; slitting and packing cannot add a gram. So a recipe that issues
+       LESS weight than the run produces is not a clever yield — it is a wrong
+       figure, and the run will under-issue by exactly the difference.
+       It is almost always a GSM: the finished tape and the material it is cut
+       from are recorded at different grammages for the same thickness.
+       Until the metre figures were restated as kilograms this was invisible —
+       "609.76 MTR" and "100 kg" are not numbers anyone can compare. */
+    if(opts.outputKg > 0){
+      let inKg=0, known=true;
+      groups.forEach(g=>(g.lines||[]).forEach(l=>{
+        const li=ENG.item(l.id)||ENG.item(l.code);
+        const w=li?ENG.kg(li,l.need):null;
+        if(w==null) known=false; else inKg+=w;
+      }));
+      if(known && inKg>0 && inKg < opts.outputKg-0.005){
+        host.appendChild(h("div",{class:"qc-note bad",
+          style:"font-size:12px;margin-top:10px;line-height:1.55;padding:8px 10px"},[
+          h("div",{style:"font-weight:700",text:"⚠ This recipe issues "+ENG.num(inKg,2)
+            +" kg to produce "+ENG.num(opts.outputKg,2)+" kg."}),
+          h("div",{text:"Material cannot be made on the floor, so one of the figures is wrong — check the GSM on the product and on the material it is cut from. As it stands the run will draw "
+            +ENG.num(opts.outputKg-inKg,2)+" kg less than it makes."}),
+        ]));
+      }
+    }
   }
 
   /* The layer build-up — the recipe as the floor reads it: each layer, the
@@ -370,7 +437,9 @@
         text:g.label||("LAYER "+(gi+1))}));
       g.lines.forEach(l=>{
         const q=opts.qtyOf?opts.qtyOf(l):l.qty;
-        const unit=(l.id&&(ENG.item(l.id)||{}).uom)||l.unit||"";
+        const li=l.id?ENG.item(l.id):null;
+        const unit=li?ENG.dispUom(li):(l.unit||"");
+        const qShown=li?ENG.dispQty(li,q):q;
         const whs=opts.whOf?whChips(opts.whOf(l)):[];
         box.appendChild(h("div",{class:"flex aic wrap lp-row"+(whs.length?" lp-row-wh":""),style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:12.5px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
           h("span",{style:"font-weight:600",text:matLineName(l)}),
@@ -378,7 +447,7 @@
           matLineSpec(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:matLineSpec(l)}):null,
           ...whs,
           h("span",{class:"mono lp-qty",style:"font-size:11.5px;flex:0 0 auto;font-weight:700",
-            text:ENG.num(q,2)+" "+unit})
+            text:ENG.num(qShown,2)+" "+unit})
         ]));
       });
     });
@@ -435,7 +504,7 @@
     return wrap;
   }
   function stageCell(w){
-    if(w.dispatched) return `<span class="chip" style="color:var(--ok);border-color:var(--ok)">🚚 Dispatched</span>`;
+    if(w.dispatched) return `<span class="chip" style="color:var(--ok);border-color:var(--ok)" title="${UI.esc((w.dispatchedTo?w.dispatchedTo+(w.dispatchedCustomer?" → "+w.dispatchedCustomer:""):"Dispatched"))}">🚚 Dispatched${w.dispatchedTo?" · "+UI.esc(w.dispatchedTo):""}</span>`;
     const rt=w.route||[]; if(!rt.length) return `<span class="muted">—</span>`;
     const doneN=rt.filter(s=>s.status==="Completed").length;
     const cur=curStage(w);
@@ -546,7 +615,14 @@
       const batches=rows.reduce((n,r)=>Math.max(n,r.runs||0),0);
       if(batches>1) parts.push(batches+" production batches");
     }
-    if(wo.dispatched&&wo.dispatchedAt) parts.push("Dispatched: "+fmtDT(wo.dispatchedAt)+(wo.dispatchedBy?(" · by "+wo.dispatchedBy):""));
+    /* A run shipped against a sales order is recorded HERE and nowhere else —
+       it never became stock, so the ledger has nothing to show for it. Naming
+       the order and the customer is what lets a packed job be traced. */
+    if(wo.dispatchedAt) parts.push("Dispatched: "+fmtDT(wo.dispatchedAt)
+      +((+wo.dispatchedQty)?(" · "+ENG.num(wo.dispatchedQty,2)+" kg"):"")
+      +(wo.dispatchedTo?(" · "+wo.dispatchedTo):"")
+      +(wo.dispatchedCustomer?(" → "+wo.dispatchedCustomer):"")
+      +(wo.dispatchedBy?(" · by "+wo.dispatchedBy):""));
     if(parts.length) wrap.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:12px",text:parts.join("    ·    ")}));
     return wrap;
   }
@@ -782,10 +858,10 @@
       const rows=(e.shortage||[]).map(s=>h("tr",{},[
         h("td",{style:"padding:4px 8px"},[h("div",{text:s.name}),
           h("div",{class:"cell-sub mono",text:s.id||""})]),
-        h("td",{class:"num",style:"padding:4px 8px;text-align:right",text:ENG.num(s.need,2)+" "+(s.uom||"")}),
-        h("td",{class:"num",style:"padding:4px 8px;text-align:right",text:ENG.num(s.have,2)}),
+        h("td",{class:"num",style:"padding:4px 8px;text-align:right",text:ENG.qtyText(ENG.item(s.id),s.need,2)}),
+        h("td",{class:"num",style:"padding:4px 8px;text-align:right",text:ENG.num(ENG.dispQty(ENG.item(s.id),s.have),2)}),
         h("td",{class:"num",style:"padding:4px 8px;text-align:right;color:var(--danger);font-weight:700",
-          text:"−"+ENG.num(s.short,2)}),
+          text:"−"+ENG.num(ENG.dispQty(ENG.item(s.id),s.short),2)}),
       ]));
       const tbl=h("table",{class:"tbl",style:"width:100%;margin:10px 0"});
       tbl.appendChild(h("thead",{},h("tr",{},["Material","Required","In store","Short"].map((t,i)=>
@@ -940,7 +1016,7 @@
       /* One list, in the layer build-up the floor already reads — the recipe
          with the quantity THIS run consumes, rather than the BOM's per-batch
          figures, and each line naming the store it leaves. */
-      const uomIt=(it||{}).uom||"kg";
+      const uomIt=ENG.dispUom(it)||"kg";
       const fgQty=+(net&&net.fgQty)||0, wipQty=+(net&&net.wipQty)||0;
       const took=[];
       if(fgQty>0.001) took.push(ENG.num(fgQty,2)+" "+uomIt+" from finished stock");
@@ -1329,6 +1405,7 @@
            CLOFT 913") or a span ("0.08-0.10") rather than one material; which
            is actually issued is decided here, against live stock, and travels
            to the server so the issue posts the material that was chosen. */
+        optionalPicker(matHost, bom, fsChoices, qty, drawMaterials);
         const norm=BOMCALC.normalize(bom.lines);
         const ranged=norm.map((l,i)=>({l,i})).filter(x=>x.l.ranged);
         if(ranged.length){
@@ -1343,7 +1420,7 @@
             const sel=h("select",{class:"select",style:"max-width:340px",
               onchange:e=>{ fsChoices[i]=e.target.value; drawMaterials(); }},
               usable.map(c=>h("option",{value:c.id,selected:fsChoices[i]===c.id,
-                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+ENG.kgSuffix(c.item,c.have)+" in store"})));
+                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.qtyText(c.item,c.have,1)+ENG.kgSuffix(c.item,c.have)+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
@@ -1362,13 +1439,13 @@
           label: grp.label,
           lines: grp.lines.filter(keep).map(l=>{
             const rid=l.id, r=rid?(ENG.item(rid)||{}):{};
-            return { name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
+            return { id: rid, name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
               need: perOf(l)*qty/bom.yield,
               have: rid?(ENG.stock(rid).onHand||0):0,
               agg: rid?needBy[rid]:undefined,
               uom: r.uom||l.unit||"" };
           }),
-        })), {title:"Raw materials to be deducted from store"});
+        })), {title:"Raw materials to be deducted from store", outputKg:ENG.kg(owner,qty)});
 
         /* ---- a short material blocks the booking, exactly as it blocks a
            work order: stock cannot be issued that is not there ---- */
@@ -1686,6 +1763,7 @@
            The BOM records a choice ("CLOFT 912 / CLOFT 913") or a span
            ("0.08-0.10") rather than one material. Which is actually issued is
            decided here, against live stock. */
+        optionalPicker(matHost, bom, matChoices, qty, recalc);
         const norm=BOMCALC.normalize(bom.lines);
         const ranged=norm.map((l,i)=>({l,i})).filter(x=>x.l.ranged);
         if(ranged.length){
@@ -1700,7 +1778,7 @@
             const sel=h("select",{class:"select",style:"max-width:340px",
               onchange:e=>{ matChoices[i]=e.target.value; recalc(); }},
               usable.map(c=>h("option",{value:c.id,selected:matChoices[i]===c.id,
-                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.num(c.have,1)+" "+(c.item.uom||"")+ENG.kgSuffix(c.item,c.have)+" in store"})));
+                text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.qtyText(c.item,c.have,1)+ENG.kgSuffix(c.item,c.have)+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
               h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
@@ -1727,7 +1805,7 @@
           label: grp.label,
           lines: grp.lines.map(l=>{
             const rid=l.id, r=rid?(ENG.item(rid)||{}):{};
-            return { name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
+            return { id: rid, name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
               need: perOf(l)*makeQty/bom.yield,
               have: rid?(ENG.stock(rid).onHand||0):0,
               agg: rid?needBy[rid]:undefined,
@@ -1736,22 +1814,32 @@
               wh: rid?issuingWh(rid):null,
               uom: r.uom||l.unit||"" };
           }),
-        })));
-        /* A short material no longer blocks the order. The factory makes what
-           the store covers and carries the rest as pending, so this WARNS and
-           the button stays live — the server answers with the exact shortage
-           and the office confirms before anything is written. */
+        })), {outputKg: makeQty});
+        /* A SHORT material does not block the order — what the store covers
+           runs, the balance pends, the office confirms. A material at ZERO is
+           different (ruled 2026-08-22): nothing can start, so the order cannot
+           be raised at all. Products we make in-house are exempt, exactly as
+           on the server — their material comes off our own line, not a truck. */
         shortages=Object.entries(needBy)
           .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
           .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
-        if(makeQty>0 && shortages.length){
+        const noneAtAll = Object.entries(needBy)
+          .filter(([rid,n])=>n>1e-9 && (ENG.stock(rid).onHand||0)<=1e-9)
+          .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
+        if(makeQty>0 && noneAtAll.length){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600"},[
+            h("div",{text:"⛔ The store has NONE of: "+noneAtAll.join(", ")}),
+            h("div",{style:"font-weight:500;margin-top:3px;font-size:11.5px",
+              text:"This order cannot be raised until the material is received — raise a purchase order first."}),
+          ]));
+        } else if(makeQty>0 && shortages.length){
           matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--warn);border-radius:8px;color:var(--warn);font-size:12.5px;font-weight:600"},[
             h("div",{text:"⚠ Short of: "+shortages.join(", ")}),
             h("div",{style:"font-weight:500;margin-top:3px;font-size:11.5px",
               text:"The order can still be raised — what the store covers goes to the floor and the balance is held as pending until the material arrives."}),
           ]));
         }
-        if(createBtn) createBtn.disabled=false;
+        if(createBtn) createBtn.disabled = makeQty>0 && noneAtAll.length>0;
       };
       const createBtn=h("button",{class:"btn primary",onclick:save,text:"Create Work Order"});
       const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
@@ -1915,10 +2003,12 @@ recalc(); },50);
         out.appendChild(table(rows,[
           {key:"name",label:"Raw Material",cls:"nm",render:r=>esc(r.name)},
           {key:"per",label:"Per kg",num:true,render:r=>ENG.num(r.per,3)+" "+esc(r.uom),sort:r=>r.per},
-          {key:"need",label:"Required",num:true,render:r=>"<b>"+ENG.num(r.need,2)+"</b> "+esc(r.uom),sort:r=>r.need},
-          {key:"needKg",label:"Required (kg)",num:true,render:r=>{const w=ENG.kg(ENG.item(r.rid),r.need);return w==null?'<span class="muted">—</span>':"<b>"+ENG.num(w,2)+"</b> kg";},sort:r=>ENG.kg(ENG.item(r.rid),r.need)||0},
-          {key:"have",label:"In Stock",num:true,render:r=>ENG.num(r.have,1)+" "+esc(r.uom)+ENG.kgSuffix(ENG.item(r.rid),r.have),sort:r=>r.have},
-          {key:"short",label:"Shortfall",num:true,render:r=> r.short>0? badge("danger",ENG.num(r.short,2)+" "+r.uom): badge("ok","OK"),sort:r=>r.short},
+          {key:"need",label:"Required",num:true,render:r=>"<b>"+ENG.num(ENG.dispQty(ENG.item(r.rid),r.need),2)+"</b> "+esc(ENG.dispUom(ENG.item(r.rid))||r.uom),sort:r=>r.need},
+          /* "Required (kg)" only says something when the column beside it is
+             NOT already a weight — web reads in kilograms on its own now */
+          {key:"needKg",label:"Required (kg)",num:true,render:r=>{const it=ENG.item(r.rid);if(ENG.readsAsKg(it))return '<span class="muted">—</span>';const w=ENG.kg(it,r.need);return w==null?'<span class="muted">—</span>':"<b>"+ENG.num(w,2)+"</b> kg";},sort:r=>ENG.kg(ENG.item(r.rid),r.need)||0},
+          {key:"have",label:"In Stock",num:true,render:r=>ENG.num(ENG.dispQty(ENG.item(r.rid),r.have),1)+" "+esc(ENG.dispUom(ENG.item(r.rid))||r.uom)+ENG.kgSuffix(ENG.item(r.rid),r.have),sort:r=>r.have},
+          {key:"short",label:"Shortfall",num:true,render:r=> r.short>0? badge("danger",ENG.num(ENG.dispQty(ENG.item(r.rid),r.short),2)+" "+(ENG.dispUom(ENG.item(r.rid))||r.uom)): badge("ok","OK"),sort:r=>r.short},
         ],{empty:"No components"}));
       }
       setTimeout(()=>{ const s=UI.$("#bc_fg"); if(s) s.addEventListener("change",recalc); const q=UI.$("#bc_qty"); if(q) q.addEventListener("input",recalc); const u=UI.$("#bc_unit"); if(u) u.addEventListener("change",recalc); recalc(); },50);
@@ -2601,10 +2691,11 @@ recalc(); },50);
 
         /* ---- component rows ---- */
         tblHost.innerHTML="";
-        const head=["Raw material","Qty / batch","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm",""];
+        const head=["Raw material","Qty / batch","Opt?","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm",""];
         const tbl=h("table",{class:"tbl bom-edit-tbl"});
         tbl.appendChild(h("thead",{},[h("tr",{},head.map((t,i)=>
-          h("th",{style:"font-size:11px;"+(i>=1&&i<=6?"text-align:right":""),text:t})))]));
+          h("th",{style:"font-size:11px;"+(i>=1&&i<=7?"text-align:right":""),text:t,
+            title:t==="Opt?"?"Optional — each work order chooses whether to use this line":null})))]));
         const tb=h("tbody");
         /* layer names render as heading rows inside the editable table; a
            single-layer product gets the same heading so it reads like a
@@ -2614,7 +2705,7 @@ recalc(); },50);
         grpIdx.forEach((g,gi)=>{ if(g.lines.length) heads[g.lines[0]._i]=g.label||(grpIdx.length>1?"LAYER "+(gi+1):"LAYER 1"); });
         c.lines.forEach((cl,i)=>{
           const l=lines[i];
-          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"8",
+          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"9",
             style:"font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
             text:heads[i]})]));
           const nameCell=h("td",{class:"nm bom-nm"});
@@ -2655,6 +2746,12 @@ recalc(); },50);
             style:"width:96px;text-align:right",
             oninput:reclass(e=>{ const v=e.target.value.trim(); l.rmGsm = v===""?null:v; })});
           gsmIn.title="Give a fabric its GSM (with unit MTR) to count it as a layer in the pickup-GSM calculation";
+          /* optional = offered per order, never assumed. The ink lines on the
+             aluminium tapes are the reason this exists. */
+          const optIn=h("input",{type:"checkbox",title:"Optional \u2014 each work order chooses whether to use this line",
+            style:"width:15px;height:15px;accent-color:var(--accent)"});
+          optIn.checked=!!l.optional;
+          optIn.addEventListener("change",()=>{ l.optional=optIn.checked||undefined; });
           const pickIn=h("input",{class:"input",type:"number",step:"1",min:"0",max:"100",
             value:(l.pickupPct==null?"":l.pickupPct), placeholder:cl.fabric?"n/a":"set",
             style:"width:84px;text-align:right",
@@ -2666,6 +2763,7 @@ recalc(); },50);
           tb.appendChild(h("tr",{},[
             nameCell,
             h("td",{style:"text-align:right"},[qtyIn]),
+            h("td",{style:"text-align:right",title:"Optional per order"},[optIn]),
             h("td",{style:"text-align:right"},[unitIn]),
             h("td",{style:"text-align:right"}, isMtr?[gsmIn]:[h("span",{class:"muted",title:"GSM applies only to fabrics and tapes (unit MTR)",text:"—"})]),
             h("td",{style:"text-align:right"},[pickIn]),
@@ -2783,6 +2881,7 @@ recalc(); },50);
             rm:l.rm, rmType:l.rmType, rmThk:l.rmThk, rmGsm:l.rmGsm,
             qty:+l.qty||0, unit:l.unit||"KG",
             pickupPct: l.pickupPct==null?null:+l.pickupPct,
+            optional: l.optional?true:undefined,
             ranged:!!l.ranged, options:l.options||[], layer:l.layer||null };
           return o;
         }).filter(l=>(l.id||l.options.length) && l.qty>0);

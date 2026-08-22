@@ -734,6 +734,22 @@ async function deleteSalesOrder(id) {
    negative finished stock is expected here — production books nothing in
    (ruled 2026-07-30), so the ledger goes negative by design until somebody
    runs "Add to Finished Stock". Blocking it would stop real dispatches. */
+/* ---- DISPATCHING A SALES ORDER ----
+   Nothing is booked INTO stock anywhere in production: a run travels stage to
+   stage and out of the door (the no-stock rule). So deducting finished goods
+   on dispatch was taking out something that had never gone in, and the item
+   went further negative with every order shipped — which is what "need 99,
+   have -102" was.
+
+   A line that names a BATCH is that work order being shipped. It is recorded
+   against the WORK ORDER, where Production Control shows it, and it takes
+   NOTHING out of the store.
+
+   A line with NO batch is genuine finished stock, put there deliberately by
+   "Add to Finished Stock", so that still comes out of the store — and if it
+   is not there, the dispatch is REFUSED. There is no "post it anyway": a
+   negative balance is not a warning, it is a wrong number that every
+   valuation, reorder and ATP figure downstream then repeats. */
 async function dispatchSalesOrder(soId, body, user) {
   return await repo.withTx(async (x) => {
     body = body || {};
@@ -743,14 +759,62 @@ async function dispatchSalesOrder(soId, body, user) {
     const date = body.date || todayISO();
     const wh = body.wh || "WH-FG";
     const by = (user && user.username) || "sales";
-    const moves = (so.lines || []).map((l) => ({
-      id: mvId(), date, itemId: l.itemId, wh, type: "SALE",
-      qty: -Math.abs(num(l.qty)), rate: l.rate || 0, ref: so.id, note: "Dispatch vs SO", by,
-    }));
+    const now = new Date().toISOString();
+    const r3v = (n) => Math.round(n * 1000) / 1000;
+    /* who it went to, read once — Production Control names the customer on the
+       run, which is how the floor recognises a job it packed */
+    const cust = so.customerId ? await repo.getCustomer(so.customerId, x) : null;
+    const custName = (cust && cust.name) || so.customerId || null;
+
+    const moves = [];
+    const batches = [];
+    for (const l of (so.lines || [])) {
+      const qty = Math.abs(num(l.qty));
+      if (!qty) continue;
+
+      if (l.batch) {
+        const wo = await repo.getWorkOrder(l.batch, x);
+        if (!wo) throw err("Batch " + l.batch + " is no longer a work order — re-pick the batch on this line.", 400);
+        /* What the run actually MADE, the same way readyBatches reads it: a
+           part-served order has made only completed + on-the-floor, and an
+           ordinary one made what it was raised for. The shipped figure is
+           capped at that, never at the line — an order for 500 kg against a
+           20 kg run is ordinary make-to-order trade and is NOT refused here
+           (the batch is traceability, never a ceiling). */
+        const partial = (wo.runQty != null || wo.completedQty != null || wo.pendingQty != null);
+        const made = partial ? r3v(num(wo.completedQty) + num(wo.runQty)) : num(wo.qty);
+        wo.dispatchedQty = Math.min(made, r3v(num(wo.dispatchedQty) + qty));
+        wo.dispatchedBy = by;
+        wo.dispatchedAt = now;
+        wo.dispatchedTo = so.id;                       // shown in Production Control
+        wo.dispatchedCustomer = custName;
+        /* only an order with no balance left waiting on material is closed */
+        if (num(wo.pendingQty) <= 1e-6) wo.dispatched = true;
+        await repo.putWorkOrder(wo, x);
+        batches.push({ batch: wo.id, qty });
+        continue;
+      }
+
+      const have = await repo.onHandOf(l.itemId, x);
+      if (have + 1e-6 < qty) {
+        const it = await repo.getItem(l.itemId);
+        throw err(
+          "Not enough finished stock for " + ((it && it.name) || l.itemId) +
+          " — " + qty + " needed, " + r3v(have) + " in store. Either add the finished stock first, " +
+          "or pick the batch (work order) this line ships from: a batch ships the run itself and " +
+          "takes nothing out of the store.", 400);
+      }
+      moves.push({
+        id: mvId(), date, itemId: l.itemId, wh, type: "SALE",
+        qty: -qty, rate: l.rate || 0, ref: so.id, note: "Dispatch vs SO", by,
+      });
+    }
+
     if (moves.length) await repo.addMovements(moves, x);
     so.status = "Dispatched";
     await repo.putSalesOrder(so, x);
-    return { ok: true, posted: moves.length, so: { id: so.id, status: so.status } };
+    return { ok: true, posted: moves.length, fromBatches: batches.length,
+             batches, so: { id: so.id, status: so.status } };
   });
 }
 

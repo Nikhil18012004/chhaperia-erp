@@ -190,6 +190,10 @@
       // the sheet's layer section this line belongs to (e.g. "TOP LAYER");
       // must survive normalisation or every save strips the layer grouping
       layer: isBlank(l.layer) ? null : String(l.layer).replace(/\s+/g, " ").trim(),
+      /* An OPTIONAL line (printing ink on an aluminium tape) is part of the
+         recipe but not of every run: some customers want the print, some do
+         not. It is EXCLUDED unless the order says otherwise - see resolve(). */
+      optional: !!l.optional,
       legacy: false,
     };
   }
@@ -315,6 +319,13 @@
     return lines.map(function (l, i) {
       var pick = choices[i] || choices[String(i)];
       return pick ? Object.assign({}, l, { id: pick, ranged: false }) : l;
+    }).filter(function (l, i) {
+      /* An optional line is OUT unless this order asked for it. The key is
+         "use:<index>" in the same choices object that carries the ranged
+         picks, so the decision travels to the server on the work order and
+         the issue posts exactly what the screen showed. The filter runs
+         AFTER the map so the ranged keys (plain indexes) never shift. */
+      return !l.optional || choices["use:" + i];
     });
   }
 
@@ -360,7 +371,7 @@
   function toLegacy(bom, meta, choices, items) {
     bom = bom || {};
     meta = meta || bom.meta || {};
-    var lines = choices ? resolve(bom, choices) : normalize(bom.lines);
+    var lines = resolve(bom, choices || {});
     var c = compute({ lines: lines }, meta);
     var perUnitBasis = String(meta.basis || bom.basis || "").toLowerCase() === "batch" || !!c.fgKgPerBatch;
     var look = typeof items === "function"

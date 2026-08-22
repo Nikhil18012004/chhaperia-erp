@@ -398,6 +398,14 @@ async function getWorkOrder(id, x0) {
   });
 }
 
+/** Stock on hand for ONE item, summed in the database rather than by loading
+    every movement. Used by dispatch, which has to refuse before it writes. */
+async function onHandOf(itemId, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT COALESCE(SUM(`qty`),0) AS q FROM `movements` WHERE `item_id`=?", [itemId]);
+  return +((r && r.q) || 0);
+}
+
 /** Insert-or-replace one work order (extra fields kept in doc JSON). */
 async function putWorkOrder(w, x0) {
   const x = await ex(x0);
@@ -1071,7 +1079,7 @@ async function hrIsEmpty(x0) {
   return Number(await x.val("SELECT COUNT(*) AS `c` FROM `hr_workers`")) === 0;
 }
 
-module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder,
+module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder, onHandOf,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getGrns, putGrn, insertGrn, getGrn,
   getGrnTests, getGrnTest, getGrnTestFor, putGrnTest, deleteGrnTest,
