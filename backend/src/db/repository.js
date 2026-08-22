@@ -406,6 +406,13 @@ async function onHandOf(itemId, x0) {
   return +((r && r.q) || 0);
 }
 
+/** On-hand of one item in ONE store — a transfer may only draw what is there. */
+async function onHandAt(itemId, wh, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT COALESCE(SUM(`qty`),0) AS q FROM `movements` WHERE `item_id`=? AND `wh`=?", [itemId, wh]);
+  return +((r && r.q) || 0);
+}
+
 /** Insert-or-replace one work order (extra fields kept in doc JSON). */
 async function putWorkOrder(w, x0) {
   const x = await ex(x0);
@@ -1079,7 +1086,7 @@ async function hrIsEmpty(x0) {
   return Number(await x.val("SELECT COUNT(*) AS `c` FROM `hr_workers`")) === 0;
 }
 
-module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder, onHandOf,
+module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder, onHandOf, onHandAt,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getGrns, putGrn, insertGrn, getGrn,
   getGrnTests, getGrnTest, getGrnTestFor, putGrnTest, deleteGrnTest,

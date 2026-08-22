@@ -420,6 +420,45 @@ async function addMovement(m) {
   if (m.type === "GRN" && mvItem.cat === "WIP" && !m.manual) {
     throw err("Cannot receive stock into a WIP item (" + m.itemId + "). Receive the raw material itself instead.", 400);
   }
+  /* A transfer is a signed pair, and the SERVER writes the pair. The browser
+     used to post the two legs as separate requests and this endpoint accepted
+     each leg blind — so a lone XFER row minted (or destroyed) stock, and a
+     network blip between the legs stranded half a transfer. Now one request
+     names both stores and both rows land in one transaction, or neither does. */
+  if (m.type === "XFER") {
+    if (!m.wh || !m.whTo)
+      throw err("A transfer moves stock between two stores in one step — send wh (from) "
+        + "and whTo (to). A lone XFER row would mint or destroy stock, so it is refused.", 400);
+    if (!await repo.getWarehouse(m.whTo)) throw err("Unknown warehouse " + m.whTo, 400);
+    if (m.whTo === m.wh) throw err("A transfer needs two different stores — it is already in " + m.wh + ".", 400);
+    const amt = Math.abs(q);
+    if (!(amt > 0)) throw err("A transfer needs a quantity greater than zero.", 400);
+    const there = await repo.onHandAt(m.itemId, m.wh);
+    if (amt > there + 1e-6)
+      throw err("Cannot move " + amt + " " + (mvItem.uom || "") + " of " + (mvItem.name || m.itemId)
+        + " out of " + m.wh + ": only " + +there.toFixed(3) + " is there.", 400);
+    const date = m.date || todayISO();
+    const rate = (m.rate != null && m.rate !== "") ? (+m.rate || 0) : 0;
+    const out = { id: m.id || mvId(), date, itemId: m.itemId, wh: m.wh, type: "XFER",
+      qty: -amt, rate, ref: m.ref || null, note: m.note || null, by: m.by || null };
+    const inn = { id: m.idTo || mvId(), date, itemId: m.itemId, wh: m.whTo, type: "XFER",
+      qty: amt, rate, ref: m.ref || null, note: m.noteTo || m.note || null, by: m.by || null };
+    await repo.addMovements([out, inn]);
+    return { ok: true, id: out.id, idTo: inn.id };
+  }
+  /* Stock has a floor. The sign rules above stop a receipt posing as a
+     write-off, but nothing bounded the size: an ISSUE of −9,000,000,000 posted
+     cleanly and the ledger read −8.99 billion with no warning anywhere. No
+     physical count is negative, so no manual movement may take an item below
+     zero — a ledger that overstates the shelf is corrected down TO zero (ADJ),
+     never through it. */
+  if (q < 0) {
+    const have = await repo.onHandOf(m.itemId);
+    if (-q > have + 1e-6)
+      throw err("This would take " + (mvItem.name || m.itemId) + " to "
+        + +(have + q).toFixed(3) + " " + (mvItem.uom || "") + ". Only " + +have.toFixed(3)
+        + " is on hand, and stock cannot go below zero.", 400);
+  }
   m.qty = +m.qty;
   if (m.rate != null && m.rate !== "") m.rate = +m.rate || 0;
   if (!m.id) m.id = mvId();

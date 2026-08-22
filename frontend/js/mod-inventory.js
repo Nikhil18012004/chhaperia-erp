@@ -1069,7 +1069,11 @@
         ENG.data.movements.push(outMove, inMove);
         mo.close();
         toast(`Moved ${ENG.num(qty,2)} ${it.uom||""}: ${whName(from)} → ${whName(to)}`,{type:"ok",title:"Stock transferred"});
-        App.saveDelta(async()=>{ await DB.movements.add(outMove); await DB.movements.add(inMove); });
+        /* ONE request — the server writes both legs in one transaction (a lone
+           XFER leg is refused there, so never post the halves separately). The
+           ids ride along so the rows the server writes are the rows shown above. */
+        App.saveDelta(()=>DB.movements.add({ id:outMove.id, idTo:inMove.id, date, itemId:id, type:"XFER",
+          qty, wh:from, whTo:to, rate:cost, ref, note:outMove.note, noteTo:inMove.note, by }));
       }
     }
   }};
