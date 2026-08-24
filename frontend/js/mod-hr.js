@@ -207,7 +207,8 @@
     ]);
     modal({ title: w.name, sub: w.id + " · " + cap(w.dept || ""), wide: true, body,
       foot: [h("button", { class: "btn danger", onclick: () => delWorker(w), text: "🗑 Delete" }),
-        h("button", { class: "btn ghost", onclick: () => { UI.$("#modalHost").hidden = true; workerForm(w); }, text: "✎ Edit" })] });
+        h("button", { class: "btn ghost", onclick: () => { UI.$("#modalHost").hidden = true; workerForm(w); }, text: "✎ Edit" }),
+        h("button", { class: "btn primary", onclick: () => printWorkerProfile(w), text: "🖨 Print Profile" })] });
     DB.hr.balances(id).then(({ balances }) => { const box = UI.$("#wk_bal"); if (!box) return; box.innerHTML = "";
       if (!balances.length) { box.appendChild(h("span", { class: "muted", text: "No leave types configured." })); return; }
       balances.forEach((b) => box.appendChild(h("div", { class: "chip", style: "padding:8px 12px" },
@@ -252,6 +253,237 @@
   async function delWorker(w) {
     if (!await confirm(`Delete ${w.name} (${w.id})? Their attendance/leave history stays but the worker record is removed.`, { title: "Delete Worker", danger: true })) return;
     UI.$("#modalHost").hidden = true; save(() => DB.hr.worker.remove(w.id), "workers");
+  }
+
+  /* ============================================================
+     WORKER PROFILE — printed sheet
+     The worker's bio-data on one branded A4: a navy masthead with the
+     worker code set in an orange corner disc, an identity card with an
+     initials avatar and the day rate, then employment and pay / statutory
+     / bank details with the values set flush right, a sign-off, and a
+     document-control strip. Nothing derived — no attendance, leave or
+     payroll history; those live on their own tabs and the payslip.
+     ============================================================ */
+
+  /* "2024-03-11" -> "1 yr 5 mos" — how long they have been on the rolls */
+  function serviceLen(joined) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(joined || ""));
+    if (!m) return "—";
+    const from = new Date(+m[1], +m[2] - 1, +m[3]), now = new Date();
+    let mos = (now.getFullYear() - from.getFullYear()) * 12 + (now.getMonth() - from.getMonth());
+    if (now.getDate() < from.getDate()) mos--;
+    if (mos < 0) return "—";
+    const y = Math.floor(mos / 12), r = mos % 12;
+    return (y ? y + (y === 1 ? " yr " : " yrs ") : "") + r + (r === 1 ? " mo" : " mos");
+  }
+
+  function workerProfileDocHtml(w) {
+    const co = payCompany();
+    const initials = String(w.name || "").trim().split(/\s+/).slice(0, 2)
+      .map((s) => (s[0] || "")).join("").toUpperCase() || "?";
+    const active = w.active !== false;
+    /* label left, value flush right — the mockup's ledger look */
+    const kv = (rows) => rows.filter(Boolean).map(([l, v]) =>
+      `<tr><td>${esc(l)}</td><td class="v">${esc(v == null || v === "" ? "—" : String(v))}</td></tr>`).join("");
+    let secNo = 0;
+    const sec = (title, inner) => `<section class="blk">
+      <div class="sec"><i>${++secNo}</i><b>${esc(title)}</b></div>${inner}</section>`;
+    const chip = (t) => `<span class="chip">${esc(t)}</span>`;
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Worker Profile — ${esc(w.name)} (${esc(w.id)})</title>
+<style>
+  /* ---- Bio-data on one branded page. The sheet is full-bleed — the navy
+     masthead and the tail strip run to the paper edge — so the @page margin
+     is zero and the grey ground is the page itself; the cards float on it.
+     Ask the print dialog for background graphics, as with the payslip. ---- */
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font:10px/1.4 "Segoe UI",Arial,sans-serif;color:#2b2f33}
+  .page{width:210mm;min-height:296.5mm;background:#eef0f3;display:flex;flex-direction:column;overflow:hidden}
+
+  /* ---- masthead: navy band, white logo card, orange corner disc ---- */
+  .hd{position:relative;background:#1b2433;padding:7mm 9mm;display:flex;align-items:center;gap:7mm;overflow:hidden}
+  .hd-disc{position:absolute;top:-26mm;right:-20mm;width:62mm;height:62mm;border-radius:50%;background:#d95f16}
+  .hd-disc2{position:absolute;top:-32mm;right:-12mm;width:58mm;height:58mm;border-radius:50%;background:#ee752a}
+  .hd-logo{position:relative;background:#fff;border-radius:9px;padding:9px 14px;flex:0 0 auto;
+    box-shadow:0 2px 8px rgba(0,0,0,.28)}
+  .hd-logo img{height:32px;display:block}
+  .hd-co{position:relative;flex:1;min-width:0;padding-right:34mm}
+  .hd-conm{font-size:15px;font-weight:800;color:#fff;letter-spacing:-.2px;line-height:1.2}
+  .hd-coad{font-size:8.5px;color:#9aa3b2;margin-top:3px;line-height:1.45;max-width:110mm}
+  .hd-id{position:relative;flex:0 0 auto;text-align:right;color:#fff}
+  .hd-id-l{font-size:8px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase}
+  .hd-id-m{font-size:22px;font-weight:800;letter-spacing:-.4px;margin-top:1px;font-variant-numeric:tabular-nums}
+  .hd-id-d{font-size:8px;color:rgba(255,255,255,.85);margin-top:2px}
+  .hd-bar{height:2.8mm;background:#e8641e}
+
+  .wrap{flex:1 0 auto;padding:6mm 8mm 0}
+
+  /* ---- identity card: avatar, name, chips, and the rate ---- */
+  .idc{background:#fff;border-radius:14px;padding:6mm 7mm;display:flex;align-items:center;gap:6mm;
+    box-shadow:0 2px 10px rgba(18,24,32,.07)}
+  .av{width:19mm;height:19mm;border-radius:50%;border:2.5px solid #e8641e;background:#fdeee2;color:#e8641e;
+    display:flex;align-items:center;justify-content:center;font-size:9mm;font-weight:800;flex:0 0 auto;
+    letter-spacing:-.5px}
+  .idc-mid{flex:1;min-width:0}
+  .nm-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .nm{font-size:22px;font-weight:800;color:#12151a;letter-spacing:-.5px;line-height:1.1}
+  .pill{font-size:8px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
+    border-radius:999px;padding:2.5px 10px;border:1.6px solid}
+  .pill.on{color:#1c7a3d;border-color:#35a15c;background:#f2faf4}
+  .pill.off{color:#a32a20;border-color:#c4453a;background:#fdf2f1}
+  .role{font-size:11.5px;font-weight:700;color:#2b2f33;margin-top:2.5px}
+  .role i{font-style:normal;color:#9aa1a8;margin:0 4px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .chip{font-size:8px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#4b5158;
+    background:#eceff3;border-radius:8px;padding:3.5px 10px;white-space:nowrap}
+  .rate{flex:0 0 auto;background:#e9eef6;border-radius:11px;padding:5mm 7mm;text-align:center;min-width:44mm}
+  .rate b{display:block;font-size:19px;font-weight:800;color:#12151a;letter-spacing:-.4px;
+    font-variant-numeric:tabular-nums}
+  .rate span{display:block;font-size:7.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
+    color:#6b7280;margin-top:2.5px}
+
+  /* ---- the main card, with its orange spine ---- */
+  .main{position:relative;background:#fff;border-radius:14px;margin-top:5mm;padding:7mm 8mm 6mm 9.5mm;
+    box-shadow:0 2px 10px rgba(18,24,32,.07)}
+  .main:before{content:"";position:absolute;left:0;top:0;bottom:0;width:2.4mm;background:#e8641e;
+    border-radius:14px 0 0 14px}
+
+  .blk+.blk{margin-top:6.5mm}
+  .sec{display:flex;align-items:center;gap:9px;border-bottom:1.8px solid #232a36;
+    padding-bottom:2.4mm;margin-bottom:1mm}
+  .sec i{font-style:normal;font-size:9px;font-weight:800;background:#1b2433;color:#fff;width:16px;height:16px;
+    border-radius:4px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .sec b{font-size:11.5px;font-weight:800;letter-spacing:.5px;color:#12151a;text-transform:uppercase}
+
+  .cols{display:flex;gap:11mm}
+  .cols>div{flex:1;min-width:0}
+  table.kv{border-collapse:collapse;width:100%}
+  table.kv td{padding:2.7mm 0 1.8mm;border-bottom:1px solid #6f7680;font-size:10px;vertical-align:bottom}
+  table.kv td:first-child{color:#6b7177}
+  table.kv td.v{text-align:right;font-weight:700;color:#12151a;word-break:break-word}
+
+  /* pay & bank sits in its peach panel, as on the mockup */
+  .panel{background:#fdf1e6;border:1px solid #f6ddc4;border-radius:10px;padding:1mm 5mm 2mm;margin-top:2mm}
+  .panel table.kv td{border-bottom-color:#e3c6a8}
+
+  .sign{display:flex;justify-content:space-between;align-items:flex-start;gap:12mm;margin-top:6mm}
+  .sign-note{font-size:8.6px;color:#6b7177;max-width:95mm;line-height:1.55;padding-top:1mm}
+  .sign-box{flex:0 0 auto;text-align:right;min-width:62mm}
+  .sign-for{font-size:10.5px;font-weight:800;color:#12151a}
+  .sign-line{height:13mm;border-bottom:1.4px solid #3a414d;margin-bottom:2.2mm}
+  .sign-lbl{font-size:10px;font-weight:800;color:#12151a}
+
+  /* ---- page foot: the record line, document control, navy tail ---- */
+  .meta{display:flex;justify-content:space-between;gap:8mm;padding:4.5mm 1mm 3.5mm;font-size:8px;color:#9aa1a8}
+  .docctl{background:#fff;border-radius:10px;padding:3.4mm 5mm;display:flex;justify-content:space-between;
+    align-items:center;gap:8mm;box-shadow:0 2px 10px rgba(18,24,32,.07)}
+  .docctl b{font-size:8px;font-weight:800;letter-spacing:1.2px;color:#3f4650;text-transform:uppercase}
+  .docctl span{font-size:8.5px;color:#6b7177}
+  .tail{height:4mm;background:#1b2433;margin-top:5mm}
+
+  @media screen{
+    body{background:#d6dade;padding:20px}
+    .page{margin:0 auto;box-shadow:0 4px 22px rgba(15,20,28,.28)}
+  }
+  @media print{
+    body{background:#fff}
+    .page{width:auto}
+  }
+  @page{size:A4 portrait;margin:0}
+</style></head><body>
+<div class="page">
+  <header class="hd">
+    <div class="hd-disc"></div><div class="hd-disc2"></div>
+    <div class="hd-logo"><img src="${location.origin}/assets/logo-full-print.png" alt="${esc(co.name)}"
+      onerror="this.src='${location.origin}/assets/logo-invoice.png'"></div>
+    <div class="hd-co">
+      <div class="hd-conm">${esc(co.name)}</div>
+      <div class="hd-coad">${esc(co.address || "")}</div>
+    </div>
+    <div class="hd-id">
+      <div class="hd-id-l">Employee Bio-Data</div>
+      <div class="hd-id-m">${esc(w.id)}</div>
+      <div class="hd-id-d">as on ${esc(dmy(iso()))}</div>
+    </div>
+  </header>
+  <div class="hd-bar"></div>
+
+  <div class="wrap">
+    <div class="idc">
+      <div class="av">${esc(initials)}</div>
+      <div class="idc-mid">
+        <div class="nm-row"><span class="nm">${esc(w.name)}</span>
+          <span class="pill ${active ? "on" : "off"}">${active ? "Active" : "Inactive"}</span></div>
+        <div class="role">${esc(w.designation || "—")}<i>·</i>${esc(cap(w.dept || "—"))} Department</div>
+        <div class="chips">
+          ${chip(w.payType === "monthly" ? "Monthly Salary" : "Daily Wage")}
+          ${chip("Shift " + (w.shift || "General"))}
+          ${chip("Joined " + dmy(w.joined))}
+          ${chip("Service " + serviceLen(w.joined))}
+        </div>
+      </div>
+      <aside class="rate">
+        <b>${w.payType === "monthly" ? RS(w.monthlyCtc) : RS(w.dailyRate)}</b>
+        <span>${w.payType === "monthly" ? "Monthly CTC" : "Rate Per Day"}</span>
+      </aside>
+    </div>
+
+    <div class="main">
+      ${sec("Employment Details", `<div class="cols">
+        <div><table class="kv"><tbody>${kv([
+          ["Worker Code", w.id], ["Department", cap(w.dept || "")],
+          ["Date of Joining", dmy(w.joined)], ["Shift", w.shift || "General"], ["Phone", w.phone],
+        ])}</tbody></table></div>
+        <div><table class="kv"><tbody>${kv([
+          ["Full Name", w.name], ["Designation", w.designation],
+          ["Length of Service", serviceLen(w.joined)], ["Status", active ? "Active" : "Inactive"],
+          ["Biometric Device ID", w.deviceUid],
+        ])}</tbody></table></div>
+      </div>`)}
+
+      ${sec("Pay, Statutory & Bank", `<div class="panel"><div class="cols">
+        <div><table class="kv"><tbody>${kv([
+          ["Pay Type", w.payType === "monthly" ? "Monthly salary" : "Daily wage"],
+          ["Monthly CTC", RS(w.monthlyCtc) + " / month"], ["UAN", w.uan], ["Bank A/C Number", w.bankAcc],
+        ])}</tbody></table></div>
+        <div><table class="kv"><tbody>${kv([
+          ["Daily Rate", RS(w.dailyRate) + " / day"], ["PF Number", w.pfNo],
+          ["ESI Number", w.esiNo], ["Bank IFSC", w.bankIfsc],
+        ])}</tbody></table></div>
+      </div></div>`)}
+
+      <div class="sign">
+        <div class="sign-note">Generated from the HR records held on ${esc(dmy(iso()))}. This is an internal
+          document — please report any discrepancy to the HR desk within 7 days.</div>
+        <div class="sign-box">
+          <div class="sign-for">For ${esc(co.name)}</div>
+          <div class="sign-line"></div>
+          <div class="sign-lbl">Authorised Signatory</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="meta">
+      <span>${esc(co.name)} · Employee Bio-Data · ${esc(w.id)} · ${esc(w.name)}</span>
+      <span>Generated ${esc(dmy(iso()))}</span>
+    </div>
+    <div class="docctl">
+      <b>Document Control</b>
+      <span>Internal HR record — verify against HRMS before external use</span>
+    </div>
+  </div>
+
+  <div class="tail"></div>
+</div>
+<script>window.onload=function(){window.print();}<\/script>
+</body></html>`;
+  }
+
+  function printWorkerProfile(w) {
+    const win = window.open("", "_blank");
+    if (!win) { toast("Popup blocked — allow popups for this site to print", { type: "warn" }); return; }
+    win.document.write(workerProfileDocHtml(w));
+    win.document.close();
   }
 
   /* ============================================================
