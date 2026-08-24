@@ -297,12 +297,51 @@
           }
           return;
         }
+        /* ---- STOCK TAKE: the sheet's On Hand column vs the ledger ----
+           The figure is in the unit the screen shows (kg for weighable web),
+           so it converts back through the item's own geometry before the
+           delta is measured. Only a real difference becomes an adjustment —
+           the exported figures round-trip as "unchanged". */
+        let adjs=[];
+        if(curKey==="items" && Array.isArray(diff.qty)){
+          diff.qty.forEach(q=>{
+            const it=ENG.item(q.id)
+              || (diff.add.find(a=>a.id===q.id)||{}).after;   // a brand-new row
+            if(!it) return;
+            const cur=ENG.item(q.id)?(ENG.status(q.id).onHand||0):0;
+            const curShown=Math.round(ENG.dispQty(it,cur)*100)/100;
+            if(Math.abs(q.shown-curShown)<=0.005) return;
+            const per=(ENG.readsAsKg(it)&&ENG.kgPerUnit(it))||1;
+            const target=q.shown/per;
+            const delta=Math.round((target-cur)*1000)/1000;
+            if(!delta) return;
+            adjs.push({ id:q.id, name:it.name||q.id, delta,
+              from:curShown, to:q.shown, uom:ENG.dispUom(it)||it.uom||"",
+              isNew:!ENG.item(q.id) });
+          });
+        }
         host.appendChild(h("div",{class:"flex gap wrap",style:"margin-bottom:14px"},[
           statPill("＋ "+diff.add.length+" new","var(--ok)"),
           statPill("~ "+diff.update.length+" updated","var(--info)"),
+          adjs.length?statPill("◆ "+adjs.length+" stock adjustments","var(--warn)"):null,
           statPill("= "+diff.unchanged.length+" unchanged","var(--text-mut)"),
           diff.errors.length?statPill("⚠ "+diff.errors.length+" skipped","var(--danger)"):null,
         ].filter(Boolean)));
+        if(adjs.length){
+          host.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin:2px 0 6px",
+            text:"Stock adjustments from the On Hand column"}));
+          host.appendChild(table(adjs.slice(0,120),[
+            {key:"name",label:"Material",cls:"nm",noSort:true,render:r=>esc(String(r.name)).slice(0,44)+(r.isNew?' <span class="muted">(new item — opening stock)</span>':"")},
+            {key:"from",label:"Ledger says",noSort:true,render:r=>ENG.num(r.from,2)+" "+esc(r.uom)},
+            {key:"to",label:"Sheet says",noSort:true,render:r=>"<b>"+ENG.num(r.to,2)+"</b> "+esc(r.uom)},
+            {key:"delta",label:"Adjustment",noSort:true,render:r=>{
+              const shown=ENG.dispQty(ENG.item(r.id)||{},r.delta);
+              return '<span style="color:'+(r.delta<0?'var(--danger)':'var(--ok)')+';font-weight:700">'
+                +(r.delta>0?"+":"")+ENG.num(shown,2)+'</span> <span class="muted">'+esc(r.uom)+"</span>";}},
+          ],{empty:""}));
+          host.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin:6px 0 12px",
+            text:"Each row posts one ADJ movement bringing the store to the sheet's figure — the audit trail keeps both numbers."}));
+        }
 
         const changed=diff.add.map(x=>({kind:"New",o:x.after})).concat(diff.update.map(x=>({kind:"Updated",o:x.after})));
         const cols0=CSVIO.ENTITIES[curKey].cols.slice(0,6);
@@ -315,12 +354,29 @@
         host.appendChild(table(preview,tcols,{empty:"No new or changed rows in this file"}));
         if(changed.length>120) host.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-top:8px",text:"Showing first 120 of "+changed.length+" changed rows — all will be applied."}));
 
-        const applyBtn=UI.$("#csvApplyBtn"); const total=diff.add.length+diff.update.length;
+        const applyBtn=UI.$("#csvApplyBtn"); const total=diff.add.length+diff.update.length+adjs.length;
         if(applyBtn){
           applyBtn.textContent=total?"Apply Import ("+total+")":"Nothing to import";
           applyBtn.disabled=!total;
           applyBtn.onclick=async ()=>{ applyBtn.disabled=true; applyBtn.textContent="Saving…";
-            try{ CSVIO.apply(diff); await DB.save(ENG.data);
+            try{ CSVIO.apply(diff);
+              /* stock adjustments ride the same save: one ADJ per row, valued
+                 at the item's average cost so the books move with the goods */
+              const U2=window._erpUtil||{};
+              adjs.forEach(a=>{
+                const st=ENG.item(a.id)?ENG.status(a.id):null;
+                const it2=ENG.item(a.id)||{};
+                const byWh=(ENG.stock(a.id)||{}).byWh||{};
+                const wh=Object.keys(byWh).sort((x,y)=>(byWh[y]||0)-(byWh[x]||0))[0]
+                  || (String(it2.cat||((diff.add.find(x=>x.id===a.id)||{}).after||{}).cat)==="FG"?"WH-FG":"WH-PNY");
+                ENG.data.movements.push({ id:(U2.genMoveId?U2.genMoveId():"MV-IMP-"+Date.now())+"-"+a.id,
+                  date:DB.helpers.iso(DB.helpers.today()), itemId:a.id, wh,
+                  type: a.isNew?"OPEN":"ADJ", qty:a.delta,
+                  rate:(st&&st.avgCost)||it2.cost||0, ref:"IMPORT",
+                  note:"Stock take import — sheet said "+a.to+" "+a.uom,
+                  by:(App.user&&App.user.username)||"import" });
+              });
+              await DB.save(ENG.data);
               const fresh=await DB.loadAsync(); ENG.init(fresh); App.buildNav(); App.refreshAlerts();
               mo.close(); toast(CSVIO.ENTITIES[curKey].label+" imported — "+total+" rows saved",{type:"ok",title:"Import complete"});
               App.refreshView();

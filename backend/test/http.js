@@ -2359,6 +2359,9 @@ async function run() {
       (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "ISSUE", qty: 50, wh })).status === 400);
     ok("stock cannot be booked into a warehouse that does not exist",
       (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "GRN", qty: 5, wh: "WH-NOPE" })).status === 400);
+    // give it stock first — the sign stays free either way, but the write-off
+    // now has a floor (tested below), so this probe writes off what exists
+    await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "GRN", qty: 5, wh, rate: 1 });
     ok("an adjustment may still go either way",
       (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "ADJ", qty: -5, wh })).status === 201);
 
@@ -2410,6 +2413,56 @@ async function run() {
     ok("an admin can reopen it deliberately, and it is recorded",
       reop.status === 200 && reop.d.status === "Draft" && reop.d.reopenedBy === "admin",
       JSON.stringify({ s: reop.status, st: reop.d && reop.d.status, by: reop.d && reop.d.reopenedBy }));
+
+    /* ---- a transfer is a pair the server writes ----
+       Before: the browser posted a transfer's two legs as separate requests
+       and this endpoint accepted each leg blind — a lone XFER row of +3
+       minted 3 kg from nothing, and a network blip between the legs left
+       half a transfer on the ledger. */
+    const whB = ((await call("GET", "/state", A)).d.warehouses.find((w) => w.id !== wh) || {}).id;
+    await mkItem("RM-XMOD-4");
+    await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "GRN", qty: 100, wh, rate: 10 });
+    ok("a lone XFER row is refused — it would mint stock",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "XFER", qty: 30, wh })).status === 400);
+    ok("…whichever way it points",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "XFER", qty: -30, wh })).status === 400);
+    const trf = await call("POST", "/movements", A,
+      { itemId: "RM-XMOD-4", type: "XFER", qty: 30, wh, whTo: whB });
+    ok("a transfer naming both stores posts", trf.status === 201, String(trf.status));
+    const legs = ((await call("GET", "/state", A)).d.movements || [])
+      .filter((m) => m.itemId === "RM-XMOD-4" && m.type === "XFER");
+    ok("…as BOTH legs, one out and one in",
+      legs.length === 2 && legs.some((m) => +m.qty === -30 && m.wh === wh)
+        && legs.some((m) => +m.qty === 30 && m.wh === whB),
+      JSON.stringify(legs.map((l) => l.wh + ":" + l.qty)));
+    ok("…and total stock is unchanged — a transfer nets zero",
+      Math.abs((await stockOf("RM-XMOD-4")) - 100) < 1e-6, "total " + (await stockOf("RM-XMOD-4")));
+    ok("a transfer to the same store is refused",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "XFER", qty: 5, wh, whTo: wh })).status === 400);
+    ok("a transfer to a store that does not exist is refused",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "XFER", qty: 5, wh, whTo: "WH-NOPE" })).status === 400);
+    const overTrf = await call("POST", "/movements", A,
+      { itemId: "RM-XMOD-4", type: "XFER", qty: 90, wh, whTo: whB });
+    ok("a transfer of more than the store holds is refused", overTrf.status === 400, String(overTrf.status));
+    ok("…naming what is actually there",
+      /only .*70/.test(String(overTrf.d && overTrf.d.error)), JSON.stringify(overTrf.d).slice(0, 120));
+
+    /* ---- stock has a floor ----
+       Before: an ISSUE of −9,000,000,000 posted cleanly and the ledger read
+       −8.99 billion — no warning anywhere, and every dashboard showed the
+       wreckage deadpan. No physical count is negative. */
+    ok("an issue larger than everything on hand is refused",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ISSUE", qty: -9e9, wh })).status === 400);
+    ok("…including a modest one that is still too big",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ISSUE", qty: -101, wh })).status === 400);
+    ok("an issue the stock covers still posts",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ISSUE", qty: -40, wh })).status === 201);
+    ok("an adjustment cannot write off below zero",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -1e6, wh })).status === 400);
+    ok("an adjustment down to exactly zero is allowed",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -60, wh })).status === 201);
+    ok("…and the ledger rests at zero, not below",
+      Math.abs(await stockOf("RM-XMOD-4")) < 1e-6, "total " + (await stockOf("RM-XMOD-4")));
   }
 
   // restore the BOM change we made so a re-run against a persisted DB stays clean

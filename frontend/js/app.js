@@ -299,9 +299,15 @@
        go() will note THIS tab on the way out, so back from there returns —
        two tabs toggle rather than the trail dead-ending after one hop. */
     back(){
-      const b=this._backTo;
-      if(b && M[b.id] && this.canAccess(b.id)) this.go(b.id, b.params);
-      else this.go(this.homeId());
+      /* Walk the TRAIL — the pages actually travelled, newest first. Entries
+         whose module has vanished or become inaccessible are stepped over, so
+         one revoked section cannot dead-end the whole way home. */
+      const t=this._trail||[];
+      let b=null;
+      while(t.length){ const c=t.pop(); if(M[c.id]&&this.canAccess(c.id)){ b=c; break; } }
+      this._fromBack=true;                 // going back is not a new departure
+      try{ if(b) this.go(b.id, b.params); else this.go(this.homeId()); }
+      finally{ this._fromBack=false; }
     },
 
     go(id, params){
@@ -351,7 +357,7 @@
          it left AND its params, so "back" lands on the screen as it was, not
          a fresh copy of the module. Re-rendering the same tab is not a jump
          and must not eat the trail. */
-      if(this.current && this.current!==id && M[this.current]){
+      if(this.current && this.current!==id && M[this.current] && !this._fromBack){
         /* …but not the one-shot params. openNew / create / openPending are
            commands, not state — carried back, they would re-open a "New …"
            dialog the user already dealt with. */
@@ -359,10 +365,16 @@
         if(this.params){
           bp={...this.params};
           delete bp.openNew; delete bp.create; delete bp.openPending;
-          delete bp.highlight;
+          delete bp.highlight; delete bp.open;
           if(!Object.keys(bp).length) bp=null;
         }
-        this._backTo={id:this.current, params:bp};
+        /* the TRAIL: every page on the way here, so back retraces the whole
+           journey — ledger to the order to production and back again — instead
+           of toggling between the last two tabs. Capped so a long day at the
+           terminal cannot grow it without bound. */
+        this._trail=this._trail||[];
+        this._trail.push({id:this.current, params:bp});
+        if(this._trail.length>20) this._trail.shift();
       }
       this.current=id; this.params=params||null;
       location.hash=id;
@@ -374,7 +386,7 @@
       // crumbs — with the way back, when there is one
       const mod=M[id];
       const cr=$("#crumbs"); cr.innerHTML="";
-      const bk=this._backTo;
+      const bk=(this._trail&&this._trail.length)?this._trail[this._trail.length-1]:null;
       if(bk && M[bk.id] && this.canAccess(bk.id))
         cr.appendChild(h("button",{class:"crumb-back",type:"button",
           title:"Back to "+M[bk.id].title,

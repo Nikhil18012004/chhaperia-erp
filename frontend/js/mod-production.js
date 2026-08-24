@@ -739,6 +739,7 @@
     }
     draw();
     if(params&&params.openNew){ params.openNew=false; woForm(); }
+    if(params&&params.open){ const w=(ENG.data.workorders||[]).find(x=>x.id===params.open); params.open=null; if(w) woDetail(w); }
 
     function canPlan(){ return ["admin","office"].includes((App.user&&App.user.role)||""); }
     function woActions(r){
