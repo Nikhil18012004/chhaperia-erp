@@ -424,6 +424,52 @@
      exactly what the Calendar shows, so the badge and the page can never
      tell different stories; when that page stopped carrying PO / SO / work-
      order dates (2026-08-25, mod-calendar.js) this count lost them too. */
+  /* ============================================================
+     CUSTOMERS WHO HAVE GONE QUIET
+     The CRM watches prospects closely and forgets the people who already
+     buy — yet winning a lapsed customer back is far cheaper than any lead.
+     Silence is the only warning you get: nobody sends a note saying they
+     have stopped ordering.
+
+     Their own order history states the rhythm, so this needs no new data
+     and nothing to maintain. The gap used is the MEDIAN, not the mean, so
+     one freak rush order cannot make a steady customer look erratic, and
+     THREE orders are required before a rhythm is claimed at all — two
+     orders give exactly one gap, which is a coincidence, not a pattern.
+     ============================================================ */
+  function daysApart(a, b){
+    return Math.round((new Date(b+"T00:00:00") - new Date(a+"T00:00:00")) / H.DAY);
+  }
+  function dormantCustomers(){
+    const t = H.iso(H.today());
+    const out = [];
+    (D.customers||[]).forEach(c=>{
+      const mine = (D.salesorders||[]).filter(s=>s.customerId===c.id && s.date);
+      if(mine.length < 3) return;
+      const dates = mine.map(s=>s.date).sort();
+      const gaps = [];
+      for(let i=1;i<dates.length;i++) gaps.push(daysApart(dates[i-1], dates[i]));
+      gaps.sort((a,b)=>a-b);
+      const usual = gaps[Math.floor(gaps.length/2)];
+      if(!(usual > 0)) return;
+      const lastDate = dates[dates.length-1];
+      const silent = daysApart(lastDate, t);
+      // 1.5x the usual gap is late; anything under that is just this month
+      if(silent <= usual * 1.5) return;
+      const value = mine.reduce((a,s)=>a+(+s.value||0),0);
+      const avg = value / mine.length;
+      const missed = Math.max(1, Math.floor(silent / usual) - 1);
+      const lastSO = mine.filter(s=>s.date===lastDate).map(s=>s.id)[0] || "";
+      out.push({ id:c.id, name:c.name, orders:mine.length, usual, silent, lastDate, lastSO,
+        atRisk: Math.round(avg * missed),
+        level: silent > usual * 3 ? "chase" : "watch" });
+    });
+    // worst offender first, measured against their OWN rhythm rather than in
+    // raw days — 60 days quiet is alarming for a monthly buyer and normal for
+    // one who orders twice a year
+    return out.sort((a,b)=> (b.silent/b.usual) - (a.silent/a.usual));
+  }
+
   function calendarDue(){
     const t = H.iso(H.today());
     return (D.leads||[]).filter(l=>l.nextFollowUp && l.nextFollowUp<=t && l.stage!=="Won" && l.stage!=="Lost").length
@@ -588,7 +634,7 @@
     status, pendingIn, pendingOut, wipRawDemand, readyBatches, readyQty,
     inventoryValue, alerts, dailySeries, salesByProduct, purchaseBySupplier,
     stockByCategory, abcAnalysis, forecast, kpis, sup, custName,
-    leads, crmStats, pipelineByStage, dueFollowUps, STAGES, STAGE_PROB
+    leads, crmStats, pipelineByStage, dueFollowUps, dormantCustomers, STAGES, STAGE_PROB
   };
   global.ENG = E;
 })(window);

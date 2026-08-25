@@ -2336,7 +2336,18 @@
       MW.excelMenu("customers"),
       h("button",{class:"btn primary",onclick:()=>customerForm(),html:"＋ New Customer"})
     ]));
-    let q="";
+    let q="", tab="all";
+    /* Two views of the same list. "Gone quiet" is not a filter on a field —
+       it is worked out from each client's own ordering rhythm (ENG.dormantCustomers),
+       so it can only be a tab, not a search term. */
+    const quiet=ENG.dormantCustomers();
+    const seg=h("div",{class:"seg",style:"margin-bottom:12px"},[
+      h("button",{class:"on",text:"All customers",onclick:e=>setTab("all",e.target)}),
+      h("button",{html:"Gone quiet"+(quiet.length?' <span class="chip" style="margin-left:6px">'+quiet.length+"</span>":""),
+        onclick:e=>setTab("quiet",e.currentTarget)})
+    ]);
+    root.appendChild(seg);
+    function setTab(t,btn){ tab=t; [...seg.children].forEach(c=>c.classList.remove("on")); btn.classList.add("on"); draw(); }
     root.appendChild(h("div",{class:"toolbar"},[
       MW.searchInput("Search customer, city, country, currency, GSTIN, contact…", v=>{q=v.toLowerCase().trim();draw();}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"custCount"}))
@@ -2346,6 +2357,39 @@
        accounts, and pasting an SO number finds whose order it is. Country and
        currency match on the code, the symbol-less short form AND the full name,
        so "usd", "dollar" and "united states" all find the same accounts. */
+    /* the quiet list: who has broken their own ordering rhythm */
+    function drawQuiet(){
+      const rows=quiet.filter(r=>!q || (r.name||"").toLowerCase().includes(q));
+      const cnt=UI.$("#custCount"); if(cnt) cnt.textContent=rows.length+(rows.length===1?" gone quiet":" gone quiet");
+      host.innerHTML="";
+      if(!rows.length){
+        host.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),
+          h("div",{text:quiet.length?"No match in the quiet list":"Everybody who buys regularly has ordered recently"}),
+          h("div",{class:"muted",style:"font-size:12.5px;margin-top:6px",
+            text:"A customer needs three past orders before a rhythm can be read from them."})]));
+        return;
+      }
+      host.appendChild(h("div",{class:"muted",style:"font-size:12.5px;margin-bottom:10px",
+        text:"Worked out from each client's own order history — how often they normally buy, against how long it has been. Nothing here is typed in."}));
+      host.appendChild(table(rows,[
+        {key:"name",label:"Customer",render:r=>`<b>${esc(r.name)}</b><div class="muted" style="font-size:11.5px">${r.orders} orders · last ${esc(r.lastSO||"—")}, ${esc(r.lastDate)}</div>`,sort:r=>r.name},
+        {key:"usual",label:"Usual gap",num:true,render:r=>ENG.num(r.usual)+" d",sort:r=>r.usual},
+        {key:"silent",label:"Silent",num:true,render:r=>`<span style="color:var(--${r.level==="chase"?"danger":"warn"});font-weight:700">${ENG.num(r.silent)} d</span>`,sort:r=>r.silent},
+        {key:"atRisk",label:"At risk",num:true,render:r=>ENG.money(r.atRisk),sort:r=>r.atRisk},
+        {key:"level",label:"Action",render:r=>badge(r.level==="chase"?"danger":"warn",r.level),sort:r=>r.level},
+        {key:"go",label:"",noSort:true,render:r=>`<button class="btn sm" data-quiet="${esc(r.id)}">Open</button>`}
+      ]));
+      /* delegated, not bound per button: table() empties its own tbody every
+         time a column header is clicked, so handlers attached to the rows
+         would stop working after the first sort */
+      host.onclick=(e)=>{
+        const b=e.target.closest && e.target.closest("[data-quiet]");
+        if(!b) return;
+        const c=ENG.data.customers.find(x=>x.id===b.dataset.quiet);
+        if(c) customerForm(c);
+      };
+    }
+
     function custMatch(c){
       if(!q) return true;
       const ccy=custCcy(c);
@@ -2356,6 +2400,7 @@
       return hay.filter(Boolean).join(" ").toLowerCase().includes(q);
     }
     function draw(){
+      if(tab==="quiet"){ drawQuiet(); return; }
       const list=ENG.data.customers.filter(custMatch);
       const cnt=UI.$("#custCount"); if(cnt) cnt.textContent=list.length+(list.length===1?" customer":" customers");
       host.innerHTML="";

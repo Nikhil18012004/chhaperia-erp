@@ -25,9 +25,51 @@
   // how a sample lands once the customer has run it — drives the next move
   const SAMPLE_VERDICTS = ["Awaiting feedback", "Approved", "Rejected", "Rework needed"];
   const SOURCES = ["Exhibition (Wire India)", "Website Enquiry", "Referral", "Cold Call", "Existing Customer", "Trade Directory"];
+  /* A fixed list, so the lost-reason breakdown can actually add up. */
+  const LOST_REASONS = ["Price", "Lead time", "Quality / spec", "No response", "Budget dropped", "Existing supplier", "Other"];
+  /* Leads closed before the list existed carry free text. Fold the common
+     phrasings onto the list at READ time — the stored value is never rewritten,
+     so nothing is lost if this mapping is ever wrong. */
+  function normaliseReason(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return "Not specified";
+    if (LOST_REASONS.includes(s)) return s;
+    const t = s.toLowerCase();
+    if (/price|cost|rate|expensive|costly/.test(t)) return "Price";
+    if (/lead ?time|deliver|late|schedule/.test(t)) return "Lead time";
+    if (/qualit|spec|reject|fail|sample/.test(t)) return "Quality / spec";
+    if (/no response|not respond|silent|unreach|no reply/.test(t)) return "No response";
+    if (/budget|postpon|defer|hold/.test(t)) return "Budget dropped";
+    if (/existing|already|current supplier|loyal/.test(t)) return "Existing supplier";
+    return "Other";
+  }
   const money = (n) => ENG.money(n);
   const trim = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
   const todayISO = () => DB.helpers.iso(DB.helpers.today());
+
+  /* ---- how long a sample has been out ----
+     A sample is the whole sale in this trade: the customer will not price the
+     tape until they have run it. What the record never carried was TIME, so a
+     reel sent in June looked exactly like one sent yesterday. Age is derived
+     from sentDate and never stored, so it cannot go stale.
+     SAMPLE_STALE_DAYS is the point at which an unanswered sample stops being
+     patience and starts being a lost order nobody has written down. */
+  const SAMPLE_STALE_DAYS = 30;
+  function sampleAge(l) {
+    const s = l && l.sample;
+    if (!s || !s.sentDate) return null;
+    return daysBetween(s.sentDate, todayISO());
+  }
+  /* Samples that have gone out and not come back with a decision. */
+  function openSamples(leads) {
+    return (leads || [])
+      .filter((l) => l.sample && l.sample.sentDate
+        && (!l.sample.verdict || l.sample.verdict === "Awaiting feedback")
+        && l.stage !== "Won" && l.stage !== "Lost")
+      .map((l) => ({ lead: l, age: sampleAge(l) || 0 }))
+      .sort((a, b) => b.age - a.age);
+  }
+  const ageTone = (d) => (d >= 45 ? "danger" : d >= SAMPLE_STALE_DAYS ? "warn" : "info");
 
   M.crm = { title: "CRM Pipeline", sub: "Sales leads & enquiries", render(root, params) {
     const stats = ENG.crmStats();
@@ -48,7 +90,9 @@
        and carries the loudest treatment. Everything else is context. */
     const overdueList = due.filter((l) => l.nextFollowUp < todayISO());
     const todayList = due.filter((l) => l.nextFollowUp >= todayISO());
-    root.appendChild(followUpBlock(due, overdueList, todayList));
+    // a sample sitting unanswered is a chase too, and nothing was surfacing it
+    const staleSamples = openSamples(allLeads).filter((x) => x.age >= SAMPLE_STALE_DAYS);
+    root.appendChild(followUpBlock(due, overdueList, todayList, staleSamples));
 
     /* ============ PRIORITY 2 — headline numbers, each drills down ============ */
     // derived, not listed: adding a stage to ENG.STAGES must not silently drop
@@ -316,7 +360,9 @@
         ["Created", l.created || "—"],
         ["Next Follow-up", l.nextFollowUp || "—"],
         ["Expected Close", l.expectedClose || "—"],
-        l.lostReason ? ["Lost Reason", l.lostReason] : null,
+        l.lostReason ? ["Lost Reason", normaliseReason(l.lostReason)] : null,
+        l.lostTo ? ["Lost To", l.lostTo] : null,
+        l.lostNote ? ["Their Price", l.lostNote] : null,
         l.customerId ? ["Linked Customer", ENG.custName(l.customerId)] : null,
         l.salesOrderId ? ["Sales Order", l.salesOrderId + " →"] : null,
       ].filter(Boolean)),
@@ -381,14 +427,13 @@
      instead of dead-ending in the CRM. */
   async function closeLead(l, outcome) {
     if (outcome === "Lost") {
-      const reason = await promptText("Why was this lead lost?", "e.g. Price too high / lost to competitor");
-      if (reason === null) return;
-      l.lostReason = reason || "Not specified";
-      l.stage = "Lost";
-      l.nextFollowUp = null;
+      const out = await lostForm(l);
+      if (out === null) return;
+      Object.assign(l, out, { stage: "Lost", nextFollowUp: null });
       UI.$("#modalHost").hidden = true;
-      toast(l.company + " marked Lost", { type: "warn" });
-      App.saveDelta(() => DB.leads.update(l.id, { stage: "Lost", lostReason: l.lostReason, nextFollowUp: null }));
+      toast(l.company + " marked Lost — " + l.lostReason, { type: "warn" });
+      App.saveDelta(() => DB.leads.update(l.id, { stage: "Lost", lostReason: l.lostReason,
+        lostTo: l.lostTo, lostNote: l.lostNote, nextFollowUp: null }));
       return;
     }
 
@@ -582,18 +627,23 @@
   function sampleBlock(l) {
     const s = l.sample;
     const tone = { Approved: "ok", Rejected: "danger", "Rework needed": "warn" }[s.verdict] || "info";
+    const age = sampleAge(l);
+    const open = !s.verdict || s.verdict === "Awaiting feedback";
     return h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
       h("div", { class: "flex between aic wrap gap", style: "margin-bottom:8px" }, [
         h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "📦 Sample Despatch" }),
         h("div", { class: "flex aic gap" }, [
+          // an open sample carries its age, because "how long has this been
+          // out?" is the question the chasing call actually turns on
+          (age != null && open) ? h("span", { html: badge(ageTone(age), age + (age === 1 ? " day out" : " days out")) }) : null,
           h("span", { html: badge(tone, s.verdict || "Awaiting feedback") }),
           h("button", { class: "btn sm ghost", onclick: () => sampleForm(l), text: "✎ Update" }),
-        ]),
+        ].filter(Boolean)),
       ]),
       MW.dl([
         ["Product", s.productName || s.product || "—"],
         ["Quantity", s.qty ? ENG.num(s.qty) + " " + (s.uom || "kg") : "—"],
-        ["Sent On", s.sentDate || "—"],
+        ["Sent On", (s.sentDate || "—") + (age != null ? "  ·  " + age + (age === 1 ? " day ago" : " days ago") : "")],
         ["Courier", s.courier || "—"],
         ["Docket / AWB", s.awb || "—"],
       ]),
@@ -670,8 +720,9 @@
   function cssv(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
 
   /* ---- PRIORITY BLOCK: today's follow-ups ---- */
-  function followUpBlock(due, overdueList, todayList) {
-    if (!due.length) {
+  function followUpBlock(due, overdueList, todayList, staleSamples) {
+    staleSamples = staleSamples || [];
+    if (!due.length && !staleSamples.length) {
       return h("div", { class: "card crm-fu calm" }, [
         h("div", { class: "crm-fu-empty" }, [
           h("div", { class: "crm-fu-ic", text: "✓" }),
@@ -685,13 +736,15 @@
     const tally = [];
     if (overdueList.length) tally.push(h("span", { class: "crm-delta down", text: overdueList.length + " overdue" }));
     if (todayList.length) tally.push(h("span", { class: "crm-delta flat", text: todayList.length + " due today" }));
+    if (staleSamples.length) tally.push(h("span", { class: "crm-delta down", text: staleSamples.length + " sample" + (staleSamples.length === 1 ? "" : "s") + " silent" }));
 
     return h("div", { class: "card crm-fu" }, [
       h("div", { class: "crm-fu-head" }, [
         h("div", { class: "crm-fu-ic", text: "⏰" }),
         h("div", {}, [
           h("div", { class: "crm-fu-title", text: "Chase these first" }),
-          h("div", { class: "crm-fu-sub", text: due.length + (due.length === 1 ? " lead is" : " leads are") + " waiting on you" }),
+          h("div", { class: "crm-fu-sub", text: (due.length + staleSamples.length) + " thing"
+            + (due.length + staleSamples.length === 1 ? " is" : "s are") + " waiting on you" }),
         ]),
         h("div", { class: "crm-fu-tally" }, tally),
       ]),
@@ -706,7 +759,14 @@
           h("span", { class: "crm-fu-when " + (over ? "over" : "today"),
             text: over ? (late === 1 ? "1 day late" : late + " days late") : "today" }),
         ]);
-      })),
+      }).concat(staleSamples.slice(0, 4).map(({ lead: l, age }) =>
+        h("button", { class: "crm-fu-row", onclick: () => leadDetail(l.id) }, [
+          h("span", { class: "crm-fu-dot over" }),
+          h("span", { class: "crm-fu-co", text: l.company }),
+          h("span", { class: "crm-fu-meta", text: "Sample · " + trim((l.sample && (l.sample.productName || l.sample.product)) || "—", 16) }),
+          h("span", { class: "crm-fu-val", text: money(l.value) }),
+          h("span", { class: "crm-fu-when over", text: age + " d no verdict" }),
+        ])))),
     ]);
   }
   function daysBetween(a, b) {
@@ -810,7 +870,11 @@
     const won = allLeads.filter((l) => l.stage === "Won");
     const lost = allLeads.filter((l) => l.stage === "Lost");
     const reasons = {};
-    lost.forEach((l) => { const k = l.lostReason || "Not specified"; reasons[k] = (reasons[k] || 0) + 1; });
+    // normalised, so a free-text "price too high" from before the list joins the Price row
+    lost.forEach((l) => { const k = normaliseReason(l.lostReason); reasons[k] = (reasons[k] || 0) + 1; });
+    const lostTo = {};
+    lost.forEach((l) => { if (l.lostTo) lostTo[l.lostTo] = (lostTo[l.lostTo] || 0) + 1; });
+    const rivalRows = Object.entries(lostTo).sort((a, b) => b[1] - a[1]);
     const reasonRows = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
     modal({ title: "Win rate · " + stats.winRate + "%", wide: true,
       sub: stats.won + " won and " + stats.lost + " lost out of " + (stats.won + stats.lost) + " decided enquiries",
@@ -822,10 +886,17 @@
             h("span", { class: "crm-delta down", text: n + (n === 1 ? " deal" : " deals") }),
           ]))),
         ]) : null,
+        rivalRows.length ? h("div", { style: "margin-top:18px" }, [
+          h("h3", { style: "margin:0 0 6px;font-size:13px", text: "Who we lost them to" }),
+          h("div", {}, rivalRows.map(([r, n]) => h("div", { class: "crm-drill-row", style: "cursor:default" }, [
+            h("div", { style: "flex:1;min-width:0" }, [h("div", { class: "crm-drill-co", text: r })]),
+            h("span", { class: "crm-delta down", text: n + (n === 1 ? " deal" : " deals") }),
+          ]))),
+        ]) : null,
         h("h3", { style: "margin:18px 0 6px;font-size:13px", text: "Won (" + won.length + ")" }),
         leadRows(won, (l) => "closed · " + (l.productName || l.product || "—")),
         h("h3", { style: "margin:18px 0 6px;font-size:13px", text: "Lost (" + lost.length + ")" }),
-        leadRows(lost, (l) => l.lostReason || "reason not recorded"),
+        leadRows(lost, (l) => normaliseReason(l.lostReason) + (l.lostTo ? " · to " + l.lostTo : "")),
       ]) });
   }
 
@@ -977,6 +1048,44 @@
     return { Call: "📞", Email: "✉️", Meeting: "🤝", "Sample Sent": "📦", "Quotation Sent": "📄", "Site Visit": "🏭", Note: "📝" }[t] || "•";
   }
   /* tiny text prompt built on the modal system */
+  /* ---- why a lead was lost ----
+     This used to be a free-text box, so "Price too high", "price" and "rate
+     issue" landed as three separate rows in the breakdown below and the report
+     said nothing. The reason is now picked from a fixed list; the free text
+     survives as a note beside it, and the competitor gets a field of its own
+     because "we lose to one firm, always on price" is the finding worth having.
+     Historic free-text reasons are mapped onto the list at read time by
+     normaliseReason() so old leads still group. */
+  function lostForm(l) {
+    return new Promise((res) => {
+      let picked = LOST_REASONS.includes(l.lostReason) ? l.lostReason : "";
+      const chips = h("div", { class: "flex wrap gap", style: "margin-bottom:4px" },
+        LOST_REASONS.map((r) => {
+          const b = h("button", { class: "btn sm" + (picked === r ? " primary" : ""), text: r,
+            onclick: () => {
+              picked = r;
+              [...chips.children].forEach((c) => c.classList.remove("primary"));
+              b.classList.add("primary");
+            } });
+          return b;
+        }));
+      const body = h("div", { class: "form-grid" }, [
+        field("Reason *", chips, "full"),
+        field("Lost to (optional)", `<input class="input" id="lz_to" value="${esc(l.lostTo || "")}" placeholder="Competitor or existing supplier">`),
+        field("Their price (optional)", `<input class="input" id="lz_note" value="${esc(l.lostNote || "")}" placeholder="e.g. ₹9.80/m against our ₹11.20">`),
+      ]);
+      const mo = modal({ title: "Why was this lost?", sub: l.company + " · " + money(l.value || 0), body,
+        foot: [
+          h("button", { class: "btn ghost", onclick: () => { mo.close(); res(null); }, text: "Cancel" }),
+          h("button", { class: "btn danger", text: "Mark Lost", onclick: () => {
+            if (!picked) { toast("Pick a reason", { type: "warn" }); return; }
+            mo.close();
+            res({ lostReason: picked, lostTo: UI.$("#lz_to").value.trim(), lostNote: UI.$("#lz_note").value.trim() });
+          } }),
+        ] });
+    });
+  }
+
   function promptText(title, ph) {
     return new Promise((res) => {
       const body = h("div", {}, [h("textarea", { class: "input", id: "pt_in", placeholder: ph || "" })]);
