@@ -616,6 +616,7 @@
       if(q.length>=2){
         ENG.data.items.forEach(it=>{ if((it.name+" "+it.id).toLowerCase().includes(q)) out.push({ic:"📦",label:it.name,meta:it.id,tag:"Item",act:()=>this.go("inventory")}); });
         ENG.data.salesorders.forEach(s=>{ if(s.id.toLowerCase().includes(q)) out.push({ic:"🧾",label:s.id+" — "+ENG.custName(s.customerId),tag:"Sales",act:()=>this.go("sales")}); });
+        (ENG.data.quotations||[]).forEach(qt=>{ if((qt.id+" "+(qt.company||"")+" "+(qt.productName||"")).toLowerCase().includes(q)) out.push({ic:"📄",label:qt.id+" — "+(qt.company||ENG.custName(qt.customerId)),meta:(qt.productName||"")+" · "+qt.status,tag:"Quotation",act:()=>this.go("quotations",{tab:"quotations",open:qt.id})}); });
         ENG.data.purchaseorders.forEach(p=>{ if(p.id.toLowerCase().includes(q)) out.push({ic:"🛒",label:p.id+" — "+ENG.sup(p.supplierId),tag:"PO",act:()=>this.go("purchase")}); });
         ENG.data.workorders.forEach(w=>{ const nm=(ENG.item(w.itemId)||{}).name||w.itemId; if((w.id+" "+nm).toLowerCase().includes(q)) out.push({ic:"⚙️",label:w.id+" — "+nm,tag:"Work Order",act:()=>this.go("production")}); });
         (ENG.data.leads||[]).forEach(l=>{ if((l.company+" "+l.id).toLowerCase().includes(q)) out.push({ic:"🎯",label:l.company,meta:l.id,tag:"Lead",act:()=>this.go("crm")}); });

@@ -42,7 +42,7 @@ const ORDER = [
   "warehouses", "categories", "suppliers", "customers", "transporters",
   "items", "boms",
   "movements", "work_orders", "sales_orders", "purchase_orders",
-  "leads", "appointments",
+  "leads", "appointments", "complaints", "quotations",
   "hr_workers", "hr_punches", "hr_attendance",
   "hr_leave_types", "hr_leaves", "hr_payruns", "hr_payslips",
   "lab_products", "lab_reports", "grns", "grn_tests",

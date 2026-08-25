@@ -261,6 +261,30 @@ CREATE TABLE IF NOT EXISTS `complaints` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;
 
 -- ============================================================
+--  QUOTATIONS — what was offered, to whom, and what it became.
+--  A quote used to be a number typed onto a lead. The document
+--  itself lives here now: its lines, its money (worked out by the
+--  server from gst.js, never by the client), every earlier
+--  revision, and the sales order it turned into. Customer, lead,
+--  status and the two dates are promoted so "open quotes for this
+--  customer" and "what expires this week" are indexed queries.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `quotations` (
+  `id`          VARCHAR(100) NOT NULL,   -- QTN-0001
+  `customer_id` VARCHAR(100),
+  `lead_id`     VARCHAR(100),            -- LD-0012 — the enquiry it answers, if any
+  `item_id`     VARCHAR(100),            -- the ONE product the price is for
+  `status`      VARCHAR(32),             -- Open | Won | Lost
+  `date`        VARCHAR(32),             -- ISO yyyy-mm-dd, the day the first price went out
+  `doc`         JSON         NOT NULL,   -- uom,qty,price,value,rounds,history[],finalPrice,counterPrice,lostReason,…
+  PRIMARY KEY (`id`),
+  KEY `idx_qtn_customer` (`customer_id`),
+  KEY `idx_qtn_lead` (`lead_id`),
+  KEY `idx_qtn_item` (`item_id`),
+  KEY `idx_qtn_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;
+
+-- ============================================================
 --  USERS — authentication & role-based access control.
 --  Passwords are scrypt 'saltHex:hashHex' — never plaintext.
 --  `username` is UNIQUE under a CASE-SENSITIVE collation, exactly

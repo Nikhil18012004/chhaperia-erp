@@ -382,6 +382,28 @@
       .sort((a,b)=> (a.nextFollowUp<b.nextFollowUp?-1:1));
   }
 
+  /* ---- why a lead was lost ----
+     One fixed list, shared by the CRM (the Mark Lost form), the Customers
+     screen (the "Why we lost" card) and the quotation's Mark Lost, so every
+     screen groups the same way. Leads closed before the list existed carry
+     free text; normaliseReason() folds the common phrasings onto the list at
+     READ time — the stored value is never rewritten, so nothing is lost if
+     this mapping is ever wrong. */
+  const LOST_REASONS = ["Price", "Lead time", "Quality / spec", "No response", "Budget dropped", "Existing supplier", "Other"];
+  function normaliseReason(raw){
+    const s = String(raw || "").trim();
+    if(!s) return "Not specified";
+    if(LOST_REASONS.includes(s)) return s;
+    const t = s.toLowerCase();
+    if(/price|cost|rate|expensive|costly/.test(t)) return "Price";
+    if(/lead ?time|deliver|late|schedule/.test(t)) return "Lead time";
+    if(/qualit|spec|reject|fail|sample/.test(t)) return "Quality / spec";
+    if(/no response|not respond|silent|unreach|no reply/.test(t)) return "No response";
+    if(/budget|postpon|defer|hold/.test(t)) return "Budget dropped";
+    if(/existing|already|current supplier|loyal/.test(t)) return "Existing supplier";
+    return "Other";
+  }
+
   /* KPIs for dashboard cards */
   function kpis(){
     return KPIS || (KPIS = computeKpis());
@@ -416,6 +438,8 @@
          A ruling is the more urgent of the two — the stock is live meanwhile. */
       grnTestPending:(D.grnTestPending||[]).length,
       grnQcDecisions:(D.grnQcDecisions||[]).length,
+      /* Quotations still open — a price on the table with no yes or no yet */
+      openQuotes:(D.quotations||[]).filter(q=>q.status==="Open").length,
       hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 
@@ -634,7 +658,8 @@
     status, pendingIn, pendingOut, wipRawDemand, readyBatches, readyQty,
     inventoryValue, alerts, dailySeries, salesByProduct, purchaseBySupplier,
     stockByCategory, abcAnalysis, forecast, kpis, sup, custName,
-    leads, crmStats, pipelineByStage, dueFollowUps, dormantCustomers, STAGES, STAGE_PROB
+    leads, crmStats, pipelineByStage, dueFollowUps, dormantCustomers, STAGES, STAGE_PROB,
+    LOST_REASONS, normaliseReason
   };
   global.ENG = E;
 })(window);

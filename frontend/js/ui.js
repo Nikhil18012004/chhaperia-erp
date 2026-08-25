@@ -339,6 +339,9 @@
     {id:"lab-reports", icon:"🧪", label:"Lab Reports", accent:"teal", labOk:true, labWrite:true, pillKey:"labPending"},
     {sec:"Sales & CRM"},
     {id:"crm", icon:"🎯", label:"CRM Pipeline", accent:"pink", pillKey:"openLeads"},
+    // the road from a reel to an order: every sample sent and every price
+    // offered, on one page — the pill counts the quotes still open
+    {id:"quotations", icon:"📄", label:"Samples & Quotations", accent:"pink", pillKey:"openQuotes"},
     // sits under CRM because that is who books appointments, but the grid
     // itself spans procurement, sales, production and HR
     {id:"calendar", icon:"📅", label:"Calendar", accent:"violet", pillKey:"calToday"},

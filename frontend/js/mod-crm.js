@@ -5,7 +5,11 @@
      • Follow-up reminders (due today / overdue)
      • Pipedrive-style pipeline board (New→Contacted→Quoted→Won/Lost)
      • Lead detail drawer: info, activity timeline, log activity,
-       move stage, edit, convert-to-customer
+       move stage, edit, convert-to-customer, straight to a quotation
+     • Samples & Quotations — its own page (M.quotations, registered here
+       because it shares the lead drawer, the sample form and the lost
+       form): every reel that went out and every price offered, with the
+       rounds of a negotiation and the won/lost close that moves the lead
    Reads from ENG (engine) + DB; persists via App.persistAndRefresh().
    ============================================================ */
 (function () {
@@ -25,24 +29,10 @@
   // how a sample lands once the customer has run it — drives the next move
   const SAMPLE_VERDICTS = ["Awaiting feedback", "Approved", "Rejected", "Rework needed"];
   const SOURCES = ["Exhibition (Wire India)", "Website Enquiry", "Referral", "Cold Call", "Existing Customer", "Trade Directory"];
-  /* A fixed list, so the lost-reason breakdown can actually add up. */
-  const LOST_REASONS = ["Price", "Lead time", "Quality / spec", "No response", "Budget dropped", "Existing supplier", "Other"];
-  /* Leads closed before the list existed carry free text. Fold the common
-     phrasings onto the list at READ time — the stored value is never rewritten,
-     so nothing is lost if this mapping is ever wrong. */
-  function normaliseReason(raw) {
-    const s = String(raw || "").trim();
-    if (!s) return "Not specified";
-    if (LOST_REASONS.includes(s)) return s;
-    const t = s.toLowerCase();
-    if (/price|cost|rate|expensive|costly/.test(t)) return "Price";
-    if (/lead ?time|deliver|late|schedule/.test(t)) return "Lead time";
-    if (/qualit|spec|reject|fail|sample/.test(t)) return "Quality / spec";
-    if (/no response|not respond|silent|unreach|no reply/.test(t)) return "No response";
-    if (/budget|postpon|defer|hold/.test(t)) return "Budget dropped";
-    if (/existing|already|current supplier|loyal/.test(t)) return "Existing supplier";
-    return "Other";
-  }
+  /* The lost-reason list and its normaliser live in the engine so the CRM,
+     the Customers screen and the quotations all group the same way. */
+  const LOST_REASONS = ENG.LOST_REASONS;
+  const normaliseReason = ENG.normaliseReason;
   const money = (n) => ENG.money(n);
   const trim = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
   const todayISO = () => DB.helpers.iso(DB.helpers.today());
@@ -82,6 +72,10 @@
     root.appendChild(pageHead("CRM — Sales Pipeline",
       "Track enquiries from first contact to won order. Never miss a follow-up.",
       [ MW.excelMenu("leads"),
+        // every reel that has gone out, on one page — the count is the ones
+        // still waiting on a verdict
+        h("button", { class: "btn ghost", onclick: () => App.go("quotations", { tab: "samples" }),
+          html: "📦 Samples & Quotes (" + openSamples(allLeads).length + ")" }),
         h("button", { class: "btn ghost", onclick: () => activityDrill(allLeads), html: "🕘 Activity" }),
         h("button", { class: "btn primary", onclick: () => leadForm(), html: "＋ New Lead" }) ]));
 
@@ -197,6 +191,8 @@
     root.appendChild(car);
     root.appendChild(dots);
     if (params && params.openNew) { params.openNew = false; leadForm(); }
+    // a deep link from Samples & Quotations lands on the lead's drawer
+    if (params && params.open) { const id = params.open; params.open = null; leadDetail(id); }
 
     /* --- which slide is centred, and how the carousel is driven --- */
     // start on the first stage that actually holds leads — the one being worked
@@ -344,6 +340,9 @@
               // Move stage — sending a sample is the common next move here
               !l.sample ? h("button", { class: "btn sm", onclick: () => sampleForm(l), html: "📦 Send sample" }) : null,
               l.phone ? h("button", { class: "btn sm", onclick: () => whatsappForm(l), html: "💬 WhatsApp" }) : null,
+              // the document that follows the sample: opens the quotation form
+              // with this lead's customer and product already on it
+              h("button", { class: "btn sm", onclick: () => quoteFromLead(l), html: "📄 Create quotation" }),
               h("button", { class: "btn sm", onclick: () => moveStage(l), html: "➜ Move stage" }),
               h("button", { class: "btn sm primary", onclick: () => logActivity(l), html: "＋ Log activity" }),
             ].filter(Boolean))
@@ -368,7 +367,9 @@
         l.salesOrderId ? ["Sales Order", l.salesOrderId + " →"] : null,
       ].filter(Boolean)),
 
-      l.sample ? sampleBlock(l) : null,
+      // one line each; the records themselves live on Samples & Quotations
+      sampleStrip(l),
+      quoteStrip(l),
 
       l.notes ? h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" },
         [h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px", text: "Notes" }),
@@ -443,8 +444,57 @@
     l.nextFollowUp = null;
 
     // 1) ensure a Customer record exists for this company
+    const { cust, created: createdCustomer } = ensureCustomerFor(l);
+
+    // 2) ask whether to raise a Sales Order from this won lead
+    UI.$("#modalHost").hidden = true;
+    const makeSO = await confirm(
+      `🏆 ${l.company} marked WON!\n\n` +
+      (createdCustomer ? `• New customer "${cust.name}" added to your customer list.\n` : `• Linked to existing customer ${cust.name}.\n`) +
+      `\nRaise a Sales Order now for ${l.productName || l.product}?\n` +
+      `This pushes the deal into your order book → production → dispatch.`,
+      { title: "Convert Won lead to order?" });
+
+    if (makeSO) {
+      try {
+        await App.saveDelta(async () => {
+          if (createdCustomer) await DB.customers.upsert(cust);
+          await DB.leads.update(l.id, { stage: "Won", customerId: cust.id, nextFollowUp: null });
+        });
+      } catch (e) { return; }
+      // a price won on Samples & Quotations goes onto the line; otherwise the
+      // list price, with the quantity derived from the deal value as before
+      const wq = quotes().filter((x) => x.leadId === l.id && x.status === "Won").sort(newestFirst)[0];
+      await raiseOrderFor({ customerId: cust.id, itemId: l.product, leadId: l.id,
+        price: wq ? (wq.finalPrice || wq.price) : 0, qty: wq ? wq.qty : 0, uom: wq ? wq.uom : "",
+        quoteId: wq ? wq.id : "", value: l.value || 0 });
+      return;
+    }
+
+    toast(l.company + " marked Won", { type: "ok" });
+    App.saveDelta(async () => {
+      if (createdCustomer) await DB.customers.upsert(cust);
+      await DB.leads.update(l.id, { stage: "Won", customerId: cust.id, nextFollowUp: null });
+    });
+    App.go("crm");
+  }
+
+  function nextCustomerId() {
+    const ids = (ENG.data.customers || []).map((c) => +(String(c.id).replace(/\D/g, "")) || 0);
+    const n = (ids.length ? Math.max(...ids) : 0) + 1;
+    return "CUS-" + String(n).padStart(2, "0");
+  }
+
+  /* ---- the customer record behind a lead ----
+     A lead is a company name until something is raised against it, and both
+     a won order and a quotation need a customer the server knows. Found by
+     name (case-insensitive) or created on the spot and pushed into the
+     dataset; the CALLER persists it (DB.customers.upsert) inside its own
+     save so the customer and the record that needs it land together.
+     Returns { cust, created }. */
+  function ensureCustomerFor(l) {
     let cust = ENG.data.customers.find((c) => c.name.toLowerCase() === (l.company || "").toLowerCase());
-    let createdCustomer = false;
+    let created = false;
     if (!cust) {
       cust = {
         id: nextCustomerId(),
@@ -465,63 +515,28 @@
         country: "India", countryCode: "IN", currency: "INR",
       };
       ENG.data.customers.push(cust);
-      createdCustomer = true;
+      created = true;
     }
     l.customerId = cust.id;
-
-    // 2) ask whether to raise a Sales Order from this won lead
-    UI.$("#modalHost").hidden = true;
-    const makeSO = await confirm(
-      `🏆 ${l.company} marked WON!\n\n` +
-      (createdCustomer ? `• New customer "${cust.name}" added to your customer list.\n` : `• Linked to existing customer ${cust.name}.\n`) +
-      `\nRaise a Sales Order now for ${l.productName || l.product}?\n` +
-      `This pushes the deal into your order book → production → dispatch.`,
-      { title: "Convert Won lead to order?" });
-
-    if (makeSO) {
-      const fg = ENG.item(l.product);
-      const price = (fg && fg.price) || 0;
-      // derive a sensible quantity from the deal value (value ÷ unit price);
-      // always carry at least one line so the granular SO endpoint accepts it
-      const qty = price > 0 ? Math.max(1, Math.round((l.value || 0) / price)) : 1;
-      const rate = price || (l.value || 0);
-      const so = {
-        id: window._erpUtil.nextSeqId(ENG.data.salesorders, "SO-"),
-        date: DB.helpers.iso(DB.helpers.today()),
-        customerId: cust.id,
-        // no invented width: it is set from the work order the line is filled
-        // from, and until then the invoice simply prints the thickness
-        lines: [{ itemId: l.product, qty, rate, width: (fg && fg.widthMM ? fg.widthMM[0] : null) }],
-        status: "Confirmed",
-        promised: DB.helpers.daysAhead(14),
-        priority: "Normal",
-        value: l.value || 0,
-        fromLead: l.id, // traceability back to the CRM lead
-      };
-      ENG.data.salesorders.push(so);
-      l.salesOrderId = so.id; // traceability forward to the order
-      toast(`${so.id} created from ${l.company}`, { type: "ok", title: "Lead converted to order" });
-      App.saveDelta(async () => {
-        if (createdCustomer) await DB.customers.upsert(cust);
-        await DB.sales.create(so);
-        await DB.leads.update(l.id, { stage: "Won", customerId: cust.id, salesOrderId: so.id, nextFollowUp: null });
-      });
-      App.go("sales");
-      return;
-    }
-
-    toast(l.company + " marked Won", { type: "ok" });
-    App.saveDelta(async () => {
-      if (createdCustomer) await DB.customers.upsert(cust);
-      await DB.leads.update(l.id, { stage: "Won", customerId: cust.id, nextFollowUp: null });
-    });
-    App.go("crm");
+    return { cust, created };
   }
 
-  function nextCustomerId() {
-    const ids = (ENG.data.customers || []).map((c) => +(String(c.id).replace(/\D/g, "")) || 0);
-    const n = (ids.length ? Math.max(...ids) : 0) + 1;
-    return "CUS-" + String(n).padStart(2, "0");
+  /* ---- from the drawer straight to a quotation ----
+     The quotation form wants a customer the server can look up, so the same
+     step Mark Won takes runs first and is SAVED before leaving the page —
+     a form that opened on a customer only this browser knew about would be
+     refused at the end. The lead keeps the link, and the form opens with
+     the lead's product already on the first line. */
+  async function quoteFromLead(l) {
+    const { cust, created } = ensureCustomerFor(l);
+    UI.$("#modalHost").hidden = true;
+    try {
+      await App.saveDelta(async () => {
+        if (created) await DB.customers.upsert(cust);
+        await DB.leads.update(l.id, { customerId: cust.id });
+      });
+    } catch (e) { return; }   // saveDelta has already said so and reloaded
+    App.go("quotations", { tab: "quotations", openNew: true, fromLead: l.id, customerId: cust.id });
   }
 
   /* ---- log an activity ---- */
@@ -567,11 +582,19 @@
     const already = !!l.sample;
     const chosen = s.product || l.product || (fgs[0] && fgs[0].id);
     const uomOf = (id) => (ENG.item(id) || {}).uom || "kg";
+    /* the jobs that made this product, newest first — a reel is cut from one
+       of them, and naming it is what lets a verdict be answered with the lab
+       reading for that very batch */
+    const batchOpts = (pid) => [{ v: "", l: "— none —" }].concat(
+      (ENG.data.workorders || []).filter((w) => w.itemId === pid)
+        .sort((a, b) => (a.id < b.id ? 1 : -1))
+        .map((w) => ({ v: w.id, l: w.id + " · " + ENG.qtyText(ENG.item(w.itemId), w.qty) + " · " + (w.status || "") })));
 
     const body = h("div", { class: "form-grid" }, [
       field("Sample Product *", selectHTML("s_product",
         fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })),
         chosen)),
+      field("Batch (work order)", selectHTML("s_batch", batchOpts(chosen), s.batch || "")),
       field("Quantity", `<div class="flex aic gap"><input class="input" id="s_qty" type="number" step="0.01" min="0" value="${s.qty != null ? s.qty : 1}">`
         + `<span class="chip" id="s_uom">${esc(uomOf(chosen))}</span></div>`),
       field("Sent On", `<input class="input" id="s_sent" type="date" value="${s.sentDate || todayISO()}">`),
@@ -588,9 +611,13 @@
         h("button", { class: "btn primary", onclick: save, text: already ? "Save Sample" : "Record Sample & Move" }),
       ] });
 
-    // the unit belongs to the product, so it follows the product picker
+    // the unit and the batch list belong to the product, so both follow the picker
     const prodSel = UI.$("#s_product");
-    if (prodSel) prodSel.onchange = () => { const u = UI.$("#s_uom"); if (u) u.textContent = uomOf(prodSel.value); };
+    if (prodSel) prodSel.onchange = () => {
+      const u = UI.$("#s_uom"); if (u) u.textContent = uomOf(prodSel.value);
+      const b = UI.$("#s_batch");
+      if (b) b.innerHTML = batchOpts(prodSel.value).map((o) => `<option value="${esc(o.v)}">${esc(o.l)}</option>`).join("");
+    };
 
     function save() {
       const pid = UI.$("#s_product").value;
@@ -599,6 +626,7 @@
       const sample = {
         product: pid, productName: fg.name || "", qty: +UI.$("#s_qty").value || 0,
         uom: fg.uom || "kg", sentDate,
+        batch: UI.$("#s_batch").value,
         courier: UI.$("#s_courier").value.trim(), awb: UI.$("#s_awb").value.trim(),
         verdict: UI.$("#s_verdict").value, note: UI.$("#s_note").value.trim(),
       };
@@ -612,44 +640,554 @@
         l.activities = l.activities || [];
         l.activities.push({ date: sentDate, type: "Sample Sent",
           note: [ENG.num(sample.qty) + " " + sample.uom, sample.productName].filter(Boolean).join(" — ")
+            + (sample.batch ? " · batch " + sample.batch : "")
             + (sample.courier ? " · via " + sample.courier : "")
             + (sample.awb ? " (" + sample.awb + ")" : ""),
           by: l.owner || "Sales Desk" });
       }
       mo.close();
       toast(first ? l.company + " → Sample" : "Sample details updated", { type: "ok" });
+      // no page change: the save re-renders whichever screen this was opened
+      // from — the lead drawer on the CRM, or the Samples tab
       App.saveDelta(() => DB.leads.update(l.id, { stage: "Sample", sample,
         nextFollowUp: l.nextFollowUp, activities: l.activities }));
-      App.go("crm");
     }
   }
 
-  /* the sample card inside the lead drawer — what went out and how it landed */
-  function sampleBlock(l) {
-    const s = l.sample;
-    const tone = { Approved: "ok", Rejected: "danger", "Rework needed": "warn" }[s.verdict] || "info";
-    const age = sampleAge(l);
-    const open = !s.verdict || s.verdict === "Awaiting feedback";
-    return h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
-      h("div", { class: "flex between aic wrap gap", style: "margin-bottom:8px" }, [
-        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "📦 Sample Despatch" }),
-        h("div", { class: "flex aic gap" }, [
-          // an open sample carries its age, because "how long has this been
-          // out?" is the question the chasing call actually turns on
-          (age != null && open) ? h("span", { html: badge(ageTone(age), age + (age === 1 ? " day out" : " days out")) }) : null,
-          h("span", { html: badge(tone, s.verdict || "Awaiting feedback") }),
-          h("button", { class: "btn sm ghost", onclick: () => sampleForm(l), text: "✎ Update" }),
-        ].filter(Boolean)),
-      ]),
-      MW.dl([
-        ["Product", s.productName || s.product || "—"],
-        ["Quantity", s.qty ? ENG.num(s.qty) + " " + (s.uom || "kg") : "—"],
-        ["Sent On", (s.sentDate || "—") + (age != null ? "  ·  " + age + (age === 1 ? " day ago" : " days ago") : "")],
-        ["Courier", s.courier || "—"],
-        ["Docket / AWB", s.awb || "—"],
-      ]),
-      s.note ? h("div", { style: "font-size:13px;line-height:1.5;margin-top:10px", text: s.note }) : null,
+  /* ---- what the lab measured on the batch the sample was cut from ----
+     "Your sample failed on our line" is answered with the certificate for
+     that reel, not with a promise to look into it. The reading is fetched
+     live through the same call the complaint screen makes (nothing about it
+     is stored on the lead) and drawn into the card when it lands, so the
+     drawer opens without waiting on the server. */
+  function labReadingCard(batch) {
+    const head = (rep) => h("div", { class: "flex between aic wrap gap", style: "margin-bottom:8px" }, [
+      h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "🧪 What the lab measured on " + batch }),
+      rep ? h("span", { html: badge(String(rep.labResult || rep.result || "").toLowerCase() === "pass" ? "ok" : "danger", rep.labResult || rep.result || "—") }) : null,
+    ].filter(Boolean));
+    const card = h("div", { class: "card", style: "margin-top:10px;box-shadow:none;background:var(--panel-2)" }, [
+      head(null),
+      h("div", { class: "muted", style: "font-size:13px", text: "Reading the lab record…" }),
     ]);
+    DB.complaints.spread(batch).then((sp) => {
+      const params = (M["lab-reports"] && M["lab-reports"].PARAMS) || [];
+      const rep = sp && sp.report;
+      const vals = rep ? (rep.labValues || rep.values || {}) : {};
+      const res = rep ? (rep.labResults || rep.results || {}) : {};
+      const labRows = params.filter((p) => vals[p.key] != null).map((p) => {
+        const r = String(res[p.key] || "").toLowerCase();
+        return `<tr><td>${esc(p.label)}</td><td class="num mono">${esc(String(vals[p.key]))} <span class="muted">${esc(p.unit)}</span></td>`
+          + `<td class="num">${r ? badge(r === "pass" ? "ok" : "danger", r === "pass" ? "✓ pass" : "✗ fail") : '<span class="muted">—</span>'}</td></tr>`;
+      }).join("");
+      const failed = Object.entries(res).filter(([, v]) => String(v).toLowerCase() === "fail")
+        .map(([k]) => (params.find((p) => p.key === k) || { label: k }).label);
+      card.innerHTML = "";
+      card.appendChild(head(rep));
+      card.appendChild(rep
+        ? h("div", { class: "table-wrap" }, h("table", { class: "tbl", html: '<thead><tr><th>Parameter</th><th class="num">Reading</th><th class="num">Spec</th></tr></thead><tbody>'
+            + (labRows || '<tr><td colspan="3" class="muted">No readings recorded</td></tr>') + "</tbody>" }))
+        : h("div", { class: "muted", style: "font-size:13px", text: "No lab report found for this batch." }));
+      // the verdict line is what a rejected sample is answered with
+      if (rep && failed.length) card.appendChild(h("div", { style: "margin-top:8px", html: badge("danger", "The batch failed " + failed.join(", ") + " — the reel went out below spec") }));
+      else if (rep && labRows) card.appendChild(h("div", { style: "margin-top:8px", html: badge("ok", "The batch passed every test — the reel went out to spec") }));
+    }).catch(() => {
+      card.lastChild.textContent = "The lab record could not be read — the server did not answer.";
+    });
+    return card;
+  }
+
+  /* ============================================================
+     SAMPLES & QUOTATIONS — the road from a reel to an order
+     One page, two tabs, one flow: a sample goes out, a verdict comes
+     back, a price is offered, the number moves round by round, and the
+     quote closes won or lost. Samples live on their leads (one reel per
+     enquiry) and are only LISTED here; quotations are records of their
+     own. The tab rides in App.params because every save re-renders the
+     module from scratch, and a save must land back on the tab it left.
+     ============================================================ */
+  const QTN_UOMS = ["KG", "SQM", "MTR"];
+  const STALE_QUOTE_DAYS = 7;   // an open price with no word back this long is a chase
+  const quotes = () => ENG.data.quotations || [];
+  /* A quotation is the SERVER's record — it assigns the id, the value and the
+     history line, so the client cannot mutate ENG.data optimistically the way
+     the lead editors do. App.saveDelta only reloads on failure; a quotation
+     write must reload on SUCCESS too, or the list, the pill and the reopened
+     detail keep showing the price from before the change until the next poll.
+     Every quotation verb goes through here. Returns the server's record. */
+  async function qtnSave(fn, okMsg) {
+    let out;
+    try { out = await fn(); }
+    catch (e) { toast(e.message || "Could not save the quotation", { type: "danger" }); throw e; }
+    await App.reloadState();
+    if (okMsg) toast(okMsg, { type: "ok" });
+    return out;
+  }
+  const leadById = (id) => (ENG.data.leads || []).find((l) => l.id === id) || null;
+  const uomOfQuote = (q) => String(q.uom || "KG").toLowerCase();
+  const rs = (n) => "₹" + ENG.num(n, 2);
+  /* a quote in one breath: ₹940.00/kg */
+  const priceText = (q, p) => rs(p != null ? p : q.price) + "/" + uomOfQuote(q);
+  const quoteValueOf = (p, qty) => (qty > 0 ? Math.round(p * qty * 100) / 100 : p);
+  const isOpenSample = (l) => !!l.sample && (!l.sample.verdict || l.sample.verdict === "Awaiting feedback") && l.stage !== "Won" && l.stage !== "Lost";
+  /* an approved sample with no price on the table yet — money left lying */
+  const needsQuote = (l) => !!l.sample && l.sample.verdict === "Approved" && l.stage !== "Won" && l.stage !== "Lost"
+    && !quotes().some((q) => q.leadId === l.id && q.status !== "Lost");
+  const quoteDays = (q) => daysBetween(q.lastUpdated || q.date, todayISO());
+  /* open quotes the customer has gone quiet on, longest first */
+  function staleQuotes() {
+    return quotes().filter((q) => q.status === "Open" && quoteDays(q) >= STALE_QUOTE_DAYS)
+      .map((q) => ({ q, days: quoteDays(q) })).sort((a, b) => b.days - a.days);
+  }
+  function quoteBadge(q) {
+    if (q.status === "Won") return badge("ok", "Won · " + priceText(q, q.finalPrice != null ? q.finalPrice : q.price));
+    if (q.status === "Lost") return badge("danger", "Lost" + (q.counterPrice > 0 ? " · " + priceText(q, q.counterPrice) : "") + " · " + normaliseReason(q.lostReason));
+    const d = quoteDays(q);
+    return d >= STALE_QUOTE_DAYS ? badge("warn", "Open · " + d + " d silent") : badge("info", "Open");
+  }
+  const vTone = (v) => ({ Approved: "ok", Rejected: "danger", "Rework needed": "warn" }[v] || "info");
+  const chipN = (n) => (n ? ' <span class="chip" style="margin-left:6px">' + n + "</span>" : "");
+  const newestFirst = (a, b) => String(b.lastUpdated || b.date || "").localeCompare(String(a.lastUpdated || a.date || ""));
+
+  M.quotations = { title: "Samples & Quotations", sub: "Samples out, prices offered, and what came of them", render(root, params) {
+    let tab = (params && params.tab) || "quotations";
+    let q = "";
+    const allLeads = ENG.leads();
+    const sampled = allLeads.filter((l) => l.sample && l.sample.sentDate);
+    const waiting = openSamples(allLeads);
+    const toQuote = sampled.filter(needsQuote);
+    const open = quotes().filter((x) => x.status === "Open");
+
+    root.appendChild(pageHead("Samples & Quotations", "Every reel that went out, every price offered, and what came of them", [
+      MW.excelMenu("quotations"),
+      h("button", { class: "btn ghost", onclick: () => pickLeadForSample(), html: "📦 Send sample" }),
+      h("button", { class: "btn primary", onclick: () => quoteForm(null, {}), html: "＋ New quotation" }),
+    ]));
+    const seg = h("div", { class: "seg", style: "margin-bottom:12px" }, [
+      h("button", { class: tab === "samples" ? "on" : "", html: "📦 Samples" + chipN(waiting.length), onclick: (e) => setTab("samples", e.currentTarget) }),
+      h("button", { class: tab === "quotations" ? "on" : "", html: "📄 Quotations" + chipN(open.length), onclick: (e) => setTab("quotations", e.currentTarget) }),
+    ]);
+    root.appendChild(seg);
+    function setTab(t, btn) {
+      tab = t; App.params = Object.assign({}, App.params || {}, { tab: t });
+      [...seg.children].forEach((c) => c.classList.remove("on")); btn.classList.add("on"); draw();
+    }
+    root.appendChild(h("div", { class: "toolbar" }, [
+      MW.searchInput("Search customer, product, batch, note…", (v) => { q = v.toLowerCase().trim(); draw(); }),
+      h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "sqCount" })),
+    ]));
+    const host = h("div"); root.appendChild(host);
+    /* delegated, because UI.table rebuilds its rows on every sort */
+    host.onclick = (e) => {
+      const b = e.target.closest && e.target.closest("[data-sample],[data-quote]");
+      if (!b) return;
+      if (b.dataset.sample) { const l = leadById(b.dataset.sample); if (l) sampleDetail(l); }
+      else { const x = quotes().find((z) => z.id === b.dataset.quote); if (x) quoteDetail(x); }
+    };
+    draw();
+    /* one-shot commands, cleared so the 15 s refresh does not reopen them */
+    if (params && params.openNew) {
+      const seed = { leadId: params.fromLead, customerId: params.customerId };
+      params.openNew = false; params.fromLead = null; params.customerId = null;
+      quoteForm(null, seed);
+    }
+    if (params && params.open) { const x = quotes().find((z) => z.id === params.open); params.open = null; if (x) quoteDetail(x); }
+
+    function draw() { if (tab === "samples") drawSamples(); else drawQuotes(); }
+
+    function drawSamples() {
+      const rows = sampled.map((l) => ({ id: l.id, lead: l, s: l.sample, open: isOpenSample(l), age: sampleAge(l) || 0 }))
+        .filter((r) => !q || [r.lead.company, r.lead.contact, r.s.productName, r.s.batch, r.s.awb, r.s.verdict, r.s.note].join(" ").toLowerCase().includes(q))
+        .sort((a, b) => (a.open !== b.open) ? (a.open ? -1 : 1) : (b.age - a.age));
+      const c = UI.$("#sqCount"); if (c) c.textContent = rows.length + (rows.length === 1 ? " sample" : " samples");
+      const oldest = waiting.length ? waiting[0].age : 0;
+      host.innerHTML = "";
+      host.appendChild(h("div", { class: "muted", style: "font-size:12.5px;margin-bottom:10px",
+        text: waiting.length + " awaiting a verdict" + (waiting.length ? " · oldest " + oldest + (oldest === 1 ? " day" : " days") : "")
+          + (toQuote.length ? " · " + toQuote.length + " approved and not yet quoted" : "") }));
+      if (!rows.length) {
+        host.appendChild(h("div", { class: "empty" }, [h("div", { class: "big", text: "📦" }),
+          h("div", { text: sampled.length ? "No sample matches that search" : "No sample has gone out yet — send one from a lead" })]));
+        return;
+      }
+      host.appendChild(table(rows, [
+        { key: "customer", label: "Customer", sort: (r) => r.lead.company,
+          render: (r) => `<b>${esc(r.lead.company)}</b><div class="muted" style="font-size:11.5px">${esc(r.lead.contact || "—")} · ${esc(r.lead.id)}</div>` },
+        { key: "product", label: "Product · batch", sort: (r) => r.s.productName || "",
+          render: (r) => esc((r.s.productName || r.s.product || "—") + (r.s.batch ? " · " + r.s.batch : ""))
+            + (r.s.awb ? `<div class="muted" style="font-size:11.5px">${esc((r.s.courier ? r.s.courier + " · " : "") + "AWB " + r.s.awb)}</div>` : "") },
+        { key: "qty", label: "Qty", num: true, sort: (r) => +r.s.qty || 0, render: (r) => (r.s.qty ? ENG.num(r.s.qty) + " " + esc(r.s.uom || "") : "—") },
+        { key: "sent", label: "Sent", sort: (r) => r.s.sentDate, render: (r) => esc(r.s.sentDate) },
+        // the tone only means something while the verdict is still owed
+        { key: "age", label: "Age", num: true, sort: (r) => r.age, render: (r) => badge(r.open ? ageTone(r.age) : "mut", r.age + (r.age === 1 ? " day" : " days")) },
+        { key: "verdict", label: "Verdict", sort: (r) => r.s.verdict || "",
+          render: (r) => badge(vTone(r.s.verdict), r.s.verdict || "Awaiting feedback") + (needsQuote(r.lead) ? " " + badge("warn", "quote it") : "") },
+        { key: "go", label: "", noSort: true, render: (r) => `<button class="btn sm" data-sample="${esc(r.id)}">Open</button>` },
+      ], { empty: "No sample has gone out yet" }));
+    }
+
+    function drawQuotes() {
+      const rank = { Open: 0, Won: 1, Lost: 2 };
+      const rows = quotes().filter((x) => !q || [x.id, x.company, x.productName, x.itemId, x.note, x.status, x.lostTo].join(" ").toLowerCase().includes(q))
+        .sort((a, b) => (rank[a.status] - rank[b.status]) || newestFirst(a, b));
+      const c = UI.$("#sqCount"); if (c) c.textContent = rows.length + (rows.length === 1 ? " quotation" : " quotations");
+      const decided = quotes().filter((x) => x.status !== "Open");
+      const won = decided.filter((x) => x.status === "Won");
+      const rounds = decided.length ? decided.reduce((s, x) => s + (+x.rounds || 1), 0) / decided.length : 0;
+      host.innerHTML = "";
+      host.appendChild(h("div", { class: "muted", style: "font-size:12.5px;margin-bottom:10px",
+        text: open.length + " open" + (decided.length ? " · won " + Math.round(won.length / decided.length * 100) + "% of " + decided.length + " decided · " + rounds.toFixed(1) + " rounds to close" : "") }));
+      if (!rows.length) {
+        host.appendChild(h("div", { class: "empty" }, [h("div", { class: "big", text: "📄" }),
+          h("div", { text: quotes().length ? "No quotation matches that search" : "No price has been quoted yet" })]));
+        return;
+      }
+      host.appendChild(table(rows, [
+        { key: "id", label: "Quote", sort: (r) => r.id, render: (r) => `<b class="mono">${esc(r.id)}</b><div class="muted" style="font-size:11.5px">${esc(r.date || "")}</div>` },
+        { key: "company", label: "Customer", sort: (r) => r.company || "",
+          render: (r) => `<b>${esc(r.company || ENG.custName(r.customerId))}</b>` + (r.leadId ? `<div class="muted" style="font-size:11.5px">${esc(r.leadId)}</div>` : "") },
+        { key: "product", label: "Product", sort: (r) => r.productName || "", render: (r) => esc(r.productName || r.itemId || "—") },
+        { key: "uom", label: "Unit", sort: (r) => r.uom || "", render: (r) => esc(uomOfQuote(r)) },
+        { key: "price", label: "Price", num: true, sort: (r) => +r.price || 0,
+          render: (r) => `<b>${esc(priceText(r))}</b>`
+            + (r.status === "Won" && r.finalPrice !== r.price ? `<div class="muted" style="font-size:11px">final ${esc(priceText(r, r.finalPrice))}</div>` : "")
+            + (r.status === "Lost" && r.counterPrice > 0 ? `<div class="muted" style="font-size:11px">counter ${esc(priceText(r, r.counterPrice))}</div>` : "") },
+        { key: "qty", label: "Qty → Value", num: true, sort: (r) => +r.value || 0,
+          render: (r) => (r.qty > 0 ? ENG.num(r.qty) + " " + esc(uomOfQuote(r)) + " → " + money(r.value) : '<span class="muted">—</span>') },
+        { key: "rounds", label: "Rounds", num: true, sort: (r) => +r.rounds || 1, render: (r) => String(r.rounds || 1) },
+        { key: "upd", label: "Updated", sort: (r) => r.lastUpdated || r.date, render: (r) => esc(r.lastUpdated || r.date || "") },
+        { key: "status", label: "Status", sort: (r) => rank[r.status], render: (r) => quoteBadge(r) },
+        { key: "go", label: "", noSort: true, render: (r) => `<button class="btn sm" data-quote="${esc(r.id)}">Open</button>` },
+      ], { empty: "No price has been quoted yet" }));
+    }
+  }};
+
+  /* ---- a reel goes out against an enquiry; pick which one ---- */
+  function pickLeadForSample() {
+    const cands = ENG.leads().filter((l) => l.stage !== "Won" && l.stage !== "Lost" && !l.sample);
+    if (!cands.length) { toast("Every open lead already has a sample out — open the lead to update it", { type: "warn" }); return; }
+    const body = h("div", { class: "form-grid" }, [
+      field("Lead (enquiry) *", selectHTML("ps_lead", cands.map((l) => ({ v: l.id, l: l.company + " · " + (l.productName || l.product || "") + " · " + l.id })), cands[0].id), "full"),
+    ]);
+    const mo = modal({ title: "Send a sample", sub: "Which enquiry is the reel for?", body, foot: [
+      h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+      h("button", { class: "btn primary", text: "Next →", onclick: () => { const l = leadById(UI.$("#ps_lead").value); mo.close(); if (l) sampleForm(l); } }),
+    ] });
+  }
+
+  /* ---- the sample's own record: what went out, what came back, what the lab saw ---- */
+  function sampleDetail(l) {
+    const s = l.sample; if (!s) return;
+    const age = sampleAge(l);
+    const body = h("div", {}, [
+      MW.dl([
+        ["Customer", l.company], ["Contact", l.contact || "—"],
+        ["Product", s.productName || s.product || "—"],
+        ["Quantity", s.qty ? ENG.num(s.qty) + " " + (s.uom || "") : "—"],
+        ["Sent", (s.sentDate || "—") + (age != null ? " · " + age + (age === 1 ? " day ago" : " days ago") : "")],
+        ["Batch", s.batch || "—"], ["Courier", s.courier || "—"], ["Docket / AWB", s.awb || "—"],
+        ["Verdict", h("span", { html: badge(vTone(s.verdict), s.verdict || "Awaiting feedback") })],
+        ["Lead stage", h("span", { html: badge(stageBadge(l.stage), l.stage) })],
+      ]),
+      s.note ? h("div", { class: "card", style: "margin-top:12px;box-shadow:none;background:var(--panel-2)" }, [
+        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px", text: "Remarks" }),
+        h("div", { style: "font-size:13px;line-height:1.5", text: s.note })]) : null,
+      s.batch ? labReadingCard(s.batch) : null,
+    ]);
+    modal({ title: "📦 Sample · " + l.company, sub: l.id + " · " + (s.productName || ""), wide: true, body, foot: [
+      h("button", { class: "btn ghost", onclick: () => { UI.$("#modalHost").hidden = true; leadDetail(l.id); }, text: "🎯 Lead" }),
+      h("button", { class: "btn", onclick: () => sampleForm(l), text: "✎ Update verdict" }),
+      needsQuote(l) ? h("button", { class: "btn primary", text: "📄 Quote it",
+        onclick: () => { UI.$("#modalHost").hidden = true; quoteForm(null, { leadId: l.id, customerId: l.customerId }); } }) : null,
+    ].filter(Boolean) });
+  }
+
+  /* ---- raise or edit a quotation ----
+     The entries are deliberately few: who, which product, in which unit,
+     at what price. The customer follows the lead, the unit follows the
+     product, and the price is the only number the desk has to think about. */
+  function quoteForm(edit, seed) {
+    seed = seed || {};
+    const q0 = edit || {};
+    const lead = leadById(q0.leadId || seed.leadId);
+    const openLeads = ENG.leads().filter((l) => (l.stage !== "Won" && l.stage !== "Lost") || (lead && l.id === lead.id));
+    const fgs = ENG.data.items.filter((i) => i.cat === "FG");
+    const custs = ENG.data.customers.slice().sort((a, b) => a.name.localeCompare(b.name));
+    const item0 = q0.itemId || seed.itemId || (lead && lead.product) || (fgs[0] && fgs[0].id);
+    const uomOf = (id) => { const u = String((ENG.item(id) || {}).uom || "KG").toUpperCase(); return QTN_UOMS.includes(u) ? u : "KG"; };
+    const custOpts = [{ v: "", l: "— none —" }].concat(custs.map((c) => ({ v: c.id, l: c.name })));
+    const body = h("div", { class: "form-grid" }, [
+      field("Lead (enquiry)", edit
+        ? `<input class="input" value="${esc(lead ? lead.company + " · " + lead.id : "— none —")}" disabled>`
+        : selectHTML("q_lead", [{ v: "", l: "— none, quote a customer directly —" }].concat(openLeads.map((l) => ({ v: l.id, l: l.company + " · " + l.id }))), (lead && lead.id) || "")),
+      field("Customer", selectHTML("q_cust", custOpts, q0.customerId || seed.customerId || (lead && lead.customerId) || "")),
+      field("Product *", selectHTML("q_item", fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })), item0)),
+      field("Unit *", selectHTML("q_uom", QTN_UOMS.map((u) => ({ v: u, l: "per " + u.toLowerCase() })), q0.uom || seed.uom || uomOf(item0))),
+      field("Price per unit (₹) *", `<input class="input" id="q_price" type="number" step="0.01" min="0" value="${q0.price != null ? q0.price : (seed.price || "")}" placeholder="the number offered">`),
+      field("Quantity (optional)", `<input class="input" id="q_qty" type="number" step="0.01" min="0" value="${q0.qty || seed.qty || ""}" placeholder="expected order, in the unit above">`),
+      field("Note", `<textarea class="input" id="q_note" placeholder="What was discussed — width, delivery, payment…">${esc(q0.note || "")}</textarea>`, "full"),
+    ]);
+    const mo = modal({ title: edit ? "Edit " + q0.id : "New quotation", sub: edit ? (q0.company || "") : "The price you are putting on the table", body, foot: [
+      h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+      h("button", { class: "btn primary", onclick: save, text: edit ? "Save" : "Raise quotation" }),
+    ] });
+    // the customer and the product follow the lead; the unit follows the product
+    const leadSel = UI.$("#q_lead");
+    if (leadSel) leadSel.onchange = () => {
+      const l = leadById(leadSel.value);
+      if (!l) return;
+      const cs = UI.$("#q_cust"); if (cs && l.customerId) cs.value = l.customerId;
+      const it = UI.$("#q_item"); if (it && l.product) { it.value = l.product; const u = UI.$("#q_uom"); if (u) u.value = uomOf(l.product); }
+    };
+    const itemSel = UI.$("#q_item");
+    if (itemSel) itemSel.onchange = () => { const u = UI.$("#q_uom"); if (u) u.value = uomOf(itemSel.value); };
+
+    async function save() {
+      const leadId = edit ? (q0.leadId || "") : UI.$("#q_lead").value;
+      const customerId = UI.$("#q_cust").value;
+      const itemId = UI.$("#q_item").value, uom = UI.$("#q_uom").value;
+      const price = +UI.$("#q_price").value || 0, qty = +UI.$("#q_qty").value || 0, note = UI.$("#q_note").value.trim();
+      if (!leadId && !customerId) { toast("Pick the lead or the customer being quoted", { type: "warn" }); return; }
+      if (!itemId) { toast("Pick the product", { type: "warn" }); return; }
+      if (!(price > 0)) { toast("Enter the price per " + uom.toLowerCase(), { type: "warn" }); return; }
+      mo.close();
+      App.params = Object.assign({}, App.params || {}, { tab: "quotations" });
+      try {
+        await qtnSave(() => edit
+          ? DB.quotations.update(q0.id, { itemId, uom, qty, note, price, customerId })
+          : DB.quotations.create({ leadId, customerId, itemId, uom, price, qty, note }),
+          edit ? q0.id + " saved" : "Quotation raised" + (leadId ? " — lead moved to Quoted" : ""));
+      } catch (e) { /* qtnSave already toasted */ }
+    }
+  }
+
+  /* ---- one quotation: the price now, the road to it, and what to do next ---- */
+  function quoteDetail(q) {
+    const lead = leadById(q.leadId);
+    const it = ENG.item(q.itemId) || {};
+    const kindLabel = { quoted: "opened at", updated: "updated to", won: "won at", lost: "lost against", reopened: "reopened" };
+    const hist = (q.history || []).slice().reverse();
+    const body = h("div", {}, [
+      MW.dl([
+        ["Product", q.productName || it.name || q.itemId],
+        ["Unit", uomOfQuote(q)],
+        ["Current price", h("b", { text: priceText(q) })],
+        ["Quantity", q.qty > 0 ? ENG.num(q.qty) + " " + uomOfQuote(q) : "—"],
+        ["Value", q.qty > 0 ? money(q.value) : "—"],
+        ["Status", h("span", { html: quoteBadge(q) })],
+        ["Rounds", String(q.rounds || 1)],
+        ["Opened", q.date || "—"],
+        ["Last update", q.lastUpdated || q.date || "—"],
+        lead ? ["Lead", h("a", { href: "#", class: "a-link", text: lead.company + " · " + lead.id,
+          onclick: (e) => { e.preventDefault(); UI.$("#modalHost").hidden = true; App.go("crm", { open: lead.id }); } })] : null,
+        q.customerId ? ["Customer", ENG.custName(q.customerId)] : null,
+        q.status === "Won" ? ["Final price", priceText(q, q.finalPrice)] : null,
+        q.status === "Lost" ? ["Counter price", q.counterPrice > 0 ? priceText(q, q.counterPrice) : "—"] : null,
+        q.status === "Lost" ? ["Lost to", q.lostTo || "—"] : null,
+      ].filter(Boolean)),
+      q.note ? h("div", { class: "card", style: "margin-top:12px;box-shadow:none;background:var(--panel-2)" }, [
+        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px", text: "Note" }),
+        h("div", { style: "font-size:13px;line-height:1.5;white-space:pre-wrap", text: q.note })]) : null,
+      h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
+        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px", text: "Price history — " + hist.length + (hist.length === 1 ? " entry" : " entries") }),
+        h("div", {}, hist.map((x) => h("div", { class: "flex aic wrap gap", style: "padding:6px 0;border-top:1px solid var(--line);font-size:13px" }, [
+          h("span", { class: "muted mono", style: "font-size:11.5px", text: String(x.at || "").slice(0, 10) }),
+          h("span", { class: "muted", text: kindLabel[x.kind] || x.kind }),
+          h("b", { text: x.price > 0 ? priceText(q, x.price) : "—" }),
+          x.qty > 0 ? h("span", { class: "muted", text: "× " + ENG.num(x.qty) + " " + uomOfQuote(q) }) : null,
+          x.note ? h("span", { text: "— " + x.note }) : null,
+          x.by ? h("span", { class: "muted", style: "margin-left:auto;font-size:11.5px", text: x.by }) : null,
+        ].filter(Boolean)))),
+      ]),
+      lead && lead.sample ? h("div", { class: "flex aic wrap gap", style: "margin-top:12px;font-size:12.5px" }, [
+        h("span", { text: "📦 Sample " + (lead.sample.productName || "") + " · sent " + (lead.sample.sentDate || "—") }),
+        h("span", { html: badge(vTone(lead.sample.verdict), lead.sample.verdict || "Awaiting feedback") }),
+        h("button", { class: "btn sm ghost", text: "Open sample", onclick: () => { UI.$("#modalHost").hidden = true; sampleDetail(lead); } }),
+      ]) : null,
+    ]);
+    const isOpen = q.status === "Open";
+    modal({ title: q.id + " · " + (q.company || ENG.custName(q.customerId)), sub: (q.productName || q.itemId) + " · " + priceText(q), wide: true, body,
+      foot: [
+        window._erpUtil && window._erpUtil.printQuote ? h("button", { class: "btn ghost", onclick: () => window._erpUtil.printQuote(q), text: "🖨 Print" }) : null,
+        q.status !== "Won" ? h("button", { class: "btn danger", text: "🗑 Delete", onclick: async () => {
+          if (!await confirm("Delete " + q.id + "?", { title: "Delete quotation", danger: true })) return;
+          UI.$("#modalHost").hidden = true;
+          try { await qtnSave(() => DB.quotations.remove(q.id), q.id + " deleted"); } catch (e) {}
+        } }) : null,
+        isOpen ? h("button", { class: "btn ghost", onclick: () => { UI.$("#modalHost").hidden = true; quoteForm(q); }, text: "✎ Edit" }) : null,
+        !isOpen ? h("button", { class: "btn ghost", text: "↺ Reopen", onclick: async () => {
+          UI.$("#modalHost").hidden = true;
+          try { await qtnSave(() => DB.quotations.reopen(q.id), q.id + " reopened"); const fr = quotes().find((x) => x.id === q.id); if (fr) quoteDetail(fr); } catch (e) {}
+        } }) : null,
+        isOpen ? h("button", { class: "btn", onclick: () => repriceForm(q), html: "↻ Update price" }) : null,
+        isOpen ? h("button", { class: "btn", style: "color:var(--danger)", onclick: () => loseForm(q), html: "✕ Lost" }) : null,
+        isOpen ? h("button", { class: "btn primary", style: "background:linear-gradient(135deg,var(--ok),#0f8a3c)", onclick: () => winForm(q), html: "🏆 Won" }) : null,
+      ].filter(Boolean) });
+  }
+
+  /* ---- a new number in the same conversation ---- */
+  function repriceForm(q) {
+    const body = h("div", { class: "form-grid" }, [
+      field("New price per " + uomOfQuote(q) + " (₹) *", `<input class="input" id="rp_price" type="number" step="0.01" min="0" value="${q.price}">`),
+      field("Quantity (" + uomOfQuote(q) + ")", `<input class="input" id="rp_qty" type="number" step="0.01" min="0" value="${q.qty || ""}">`),
+      field("What moved it", `<textarea class="input" id="rp_note" placeholder="e.g. customer countered at ₹880; matched the competitor on width…"></textarea>`, "full"),
+    ]);
+    const mo = modal({ title: "↻ Update the price — " + (q.company || ""), sub: q.id + " · now " + priceText(q) + " · round " + (q.rounds || 1), body, foot: [
+      h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+      h("button", { class: "btn primary", text: "Record new price", onclick: async () => {
+        const price = +UI.$("#rp_price").value || 0, qty = +UI.$("#rp_qty").value || 0, note = UI.$("#rp_note").value.trim();
+        if (!(price > 0)) { toast("Enter the new price", { type: "warn" }); return; }
+        mo.close();
+        try {
+          await qtnSave(() => DB.quotations.reprice(q.id, { price, qty, note }), q.id + " → " + priceText(q, price));
+          const fresh = quotes().find((x) => x.id === q.id); if (fresh) quoteDetail(fresh);
+        } catch (e) {}
+      } }),
+    ] });
+  }
+
+  /* ---- closing won: the final price, then the order ---- */
+  function winForm(q) {
+    const body = h("div", { class: "form-grid" }, [
+      field("Final price per " + uomOfQuote(q) + " (₹) *", `<input class="input" id="w_price" type="number" step="0.01" min="0" value="${q.price}">`),
+      field("Quantity (" + uomOfQuote(q) + ")", `<input class="input" id="w_qty" type="number" step="0.01" min="0" value="${q.qty || ""}" placeholder="for the order">`),
+      field("Note", `<textarea class="input" id="w_note" placeholder="What closed it — payment terms, delivery…"></textarea>`, "full"),
+    ]);
+    const mo = modal({ title: "🏆 Won — " + (q.company || ""), sub: q.id + " · " + (q.productName || ""), body, foot: [
+      h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+      h("button", { class: "btn primary", style: "background:linear-gradient(135deg,var(--ok),#0f8a3c)", text: "Mark Won", onclick: save }),
+    ] });
+    async function save() {
+      const finalPrice = +UI.$("#w_price").value || 0;
+      if (!(finalPrice > 0)) { toast("Enter the final price", { type: "warn" }); return; }
+      const qty = +UI.$("#w_qty").value || 0, note = UI.$("#w_note").value.trim();
+      // the order needs a customer the server knows; a lead becomes one here
+      const lead = leadById(q.leadId);
+      let cust = null, created = false;
+      if (lead) { const r = ensureCustomerFor(lead); cust = r.cust; created = r.created; }
+      const customerId = cust ? cust.id : q.customerId;
+      mo.close();
+      try {
+        await qtnSave(async () => {
+          if (created) await DB.customers.upsert(cust);
+          await DB.quotations.win(q.id, { finalPrice, qty, note, customerId });
+        }, (q.company || "Quote") + " won at " + priceText(q, finalPrice));
+      } catch (e) { return; }
+      if (!customerId) return;
+      const yes = await confirm(`🏆 ${q.company || ENG.custName(customerId)} won at ${priceText(q, finalPrice)}.\n\nRaise a sales order now for ${q.productName || q.itemId}?\nThis pushes the deal into your order book → production → dispatch.`,
+        { title: "Raise the order?" });
+      if (yes) await raiseOrderFor({ customerId, itemId: q.itemId, price: finalPrice, qty, uom: q.uom, leadId: q.leadId, quoteId: q.id, value: quoteValueOf(finalPrice, qty) });
+    }
+  }
+
+  /* ---- closing lost: the counter price is the honest input to "were we too dear" ---- */
+  function loseForm(q) {
+    let picked = "";
+    const chips = h("div", { class: "flex wrap gap", style: "margin-bottom:4px" }, LOST_REASONS.map((r) => {
+      const b = h("button", { class: "btn sm", text: r, onclick: () => { picked = r; [...chips.children].forEach((c) => c.classList.remove("primary")); b.classList.add("primary"); } });
+      return b;
+    }));
+    // field() sets innerHTML from a string; the chips are live nodes with
+    // click handlers, so they are placed in their own field by hand
+    const reasonField = h("div", { class: "field full" }, [h("label", { text: "Reason *" }), chips]);
+    const body = h("div", { class: "form-grid" }, [
+      reasonField,
+      field("Their counter price per " + uomOfQuote(q) + " (₹)", `<input class="input" id="lz_price" type="number" step="0.01" min="0" placeholder="what they would have paid, or the rival's price">`),
+      field("Lost to", `<input class="input" id="lz_to" placeholder="competitor or existing supplier">`),
+      field("Note", `<textarea class="input" id="lz_note" placeholder="anything worth remembering next time"></textarea>`, "full"),
+    ]);
+    const mo = modal({ title: "✕ Lost — " + (q.company || ""), sub: q.id + " · our last price " + priceText(q), body, foot: [
+      h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+      h("button", { class: "btn danger", text: "Mark Lost", onclick: async () => {
+        if (!picked) { toast("Pick a reason", { type: "warn" }); return; }
+        const counterPrice = +UI.$("#lz_price").value || 0, lostTo = UI.$("#lz_to").value.trim(), note = UI.$("#lz_note").value.trim();
+        mo.close();
+        try {
+          await qtnSave(() => DB.quotations.lose(q.id, { counterPrice, lostReason: picked, lostTo, note }));
+          toast(q.id + " lost — " + picked, { type: "warn" });
+        } catch (e) {}
+      } }),
+    ] });
+  }
+
+  /* ---- the order a won price becomes ----
+     Shared by Mark Won on a lead and Won on a quotation. The agreed price
+     goes on the line only when it was talked in the product's own unit; a
+     sqm price for a kg-stocked tape cannot be typed onto the line honestly,
+     so the line takes the list price and the desk is told to correct it. */
+  async function raiseOrderFor({ customerId, itemId, price, qty, uom, leadId, quoteId, value }) {
+    const fg = ENG.item(itemId) || {};
+    const own = String(fg.uom || "KG").toUpperCase();
+    const sameUnit = !uom || String(uom).toUpperCase() === own;
+    const rate = (sameUnit && price > 0) ? price : (fg.price || price || 0);
+    if (!sameUnit) toast("Quoted per " + String(uom).toLowerCase() + " but the tape is stocked in " + own.toLowerCase() + " — the line carries the list price; correct it on the order", { type: "warn" });
+    const n = qty > 0 ? qty : (rate > 0 && value > 0 ? Math.max(1, Math.round(value / rate)) : 1);
+    const so = {
+      id: window._erpUtil.nextSeqId(ENG.data.salesorders, "SO-"),
+      date: todayISO(), customerId,
+      // no invented width: it is set from the work order the line is filled
+      // from, and until then the invoice simply prints the thickness
+      lines: [{ itemId, qty: n, rate, width: (fg.widthMM ? fg.widthMM[0] : null) }],
+      status: "Confirmed", promised: DB.helpers.daysAhead(14), priority: "Normal",
+      value: Math.round(n * rate),
+      fromLead: leadId || "",     // traceability back to the CRM lead
+      fromQuote: quoteId || "",   // …and to the price it was won at
+    };
+    // the SO is pushed optimistically so it shows at once; the lead's back-link
+    // is the server's to write, so we reload after to reflect it (and the quote
+    // the win already closed) rather than leave it for the 15 s poll
+    ENG.data.salesorders.push(so);
+    try {
+      await App.saveDelta(async () => {
+        await DB.sales.create(so);
+        if (leadId) await DB.leads.update(leadId, { salesOrderId: so.id });
+      });
+      await App.reloadState();
+    } catch (e) { return null; }
+    toast(so.id + " created", { type: "ok", title: "Order raised" });
+    App.go("sales");
+    return so;
+  }
+
+  /* ---- the drawer's one-line view of the sample and the quote ----
+     The records live on the Samples & Quotations page; the drawer shows
+     the state in one breath and an arrow to the record. */
+  function sampleStrip(l) {
+    const s = l.sample; if (!s) return null;
+    const age = sampleAge(l);
+    return h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2);padding:10px 14px" },
+      h("div", { class: "flex between aic wrap gap" }, [
+        h("div", { class: "flex aic wrap gap", style: "font-size:13px" }, [
+          h("span", { text: "📦" }), h("b", { text: "Sample" }),
+          h("span", { text: (s.productName || s.product || "—") + (s.batch ? " · " + s.batch : "") }),
+          h("span", { class: "muted", text: "sent " + (s.sentDate || "—") + (age != null ? " · " + age + (age === 1 ? " day" : " days") : "") }),
+          h("span", { html: badge(vTone(s.verdict), s.verdict || "Awaiting feedback") }),
+          needsQuote(l) ? h("span", { html: badge("warn", "quote it") }) : null,
+        ].filter(Boolean)),
+        h("div", { class: "flex gap" }, [
+          h("button", { class: "btn sm ghost", title: "Update the sample or its verdict", onclick: () => sampleForm(l), text: "✎" }),
+          h("button", { class: "btn sm", title: "Open on Samples & Quotations",
+            onclick: () => { UI.$("#modalHost").hidden = true; App.go("quotations", { tab: "samples", highlight: l.id }); }, text: "→" }),
+        ]),
+      ]));
+  }
+  function quoteStrip(l) {
+    const qs = quotes().filter((x) => x.leadId === l.id).sort(newestFirst);
+    if (!qs.length) return null;
+    const x = qs[0];
+    return h("div", { class: "card", style: "margin-top:10px;box-shadow:none;background:var(--panel-2);padding:10px 14px" },
+      h("div", { class: "flex between aic wrap gap" }, [
+        h("div", { class: "flex aic wrap gap", style: "font-size:13px" }, [
+          h("span", { text: "📄" }), h("b", { text: "Quote" }), h("span", { class: "mono", text: x.id }),
+          h("span", { text: priceText(x) + (x.qty > 0 ? " × " + ENG.num(x.qty) + " " + uomOfQuote(x) : "") }),
+          h("span", { class: "muted", text: (x.rounds || 1) + ((x.rounds || 1) === 1 ? " round" : " rounds") + (qs.length > 1 ? " · " + qs.length + " quotes" : "") }),
+          h("span", { html: quoteBadge(x) }),
+        ]),
+        h("div", { class: "flex gap" }, [
+          x.status === "Open" ? h("button", { class: "btn sm ghost", title: "Update the price", onclick: () => repriceForm(x), text: "↻" }) : null,
+          h("button", { class: "btn sm", title: "Open on Samples & Quotations",
+            onclick: () => { UI.$("#modalHost").hidden = true; App.go("quotations", { tab: "quotations", open: x.id }); }, text: "→" }),
+        ].filter(Boolean)),
+      ]));
   }
 
   /* ============================================================
@@ -723,7 +1261,9 @@
   /* ---- PRIORITY BLOCK: today's follow-ups ---- */
   function followUpBlock(due, overdueList, todayList, staleSamples) {
     staleSamples = staleSamples || [];
-    if (!due.length && !staleSamples.length) {
+    // a price on the table with no word back is a chase as much as a call is
+    const staleQ = staleQuotes();
+    if (!due.length && !staleSamples.length && !staleQ.length) {
       return h("div", { class: "card crm-fu calm" }, [
         h("div", { class: "crm-fu-empty" }, [
           h("div", { class: "crm-fu-ic", text: "✓" }),
@@ -737,15 +1277,21 @@
     const tally = [];
     if (overdueList.length) tally.push(h("span", { class: "crm-delta down", text: overdueList.length + " overdue" }));
     if (todayList.length) tally.push(h("span", { class: "crm-delta flat", text: todayList.length + " due today" }));
-    if (staleSamples.length) tally.push(h("span", { class: "crm-delta down", text: staleSamples.length + " sample" + (staleSamples.length === 1 ? "" : "s") + " silent" }));
+    // the sample and quote tallies are a way in: they open Samples & Quotations
+    if (staleSamples.length) tally.push(h("button", { class: "crm-delta down", type: "button", style: "border:0;cursor:pointer",
+      title: "Every sample that has gone out", onclick: () => App.go("quotations", { tab: "samples" }),
+      text: staleSamples.length + " sample" + (staleSamples.length === 1 ? "" : "s") + " silent" }));
+    if (staleQ.length) tally.push(h("button", { class: "crm-delta down", type: "button", style: "border:0;cursor:pointer",
+      title: "Every price on the table", onclick: () => App.go("quotations", { tab: "quotations" }),
+      text: staleQ.length + " quote" + (staleQ.length === 1 ? "" : "s") + " silent" }));
 
     return h("div", { class: "card crm-fu" }, [
       h("div", { class: "crm-fu-head" }, [
         h("div", { class: "crm-fu-ic", text: "⏰" }),
         h("div", {}, [
           h("div", { class: "crm-fu-title", text: "Chase these first" }),
-          h("div", { class: "crm-fu-sub", text: (due.length + staleSamples.length) + " thing"
-            + (due.length + staleSamples.length === 1 ? " is" : "s are") + " waiting on you" }),
+          h("div", { class: "crm-fu-sub", text: (due.length + staleSamples.length + staleQ.length) + " thing"
+            + (due.length + staleSamples.length + staleQ.length === 1 ? " is" : "s are") + " waiting on you" }),
         ]),
         h("div", { class: "crm-fu-tally" }, tally),
       ]),
@@ -767,7 +1313,14 @@
           h("span", { class: "crm-fu-meta", text: "Sample · " + trim((l.sample && (l.sample.productName || l.sample.product)) || "—", 16) }),
           h("span", { class: "crm-fu-val", text: money(l.value) }),
           h("span", { class: "crm-fu-when over", text: age + " d no verdict" }),
-        ])))),
+        ])).concat(staleQ.slice(0, 4).map(({ q, days }) =>
+        h("button", { class: "crm-fu-row", onclick: () => quoteDetail(q) }, [
+          h("span", { class: "crm-fu-dot over" }),
+          h("span", { class: "crm-fu-co", text: q.company || ENG.custName(q.customerId) }),
+          h("span", { class: "crm-fu-meta", text: "Quote · " + priceText(q) + " · " + trim(q.productName || q.itemId || "—", 14) }),
+          h("span", { class: "crm-fu-val", text: q.qty > 0 ? money(q.value) : "—" }),
+          h("span", { class: "crm-fu-when over", text: days + " d no answer" }),
+        ]))))),
     ]);
   }
   function daysBetween(a, b) {
@@ -1074,8 +1627,12 @@
       t: (l) => { const s = l.sample || {};
         return `Hello ${who(l)}, your sample of ${s.productName || prod(l)}${s.qty ? " (" + ENG.num(s.qty) + " " + (s.uom || "") + ")" : ""} was sent on ${s.sentDate || todayISO()}${s.courier ? " by " + s.courier : ""}${s.awb ? ", AWB " + s.awb : ""}. Please let me know once it reaches you.`; } },
     { k: "quote",   l: "Quote follow-up",
-      t: (l) => { const q = lastActivity(l, "Quotation Sent");
-        return `Hello ${who(l)}, following up on our quotation${q ? " sent on " + q.date : ""} for ${prod(l)}. Happy to revise if the schedule or quantity has changed.`; } },
+      t: (l) => { const q = quotes().filter((x) => x.leadId === l.id && x.status === "Open").sort(newestFirst)[0];
+        // the price on the table when one was quoted — the number and the unit
+        // the customer is weighing; the old activity-date wording otherwise
+        if (q) return `Hello ${who(l)}, following up on our quotation of ${priceText(q)} for ${q.productName || prod(l)}${q.qty > 0 ? " (" + ENG.num(q.qty) + " " + uomOfQuote(q) + ")" : ""}. Happy to discuss if the quantity or schedule has changed.`;
+        const a = lastActivity(l, "Quotation Sent");
+        return `Hello ${who(l)}, following up on our quotation${a ? " sent on " + a.date : ""} for ${prod(l)}. Happy to revise if the schedule or quantity has changed.`; } },
     { k: "thanks",  l: "Thank you for the enquiry",
       t: (l) => `Hello ${who(l)}, thank you for your enquiry about ${prod(l)}. I will revert with details shortly.` },
   ];
@@ -1110,15 +1667,18 @@
       field("Template", sel, "full"),
       field("Message", '<textarea class="input" id="wa_text" rows="5" style="min-height:110px"></textarea>', "full"),
       h("div", { class: "muted", style: "grid-column:1/-1;font-size:12px" },
-        [h("span", { text: "Opens WhatsApp with this text ready. Nothing is sent until you press send there. " }),
-         h("b", { text: "Logged on the lead as a WhatsApp activity when you open it." })]),
+        [h("span", { text: "Opens WhatsApp (or your mail) with this text ready. Nothing is sent until you press send there. " }),
+         h("b", { text: "Logged on the lead as a WhatsApp or Email activity when you open it." })]),
     ]);
     const ta = () => UI.$("#wa_text");
-    const fill = () => { const t = WA_TEMPLATES.find((x) => x.k === key) || WA_TEMPLATES[0]; if (ta()) ta().value = t.t(l); };
+    const tplOf = () => WA_TEMPLATES.find((x) => x.k === key) || WA_TEMPLATES[0];
+    const fill = () => { if (ta()) ta().value = tplOf().t(l); };
 
     const mo = modal({ title: "💬 Follow up on WhatsApp", sub: l.company + " · " + (l.contact || "") + " · " + l.phone, body,
       foot: [
         h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+        // the same words by mail, for the contact who answers email and not WhatsApp
+        h("button", { class: "btn", text: "✉️ Email instead", onclick: (e) => emailInstead(e.currentTarget) }),
         h("button", { class: "btn primary", text: "Open WhatsApp", onclick: send }),
       ] });
     // the modal has mounted the HTML by now, so the textarea exists to fill
@@ -1140,6 +1700,24 @@
       toast("WhatsApp opened — logged on " + l.company, { type: "ok" });
       App.saveDelta(() => DB.leads.update(l.id, { activities: l.activities, nextFollowUp: l.nextFollowUp }));
       leadDetail(l.id);
+    }
+    /* Same message, composed in the user's own webmail through the shared
+       chooser. Logged only once a mail client is actually picked — dismissing
+       the chooser must not leave a phantom Email on the timeline. */
+    function emailInstead(anchor) {
+      const text = (ta() ? ta().value : "").trim();
+      if (!text) { toast("The message is empty", { type: "warn" }); return; }
+      if (!l.email) { toast("This lead has no email address — add one on ✎ Edit", { type: "warn" }); return; }
+      MW.mailChooser(anchor, l.email, { subject: l.company + " — " + tplOf().l, body: text,
+        onOpen: () => {
+          l.activities = l.activities || [];
+          l.activities.push({ date: todayISO(), type: "Email", note: trim(text, 140), by: l.owner || "Sales Desk" });
+          if (l.stage !== "Won" && l.stage !== "Lost") l.nextFollowUp = DB.helpers.daysAhead(3);
+          mo.close();
+          toast("Email opened — logged on " + l.company, { type: "ok" });
+          App.saveDelta(() => DB.leads.update(l.id, { activities: l.activities, nextFollowUp: l.nextFollowUp }));
+          leadDetail(l.id);
+        } });
     }
   }
   /* tiny text prompt built on the modal system */
@@ -1195,5 +1773,6 @@
   // register the ⌘K quick action for CRM
   window.ERPActions = Object.assign(window.ERPActions || {}, {
     newLead: { mod: "crm", create: true, ic: "🎯", label: "New Lead", run: () => App.go("crm", { openNew: true }) },
+    samplesOut: { ic: "📦", label: "Samples out — every reel that has gone out", run: () => App.go("quotations", { tab: "samples" }) },
   });
 })();

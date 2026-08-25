@@ -275,6 +275,11 @@ try {
     st.labReports = (st.labReports || []).concat(
       [{ id: "LR-SMOKE", productId: "LP-SMOKE", refNo: "B-1", values: { tensile: 42 } }]);
     st.appointments = (st.appointments || []).concat([{ id: "AP-SMOKE", date: "2026-08-06", title: "Smoke meeting" }]);
+    st.complaints = (st.complaints || []).concat([{ id: "CMP-SMOKE", customerId: "CUS-01", batch: "WO-0001",
+      status: "Open", raised: "2026-08-06", claim: "Smoke claim" }]);
+    st.quotations = (st.quotations || []).concat([{ id: "QTN-SMOKE", customerId: "CUS-01", leadId: "", itemId: "FG-CM25G", status: "Open",
+      date: "2026-08-06", uom: "KG", qty: 500, price: 940, value: 470000, rounds: 1,
+      history: [{ at: "2026-08-06T09:00:00.000Z", by: "office", kind: "quoted", price: 940, qty: 500 }] }]);
     st.hrWorkers = (st.hrWorkers || []).concat(
       [{ id: "EMP-SMOKE", name: "Smoke Worker", dept: "Coating", payType: "daily", dailyRate: 700, active: false }]);
     st.hrAttendance = (st.hrAttendance || []).concat(
@@ -291,6 +296,11 @@ try {
     const lr = (back.labReports || []).find((r) => r.id === "LR-SMOKE");
     ok("an imported lab report survives with its measurements", !!lr && lr.values && lr.values.tensile === 42);
     ok("a calendar appointment survives", (back.appointments || []).some((a) => a.id === "AP-SMOKE"));
+    const cmp = (back.complaints || []).find((c) => c.id === "CMP-SMOKE");
+    ok("a complaint survives", !!cmp && cmp.batch === "WO-0001" && cmp.status === "Open" && cmp.claim === "Smoke claim");
+    const qt = (back.quotations || []).find((q) => q.id === "QTN-SMOKE");
+    ok("a quotation survives", !!qt && qt.itemId === "FG-CM25G" && qt.status === "Open" && qt.uom === "KG" && qt.price === 940
+      && qt.value === 470000 && qt.history && qt.history[0].price === 940, JSON.stringify(qt));
     const wk = (back.hrWorkers || []).find((w) => w.id === "EMP-SMOKE");
     ok("an imported worker survives", !!wk && wk.dailyRate === 700);
     ok("an imported attendance row survives", (back.hrAttendance || []).some((a) => a.id === "EMP-SMOKE:2026-08-06"));

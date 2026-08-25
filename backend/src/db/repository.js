@@ -54,6 +54,10 @@ const J = (v) => (v == null ? null : JSON.stringify(v));
    over any stale copy inside the doc, the same rule appointments follow. */
 const rowToComplaint = (r) => Object.assign({}, P(r.doc, {}),
   { id: r.id, customerId: r.customer_id, batch: r.batch, status: r.status, raised: r.raised });
+/* A quotation row → the record the UI sees. Same rule: the six promoted
+   columns win over any stale copy inside the doc. */
+const rowToQuotation = (r) => Object.assign({}, P(r.doc, {}),
+  { id: r.id, customerId: r.customer_id, leadId: r.lead_id, itemId: r.item_id, status: r.status, date: r.date });
 const P = (v, d) => {
   if (v == null) return d;
   if (typeof v === "object") return v;
@@ -84,6 +88,8 @@ async function getState(x0) {
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, date: r.date }));
   const complaints = (await x.all("SELECT `id`,`customer_id`,`batch`,`status`,`raised`,`doc` FROM `complaints`"))
     .map(rowToComplaint);
+  const quotations = (await x.all("SELECT `id`,`customer_id`,`lead_id`,`item_id`,`status`,`date`,`doc` FROM `quotations`"))
+    .map(rowToQuotation);
 
   // items: merge promoted columns back into the doc
   const items = (await x.all("SELECT * FROM `items`")).map((r) => {
@@ -170,7 +176,7 @@ async function getState(x0) {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers, transporters,
-    movements, workorders, salesorders, purchaseorders, leads, appointments, complaints, settings,
+    movements, workorders, salesorders, purchaseorders, leads, appointments, complaints, quotations, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
     labProducts, labReports, grns, grnTests,
   };
@@ -318,6 +324,14 @@ async function saveState(data) {
       const { id, customerId, batch, status, raised, ...rest } = c;
       return x.run(CM, { id, customer_id: customerId || null, batch: batch || null,
         status: status || null, raised: raised || null, doc: J(rest) });
+    });
+
+    const QT = "INSERT INTO `quotations`(`id`,`customer_id`,`lead_id`,`item_id`,`status`,`date`,`doc`) " +
+      "VALUES(:id,:customer_id,:lead_id,:item_id,:status,:date,:doc)";
+    await replace("quotations", "quotations", (q) => {
+      const { id, customerId, leadId, itemId, status, date, ...rest } = q;
+      return x.run(QT, { id, customer_id: customerId || null, lead_id: leadId || null, item_id: itemId || null,
+        status: status || null, date: date || null, doc: J(rest) });
     });
 
     const LP = "INSERT INTO `lab_products`(`id`,`doc`) VALUES(?,?)";
@@ -889,6 +903,30 @@ async function deleteComplaint(id, x0) {
   return { id };
 }
 
+/* ---- quotations ---- */
+const QTN_COLS = "`id`,`customer_id`,`lead_id`,`item_id`,`status`,`date`,`doc`";
+async function getQuotation(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT " + QTN_COLS + " FROM `quotations` WHERE `id`=?", [id]);
+  return r ? rowToQuotation(r) : null;
+}
+async function putQuotation(q, x0) {
+  const x = await ex(x0);
+  const { id, customerId, leadId, itemId, status, date, ...rest } = q;
+  await x.run("INSERT INTO `quotations`(" + QTN_COLS + ") " +
+    "VALUES(:id,:customer_id,:lead_id,:item_id,:status,:date,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `customer_id`=`new`.`customer_id`, `lead_id`=`new`.`lead_id`, `item_id`=`new`.`item_id`, " +
+    "`status`=`new`.`status`, `date`=`new`.`date`, `doc`=`new`.`doc`",
+    { id, customer_id: customerId || null, lead_id: leadId || null, item_id: itemId || null, status: status || null,
+      date: date || null, doc: J(rest) });
+  return getQuotation(id, x);
+}
+async function deleteQuotation(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `quotations` WHERE `id`=?", [id]);
+  return { id };
+}
+
 /* ---------- LAB REPORTS (QC certificates + own product master) ---------- */
 async function getLabProduct(id, x0) {
   const x = await ex(x0);
@@ -1133,6 +1171,7 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   withTx, getPurchaseOrderForUpdate, getSalesOrderForUpdate,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
   getComplaint, putComplaint, deleteComplaint,
+  getQuotation, putQuotation, deleteQuotation,
   getCustomer, putCustomer, deleteCustomer,
   getSupplier, putSupplier, deleteSupplier,
   getOrg, putOrg,

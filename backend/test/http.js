@@ -467,6 +467,163 @@ async function run() {
   ok("delete appointment 200", (await call("DELETE", "/appointments/" + ap.d.id, A)).status === 200);
   ok("delete unknown appointment → 404", (await call("DELETE", "/appointments/AP-NOPE", A)).status === 404);
 
+  /* local-day helpers for the two document blocks below: the server stamps
+     todayISO() in local time, so the assertions must read the same clock */
+  const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  const TODAY = iso(new Date());
+  const plus = (day, n) => { const x = new Date(day + "T00:00:00"); x.setDate(x.getDate() + n); return iso(x); };
+
+  /* ---- Complaints ----
+     A customer's problem tied to the batch it came from. The batch number is
+     normalised on the way in (people type "wo 288", the label says WO-0288),
+     the status trail is the server's, and the spread — who else received
+     that batch — is derived from the sales orders, so there is nothing of it
+     to store or to test beyond the complaint itself. */
+  section("Complaints — a customer's problem tied to its batch");
+  {
+    const cust0 = st.customers[0].id;
+    const woId = st.workorders[0].id;
+    const loose = "wo " + String(+woId.replace(/^WO-/, ""));   // "wo 12" for WO-0012
+    const cm = await call("POST", "/complaints", A,
+      { customerId: cust0, batch: loose, claim: "Adhesive lifting on three reels", via: "Phone" });
+    ok("create complaint 201 with a four-digit id", cm.status === 201 && /^CMP-\d{4}$/.test(cm.d.id), JSON.stringify(cm.d).slice(0, 80));
+    ok("a loosely typed batch number is normalised to the work order", cm.d.batch === woId, cm.d.batch);
+    ok("a new complaint is Open, dated today, raised by the caller",
+      cm.d.status === "Open" && cm.d.raised === TODAY && cm.d.raisedBy === "admin");
+    ok("complaint history starts with Raised",
+      Array.isArray(cm.d.history) && cm.d.history.length === 1 && cm.d.history[0].note === "Raised");
+    ok("complaint reaches the shared state",
+      (await call("GET", "/state", A)).d.complaints.some((c) => c.id === cm.d.id));
+    ok("complaint without a customer → 400", (await call("POST", "/complaints", A, { claim: "x" })).status === 400);
+    ok("complaint without the claim → 400", (await call("POST", "/complaints", A, { customerId: cust0 })).status === 400);
+    ok("complaint for an unknown customer → 404",
+      (await call("POST", "/complaints", A, { customerId: "CUS-NOPE", claim: "x" })).status === 404);
+    ok("complaint on a batch that is not a work order → 400",
+      (await call("POST", "/complaints", A, { customerId: cust0, batch: "WO-99999", claim: "x" })).status === 400);
+    const res = await call("PATCH", "/complaints/" + cm.d.id, A, { status: "Resolved", resolution: "Replaced the reels" });
+    ok("resolving adds a history line and a closed date",
+      res.d.status === "Resolved" && res.d.history.length === 2 && res.d.history[1].note === "Replaced the reels"
+      && res.d.history[1].by === "admin" && res.d.closed === TODAY, JSON.stringify(res.d.history));
+    ok("patching one field keeps the claim", res.d.claim === "Adhesive lifting on three reels");
+    ok("unknown complaint status → 400",
+      (await call("PATCH", "/complaints/" + cm.d.id, A, { status: "Shrugged" })).status === 400);
+    ok("patch unknown complaint → 404", (await call("PATCH", "/complaints/CMP-NOPE", A, { status: "Open" })).status === 404);
+    const spread = await call("GET", "/batches/" + woId + "/spread", A);
+    ok("the batch spread lists the complaint",
+      spread.status === 200 && spread.d.complaints.some((c) => c.id === cm.d.id), JSON.stringify(spread.d).slice(0, 120));
+    const byOffice = await call("POST", "/complaints", O, { customerId: cust0, claim: "Office raised" });
+    ok("office can raise a complaint", byOffice.status === 201);
+    ok("supervisor cannot (403)", (await call("POST", "/complaints", C, { customerId: cust0, claim: "x" })).status === 403);
+    ok("delete complaint 200", (await call("DELETE", "/complaints/" + cm.d.id, A)).status === 200);
+    ok("delete unknown complaint → 404", (await call("DELETE", "/complaints/CMP-NOPE", A)).status === 404);
+    await call("DELETE", "/complaints/" + byOffice.d.id, A);
+  }
+
+  /* ---- Quotations ----
+     A quote is the record of a price discussion for one product in one
+     unit: opened at a price, repriced round by round, and closed Won at a
+     final price or Lost against a counter price. The lead mirrors it —
+     Quoted while open, Won or Lost when it closes — and a lead closed from
+     the CRM closes its open quotes the same way. */
+  section("Quotations — a price offered, negotiated, and closed won or lost");
+  {
+    const sq = (await call("GET", "/state", A)).d;
+    const cust0 = sq.customers[0].id;
+    const fg = sq.items.find((i) => i.cat === "FG");
+    const leadOf = async (id) => (await call("GET", "/state", A)).d.leads.find((l) => l.id === id);
+    const quoteOf = async (id) => (await call("GET", "/state", A)).d.quotations.find((q) => q.id === id);
+
+    ok("quotation without a product → 400", (await call("POST", "/quotations", A, { customerId: cust0, price: 100 })).status === 400);
+    ok("quotation without a price → 400", (await call("POST", "/quotations", A, { customerId: cust0, itemId: fg.id, price: 0 })).status === 400);
+    ok("quotation for an unknown customer → 404", (await call("POST", "/quotations", A, { customerId: "CUS-NOPE", itemId: fg.id, price: 100 })).status === 404);
+    ok("quotation for an unknown lead → 404", (await call("POST", "/quotations", A, { leadId: "LD-NOPE", itemId: fg.id, price: 100 })).status === 404);
+    ok("quotation with neither customer nor lead → 400", (await call("POST", "/quotations", A, { itemId: fg.id, price: 100 })).status === 400);
+
+    const q = await call("POST", "/quotations", A, { customerId: cust0, itemId: fg.id, uom: "kg", price: 940, qty: 500, note: "opening offer" });
+    ok("create quotation 201 with a four-digit id", q.status === 201 && /^QTN-\d{4}$/.test(q.d.id), JSON.stringify(q.d).slice(0, 80));
+    ok("unit is normalised and value = price × qty", q.d.uom === "KG" && q.d.value === 470000, q.d.uom + " " + q.d.value);
+    ok("a new quotation is Open, round 1, dated today, by the caller", q.d.status === "Open" && q.d.rounds === 1 && q.d.date === TODAY && q.d.createdBy === "admin");
+    ok("history starts with the opening price", Array.isArray(q.d.history) && q.d.history.length === 1 && q.d.history[0].kind === "quoted" && q.d.history[0].price === 940);
+    ok("the customer's name is carried on the quote", q.d.company === sq.customers[0].name);
+    ok("quotation reaches the shared state", !!(await quoteOf(q.d.id)));
+
+    const r1 = await call("POST", "/quotations/" + q.d.id + "/reprice", A, { price: 910, note: "customer asked for less" });
+    ok("reprice is a new round and keeps the old price in history", r1.status === 200 && r1.d.price === 910 && r1.d.rounds === 2 && r1.d.history.length === 2 && r1.d.history[0].price === 940 && r1.d.history[1].kind === "updated");
+    ok("reprice to zero → 400", (await call("POST", "/quotations/" + q.d.id + "/reprice", A, { price: 0 })).status === 400);
+    const e1 = await call("PATCH", "/quotations/" + q.d.id, A, { qty: 600, note: "monthly" });
+    ok("PATCH of qty/note is not a round", e1.status === 200 && e1.d.qty === 600 && e1.d.rounds === 2 && e1.d.value === 546000 && e1.d.note === "monthly");
+    const e2 = await call("PATCH", "/quotations/" + q.d.id, A, { price: 900 });
+    ok("PATCH with a new price counts as a round", e2.d.price === 900 && e2.d.rounds === 3);
+    ok("PATCH echoing the same price is not a round", (await call("PATCH", "/quotations/" + q.d.id, A, { price: 900 })).d.rounds === 3);
+    ok("PATCH to an unknown item → 400", (await call("PATCH", "/quotations/" + q.d.id, A, { itemId: "FG-NOPE" })).status === 400);
+    ok("patch unknown quotation → 404", (await call("PATCH", "/quotations/QTN-NOPE", A, { note: "x" })).status === 404);
+
+    // ---- the lead follows the quote ----
+    const ld = await call("POST", "/leads", A, { company: "Quote Test Co", contact: "Q Tester", stage: "Contacted", product: fg.id, value: 0, phone: "9999999999" });
+    const ql = await call("POST", "/quotations", A, { leadId: ld.d.id, uom: "sqm", price: 120 });
+    ok("a quotation on a lead takes the lead's product and company", ql.status === 201 && ql.d.itemId === fg.id && ql.d.company === "Quote Test Co" && ql.d.uom === "SQM");
+    let lead = await leadOf(ld.d.id);
+    ok("…the lead moves to Quoted and carries the quote", lead.stage === "Quoted" && lead.quotationId === ql.d.id && lead.quotedValue === 120 && lead.quotedPrice === 120 && lead.quotedUom === "SQM");
+    ok("…with a Quotation Sent activity and a follow-up date", (lead.activities || []).some((a) => a.type === "Quotation Sent") && !!lead.nextFollowUp);
+    await call("POST", "/quotations/" + ql.d.id + "/reprice", A, { price: 115 });
+    lead = await leadOf(ld.d.id);
+    ok("a reprice keeps the lead's quoted value in step", lead.quotedValue === 115 && lead.quotedPrice === 115);
+
+    // ---- closing: won ----
+    ok("a negative final price → 400", (await call("POST", "/quotations/" + ql.d.id + "/win", A, { finalPrice: -1 })).status === 400);
+    const w = await call("POST", "/quotations/" + ql.d.id + "/win", A, { finalPrice: 118 });
+    ok("win closes the quote at the final price", w.status === 200 && w.d.status === "Won" && w.d.finalPrice === 118 && w.d.wonOn === TODAY && w.d.history[w.d.history.length - 1].kind === "won");
+    lead = await leadOf(ld.d.id);
+    ok("…and the lead is Won at that price", lead.stage === "Won" && lead.finalPrice === 118 && lead.quotedValue === 118 && lead.nextFollowUp == null);
+    ok("win twice is idempotent", (await call("POST", "/quotations/" + ql.d.id + "/win", A, { finalPrice: 999 })).d.finalPrice === 118);
+    ok("a won quote cannot be lost", (await call("POST", "/quotations/" + ql.d.id + "/lose", A, { lostReason: "Price" })).status === 409);
+    ok("a won quote cannot be repriced", (await call("POST", "/quotations/" + ql.d.id + "/reprice", A, { price: 100 })).status === 409);
+    ok("a won quote cannot be deleted", (await call("DELETE", "/quotations/" + ql.d.id, A)).status === 409);
+    ok("a closed quote still takes a note", (await call("PATCH", "/quotations/" + ql.d.id, A, { note: "signed" })).status === 200);
+    ok("…but not a new quantity", (await call("PATCH", "/quotations/" + ql.d.id, A, { qty: 5 })).status === 409);
+    const ro = await call("POST", "/quotations/" + ql.d.id + "/reopen", A, {});
+    lead = await leadOf(ld.d.id);
+    ok("reopen puts the quote back to Open and the lead back to Quoted", ro.d.status === "Open" && ro.d.finalPrice == null && lead.stage === "Quoted" && lead.finalPrice == null);
+
+    // ---- closing: lost ----
+    ok("lose with a reason off the list → 400", (await call("POST", "/quotations/" + ql.d.id + "/lose", A, { lostReason: "Vibes" })).status === 400);
+    const lz = await call("POST", "/quotations/" + ql.d.id + "/lose", A, { counterPrice: 105, lostReason: "Price", lostTo: "Rival Tapes", note: "went with the cheaper reel" });
+    ok("lose records the counter price, the reason and who won it", lz.status === 200 && lz.d.status === "Lost" && lz.d.counterPrice === 105 && lz.d.lostReason === "Price" && lz.d.lostTo === "Rival Tapes");
+    lead = await leadOf(ld.d.id);
+    ok("…and the lead is Lost with the same reason", lead.stage === "Lost" && lead.lostReason === "Price" && lead.lostTo === "Rival Tapes" && lead.nextFollowUp == null);
+    ok("lose twice is idempotent", (await call("POST", "/quotations/" + ql.d.id + "/lose", A, { lostReason: "Other" })).d.lostReason === "Price");
+    ok("a lost quote can be deleted", (await call("DELETE", "/quotations/" + ql.d.id, A)).status === 200);
+    lead = await leadOf(ld.d.id);
+    ok("…and the lead no longer points at it", lead.quotationId == null && lead.quotedValue == null);
+
+    // ---- the lead closes its quotes ----
+    const ld2 = await call("POST", "/leads", A, { company: "Cascade Lost Co", stage: "Contacted", product: fg.id, value: 0 });
+    const q2 = await call("POST", "/quotations", A, { leadId: ld2.d.id, price: 50 });
+    await call("PATCH", "/leads/" + ld2.d.id, A, { stage: "Lost", lostReason: "Lead time", lostTo: "Rival" });
+    const q2b = await quoteOf(q2.d.id);
+    ok("a lead marked Lost takes its open quote with it, reason and all", q2b.status === "Lost" && q2b.lostReason === "Lead time" && q2b.lostTo === "Rival");
+    const ld3 = await call("POST", "/leads", A, { company: "Cascade Won Co", stage: "Contacted", product: fg.id, value: 0 });
+    const q3 = await call("POST", "/quotations", A, { leadId: ld3.d.id, price: 75 });
+    await call("PATCH", "/leads/" + ld3.d.id, A, { stage: "Won" });
+    const q3b = await quoteOf(q3.d.id);
+    ok("a lead marked Won closes its open quote Won at the price on the table", q3b.status === "Won" && q3b.finalPrice === 75);
+
+    // ---- access ----
+    ok("supervisor cannot raise a quotation (403)", (await call("POST", "/quotations", C, { customerId: cust0, itemId: fg.id, price: 1 })).status === 403);
+    ok("office can raise one", (await call("POST", "/quotations", O, { customerId: cust0, itemId: fg.id, price: 1 })).status === 201);
+
+    // ---- delete ----
+    ok("delete an open quotation 200", (await call("DELETE", "/quotations/" + q.d.id, A)).status === 200);
+    ok("delete again → 404", (await call("DELETE", "/quotations/" + q.d.id, A)).status === 404);
+    ok("it is gone from the shared state", !(await quoteOf(q.d.id)));
+    // tidy: the won cascade quote must be reopened before it can go
+    await call("POST", "/quotations/" + q3.d.id + "/reopen", A, {});
+    for (const id of [q2.d.id, q3.d.id]) await call("DELETE", "/quotations/" + id, A);
+    for (const x of (await call("GET", "/state", A)).d.quotations.filter((z) => z.customerId === cust0 && z.price === 1)) await call("DELETE", "/quotations/" + x.id, A);
+    for (const id of [ld.d.id, ld2.d.id, ld3.d.id]) await call("DELETE", "/leads/" + id, A);
+    ok("quotations table is clean afterwards", (await call("GET", "/state", A)).d.quotations.length === 0);
+  }
+
   /* ============================================================
      LAB INCHARGE — a low-trust role. The earlier "sales desk" role
      leaked the entire database because stateForUser() fell through

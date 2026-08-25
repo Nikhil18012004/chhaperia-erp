@@ -146,6 +146,14 @@
       cols: [C("id", "S.O. Number"), C("date", "Order Date"), C("customerId", "Customer ID"), C("status", "Status"), C("promised", "Promised Date"),
         C("priority", "Priority"), C("value", "Order Value (Rs)", "num"), C("lines", "Line Items (JSON)", "json")],
     },
+    quotations: {
+      label: "Quotations", idKey: "id", kind: "array", path: "quotations", autoId: "QTN-",
+      cols: [C("id", "Quotation No."), C("date", "Opened On"), C("company", "Customer / Lead"), C("customerId", "Customer ID"), C("leadId", "CRM Lead ID"),
+        C("itemId", "Product (Item Code)"), C("productName", "Product Name"), C("uom", "Unit (KG/SQM/MTR)"), C("price", "Price per Unit (Rs)", "num"),
+        C("qty", "Quantity", "num"), C("value", "Value (Rs)", "num"), C("status", "Status"), C("rounds", "Rounds", "num"), C("lastUpdated", "Last Update"),
+        C("finalPrice", "Final Price (Won)", "num"), C("counterPrice", "Counter Price (Lost)", "num"), C("lostReason", "Lost Reason"), C("lostTo", "Lost To"),
+        C("note", "Note"), C("history", "Price History (JSON)", "json")],
+    },
     purchaseorders: {
       label: "Purchase Orders", idKey: "id", kind: "array", path: "purchaseorders", autoId: "PO-",
       cols: [C("id", "P.O. Number"), C("date", "Order Date"), C("supplierId", "Supplier ID"), C("status", "Status"), C("eta", "ETA"),

@@ -217,12 +217,15 @@
   function _onDoc(e){ if(_openPop && !_openPop.contains(e.target)) closePop(); }
   function _onKey(e){ if(e.key === "Escape") closePop(); }
 
+  // opts.onOpen(url) fires once a mail client has actually been picked — a
+  // caller that wants to log "email sent" hooks in here rather than on the
+  // button that merely opened the chooser, which can still be dismissed.
   function mailChooser(anchor, address, opts){
     closePop();
     opts = opts || {};
     const inbox = opts.mode === "inbox";
     const u = mailUrls(address, opts);
-    const open = (url, web) => { closePop(); if(web) window.open(url, "_blank", "noopener,noreferrer"); else window.location.href = url; };
+    const open = (url, web) => { closePop(); if(typeof opts.onOpen === "function") opts.onOpen(url); if(web) window.open(url, "_blank", "noopener,noreferrer"); else window.location.href = url; };
     const row = (icon, label, meta, fn) => h("button", { class:"mail-opt", onclick: fn }, [
       h("span", { class:"mail-opt-ic", text: icon }),
       h("span", { class:"mail-opt-tx" }, [ h("b", { text: label }), h("span", { class:"muted", text: meta }) ]),
@@ -322,6 +325,9 @@
   global.M = M;
   /* phoneDigits is exported so the CRM's WhatsApp follow-up dials the same
      number this popover does. Two copies of the "assume +91" rule would
-     eventually disagree, and the one that is wrong sends the message nowhere. */
-  global.MW = { pageHead, readOnlyHere, loadError, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, phoneDigits, csvMenu, dataPreview, excelMenu };
+     eventually disagree, and the one that is wrong sends the message nowhere.
+     mailUrls / mailChooser go out for the same reason: the CRM's "Email
+     instead" composes through this chooser, so every user opens mail in the
+     webmail they picked here and not in a second, differently-built one. */
+  global.MW = { pageHead, readOnlyHere, loadError, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, phoneDigits, mailUrls, mailChooser, csvMenu, dataPreview, excelMenu };
 })(window);

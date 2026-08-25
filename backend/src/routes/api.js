@@ -190,7 +190,7 @@ router.post("/leads", requireAuth, rw, async (req, res, next) => {
   try { res.status(201).json(await erp.createLead(req.body || {})); } catch (e) { next(e); }
 });
 router.patch("/leads/:id", requireAuth, rw, async (req, res, next) => {
-  try { res.json(await erp.updateLead(req.params.id, req.body || {})); } catch (e) { next(e); }
+  try { res.json(await erp.updateLead(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
 });
 router.delete("/leads/:id", requireAuth, rw, async (req, res, next) => {
   try { res.json(await erp.deleteLead(req.params.id)); } catch (e) { next(e); }
@@ -242,6 +242,31 @@ router.patch("/complaints/:id", requireAuth, rw, async (req, res, next) => {
 });
 router.delete("/complaints/:id", requireAuth, rw, async (req, res, next) => {
   try { res.json(await erp.deleteComplaint(req.params.id)); } catch (e) { next(e); }
+});
+// Quotations: a price offered for one product in one unit, then negotiated.
+// A new price is a round (reprice); the quote closes won at a final price or
+// lost against a counter price, and the lead follows. These verbs are the
+// only way a quote changes status after it is raised.
+router.post("/quotations", requireAuth, rw, async (req, res, next) => {
+  try { res.status(201).json(await erp.createQuotation(req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.patch("/quotations/:id", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.updateQuotation(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.delete("/quotations/:id", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.deleteQuotation(req.params.id)); } catch (e) { next(e); }
+});
+router.post("/quotations/:id/reprice", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.repriceQuotation(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.post("/quotations/:id/win", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.winQuotation(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.post("/quotations/:id/lose", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.loseQuotation(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.post("/quotations/:id/reopen", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.reopenQuotation(req.params.id, req.user)); } catch (e) { next(e); }
 });
 // Who else received a batch, and what the lab measured on it — read-only
 router.get("/batches/:id/spread", requireAuth, async (req, res, next) => {

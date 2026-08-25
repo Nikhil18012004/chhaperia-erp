@@ -128,6 +128,16 @@
 
     if (params && params.openNew) { params.openNew = false; if (!labOnly && VIEW === "products") productForm(); }
     if (params && params.openPending) { params.openPending = false; pendingModal(); return; }
+    /* A certificate asked for by id from another screen — the complaint's
+       "Send test certificate" lands here with the report the batch was graded
+       on. One-shot, like openPending: cleared before the detail opens so a
+       refresh does not raise it again. */
+    if (params && params.open) {
+      const id = params.open; params.open = null;
+      const r = reports().find((x) => x.id === id);
+      if (r) reportDetail(r); else toast("Lab report " + id + " is not on file", { type: "warn" });
+      return;
+    }
     // the incharge is told what is waiting the first time they land here
     maybeAnnouncePending();
   }};

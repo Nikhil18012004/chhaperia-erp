@@ -909,8 +909,13 @@
     const pl = paidLeavePending(s.workerId, run.period);
 
     /* [label, this month, year to date, optional note] */
+    // a monthly worker is a fixed salary pro-rated to the days actually worked;
+    // a daily worker is a rate per day. Say which, in the worker's own terms.
+    const basicNote = s.payType === "monthly"
+      ? money(s.monthPerDay) + "/day (" + money(s.monthlyCtc) + " ÷ " + days(s.monthWorkingDays) + " working days) × " + days(s.payableDays) + " paid"
+      : days(s.payableDays) + " days × " + money(s.dailyRate);
     const earn = [
-      ["Basic", s.basicEarned, y.basic, days(s.payableDays) + " days × " + money(s.dailyRate)],
+      ["Basic", s.basicEarned, y.basic, basicNote],
       s.otPay ? ["Overtime", s.otPay, y.ot, days(s.otHours) + " h × " + money(s.hourly || 0)] : null,
       s.allowances ? ["Allowances", s.allowances, y.allow, ""] : null,
     ].filter(Boolean);
@@ -1182,7 +1187,9 @@
       ]),
       h("div", { class: "pay-cols" }, [
         moneyTable("Earnings", [
-          ["Basic earned", s.basicEarned, num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
+          ["Basic earned", s.basicEarned, s.payType === "monthly"
+            ? money(s.monthPerDay) + "/day (" + money(s.monthlyCtc) + " ÷ " + num(s.monthWorkingDays, 0) + " working days) × " + num(s.payableDays, 1) + " paid"
+            : num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
           s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
           s.allowances ? ["Allowances", s.allowances, ""] : null,
         ].filter(Boolean), "Gross earnings", s.gross),

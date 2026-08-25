@@ -171,6 +171,19 @@
     // the batch's other recipients and its lab reading — read-only
     spread(batch) { return http("GET", "/batches/" + enc(batch) + "/spread"); },
   };
+  /* Quotations. A quote is a price discussion with a life of its own —
+     opened, repriced round by round, won at a final price or lost against a
+     counter price — so the moves are verbs on the server, not fields the
+     client sets by hand. */
+  const quotations = {
+    create(q) { return http("POST", "/quotations", q); },
+    update(id, patch) { return http("PATCH", "/quotations/" + enc(id), patch); },
+    remove(id) { return http("DELETE", "/quotations/" + enc(id)); },
+    reprice(id, body) { return http("POST", "/quotations/" + enc(id) + "/reprice", body || {}); },
+    win(id, body) { return http("POST", "/quotations/" + enc(id) + "/win", body || {}); },
+    lose(id, body) { return http("POST", "/quotations/" + enc(id) + "/lose", body || {}); },
+    reopen(id) { return http("POST", "/quotations/" + enc(id) + "/reopen", {}); },
+  };
   const customers = {
     upsert(cust) { return http("POST", "/customers", cust); },
     update(id, patch) { return http("PATCH", "/customers/" + enc(id), patch); },
@@ -317,7 +330,7 @@
 
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
-    items, movements, purchase, sales, boms, leads, appointments, complaints, customers, suppliers, org, transporters, warehouses, hr,
+    items, movements, purchase, sales, boms, leads, appointments, complaints, quotations, customers, suppliers, org, transporters, warehouses, hr,
     labProducts, labReports, grnTests, bartender,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };

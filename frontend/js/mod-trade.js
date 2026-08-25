@@ -1916,7 +1916,10 @@
           .concat(so.placeOfSupply?[["Place of Supply",so.placeOfSupply+" — "+GST.stateName(so.placeOfSupply)]]:[])
           .concat(so.transportMode?[["Transport",[so.transportMode,so.vehicleNo].filter(Boolean).join(" · ")]]:[])
           .concat(so.ewayBill?[["E-Way Bill",so.ewayBill]]:[])
-          .concat(so.fromLead?[["From CRM Lead","🎯 "+so.fromLead]]:[])),
+          .concat(so.fromLead?[["From CRM Lead","🎯 "+so.fromLead]]:[])
+          // the quote this order was accepted from — one click back to what was offered
+          .concat(so.fromQuote?[["From Quotation",h("a",{href:"#",class:"a-link",title:"Open "+so.fromQuote,
+            onclick:e=>{ e.preventDefault(); UI.$("#modalHost").hidden=true; App.go("quotations",{tab:"quotations",open:so.fromQuote}); },text:so.fromQuote+" →"})]]:[])),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Order Lines"}),
         table(so.lines,cols,{empty:"No lines"}),
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Tax Summary"}),
@@ -2324,13 +2327,6 @@
     draw();
   }};
 
-  /* ============== CUSTOMERS ============== */
-  /* Where the client is, and what their invoice is raised in. A record saved
-     before these fields existed falls back through its country to India/INR,
-     so nothing in the list reads as blank or broken. */
-  function custCountry(c){ const k=CCY.country(c&&c.country); return k?k.name:((c&&c.country)||"India"); }
-  function custCcy(c){ return String((c&&c.currency)||CCY.forCountry(c&&c.country)||"INR").toUpperCase(); }
-
   M.customers = { title:"Customers", sub:"Client master & orders", render(root,params){
     root.appendChild(pageHead("Customers","HT cable manufacturers and order history",[
       MW.excelMenu("customers"),
@@ -2416,25 +2412,77 @@
             text:"A customer needs three past orders before a rhythm can be read from them."})]));
         return;
       }
-      host.appendChild(h("div",{class:"muted",style:"font-size:12.5px;margin-bottom:10px",
-        text:"Worked out from each client's own order history — how often they normally buy, against how long it has been. Nothing here is typed in."}));
-      host.appendChild(table(rows,[
+      /* the nudge: one WhatsApp per quiet account, drafted from their own last
+         order, so the desk never types a customer's history from memory */
+      const custOf=(r)=>ENG.data.customers.find(x=>x.id===r.id)||{};
+      const quietText=(r)=>{
+        const c=custOf(r);
+        const so=(ENG.data.salesorders||[]).find(s=>s.id===r.lastSO);
+        const it=so&&so.lines&&so.lines[0]?ENG.item(so.lines[0].itemId):null;
+        return "Hello "+waWho(c.contact)+", it has been a while since your last order ("+(r.lastSO||"—")+", "+(r.lastDate||"—")+"). Do let me know if you need "+((it&&it.name)||"our tapes")+" again — happy to hold the same rates for you.";
+      };
+      const chase=rows.filter(r=>r.level==="chase"&&MW.phoneDigits(custOf(r).phone));
+      host.appendChild(h("div",{class:"flex between aic wrap gap",style:"margin-bottom:10px"},[
+        h("div",{class:"muted",style:"font-size:12.5px;flex:1 1 360px",
+          text:"Worked out from each client's own order history — how often they normally buy, against how long it has been. Nothing here is typed in."}),
+        chase.length?h("button",{class:"btn primary sm",html:"💬 Message "+chase.length+" on WhatsApp",
+          onclick:()=>waListModal({title:"Message "+chase.length+" quiet account"+(chase.length===1?"":"s"),
+            sub:"One tap each — a popup blocker would swallow them all at once",
+            rows:chase.map(r=>{ const c=custOf(r); return {name:r.name, meta:ENG.num(r.silent)+" d silent · "+(c.contact||"")+" · "+(c.phone||""),
+              digits:MW.phoneDigits(c.phone), text:quietText(r)}; })})}):null,
+      ]));
+      const wrap=h("div",{style:"display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start"});
+      const tblHost=h("div",{style:"flex:1 1 520px;min-width:0"});
+      tblHost.appendChild(table(rows,[
         {key:"name",label:"Customer",render:r=>`<b>${esc(r.name)}</b><div class="muted" style="font-size:11.5px">${r.orders} orders · last ${esc(r.lastSO||"—")}, ${esc(r.lastDate)}</div>`,sort:r=>r.name},
         {key:"usual",label:"Usual gap",num:true,render:r=>ENG.num(r.usual)+" d",sort:r=>r.usual},
         {key:"silent",label:"Silent",num:true,render:r=>`<span style="color:var(--${r.level==="chase"?"danger":"warn"});font-weight:700">${ENG.num(r.silent)} d</span>`,sort:r=>r.silent},
         {key:"atRisk",label:"At risk",num:true,render:r=>ENG.money(r.atRisk),sort:r=>r.atRisk},
         {key:"level",label:"Action",render:r=>badge(r.level==="chase"?"danger":"warn",r.level),sort:r=>r.level},
-        {key:"go",label:"",noSort:true,render:r=>`<button class="btn sm" data-quiet="${esc(r.id)}">Open</button>`}
+        {key:"go",label:"",noSort:true,render:r=>`<button class="btn sm" data-quiet="${esc(r.id)}">Open</button>`
+          +(MW.phoneDigits(custOf(r).phone)?` <button class="btn sm ghost" data-quiet-wa="${esc(r.id)}" title="Message on WhatsApp">💬</button>`:"")}
       ]));
+      wrap.appendChild(tblHost);
+      wrap.appendChild(whyLostCard());
+      host.appendChild(wrap);
       /* delegated, not bound per button: table() empties its own tbody every
          time a column header is clicked, so handlers attached to the rows
          would stop working after the first sort */
       host.onclick=(e)=>{
+        const w=e.target.closest && e.target.closest("[data-quiet-wa]");
+        if(w){
+          const r=rows.find(x=>x.id===w.dataset.quietWa); const c=r?custOf(r):null;
+          if(r&&c) waMessageModal({title:"💬 Nudge "+r.name, sub:(c.contact||"")+" · "+(c.phone||""), digits:MW.phoneDigits(c.phone), text:quietText(r)});
+          return;
+        }
         const b=e.target.closest && e.target.closest("[data-quiet]");
         if(!b) return;
         const c=ENG.data.customers.find(x=>x.id===b.dataset.quiet);
         if(c) customerForm(c);
       };
+    }
+    /* Why we lost — the reasons the CRM's lost leads carry, folded onto the
+       one fixed list, so the quiet list sits beside the pattern behind it. A
+       lead is dated by its creation or its last activity; only when nothing
+       in the last year is dated does the card fall back to every lost lead. */
+    function whyLostCard(){
+      const lost=ENG.leads().filter(l=>l.stage==="Lost");
+      const when=(l)=>{ const ds=[l.created].concat((l.activities||[]).map(a=>a&&a.date)).filter(Boolean).sort(); return ds.length?ds[ds.length-1]:null; };
+      const dayMs=86400000, today=new Date(DB.helpers.iso(DB.helpers.today())+"T00:00:00");
+      const recent=lost.filter(l=>{ const d=when(l); return d && (today-new Date(d+"T00:00:00"))/dayMs<=365; });
+      const pool=recent.length?recent:lost;
+      const by={}; pool.forEach(l=>{ const r=ENG.normaliseReason(l.lostReason); by[r]=(by[r]||0)+1; });
+      const items=Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([name,value])=>({name,value}));
+      const rivals={}; pool.forEach(l=>{ if(l.lostTo) rivals[l.lostTo]=(rivals[l.lostTo]||0)+1; });
+      const rl=Object.entries(rivals).sort((a,b)=>b[1]-a[1]).slice(0,3);
+      return h("div",{class:"card",style:"flex:0 1 300px;min-width:250px"},[
+        h("h3",{style:"font-size:14px",text:"Why we lost · last 12 months"}),
+        h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",
+          text:pool.length?pool.length+" lost lead"+(pool.length===1?"":"s")+(recent.length?"":" — none dated, so all time"):"No lost leads on record"}),
+        items.length?MW.barList(items):null,
+        rl.length?h("div",{style:"font-size:12.5px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"},
+          rl.map(([n,c])=>h("div",{text:"Lost to "+n+" "+c+" time"+(c===1?"":"s")}))):null,
+      ]);
     }
 
     function custMatch(c){
@@ -2611,6 +2659,46 @@
   const CMP_VIA=["Phone","WhatsApp","Email","Site visit","Letter"];
   const cmpTone=s=>s==="Open"?"danger":s==="Investigating"?"warn":s==="Resolved"?"ok":"mut";
 
+  /* ---- WhatsApp nudges from the customer screens ----
+     Nothing is sent by this app: wa.me opens WhatsApp with the text ready and
+     the person presses send there — the same rule the CRM follows. A list of
+     accounts gets ONE link per row, never a window.open in a loop: a popup
+     blocker swallows every tab after the first and the desk would not know. */
+  /* "H. Desai" greets as Desai, not "H." — an initial is not a name */
+  function waWho(contact){
+    const parts=String(contact||"").trim().split(/\s+/).filter(Boolean);
+    if(!parts.length) return "Sir/Madam";
+    const first=parts[0];
+    return (/^[A-Za-z]\.?$/.test(first)&&parts.length>1)?parts[parts.length-1]:first;
+  }
+  function waMessageModal({title, sub, digits, text, onBack}){
+    if(!digits){ toast("No phone number on this customer's record",{type:"warn"}); return; }
+    const body=h("div",{class:"form-grid"},[
+      U.field("Message",'<textarea class="input" id="wa_text" rows="5" style="min-height:110px"></textarea>',"full"),
+      h("div",{class:"muted",style:"grid-column:1/-1;font-size:12px",text:"Opens WhatsApp with this text ready. Nothing is sent until you press send there."}),
+    ]);
+    const mo=modal({title, sub, body, onClose:onBack,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+            h("button",{class:"btn primary",text:"Open WhatsApp",onclick:()=>{
+              const t=(UI.$("#wa_text")?UI.$("#wa_text").value:"").trim();
+              if(!t){ toast("The message is empty",{type:"warn"}); return; }
+              window.open("https://wa.me/"+digits+"?text="+encodeURIComponent(t),"_blank","noopener");
+              mo.close();
+            }})]});
+    const ta=UI.$("#wa_text"); if(ta) ta.value=text||"";
+  }
+  function waListModal({title, sub, rows, onBack}){
+    const list=(rows||[]).filter(r=>r.digits);
+    const body=h("div",{},[
+      list.length?h("div",{},list.map(r=>h("div",{class:"flex between aic gap",style:"padding:8px 0;border-bottom:1px solid var(--line)"},[
+        h("div",{style:"min-width:0"},[h("div",{style:"font-weight:700",text:r.name}), h("div",{class:"muted",style:"font-size:11.5px",text:r.meta||""})]),
+        h("a",{class:"btn sm primary",href:"https://wa.me/"+r.digits+"?text="+encodeURIComponent(r.text||""),target:"_blank",rel:"noopener noreferrer",text:"Open WhatsApp"}),
+      ]))):h("div",{class:"muted",text:"Nobody here has a phone number on record."}),
+      h("div",{class:"muted",style:"font-size:12px;margin-top:10px",text:"Each button opens one WhatsApp chat with the message ready; nothing is sent until you press send there."}),
+    ]);
+    const mo=modal({title, sub, body, onClose:onBack, foot:[h("button",{class:"btn primary",onclick:()=>mo.close(),text:"Done"})]});
+  }
+
   /* the batches a customer actually received — every SO line with a batch
      number, most recent first — so the picker offers what they hold, not
      every work order the plant has ever run */
@@ -2680,6 +2768,13 @@
     }).join("");
     const failed=Object.entries(res).filter(([,v])=>String(v).toLowerCase()==="fail").map(([k])=>(params.find(p=>p.key===k)||{label:k}).label);
     const others=sp?sp.orders.filter(o=>o.customerId!==c.customerId):[];
+    /* the warning to everyone else holding the batch — drafted from the
+       complaint itself so the batch, product and order are never mistyped */
+    const custById=(id)=>ENG.data.customers.find(x=>x.id===id)||{};
+    const prodName=c.itemId?((ENG.item(c.itemId)||{}).name||c.itemId)
+      :(sp&&sp.workOrder&&((ENG.item(sp.workOrder.itemId)||{}).name||sp.workOrder.itemId))||"the product";
+    const warnText=(o)=>"Hello "+waWho(custById(o.customerId).contact)+", a quality concern has been raised on batch "+c.batch+" of "+prodName+" supplied on "+o.soId+". Please hold the reels; we will replace whatever is affected and confirm the lab finding shortly.";
+    const warnable=others.filter(o=>MW.phoneDigits(custById(o.customerId).phone));
 
     const body=h("div",{},[
       MW.dl([
@@ -2708,15 +2803,25 @@
       ]):null,
 
       c.batch?h("div",{class:"card",style:"margin-top:14px"},[
-        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px;color:var(--accent)",
-          text:"Who else received batch "+c.batch}),
+        h("div",{class:"flex between aic wrap gap",style:"margin-bottom:8px"},[
+          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent)",
+            text:"Who else received batch "+c.batch}),
+          warnable.length?h("button",{class:"btn sm",html:"💬 Warn all on WhatsApp",
+            onclick:()=>waListModal({title:"Warn "+warnable.length+" customer"+(warnable.length===1?"":"s")+" holding "+c.batch,
+              sub:"Calling them first is the difference between a recall and a reputation",
+              rows:warnable.map(o=>({name:o.customer, meta:o.soId+" · "+ENG.num(o.qty)+" · "+(custById(o.customerId).contact||""), digits:MW.phoneDigits(custById(o.customerId).phone), text:warnText(o)})),
+              onBack:()=>complaintDetail(c)})}):null,
+        ]),
         sp&&sp.orders.length?h("div",{class:"table-wrap"},h("table",{class:"tbl",html:
           `<thead><tr><th>Customer</th><th>Order</th><th class="num">Qty</th><th>Dispatched</th><th></th></tr></thead><tbody>`+
           sp.orders.map(o=>{
             const mine=o.customerId===c.customerId;
             const hasCmp=(sp.complaints||[]).some(x=>x.customerId===o.customerId);
+            // the warning is one tap when the customer has a number on record
+            const canWa=!mine&&MW.phoneDigits(custById(o.customerId).phone);
             return `<tr><td><b>${esc(o.customer)}</b></td><td class="mono">${esc(o.soId)}</td><td class="num mono">${ENG.num(o.qty)}</td><td>${esc(o.dispatchedOn||o.date||"—")}</td>`+
-              `<td>${mine?badge("danger","complained"):hasCmp?badge("danger","also complained"):badge("warn","warn them")}</td></tr>`;
+              `<td>${mine?badge("danger","complained"):hasCmp?badge("danger","also complained"):badge("warn","warn them")}`+
+              `${canWa?` <button class="btn sm ghost" data-warn="${esc(o.soId)}" title="Message on WhatsApp">💬 Warn</button>`:""}</td></tr>`;
           }).join("")+`</tbody>`}))
           :h("div",{class:"muted",style:"font-size:13px",text:"No dispatched order carries this batch number."}),
         others.length?h("div",{class:"muted",style:"font-size:12.5px;margin-top:8px",
@@ -2729,12 +2834,33 @@
           text:String(x.at||"").slice(0,10)+" · "+(x.status||"")+(x.by?" · "+x.by:"")+(x.note&&x.note!=="Raised"?" — "+x.note:"")})))
       ]):null,
     ]);
+    /* delegated: the spread table is one HTML string, so its Warn buttons
+       have no handlers of their own */
+    body.onclick=(e)=>{
+      const b=e.target.closest&&e.target.closest("[data-warn]");
+      if(!b||!sp) return;
+      const o=sp.orders.find(x=>x.soId===b.dataset.warn); if(!o) return;
+      const cc=custById(o.customerId);
+      waMessageModal({title:"💬 Warn "+o.customer, sub:(cc.contact||"")+" · "+(cc.phone||""), digits:MW.phoneDigits(cc.phone), text:warnText(o), onBack:()=>complaintDetail(c)});
+    };
     const isOpen=c.status==="Open"||c.status==="Investigating";
     modal({title:c.id+" · "+(cust.name||""),sub:c.batch?"Batch "+c.batch:"Not tied to a batch",wide:true,body,
       foot:[
         h("button",{class:"btn danger",onclick:async()=>{ if(!await confirm("Delete "+c.id+"?",{title:"Delete complaint",danger:true})) return;
           UI.$("#modalHost").hidden=true; await App.saveDelta(()=>DB.complaints.remove(c.id)); toast(c.id+" deleted",{type:"ok"}); },text:"🗑 Delete"}),
         h("button",{class:"btn ghost",onclick:()=>{ UI.$("#modalHost").hidden=true; complaintForm(c); },text:"✎ Edit"}),
+        /* the certificate is the answer to the complaint — send the batch's
+           lab report; greyed rather than hidden when there is none, so the
+           desk learns the batch was never tested instead of hunting for it */
+        c.batch?h("button",{class:"btn ghost",style:rep&&rep.id?"":"opacity:.55","aria-disabled":rep&&rep.id?"false":"true",
+          onclick:()=>{ if(!(rep&&rep.id)){ toast("No lab report on file for "+c.batch+" — nothing to send",{type:"warn"}); return; }
+            UI.$("#modalHost").hidden=true; App.go("lab-reports",{open:rep.id}); },html:"📜 Send test certificate"}):null,
+        /* hand it to the floor: the complaint moves to Investigating with the
+           note on record, then the work order itself opens */
+        c.batch&&isOpen?h("button",{class:"btn",onclick:async()=>{ UI.$("#modalHost").hidden=true;
+          try{ await App.saveDelta(()=>DB.complaints.update(c.id,{status:"Investigating",resolution:"Raised to plant"})); await App.reloadState(); }
+          catch(e){ toast(e.message||"Could not update the complaint",{type:"danger"}); return; }
+          toast(c.id+" raised to plant",{type:"ok"}); App.go("production",{open:c.batch}); },html:"🏭 Raise to plant"}):null,
         isOpen?h("button",{class:"btn",onclick:async()=>{ UI.$("#modalHost").hidden=true;
           await App.saveDelta(()=>DB.complaints.update(c.id,{status:c.status==="Open"?"Investigating":"Resolved"}));
           toast(c.id+(c.status==="Open"?" → Investigating":" → Resolved"),{type:"ok"}); },
@@ -2830,11 +2956,39 @@
   const IN=v=>(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtD=d=>{ if(!d) return "—"; const m=String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}.${m[2]}.${m[1]}`:String(d); };
   function printDoc(kind, o){
+    /* a quotation prints on the same two sheets the invoice does — the styled
+       GST sheet in rupees, the export grid in any other currency — so what
+       the customer accepts looks like what they will be billed */
     const html = kind==="po" ? domesticHtml(o, true)
+               : kind==="quote" ? (String(o.currency||"INR").toUpperCase()==="INR"
+                                    ? domesticHtml(o, false, {quote:true})
+                                    : exportHtml(o, {title:"QUOTATION", validUntil:o.validUntil}))
                : (o.invoiceType==="export" ? exportHtml(o) : domesticHtml(o));
     const w=window.open("","_blank");
     if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
     w.document.write(html); w.document.close();
+  }
+  /* ---- a quotation on paper ----
+     The Samples & Quotations page keeps a quote as one product, one unit,
+     one price. Printing it borrows the invoice sheet headed QUOTATION, so
+     the customer sees the layout they will later be billed on. The sheet's
+     rate is per the product's OWN stocking unit; a price talked in another
+     unit is not restated behind the desk's back — the desk is told instead. */
+  function printQuote(q){
+    const it=ENG.item(q.itemId)||{};
+    const own=String(it.uom||"KG").toUpperCase();
+    if(String(q.uom||own).toUpperCase()!==own){
+      toast("This quote is per "+String(q.uom).toLowerCase()+", but "+(it.name||q.itemId)+" is priced per "+own.toLowerCase()+" on paper. Quote it per "+own.toLowerCase()+" to print.",{type:"warn"}); return;
+    }
+    const cust=ENG.data.customers.find(c=>c.id===q.customerId);
+    if(!cust){ toast("Link the quote to a customer first — a lead alone cannot be printed",{type:"warn"}); return; }
+    const price=(q.status==="Won"&&q.finalPrice>0)?q.finalPrice:q.price;
+    // currency follows the customer; custCcy lives in a render closure, so read it plainly here
+    const ccy=String((cust.currency)||"INR").toUpperCase();
+    printDoc("quote",{ id:q.id, rev:1, date:q.date, validUntil:DB.helpers.daysAhead(30), customerId:q.customerId,
+      company:companies()[0].key, currency:ccy, placeOfSupply:partyStateCode(cust)||"29",
+      lines:[{ itemId:q.itemId, qty:q.qty>0?q.qty:1, rate:price, discPct:0, gstPct:lineGstPct({},it) }],
+      freight:0, insurance:0, payTerms:cust.terms||"", notes:q.note||"", leadId:q.leadId||"" });
   }
 
   /* ============================================================
@@ -4181,8 +4335,13 @@
      and the purchase order: same header band, info grid, item table, totals
      block, signature and footer strip — only the wording and the fields that
      belong to each document differ (see the isPO branches below). ---- */
-  function domesticHtml(o, asPO){
-    const kind=asPO?"po":"so", isPO=!!asPO;
+  function domesticHtml(o, asPO, opts){
+    opts=opts||{};
+    /* opts.quote: the same sheet as a QUOTATION — customer branch of the tax
+       maths, but none of the cells an invoice earns only once goods move
+       (invoice no., e-way bill, LR, vehicle, dispatch date, ship-to). */
+    const isQuote=!asPO&&!!opts.quote;
+    const kind=asPO?"po":(isQuote?"quote":"so"), isPO=!!asPO;
     const dc=docCalc(kind,o);
     const {co, party, calc, interState, pos}=dc;
     const p=party||{name:isPO?o.supplierId:o.customerId};
@@ -4197,7 +4356,9 @@
        the same document every time. */
     const poTitle=String(o.docType||"").toLowerCase()==="proforma"
       ? "PROFORMA INVOICE" : "PURCHASE ORDER";
-    const title=isPO?poTitle:(o.status==="Dispatched"?"TAX INVOICE":"PROFORMA / TAX INVOICE");
+    const title=isPO?poTitle
+      :isQuote?("QUOTATION"+(o.rev>1?" · Rev "+o.rev:""))
+      :(o.status==="Dispatched"?"TAX INVOICE":"PROFORMA / TAX INVOICE");
     const logo=location.origin+"/assets/logo-invoice.png";
     const bank=co.bank||{};
     const hasBank=!isPO&&(bank.name||bank.acNo||bank.ifsc);
@@ -4246,6 +4407,9 @@
       ["Expected Delivery",o.eta||"—"],["Ref / Quotation",o.refNo||"—"],["Vendor Code",o.vendorCode||"—"],
       ["Kind Attn.",o.attn||"—"],["Our Contact",o.ctcPerson||"—"],["GST",o.gstMode||"As Applicable"],
       ["Packing",o.packing||"—"],["Delivery",o.deliveryNote||"—"],["Destination",o.destination||"—"],
+    ]:isQuote?[
+      ["Quotation No.",o.id],["Date",o.date||"—"],["Valid Until",o.validUntil||"—"],
+      ["Reference",o.leadId||"—"],["Payment Terms",o.payTerms||p.terms||"—"],["Delivery",o.deliveryTerms||"—"],
     ]:[
       ["Invoice No.",o.invoiceNo||o.id],["Invoice Date",o.date||"—"],["Due Date",o.promised||"—"],
       ["Customer PO No.",o.custPoNo||"—"],["Customer PO Date",o.custPoDate||"—"],
@@ -4266,8 +4430,10 @@
     const leftParty=isPO
       ? partyBlock("SUPPLIER / VENDOR",p.name,p.address||[p.city,p.country].filter(Boolean).join(", "),partyExtra)
       : partyBlock("BILL TO",p.name,p.address||p.city||"",partyExtra);
+    // a quotation has no delivery address yet — only the party it is made out to
     const rightParty=isPO
       ? partyBlock("DELIVER TO",co.name,co.address,`<div>GSTIN : <b>${esc(co.gstin||"—")}</b></div>`)
+      : isQuote ? ""
       : partyBlock("SHIP TO (Delivery Address)",p.name,(o.shipTo||p.shipTo||p.address||p.city||""),
           `${p.gst?`<div>GSTIN : <b>${esc(p.gst)}</b></div>`:""}`);
 
@@ -4369,6 +4535,7 @@
   <div class="rule"></div>
   <div class="title-row"><span class="title">${title}</span>${isPO
       ?'<span class="copy">For Supplier</span>'
+      :isQuote?''
       :'<span class="copy">Original for Recipient</span>'}</div>
   ${isPO?'<div class="greet">Dear Sir / Madam,&nbsp; kindly supply the material as under.</div>':""}
   <div class="info">${infoCells}</div>
@@ -4408,13 +4575,15 @@
     </div>
   </div>
   <div class="sign">
-    <div class="muted" style="color:#777">${interState?"Inter-state supply — IGST charged.":"Intra-state supply — CGST + SGST charged."}${isPO?"":" Whether tax is payable on reverse charge : No."}</div>
+    <div class="muted" style="color:#777">${interState?"Inter-state supply — IGST charged.":"Intra-state supply — CGST + SGST charged."}${isPO||isQuote?"":" Whether tax is payable on reverse charge : No."}</div>
     <div class="sig">For <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></div>
   </div>
   </td></tr></tbody></table>
   <div class="pgfoot">
-    <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>${isPO?"Thank you for your partnership!":"Thank you for your business!"}</b></div>
-    <div class="strip" style="background:none;color:#888;border:none;padding:2px 12px"><span></span><span>This is a computer generated ${isPO?"purchase order":"invoice"}.</span></div>
+    <div class="strip"><span>${esc(co.tagline||"Material Science Meets Global Demand")}</span><b>${isPO?"Thank you for your partnership!":isQuote?"We look forward to your order!":"Thank you for your business!"}</b></div>
+    <div class="strip" style="background:none;color:#888;border:none;padding:2px 12px"><span></span><span>${isQuote
+      ?`This quotation is valid until ${esc(o.validUntil||"—")}. Prices are exclusive of freight unless stated. E. &amp; O.E.`
+      :`This is a computer generated ${isPO?"purchase order":"invoice"}.`}</span></div>
   </div>
   <div class="note">Use your browser's "Save as PDF" to download</div>
   <script>window.onload=function(){window.print();}<\/script>
@@ -4425,7 +4594,13 @@
   /* ---- Export commercial invoice (per the approved sample PDF): IEC code,
      consignee / notify party, bank with SWIFT, shipment grid, currency
      amounts with no GST added, net/gross weight, India-origin certificate. ---- */
-  function exportHtml(o){
+  function exportHtml(o, opts){
+    opts=opts||{};
+    /* opts.title / opts.validUntil: the same grid headed QUOTATION for a
+       foreign-currency quote — the number cell then carries the validity
+       instead of a customer PO, and the reference is the lead */
+    const isQuote=!!opts.title&&/quot/i.test(opts.title);
+    const docTitle=opts.title||"COMMERCIAL INVOICE";
     const co=companyByKey(o.company);
     const p=ENG.data.customers.find(c=>c.id===o.customerId)||{name:o.customerId};
     const ccy=(o.currency||"USD").toUpperCase();
@@ -4441,7 +4616,7 @@
         `<td class="r">${ENG.num(l.qty,2)}</td><td class="r">${F2(l.rate)}</td><td class="r">${F2(l.qty*l.rate*(1-(l.discPct||0)/100))}</td></tr>`; }).join("");
     const exNote=(o.exportNote||"").split("\n").map(s=>s.trim()).filter(Boolean);
     const words=GST.amountInWordsCcy(total, ccy).toUpperCase();
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Commercial Invoice ${esc(o.invoiceNo||o.id)}</title>
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(isQuote?"Quotation":"Commercial Invoice")} ${esc(o.invoiceNo||o.id)}</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{font:11.5px/1.5 "Segoe UI",Arial,sans-serif;color:#111;max-width:860px;margin:0 auto;padding:16px 22px}
@@ -4468,13 +4643,17 @@
   .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
   @media print{ body{padding:6mm} .note{display:none} }
 </style></head><body>
-  <div class="title">COMMERCIAL INVOICE</div>
+  <div class="title">${esc(docTitle)}${isQuote&&o.rev>1?" · REV "+esc(String(o.rev)):""}</div>
   <div class="iec">I.E.C Code: ${esc(co.iec||"—")}</div>
   <table class="g">
     <tr><td style="width:52%"><span class="conm">${esc(co.name.toUpperCase())}</span><br>${esc(co.address||"")}<br>GSTN/Unique ID: ${esc(co.gstin||"—")}<br>email : ${esc(co.email||"")}</td>
-        <td style="width:48%"><span class="k">Invoice No. &amp; Date</span><br>${esc(o.invoiceNo||o.id)} &nbsp; DT.${fmtD(o.date)}<br>
+        ${isQuote
+          ?`<td style="width:48%"><span class="k">Quotation No. &amp; Date</span><br>${esc(o.id)} &nbsp; DT.${fmtD(o.date)}<br>
+          <span class="k">Valid Until</span><br>${fmtD(opts.validUntil||o.validUntil)}<br>
+          <span class="k">Reference:</span> ${esc(o.leadId||o.otherRef||"—")}</td>`
+          :`<td style="width:48%"><span class="k">Invoice No. &amp; Date</span><br>${esc(o.invoiceNo||o.id)} &nbsp; DT.${fmtD(o.date)}<br>
           <span class="k">CUSTOMER PO No. &amp; Date</span><br>${esc(o.custPoNo||"—")}${o.custPoDate?" DT."+fmtD(o.custPoDate):""}<br>
-          <span class="k">Other Reference:</span> ${esc(o.otherRef||"")}</td></tr>
+          <span class="k">Other Reference:</span> ${esc(o.otherRef||"")}</td>`}</tr>
     <tr><td><span class="k">Consignee :</span><br><b>${esc(o.consignee||"TO THE ORDER")}</b><br><br>
           <span class="k">Notify Party:</span><br><b>${esc(o.notifyParty||p.name||"")}</b></td>
         <td><span class="k">Bank:</span> ${esc(bank.name||"—")}<br><span class="k">Address:</span> ${esc(bank.address||"—")}<br><br>
@@ -4529,6 +4708,9 @@
   window.ERPActions = Object.assign(window.ERPActions||{}, {
     newPO: { mod:"purchase", create:true, ic:"🛒", label:"New Purchase Order", run:()=>App.go("purchase",{openNew:true}) },
     newSO: { mod:"sales", create:true, ic:"🧾", label:"New Sales Order",    run:()=>App.go("sales",{openNew:true}) },
+    newQuotation: { mod:"quotations", create:true, ic:"📄", label:"New Quotation", run:()=>App.go("quotations",{tab:"quotations",openNew:true}) },
     newComplaint: { mod:"customers", create:true, ic:"⚠️", label:"Raise a Complaint", run:()=>{ App.go("customers"); setTimeout(()=>complaintForm(),150); } },
   });
+  // the Samples & Quotations page lives in mod-crm.js; the sheet it prints on lives here
+  window._erpUtil = Object.assign(window._erpUtil||{}, { printQuote });
 })();

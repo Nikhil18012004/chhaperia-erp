@@ -354,13 +354,19 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   const payableDays = present + paidLeave;
 
   let basicEarned, gross;
+  // for a monthly worker these describe how the CTC became a per-day rate, so
+  // the payslip can show "Monthly ₹X · ₹Y/day (Z working days) × N paid days"
+  let monthWorkingDays = 0, monthPerDay = 0;
   if (worker.payType === "monthly") {
     const y = +period.split("-")[0], m = +period.split("-")[1];
     const daysInMonth = new Date(y, m, 0).getDate();
     let workingDays = 0;
+    // the calendar month less its week-offs (Sundays by default) — so a 31-day
+    // month with 5 Sundays is 26 working days, a 30-day with 4 is 26, etc.
     for (let d = 1; d <= daysInMonth; d++) if (!isWeekOff(`${y}-${pad(m)}-${pad(d)}`, cfg)) workingDays++;
-    const perDay = num(worker.monthlyCtc) / (workingDays || 1);
-    basicEarned = round(perDay * payableDays);
+    monthWorkingDays = workingDays;
+    monthPerDay = round(num(worker.monthlyCtc) / (workingDays || 1));
+    basicEarned = round(monthPerDay * payableDays);
     gross = basicEarned;
   } else {
     basicEarned = round(num(worker.dailyRate) * payableDays);
@@ -383,7 +389,8 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   const net = round(gross - pf - esi - pt - advances);
   return {
     workerId: worker.id, name: worker.name, dept: worker.dept, payType: worker.payType,
-    dailyRate: worker.dailyRate, present: round(present, 1), paidLeave, unpaidLeave, absent, payableDays: round(payableDays, 1),
+    dailyRate: worker.dailyRate, monthlyCtc: num(worker.monthlyCtc), monthWorkingDays, monthPerDay,
+    present: round(present, 1), paidLeave, unpaidLeave, absent, payableDays: round(payableDays, 1),
     otHours: round(otHours), otPay: otPayOut || 0, allowances: allowOut || 0, hourly: hourlyOut || 0,
     basicEarned, gross,
     deductions: { pf, esi, pt }, employer: { pf: employerPf, esi: employerEsi }, advances, net,

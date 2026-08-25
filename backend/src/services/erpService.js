@@ -9,6 +9,8 @@ const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const BC = require("../../../frontend/js/bomcalc");
+// the same tax engine the invoice prints from, so a quotation's money and the
+// order it becomes can never disagree on a figure
 
 /* Movement ids. A timestamp alone is not unique — several movements are posted
    inside the same millisecond, and keying the tail on the item id collides the
@@ -353,9 +355,16 @@ async function reset() {
   return await repo.saveState(buildSeed());
 }
 
-function todayISO() {
-  const x = new Date();
+function isoOf(x) {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
+function todayISO() { return isoOf(new Date()); }
+/* an ISO date moved by n days (negative goes back), in local time like todayISO */
+function addDays(iso, n) {
+  const d = new Date(String(iso || todayISO()) + "T00:00:00");
+  if (isNaN(d)) return iso;
+  d.setDate(d.getDate() + n);
+  return isoOf(d);
 }
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
 
@@ -900,12 +909,19 @@ async function createLead(lead) {
   if (!Array.isArray(lead.activities)) lead.activities = [];
   return await repo.putLead(lead);
 }
-async function updateLead(id, patch) {
+async function updateLead(id, patch, user) {
   const existing = await repo.getLead(id);
   if (!existing) throw err("Lead not found", 404);
   const merged = Object.assign({}, existing, patch || {}, { id });
   if (!merged.company) throw err("A lead needs a company", 400);
-  return await repo.putLead(merged);
+  const saved = await repo.putLead(merged);
+  /* A lead closed from the CRM closes its open quotes the same way: lost
+     takes the lead's reason so the "why we lost" bars count it, won closes
+     them at the price on the table. Quotes already decided are left alone. */
+  if (patch && (patch.stage === "Lost" || patch.stage === "Won") && patch.stage !== existing.stage) {
+    await closeQuotesOfLead(merged, patch.stage, user);
+  }
+  return saved;
 }
 async function deleteLead(id) {
   if (!await repo.getLead(id)) throw err("Lead not found", 404);
@@ -1145,6 +1161,261 @@ async function batchSpread(batch) {
     orders, complaints, report };
 }
 
+/* ---- Quotations (the price offered, and the haggling that followed) ----
+   A quotation here is not a tax document. It is the record of a price
+   discussion: for THIS product, in THIS unit, we offered THIS rate — and
+   what happened next. Every counter-offer is appended to the history and
+   never overwrites the one before, so the desk can see the road from the
+   first number to the last. A quote closes one of two ways, and each
+   carries the figure the next person needs: Won carries the FINAL price the
+   order is raised at; Lost carries the COUNTER price the customer would have
+   paid, which is the only honest input to "were we too expensive". The lead
+   follows the quote — Quoted while it is open, Won or Lost when it closes —
+   and a lead closed from the CRM takes its open quotes with it. */
+const QTN_STATUS = ["Open", "Won", "Lost"];
+/* the units a price is talked in on the floor; a product's own stocking
+   unit is the default, but a sqm price for a kg-stocked tape is common */
+const QTN_UOMS = ["KG", "SQM", "MTR"];
+/* Mirrors ENG.LOST_REASONS in frontend/js/engine.js — the chips the CRM's
+   lost form offers. A reason outside the list is refused here because the
+   "why we lost" bars group on it. Keep the two in step. */
+const LOST_REASONS = ["Price", "Lead time", "Quality / spec", "No response", "Budget dropped", "Existing supplier", "Other"];
+const r2 = (v) => Math.round(num(v) * 100) / 100;
+
+function quoteUom(u, item) {
+  const s = String(u || "").trim().toUpperCase();
+  if (QTN_UOMS.includes(s)) return s;
+  const iu = String((item && item.uom) || "").toUpperCase();
+  return QTN_UOMS.includes(iu) ? iu : "KG";
+}
+/* what a quote is worth: the price times the quantity when one was talked
+   about, the bare price when it was not — the lead's "quoted value" reads this */
+function quoteValue(price, qty) { return num(qty) > 0 ? r2(num(price) * num(qty)) : r2(num(price)); }
+function quoteText(q, price) {
+  const p = price != null ? price : q.price;
+  const u = String(q.uom || "").toLowerCase();
+  return "₹" + num(p) + "/" + u + (num(q.qty) > 0 ? " × " + num(q.qty) + " " + u : "");
+}
+function stamp(by, kind, extra) {
+  return Object.assign({ at: new Date().toISOString(), by: by || "", kind }, extra || {});
+}
+const closedLead = (l) => !l || l.stage === "Won" || l.stage === "Lost";
+
+/* The lead mirrors its quote: the number on the chip, the stage, and a line
+   in the timeline. Written straight through the DAO — never via updateLead —
+   so the lead→quote cascade below cannot loop back into here. */
+async function mirrorQuoteOnLead(lead, q, by, note) {
+  if (!lead) return;
+  lead.quotationId = q.id;
+  lead.quotedValue = quoteValue(q.status === "Won" ? q.finalPrice : q.price, q.qty);
+  lead.quotedPrice = q.status === "Won" ? q.finalPrice : q.price;
+  lead.quotedUom = q.uom;
+  lead.quoteDate = q.date;
+  if (q.status === "Open" && ["New", "Contacted", "Sample"].includes(lead.stage)) lead.stage = "Quoted";
+  if (!closedLead(lead)) {
+    const t = todayISO();
+    if (!lead.nextFollowUp || lead.nextFollowUp < t) lead.nextFollowUp = addDays(t, 3);
+  }
+  if (note) {
+    lead.activities = lead.activities || [];
+    lead.activities.push({ date: todayISO(), type: "Quotation Sent", note, by: by || lead.owner || "Sales Desk" });
+  }
+  await repo.putLead(lead);
+}
+
+async function createQuotation(body, user) {
+  body = body || {};
+  const st = await repo.getState();
+  const lead = body.leadId ? (st.leads || []).find((l) => l.id === body.leadId) : null;
+  if (body.leadId && !lead) throw err("Lead " + body.leadId + " not found", 404);
+  const customerId = body.customerId || (lead && lead.customerId) || "";
+  if (!customerId && !lead) throw err("A quotation needs a customer or a lead", 400);
+  if (customerId && !(st.customers || []).some((c) => c.id === customerId)) throw err("Customer " + customerId + " not found", 404);
+  const itemId = body.itemId || (lead && lead.product) || "";
+  const item = (st.items || []).find((i) => i.id === itemId);
+  if (!item) throw err("Pick the product being quoted", 400);
+  const price = num(body.price);
+  if (!(price > 0)) throw err("A quotation needs a price greater than zero", 400);
+  const qty = num(body.qty);
+  if (qty < 0) throw err("Quantity cannot be negative", 400);
+  const by = (user && user.username) || "";
+  const note = String(body.note || "").trim();
+  const date = body.date || todayISO();
+  const q = {
+    // seeded so the very first id is four digits wide, not QTN-001
+    id: nextId((st.quotations || []).length ? st.quotations : [{ id: "QTN-0000" }], "QTN-"),
+    date, leadId: lead ? lead.id : "", customerId,
+    company: lead ? lead.company : (((st.customers || []).find((c) => c.id === customerId) || {}).name || ""),
+    itemId, productName: item.name || itemId,
+    uom: quoteUom(body.uom, item), qty, price, value: quoteValue(price, qty),
+    note, status: "Open", rounds: 1, lastUpdated: date, createdBy: by,
+    history: [stamp(by, "quoted", { price, qty, note })],
+  };
+  const saved = await repo.putQuotation(q);
+  if (lead) await mirrorQuoteOnLead(lead, saved, by, "Quoted " + quoteText(saved) + " — " + saved.id);
+  return saved;
+}
+
+/* Edits that are not a new price: unit, quantity, note, product. A changed
+   price is a round of the negotiation and is recorded as one. */
+async function updateQuotation(id, patch, user) {
+  const q = await repo.getQuotation(id);
+  if (!q) throw err("Quotation not found", 404);
+  patch = patch || {};
+  const keys = Object.keys(patch).filter((k) => k !== "id");
+  if (q.status !== "Open" && keys.some((k) => k !== "note")) {
+    throw err(id + " is closed as " + q.status + " — reopen it to change anything but the note", 409);
+  }
+  const by = (user && user.username) || "";
+  if (patch.itemId != null && patch.itemId !== q.itemId) {
+    const item = await repo.getItem(patch.itemId);
+    if (!item) throw err("Unknown item " + patch.itemId, 400);
+    q.itemId = patch.itemId; q.productName = item.name || patch.itemId;
+    if (patch.uom == null) q.uom = quoteUom(q.uom, item);
+  }
+  if (patch.uom != null) q.uom = quoteUom(patch.uom, await repo.getItem(q.itemId));
+  if (patch.qty != null) { if (num(patch.qty) < 0) throw err("Quantity cannot be negative", 400); q.qty = num(patch.qty); }
+  if (patch.note != null) q.note = String(patch.note).trim();
+  if (patch.customerId != null) {
+    if (patch.customerId && !await repo.getCustomer(patch.customerId)) throw err("Customer " + patch.customerId + " not found", 404);
+    q.customerId = patch.customerId;
+  }
+  if (patch.price != null && num(patch.price) !== num(q.price)) return await repriceQuotation(id, { price: patch.price, note: patch.note }, user, q);
+  q.value = quoteValue(q.price, q.qty);
+  const saved = await repo.putQuotation(q);
+  const lead = saved.leadId ? await repo.getLead(saved.leadId) : null;
+  if (lead && lead.quotationId === id) await mirrorQuoteOnLead(lead, saved, by, "");
+  return saved;
+}
+
+/* A new number in the same conversation. */
+async function repriceQuotation(id, body, user, loaded) {
+  const q = loaded || await repo.getQuotation(id);
+  if (!q) throw err("Quotation not found", 404);
+  if (q.status !== "Open") throw err(id + " is closed as " + q.status + " — reopen it before changing the price", 409);
+  body = body || {};
+  const price = num(body.price);
+  if (!(price > 0)) throw err("The new price must be greater than zero", 400);
+  if (body.qty != null) { if (num(body.qty) < 0) throw err("Quantity cannot be negative", 400); q.qty = num(body.qty); }
+  const by = (user && user.username) || "";
+  const note = String(body.note || "").trim();
+  q.price = price; q.value = quoteValue(price, q.qty);
+  q.rounds = num(q.rounds || 1) + 1;
+  q.lastUpdated = todayISO();
+  q.history = (q.history || []).concat([stamp(by, "updated", { price, qty: q.qty, note })]);
+  const saved = await repo.putQuotation(q);
+  const lead = saved.leadId ? await repo.getLead(saved.leadId) : null;
+  if (lead) await mirrorQuoteOnLead(lead, saved, by, "Quote updated to " + quoteText(saved) + (note ? " — " + note : ""));
+  return saved;
+}
+
+/* Closing a quote is what moves the lead. Won carries the final price; the
+   order itself is raised by the desk (the CRM's convert step) so the human
+   decides quantity and dates, not this function. */
+async function winQuotation(id, body, user) {
+  const q = await repo.getQuotation(id);
+  if (!q) throw err("Quotation not found", 404);
+  if (q.status === "Lost") throw err(id + " was lost — reopen it first", 409);
+  if (q.status === "Won") return q;                       // idempotent
+  body = body || {};
+  if (body.finalPrice != null && num(body.finalPrice) < 0) throw err("The final price cannot be negative", 400);
+  const finalPrice = num(body.finalPrice) > 0 ? num(body.finalPrice) : num(q.price);
+  if (body.qty != null) { if (num(body.qty) < 0) throw err("Quantity cannot be negative", 400); q.qty = num(body.qty); }
+  const by = (user && user.username) || "";
+  const note = String(body.note || "").trim();
+  // a quote raised against a bare lead has no customer until it is won and one
+  // is created; adopt it here so the won quote can be printed and billed
+  if (!q.customerId && body.customerId && await repo.getCustomer(body.customerId)) q.customerId = body.customerId;
+  Object.assign(q, { status: "Won", finalPrice, wonOn: todayISO(), lastUpdated: todayISO(),
+    value: quoteValue(finalPrice, q.qty),
+    history: (q.history || []).concat([stamp(by, "won", { price: finalPrice, qty: q.qty, note })]) });
+  const saved = await repo.putQuotation(q);
+  const lead = saved.leadId ? await repo.getLead(saved.leadId) : null;
+  if (lead && lead.stage !== "Lost") {
+    lead.stage = "Won"; lead.nextFollowUp = null; lead.finalPrice = finalPrice;
+    if (body.customerId) lead.customerId = body.customerId;
+    await mirrorQuoteOnLead(lead, saved, by, "Won at " + quoteText(saved, finalPrice) + (note ? " — " + note : ""));
+  }
+  return saved;
+}
+
+async function loseQuotation(id, body, user) {
+  const q = await repo.getQuotation(id);
+  if (!q) throw err("Quotation not found", 404);
+  if (q.status === "Won") throw err(id + " was won — reopen it first", 409);
+  if (q.status === "Lost") return q;
+  body = body || {};
+  const lostReason = String(body.lostReason || "").trim();
+  if (!LOST_REASONS.includes(lostReason)) throw err("Pick the reason it was lost: " + LOST_REASONS.join(", "), 400);
+  if (body.counterPrice != null && num(body.counterPrice) < 0) throw err("The counter price cannot be negative", 400);
+  const by = (user && user.username) || "";
+  const note = String(body.note || "").trim();
+  Object.assign(q, { status: "Lost", lostOn: todayISO(), lastUpdated: todayISO(),
+    counterPrice: num(body.counterPrice), lostReason, lostTo: String(body.lostTo || "").trim(), lostNote: note,
+    history: (q.history || []).concat([stamp(by, "lost", { price: num(body.counterPrice), note: [lostReason, body.lostTo, note].filter(Boolean).join(" · ") })]) });
+  const saved = await repo.putQuotation(q);
+  const lead = saved.leadId ? await repo.getLead(saved.leadId) : null;
+  if (lead && !closedLead(lead)) {
+    Object.assign(lead, { stage: "Lost", nextFollowUp: null, lostReason, lostTo: saved.lostTo, lostNote: note });
+    await mirrorQuoteOnLead(lead, saved, by, "Lost" + (saved.counterPrice > 0 ? " against " + quoteText(saved, saved.counterPrice) : "") + " — " + lostReason);
+  }
+  return saved;
+}
+
+/* A mis-click is undone here; the lead goes back to Quoted only if this
+   quote is the one it was closed on and no order has been raised since. */
+async function reopenQuotation(id, user) {
+  const q = await repo.getQuotation(id);
+  if (!q) throw err("Quotation not found", 404);
+  if (q.status === "Open") return q;
+  const by = (user && user.username) || "";
+  const was = q.status;
+  Object.assign(q, { status: "Open", lastUpdated: todayISO(), value: quoteValue(q.price, q.qty),
+    history: (q.history || []).concat([stamp(by, "reopened", { price: q.price, note: "was " + was })]) });
+  delete q.finalPrice; delete q.wonOn; delete q.counterPrice; delete q.lostOn; delete q.lostReason; delete q.lostTo; delete q.lostNote;
+  const saved = await repo.putQuotation(q);
+  const lead = saved.leadId ? await repo.getLead(saved.leadId) : null;
+  if (lead && lead.quotationId === id && !lead.salesOrderId && (lead.stage === "Won" || lead.stage === "Lost")) {
+    lead.stage = "Quoted";
+    delete lead.finalPrice; delete lead.lostReason; delete lead.lostTo; delete lead.lostNote;
+    await mirrorQuoteOnLead(lead, saved, by, "Quote " + id + " reopened");
+  }
+  return saved;
+}
+
+async function deleteQuotation(id) {
+  const q = await repo.getQuotation(id);
+  if (!q) throw err("Quotation not found", 404);
+  if (q.status === "Won") throw err(id + " was won — it is the record the order was raised on. Reopen it first if it was a mistake.", 409);
+  const out = await repo.deleteQuotation(id);
+  if (q.leadId) {
+    const lead = await repo.getLead(q.leadId);
+    if (lead && lead.quotationId === id) {
+      delete lead.quotationId; delete lead.quotedValue; delete lead.quotedPrice; delete lead.quotedUom; delete lead.quoteDate;
+      await repo.putLead(lead);
+    }
+  }
+  return out;
+}
+
+/* The lead→quote cascade, called from updateLead: a lead closed from the CRM
+   closes its open quotes the same way, at the price on the table. */
+async function closeQuotesOfLead(lead, outcome, user) {
+  const by = (user && user.username) || "";
+  const st = await repo.getState();
+  for (const q of (st.quotations || []).filter((x) => x.leadId === lead.id && x.status === "Open")) {
+    if (outcome === "Won") {
+      Object.assign(q, { status: "Won", finalPrice: num(q.price), wonOn: todayISO(), lastUpdated: todayISO(),
+        history: (q.history || []).concat([stamp(by, "won", { price: num(q.price), note: "Lead marked won" })]) });
+    } else {
+      Object.assign(q, { status: "Lost", lostOn: todayISO(), lastUpdated: todayISO(), counterPrice: 0,
+        lostReason: LOST_REASONS.includes(lead.lostReason) ? lead.lostReason : "Other",
+        lostTo: lead.lostTo || "", lostNote: lead.lostNote || "",
+        history: (q.history || []).concat([stamp(by, "lost", { price: 0, note: "Lead marked lost" + (lead.lostReason ? " · " + lead.lostReason : "") })]) });
+    }
+    await repo.putQuotation(q);
+  }
+}
 /* ---- Transporters (dispatch providers) ---- */
 async function createTransporter(t) {
   t = t || {};
@@ -1213,4 +1484,6 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   deleteItem, deleteWorkOrder, nextId, updateWarehouse,
   createTransporter, updateTransporter, deleteTransporter, ensureDispatch,
   createAppointment, updateAppointment, deleteAppointment, APPT_KINDS,
-  createComplaint, updateComplaint, deleteComplaint, batchSpread, CMP_STATUS };
+  createComplaint, updateComplaint, deleteComplaint, batchSpread, CMP_STATUS,
+  createQuotation, updateQuotation, repriceQuotation, winQuotation, loseQuotation, reopenQuotation, deleteQuotation,
+  QTN_STATUS, QTN_UOMS, LOST_REASONS };
