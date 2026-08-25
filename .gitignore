@@ -48,8 +48,10 @@ data/*.db
 data/chhaperia.db.premysql-*.bak
 
 # Demo-layer manifests: a record of which rows THIS machine's database holds,
-# written by tools/temp-demo and tools/demo-data.js. Local state, not source.
+# written by tools/temp-demo, tools/temp-directories.js and tools/demo-data.js.
+# Local state, not source.
 data/temp-demo-manifest.json
+data/temp-directories-manifest.json
 data/demo-manifest.json
 
 # Env
