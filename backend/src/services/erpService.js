@@ -1064,6 +1064,87 @@ async function deleteAppointment(id) {
   return await repo.deleteAppointment(id);
 }
 
+/* ---- Complaints (a customer's problem, tied to the batch it came from) ----
+   Before this a complaint was a phone call somebody remembered. Tying it to
+   the batch turns an argument into a fact: the lab report for that run says
+   whether the customer is right, and the sales orders that carried the same
+   batch say who ELSE holds it and has not called yet. Both are DERIVED here
+   from records the ERP already keeps — nothing about the spread is stored,
+   so it can never disagree with the dispatches it is read from. */
+const CMP_STATUS = ["Open", "Investigating", "Resolved", "Rejected"];
+function normBatch(b) {
+  const s = String(b || "").trim().toUpperCase();
+  if (!s) return "";
+  return /^WO[\s-]*\d+$/.test(s) ? "WO-" + s.replace(/^WO[\s-]*/, "").padStart(4, "0") : s;
+}
+async function createComplaint(c, user) {
+  c = c || {};
+  if (!c.customerId) throw err("A complaint needs a customer", 400);
+  if (!String(c.claim || "").trim()) throw err("A complaint needs the claim — what the customer said", 400);
+  const st = await repo.getState();
+  if (!(st.customers || []).some((x) => x.id === c.customerId)) throw err("Customer " + c.customerId + " not found", 404);
+  // nextId reads its zero-padding from the ids already present; with none it
+  // falls back to three digits, so the very first complaint would be CMP-001
+  // and every later one four wide. Seed the width instead.
+  if (!c.id) c.id = nextId((st.complaints || []).length ? st.complaints : [{ id: "CMP-0000" }], "CMP-");
+  else if (await repo.getComplaint(c.id)) throw err("Complaint " + c.id + " already exists", 409);
+  c.batch = normBatch(c.batch);
+  if (c.batch && !(st.workorders || []).some((w) => w.id === c.batch))
+    throw err("Batch " + c.batch + " is not a work order — check the number on the label", 400);
+  c.status = CMP_STATUS.includes(c.status) ? c.status : "Open";
+  c.raised = c.raised || todayISO();
+  c.raisedBy = c.raisedBy || (user && user.username) || "";
+  c.history = [{ at: new Date().toISOString(), by: c.raisedBy, status: c.status, note: "Raised" }];
+  return await repo.putComplaint(c);
+}
+async function updateComplaint(id, patch, user) {
+  const existing = await repo.getComplaint(id);
+  if (!existing) throw err("Complaint not found", 404);
+  patch = patch || {};
+  if (patch.status && !CMP_STATUS.includes(patch.status)) throw err("Unknown complaint status " + patch.status, 400);
+  if (patch.batch != null) {
+    patch.batch = normBatch(patch.batch);
+    if (patch.batch && !((await repo.getState()).workorders || []).some((w) => w.id === patch.batch))
+      throw err("Batch " + patch.batch + " is not a work order", 400);
+  }
+  const merged = Object.assign({}, existing, patch, { id });
+  // every status change is a line in the history, so "who closed this and
+  // when" is never a matter of memory
+  if (patch.status && patch.status !== existing.status) {
+    merged.history = (existing.history || []).concat([{ at: new Date().toISOString(),
+      by: (user && user.username) || "", status: patch.status, note: patch.resolution || "" }]);
+    if (patch.status === "Resolved" || patch.status === "Rejected") merged.closed = todayISO();
+  }
+  return await repo.putComplaint(merged);
+}
+async function deleteComplaint(id) {
+  if (!await repo.getComplaint(id)) throw err("Complaint not found", 404);
+  return await repo.deleteComplaint(id);
+}
+/** Everything the complaint screen needs about one batch: the lab reading
+ *  and every sales order that shipped it. Read-only; nothing is written. */
+async function batchSpread(batch) {
+  batch = normBatch(batch);
+  if (!batch) return { batch: "", orders: [], report: null };
+  const st = await repo.getState();
+  const wo = (st.workorders || []).find((w) => w.id === batch) || null;
+  const custName = (id) => ((st.customers || []).find((c) => c.id === id) || {}).name || id || "";
+  const orders = [];
+  (st.salesorders || []).forEach((so) => {
+    const qty = (so.lines || []).filter((l) => l && normBatch(l.batch) === batch)
+      .reduce((s, l) => s + (+l.qty || 0), 0);
+    if (qty > 0) orders.push({ soId: so.id, customerId: so.customerId, customer: custName(so.customerId),
+      qty, status: so.status, date: so.date, dispatchedOn: (so.doc && so.doc.dispatchedOn) || so.dispatchedOn || null });
+  });
+  const complaints = (st.complaints || []).filter((c) => c.batch === batch)
+    .map((c) => ({ id: c.id, customerId: c.customerId, status: c.status }));
+  const lab = require("./labService");
+  let report = null;
+  try { report = wo ? await lab.reportForWO(wo, st.labReports) : null; } catch (e) { report = null; }
+  return { batch, workOrder: wo ? { id: wo.id, itemId: wo.itemId, qty: wo.qty, status: wo.status } : null,
+    orders, complaints, report };
+}
+
 /* ---- Transporters (dispatch providers) ---- */
 async function createTransporter(t) {
   t = t || {};
@@ -1131,4 +1212,5 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   createSupplier, updateSupplier, deleteSupplier, updateOrg, ensureCompanies,
   deleteItem, deleteWorkOrder, nextId, updateWarehouse,
   createTransporter, updateTransporter, deleteTransporter, ensureDispatch,
-  createAppointment, updateAppointment, deleteAppointment, APPT_KINDS };
+  createAppointment, updateAppointment, deleteAppointment, APPT_KINDS,
+  createComplaint, updateComplaint, deleteComplaint, batchSpread, CMP_STATUS };

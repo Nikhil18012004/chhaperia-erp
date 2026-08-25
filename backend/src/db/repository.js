@@ -50,6 +50,10 @@ const J = (v) => (v == null ? null : JSON.stringify(v));
    for the JSON type. Reading the same data out of an older TEXT
    column gives a string. P() takes either, so a database part-way
    through a migration cannot produce two different shapes. */
+/* A complaint row → the record the UI sees. The four promoted columns win
+   over any stale copy inside the doc, the same rule appointments follow. */
+const rowToComplaint = (r) => Object.assign({}, P(r.doc, {}),
+  { id: r.id, customerId: r.customer_id, batch: r.batch, status: r.status, raised: r.raised });
 const P = (v, d) => {
   if (v == null) return d;
   if (typeof v === "object") return v;
@@ -78,6 +82,8 @@ async function getState(x0) {
   // the date is a promoted column, so it wins over any stale copy in the doc
   const appointments = (await x.all("SELECT `id`,`date`,`doc` FROM `appointments`"))
     .map((r) => Object.assign({}, P(r.doc, {}), { id: r.id, date: r.date }));
+  const complaints = (await x.all("SELECT `id`,`customer_id`,`batch`,`status`,`raised`,`doc` FROM `complaints`"))
+    .map(rowToComplaint);
 
   // items: merge promoted columns back into the doc
   const items = (await x.all("SELECT * FROM `items`")).map((r) => {
@@ -164,7 +170,7 @@ async function getState(x0) {
     version: 1,
     seededAt: meta.seededAt || null,
     org, warehouses, categories, items, boms, suppliers, customers, transporters,
-    movements, workorders, salesorders, purchaseorders, leads, appointments, settings,
+    movements, workorders, salesorders, purchaseorders, leads, appointments, complaints, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
     labProducts, labReports, grns, grnTests,
   };
@@ -305,6 +311,14 @@ async function saveState(data) {
 
     const TR = "INSERT INTO `transporters`(`id`,`doc`) VALUES(?,?)";
     await replace("transporters", "transporters", (t) => x.run(TR, [t.id, J(t)]));
+
+    const CM = "INSERT INTO `complaints`(`id`,`customer_id`,`batch`,`status`,`raised`,`doc`) " +
+      "VALUES(:id,:customer_id,:batch,:status,:raised,:doc)";
+    await replace("complaints", "complaints", (c) => {
+      const { id, customerId, batch, status, raised, ...rest } = c;
+      return x.run(CM, { id, customer_id: customerId || null, batch: batch || null,
+        status: status || null, raised: raised || null, doc: J(rest) });
+    });
 
     const LP = "INSERT INTO `lab_products`(`id`,`doc`) VALUES(?,?)";
     await replace("labProducts", "lab_products", (p) => x.run(LP, [p.id, J(p)]));
@@ -851,6 +865,30 @@ async function deleteAppointment(id, x0) {
   return { id };
 }
 
+/* ---- complaints ---- */
+const CMP_COLS = "`id`,`customer_id`,`batch`,`status`,`raised`,`doc`";
+async function getComplaint(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT " + CMP_COLS + " FROM `complaints` WHERE `id`=?", [id]);
+  return r ? rowToComplaint(r) : null;
+}
+async function putComplaint(c, x0) {
+  const x = await ex(x0);
+  const { id, customerId, batch, status, raised, ...rest } = c;
+  await x.run("INSERT INTO `complaints`(" + CMP_COLS + ") " +
+    "VALUES(:id,:customer_id,:batch,:status,:raised,:doc) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `customer_id`=`new`.`customer_id`, `batch`=`new`.`batch`, " +
+    "`status`=`new`.`status`, `raised`=`new`.`raised`, `doc`=`new`.`doc`",
+    { id, customer_id: customerId || null, batch: batch || null, status: status || null,
+      raised: raised || null, doc: J(rest) });
+  return getComplaint(id, x);
+}
+async function deleteComplaint(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `complaints` WHERE `id`=?", [id]);
+  return { id };
+}
+
 /* ---------- LAB REPORTS (QC certificates + own product master) ---------- */
 async function getLabProduct(id, x0) {
   const x = await ex(x0);
@@ -1094,6 +1132,7 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   // transaction plumbing for flows that must post document + stock together
   withTx, getPurchaseOrderForUpdate, getSalesOrderForUpdate,
   getBom, putBom, deleteBom, getLead, putLead, deleteLead,
+  getComplaint, putComplaint, deleteComplaint,
   getCustomer, putCustomer, deleteCustomer,
   getSupplier, putSupplier, deleteSupplier,
   getOrg, putOrg,

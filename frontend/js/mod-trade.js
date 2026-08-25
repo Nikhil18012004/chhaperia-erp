@@ -2331,23 +2331,33 @@
   function custCountry(c){ const k=CCY.country(c&&c.country); return k?k.name:((c&&c.country)||"India"); }
   function custCcy(c){ return String((c&&c.currency)||CCY.forCountry(c&&c.country)||"INR").toUpperCase(); }
 
-  M.customers = { title:"Customers", sub:"Client master & orders", render(root){
+  M.customers = { title:"Customers", sub:"Client master & orders", render(root,params){
     root.appendChild(pageHead("Customers","HT cable manufacturers and order history",[
       MW.excelMenu("customers"),
       h("button",{class:"btn primary",onclick:()=>customerForm(),html:"＋ New Customer"})
     ]));
-    let q="", tab="all";
+    /* The tab lives in App.params, not a local, because every save goes
+       through reloadState → refreshView, which re-renders this module from
+       scratch. Without this, raising a complaint snapped the page back to
+       "All customers" and the row you had just created was out of sight. */
+    let q="", tab=(params&&params.tab)||"all";
     /* Two views of the same list. "Gone quiet" is not a filter on a field —
        it is worked out from each client's own ordering rhythm (ENG.dormantCustomers),
        so it can only be a tab, not a search term. */
     const quiet=ENG.dormantCustomers();
+    const openCmp=(ENG.data.complaints||[]).filter(c=>c.status==="Open"||c.status==="Investigating").length;
     const seg=h("div",{class:"seg",style:"margin-bottom:12px"},[
-      h("button",{class:"on",text:"All customers",onclick:e=>setTab("all",e.target)}),
-      h("button",{html:"Gone quiet"+(quiet.length?' <span class="chip" style="margin-left:6px">'+quiet.length+"</span>":""),
-        onclick:e=>setTab("quiet",e.currentTarget)})
+      h("button",{class:tab==="all"?"on":"",text:"All customers",onclick:e=>setTab("all",e.currentTarget)}),
+      h("button",{class:tab==="quiet"?"on":"",html:"Gone quiet"+(quiet.length?' <span class="chip" style="margin-left:6px">'+quiet.length+"</span>":""),
+        onclick:e=>setTab("quiet",e.currentTarget)}),
+      h("button",{class:tab==="complaints"?"on":"",html:"Complaints"+(openCmp?' <span class="chip" style="margin-left:6px;color:var(--danger)">'+openCmp+"</span>":""),
+        onclick:e=>setTab("complaints",e.currentTarget)})
     ]);
     root.appendChild(seg);
-    function setTab(t,btn){ tab=t; [...seg.children].forEach(c=>c.classList.remove("on")); btn.classList.add("on"); draw(); }
+    function setTab(t,btn){
+      tab=t; App.params=Object.assign({},App.params||{},{tab:t});
+      [...seg.children].forEach(c=>c.classList.remove("on")); btn.classList.add("on"); draw();
+    }
     root.appendChild(h("div",{class:"toolbar"},[
       MW.searchInput("Search customer, city, country, currency, GSTIN, contact…", v=>{q=v.toLowerCase().trim();draw();}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"custCount"}))
@@ -2357,6 +2367,43 @@
        accounts, and pasting an SO number finds whose order it is. Country and
        currency match on the code, the symbol-less short form AND the full name,
        so "usd", "dollar" and "united states" all find the same accounts. */
+    /* the complaint register: open first, then by date */
+    function drawComplaints(){
+      const all=(ENG.data.complaints||[]).slice();
+      const rank={Open:0,Investigating:1,Resolved:2,Rejected:3};
+      const rows=all.filter(c=>!q || [c.id,ENG.custName(c.customerId),c.batch,c.claim,c.status].join(" ").toLowerCase().includes(q))
+        .sort((a,b)=>(rank[a.status]-rank[b.status]) || (a.raised<b.raised?1:-1));
+      const cnt=UI.$("#custCount"); if(cnt) cnt.textContent=rows.length+(rows.length===1?" complaint":" complaints");
+      host.innerHTML="";
+      host.appendChild(h("div",{class:"flex between aic wrap gap",style:"margin-bottom:10px"},[
+        h("div",{class:"muted",style:"font-size:12.5px",
+          text:"A complaint is tied to the batch it came from, so the lab reading settles it and every other customer holding that batch is one click away."}),
+        h("button",{class:"btn primary sm",onclick:()=>complaintForm(),html:"＋ Raise complaint"})
+      ]));
+      if(!rows.length){
+        host.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),
+          h("div",{text:all.length?"No complaint matches that search":"No complaints on record"})]));
+        return;
+      }
+      const tone=s=>s==="Open"?"danger":s==="Investigating"?"warn":s==="Resolved"?"ok":"mut";
+      host.appendChild(table(rows,[
+        {key:"id",label:"Complaint",render:r=>`<b>${esc(r.id)}</b><div class="muted" style="font-size:11.5px">${esc(r.raised||"")}${r.via?" · via "+esc(r.via):""}</div>`,sort:r=>r.id},
+        {key:"customer",label:"Customer",render:r=>esc(ENG.custName(r.customerId)),sort:r=>ENG.custName(r.customerId)},
+        {key:"batch",label:"Batch",render:r=>r.batch?`<span class="mono">${esc(r.batch)}</span>`:'<span class="muted">—</span>',sort:r=>r.batch||""},
+        {key:"claim",label:"Claim",render:r=>esc(String(r.claim||"").slice(0,90))+(String(r.claim||"").length>90?"…":""),noSort:true},
+        {key:"status",label:"Status",render:r=>badge(tone(r.status),r.status),sort:r=>rank[r.status]},
+        {key:"go",label:"",noSort:true,render:r=>`<button class="btn sm" data-cmp="${esc(r.id)}">Open</button>`}
+      ]));
+      /* delegated for the same reason as the quiet list: table() rebuilds
+         its tbody on every sort and would drop per-row handlers */
+      host.onclick=(e)=>{
+        const b=e.target.closest && e.target.closest("[data-cmp]");
+        if(!b) return;
+        const c=(ENG.data.complaints||[]).find(x=>x.id===b.dataset.cmp);
+        if(c) complaintDetail(c);
+      };
+    }
+
     /* the quiet list: who has broken their own ordering rhythm */
     function drawQuiet(){
       const rows=quiet.filter(r=>!q || (r.name||"").toLowerCase().includes(q));
@@ -2401,6 +2448,7 @@
     }
     function draw(){
       if(tab==="quiet"){ drawQuiet(); return; }
+      if(tab==="complaints"){ drawComplaints(); return; }
       const list=ENG.data.customers.filter(custMatch);
       const cnt=UI.$("#custCount"); if(cnt) cnt.textContent=list.length+(list.length===1?" customer":" customers");
       host.innerHTML="";
@@ -2556,6 +2604,144 @@
      the picker stays open, because a buyer in Vietnam or Nigeria very often
      settles an export in dollars whatever is legal tender at home. Whatever
      ends up here is what a sales order for this client opens in. */
+  /* ============================================================
+     COMPLAINTS — a customer's problem, tied to the batch it came from
+     ============================================================ */
+  const CMP_STATUS=["Open","Investigating","Resolved","Rejected"];
+  const CMP_VIA=["Phone","WhatsApp","Email","Site visit","Letter"];
+  const cmpTone=s=>s==="Open"?"danger":s==="Investigating"?"warn":s==="Resolved"?"ok":"mut";
+
+  /* the batches a customer actually received — every SO line with a batch
+     number, most recent first — so the picker offers what they hold, not
+     every work order the plant has ever run */
+  function batchesFor(customerId){
+    const seen=new Map();
+    (ENG.data.salesorders||[]).filter(s=>s.customerId===customerId).forEach(so=>{
+      (so.lines||[]).forEach(l=>{ if(l&&l.batch&&!seen.has(l.batch)) seen.set(l.batch,{batch:l.batch,so:so.id,date:so.date,itemId:l.itemId}); });
+    });
+    return [...seen.values()].sort((a,b)=>a.date<b.date?1:-1);
+  }
+
+  function complaintForm(edit){
+    const c=edit||{};
+    const custs=ENG.data.customers.slice().sort((a,b)=>a.name.localeCompare(b.name));
+    const cust0=edit?edit.customerId:(custs[0]&&custs[0].id);
+    const batchOpts=(cid)=>[{v:"",l:"— not tied to a batch —"}].concat(batchesFor(cid).map(b=>({v:b.batch,
+      l:b.batch+" · "+(ENG.item(b.itemId)||{}).name+" · "+b.so+" · "+b.date})));
+    const body=h("div",{class:"form-grid"},[
+      U.field("Customer *",U.searchSelect("cm_cust",custs.map(x=>({v:x.id,l:x.name})),cust0,"Search customer…")),
+      U.field("Batch (work order)",U.selectHTML("cm_batch",batchOpts(cust0),c.batch||"")),
+      U.field("Raised on",`<input class="input" id="cm_raised" type="date" value="${c.raised||DB.helpers.iso(DB.helpers.today())}">`),
+      U.field("Came in via",U.selectHTML("cm_via",CMP_VIA.map(v=>({v,l:v})),c.via||"Phone")),
+      U.field("Raised by (their side)",`<input class="input" id="cm_by" value="${esc(c.raisedByName||"")}" placeholder="e.g. G. Rane, QA">`),
+      edit?U.field("Status",U.selectHTML("cm_status",CMP_STATUS.map(v=>({v,l:v})),c.status||"Open")):null,
+      U.field("What they said *",`<textarea class="input" id="cm_claim" placeholder="In their words — which product, which reels, what is wrong">${esc(c.claim||"")}</textarea>`,"full"),
+      edit?U.field("Resolution / notes",`<textarea class="input" id="cm_res" placeholder="What was done, what was replaced, what the plant found">${esc(c.resolution||"")}</textarea>`,"full"):null,
+    ].filter(Boolean));
+    const mo=modal({title:edit?"Edit "+c.id:"Raise a complaint",sub:edit?ENG.custName(c.customerId):"Tie it to the batch and the lab report settles it",body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+            h("button",{class:"btn primary",onclick:save,text:edit?"Save":"Raise complaint"})]});
+    // the batch list belongs to the customer, so it follows the customer picker
+    const custSel=UI.$("#cm_cust");
+    if(custSel) custSel.addEventListener("change",()=>{ const b=UI.$("#cm_batch"); if(b) b.innerHTML=batchOpts(custSel.value).map(o=>`<option value="${esc(o.v)}">${esc(o.l)}</option>`).join(""); });
+    async function save(){
+      const customerId=UI.$("#cm_cust").value, claim=UI.$("#cm_claim").value.trim();
+      if(!customerId){ toast("Pick a customer",{type:"warn"}); return; }
+      if(!claim){ toast("Write down what they said",{type:"warn"}); return; }
+      const batch=UI.$("#cm_batch").value;
+      const b=batchesFor(customerId).find(x=>x.batch===batch);
+      const patch={customerId, batch, raised:UI.$("#cm_raised").value, via:UI.$("#cm_via").value,
+        raisedByName:UI.$("#cm_by").value.trim(), claim,
+        salesOrderId:b?b.so:(c.salesOrderId||""), itemId:b?b.itemId:(c.itemId||"")};
+      if(edit){ patch.status=UI.$("#cm_status").value; patch.resolution=UI.$("#cm_res").value.trim(); }
+      mo.close();
+      try{
+        if(edit) await App.saveDelta(()=>DB.complaints.update(c.id,patch));
+        else await App.saveDelta(()=>DB.complaints.create(patch));
+        toast(edit?c.id+" saved":"Complaint raised",{type:"ok"});
+      }catch(e){ toast(e.message||"Could not save the complaint",{type:"danger"}); }
+    }
+  }
+
+  async function complaintDetail(c){
+    const cust=ENG.data.customers.find(x=>x.id===c.customerId)||{};
+    // the spread and the lab reading are read live from the server — they are
+    // derived from dispatches and reports, never stored on the complaint
+    let sp=null;
+    if(c.batch){ try{ sp=await DB.complaints.spread(c.batch); }catch(e){ sp=null; } }
+    const params=(M["lab-reports"]&&M["lab-reports"].PARAMS)||[];
+    const rep=sp&&sp.report;
+    const vals=rep?(rep.labValues||rep.values||{}):{};
+    const res=rep?(rep.labResults||rep.results||{}):{};
+    const labRows=params.filter(p=>vals[p.key]!=null).map(p=>{
+      const r=String(res[p.key]||"").toLowerCase();
+      return `<tr><td>${esc(p.label)}</td><td class="num mono">${esc(String(vals[p.key]))} <span class="muted">${esc(p.unit)}</span></td>`+
+        `<td class="num">${r?badge(r==="pass"?"ok":"danger",r==="pass"?"✓ pass":"✗ fail"):'<span class="muted">—</span>'}</td></tr>`;
+    }).join("");
+    const failed=Object.entries(res).filter(([,v])=>String(v).toLowerCase()==="fail").map(([k])=>(params.find(p=>p.key===k)||{label:k}).label);
+    const others=sp?sp.orders.filter(o=>o.customerId!==c.customerId):[];
+
+    const body=h("div",{},[
+      MW.dl([
+        ["Customer",cust.name||c.customerId],["Batch",c.batch||"—"],["Against order",c.salesOrderId||"—"],
+        ["Product",c.itemId?((ENG.item(c.itemId)||{}).name||c.itemId):"—"],
+        ["Raised",(c.raised||"—")+(c.via?" · via "+c.via:"")],["Raised by",c.raisedByName||"—"],
+        ["Status",h("span",{html:badge(cmpTone(c.status),c.status)})],
+        c.closed?["Closed",c.closed]:null,
+      ].filter(Boolean)),
+      h("div",{class:"card",style:"margin-top:14px;box-shadow:none;background:var(--panel-2)"},[
+        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",text:"What they said"}),
+        h("div",{style:"font-size:13.5px;line-height:1.5;white-space:pre-wrap",text:c.claim||"—"})]),
+      c.resolution?h("div",{class:"card",style:"margin-top:10px;box-shadow:none;background:var(--panel-2)"},[
+        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",text:"Resolution"}),
+        h("div",{style:"font-size:13.5px;line-height:1.5;white-space:pre-wrap",text:c.resolution})]):null,
+
+      c.batch?h("div",{class:"card",style:"margin-top:14px"},[
+        h("div",{class:"flex between aic wrap gap",style:"margin-bottom:8px"},[
+          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase",text:"🧪 What the lab measured on "+c.batch}),
+          rep?h("span",{html:badge(String(rep.labResult||rep.result||"").toLowerCase()==="pass"?"ok":"danger",rep.labResult||rep.result||"—")}):null
+        ]),
+        rep?h("div",{class:"table-wrap"},h("table",{class:"tbl",html:'<thead><tr><th>Parameter</th><th class="num">Reading</th><th class="num">Spec</th></tr></thead><tbody>'+(labRows||'<tr><td colspan="3" class="muted">No readings recorded</td></tr>')+'</tbody>'}))
+           :h("div",{class:"muted",style:"font-size:13px",text:"No lab report found for this batch."}),
+        rep&&failed.length?h("div",{style:"margin-top:8px",html:badge("danger","The complaint is right — this batch failed "+failed.join(", "))}):null,
+        rep&&!failed.length&&labRows?h("div",{style:"margin-top:8px",html:badge("ok","The batch passed every test — the fault is not in the lab record")}):null,
+      ]):null,
+
+      c.batch?h("div",{class:"card",style:"margin-top:14px"},[
+        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px;color:var(--accent)",
+          text:"Who else received batch "+c.batch}),
+        sp&&sp.orders.length?h("div",{class:"table-wrap"},h("table",{class:"tbl",html:
+          `<thead><tr><th>Customer</th><th>Order</th><th class="num">Qty</th><th>Dispatched</th><th></th></tr></thead><tbody>`+
+          sp.orders.map(o=>{
+            const mine=o.customerId===c.customerId;
+            const hasCmp=(sp.complaints||[]).some(x=>x.customerId===o.customerId);
+            return `<tr><td><b>${esc(o.customer)}</b></td><td class="mono">${esc(o.soId)}</td><td class="num mono">${ENG.num(o.qty)}</td><td>${esc(o.dispatchedOn||o.date||"—")}</td>`+
+              `<td>${mine?badge("danger","complained"):hasCmp?badge("danger","also complained"):badge("warn","warn them")}</td></tr>`;
+          }).join("")+`</tbody>`}))
+          :h("div",{class:"muted",style:"font-size:13px",text:"No dispatched order carries this batch number."}),
+        others.length?h("div",{class:"muted",style:"font-size:12.5px;margin-top:8px",
+          text:others.length+" other customer"+(others.length===1?" holds":"s hold")+" this batch and "+(others.length===1?"has":"have")+" not called. Calling them first is the difference between a recall and a reputation."}):null,
+      ]):null,
+
+      (c.history||[]).length?h("div",{style:"margin-top:14px"},[
+        h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"History"}),
+        h("div",{},(c.history||[]).slice().reverse().map(x=>h("div",{class:"muted",style:"font-size:12.5px;padding:3px 0",
+          text:String(x.at||"").slice(0,10)+" · "+(x.status||"")+(x.by?" · "+x.by:"")+(x.note&&x.note!=="Raised"?" — "+x.note:"")})))
+      ]):null,
+    ]);
+    const isOpen=c.status==="Open"||c.status==="Investigating";
+    modal({title:c.id+" · "+(cust.name||""),sub:c.batch?"Batch "+c.batch:"Not tied to a batch",wide:true,body,
+      foot:[
+        h("button",{class:"btn danger",onclick:async()=>{ if(!await confirm("Delete "+c.id+"?",{title:"Delete complaint",danger:true})) return;
+          UI.$("#modalHost").hidden=true; await App.saveDelta(()=>DB.complaints.remove(c.id)); toast(c.id+" deleted",{type:"ok"}); },text:"🗑 Delete"}),
+        h("button",{class:"btn ghost",onclick:()=>{ UI.$("#modalHost").hidden=true; complaintForm(c); },text:"✎ Edit"}),
+        isOpen?h("button",{class:"btn",onclick:async()=>{ UI.$("#modalHost").hidden=true;
+          await App.saveDelta(()=>DB.complaints.update(c.id,{status:c.status==="Open"?"Investigating":"Resolved"}));
+          toast(c.id+(c.status==="Open"?" → Investigating":" → Resolved"),{type:"ok"}); },
+          text:c.status==="Open"?"Start investigating":"Mark resolved"}):null,
+      ].filter(Boolean)});
+  }
+
   function customerForm(edit){
     const yr=String(DB.helpers.today().getFullYear());
     const v=k=>esc(edit?(edit[k]||""):"");
@@ -4343,5 +4529,6 @@
   window.ERPActions = Object.assign(window.ERPActions||{}, {
     newPO: { mod:"purchase", create:true, ic:"🛒", label:"New Purchase Order", run:()=>App.go("purchase",{openNew:true}) },
     newSO: { mod:"sales", create:true, ic:"🧾", label:"New Sales Order",    run:()=>App.go("sales",{openNew:true}) },
+    newComplaint: { mod:"customers", create:true, ic:"⚠️", label:"Raise a Complaint", run:()=>{ App.go("customers"); setTimeout(()=>complaintForm(),150); } },
   });
 })();

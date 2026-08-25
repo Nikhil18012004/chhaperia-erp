@@ -240,6 +240,27 @@ CREATE TABLE IF NOT EXISTS `appointments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;
 
 -- ============================================================
+--  COMPLAINTS — a customer's problem tied to the batch it came from.
+--  Before this a complaint was a phone call somebody remembered. The
+--  batch (work order) is promoted so "who else received this batch"
+--  is one indexed query, and the sales-order lines carry the same
+--  batch number, so the spread across customers is derived, never
+--  stored twice.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `complaints` (
+  `id`          VARCHAR(100) NOT NULL,   -- CMP-0001
+  `customer_id` VARCHAR(100),
+  `batch`       VARCHAR(100),            -- WO-0288 — the run being complained about
+  `status`      VARCHAR(32),             -- Open | Investigating | Resolved | Rejected
+  `raised`      VARCHAR(32),             -- ISO yyyy-mm-dd
+  `doc`         JSON         NOT NULL,   -- salesOrderId,itemId,claim,raisedBy,via,resolution,…
+  PRIMARY KEY (`id`),
+  KEY `idx_cmp_customer` (`customer_id`),
+  KEY `idx_cmp_batch` (`batch`),
+  KEY `idx_cmp_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;
+
+-- ============================================================
 --  USERS — authentication & role-based access control.
 --  Passwords are scrypt 'saltHex:hashHex' — never plaintext.
 --  `username` is UNIQUE under a CASE-SENSITIVE collation, exactly

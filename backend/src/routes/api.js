@@ -233,6 +233,20 @@ router.patch("/appointments/:id", requireAuth, rw, async (req, res, next) => {
 router.delete("/appointments/:id", requireAuth, rw, async (req, res, next) => {
   try { res.json(await erp.deleteAppointment(req.params.id)); } catch (e) { next(e); }
 });
+// Complaints: a customer's problem tied to the batch it came from
+router.post("/complaints", requireAuth, rw, async (req, res, next) => {
+  try { res.status(201).json(await erp.createComplaint(req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.patch("/complaints/:id", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.updateComplaint(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.delete("/complaints/:id", requireAuth, rw, async (req, res, next) => {
+  try { res.json(await erp.deleteComplaint(req.params.id)); } catch (e) { next(e); }
+});
+// Who else received a batch, and what the lab measured on it — read-only
+router.get("/batches/:id/spread", requireAuth, async (req, res, next) => {
+  try { res.json(await erp.batchSpread(req.params.id)); } catch (e) { next(e); }
+});
 // Transporters (dispatch providers): create / update / delete
 router.post("/transporters", requireAuth, rw, async (req, res, next) => {
   try { res.status(201).json(await erp.createTransporter(req.body || {})); } catch (e) { next(e); }

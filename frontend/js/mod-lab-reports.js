@@ -82,7 +82,10 @@
     catch (e) { toast("Save failed — " + (e.message || e), { type: "danger", title: "Sync error" }); }
   }
 
-  M["lab-reports"] = { title: "Lab Reports", sub: "QC test certificates", render(root, params) {
+  /* The complaint screen prints a batch's lab reading with these same labels
+     and units. Sharing the catalogue keeps it to two copies (this one and the
+     backend's) rather than three that would drift apart. */
+  M["lab-reports"] = { title: "Lab Reports", sub: "QC test certificates", PARAMS, render(root, params) {
     if (params && params.view) VIEW = params.view;
 
     /* THE LAB INCHARGE HAS ONE JOB: measure the batches waiting on him. His
