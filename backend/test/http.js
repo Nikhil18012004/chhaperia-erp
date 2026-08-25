@@ -436,10 +436,11 @@ async function run() {
   ok("delete lead 200", (await call("DELETE", "/leads/" + lead.id, A)).status === 200);
 
   /* ---- Calendar appointments ----
-     The ONLY thing the calendar stores. Everything else it shows (PO ETAs, SO
-     promised dates, work-order due dates, follow-ups, leave) is derived from
-     the record that owns the date, so there is nothing else here to test —
-     which is the point of that design. */
+     The ONLY thing the calendar stores. The one other entry it shows, a lead's
+     follow-up, is derived from the lead that owns the date, so there is nothing
+     else here to test — which is the point of that design. (The calendar became
+     CRM-only on 2026-08-25; it no longer derives PO / SO / work-order / leave
+     dates at all.) */
   const ap = await call("POST", "/appointments", A, {
     title: "Plant visit — HTTP Test Co", kind: "Site Visit", date: "2026-08-14",
     time: "10:30", endTime: "12:00", location: "Their works", owner: "sales",

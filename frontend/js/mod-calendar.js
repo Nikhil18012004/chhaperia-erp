@@ -1,25 +1,27 @@
 /* ============================================================
    CHHAPERIA ERP — CALENDAR  (frontend / presentation)
 
-   A CRM calendar shows meetings, calls and tasks. This one shows
-   those AND every other date the business has already committed
-   to, because in a factory the dates that actually hurt are not
-   the ones anybody typed into a diary:
+   This is the CRM's diary and nothing else. It shows exactly the
+   two things a sales desk works from:
 
-     • a purchase order's ETA          — goods we are waiting on
-     • a sales order's promised date   — the ship-by we agreed
-     • a work order's due date         — the run that must come off
-     • a lead's next follow-up         — the call we said we'd make
-     • approved leave                  — who will not be here
+     • an appointment      — the meeting, call or visit we booked
+     • a lead's follow-up  — the chase we said we would make
 
-   Every one of those already lives on its own record, so the
-   calendar DERIVES them and stores nothing. A date can therefore
-   never disagree with the document it belongs to — move a PO's
-   ETA and the calendar has already moved.
+   It once also carried PO ETAs, sales-order promised dates, work-
+   order due dates and approved leave. That was removed on the
+   user's instruction (2026-08-25): the calendar sits under SALES
+   & CRM, it was built for CRM, and a sales desk chasing leads
+   does not want the shop floor's dates in the way. Those dates
+   have not gone anywhere — each still lives on its own record and
+   is shown by the module that owns it (Procurement, Sales Orders,
+   Production, Leave), which is where they are acted on.
 
-   The one thing it does store is an appointment: a commitment
-   made to a TIME rather than to an order (the factory visit, the
-   call-back), which until now had nowhere to live.
+   Do not re-add a non-CRM source here without asking first.
+
+   A follow-up is DERIVED from its lead and stored nowhere, so it
+   can never disagree with the lead it belongs to. The one thing
+   the calendar stores is an appointment: a commitment made to a
+   TIME rather than to a record.
    ============================================================ */
 (function () {
   "use strict";
@@ -50,20 +52,16 @@
   ];
   const kindIcon = (k) => (KINDS.find((x) => x.v === k) || {}).ic || "📝";
 
-  /* ---- the six things a day can hold ----
-     `on` is the live filter state; every source can be switched off, because
-     a sales desk chasing leads does not want the shop floor's due dates in
-     the way, and the planner wants exactly the opposite. */
+  /* ---- the two things a day can hold ----
+     `on` is the live filter state, so either half can be switched off — the
+     diary on its own, or the chase list on its own. Nothing outside CRM
+     belongs in this list; see the note at the top of the file. */
   const SOURCES = [
     { key: "appt",  label: "Appointments", ic: "📅", color: "var(--c1)", on: true },
     { key: "lead",  label: "Follow-ups",   ic: "🎯", color: "var(--c8)", on: true },
-    { key: "po",    label: "PO Arrivals",  ic: "🛒", color: "var(--c2)", on: true },
-    { key: "so",    label: "Deliveries",   ic: "🧾", color: "var(--c4)", on: true },
-    { key: "wo",    label: "Production",   ic: "⚙️", color: "var(--c3)", on: true },
-    { key: "leave", label: "Leave",        ic: "🌴", color: "var(--c7)", on: false },
   ];
 
-  M.calendar = { title: "Calendar", sub: "Every date the business owes", render(root, params) {
+  M.calendar = { title: "Calendar", sub: "Appointments and lead follow-ups", render(root, params) {
     /* filter + view state survives a redraw but not a page change, which is
        the same lifetime the other modules give their toolbars */
     const on = {}; SOURCES.forEach((s) => { on[s.key] = s.on; });
@@ -73,7 +71,7 @@
     let cursor = startOfDay(DB.helpers.today());
 
     root.appendChild(pageHead("Calendar",
-      "Follow-ups, deliveries, arrivals and due dates on one grid — nothing here is typed twice",
+      "The CRM diary — meetings, calls, visits and the leads due a chase",
       [ h("button", { class: "btn", onclick: () => { cursor = startOfDay(DB.helpers.today()); draw(); },
           html: "◎ Today" }),
         h("button", { class: "btn primary", onclick: () => apptForm(null, todayISO()), html: "＋ New Appointment" }) ]));
@@ -94,7 +92,7 @@
         label,
         h("button", { class: "icon-btn", "aria-label": "Next", onclick: () => { step(1); }, html: "&rsaquo;" }),
       ]),
-      MW.searchInput("Search party, order no., product…", (v) => { q = v.toLowerCase().trim(); draw(); }),
+      MW.searchInput("Search company, contact, product…", (v) => { q = v.toLowerCase().trim(); draw(); }),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "calCount" })),
     ]);
     root.appendChild(navBar);
@@ -176,7 +174,7 @@
           delta: late.length ? "Needs chasing" : "All clear", deltaType: late.length ? "down" : "up",
           onClick: () => listModal("Overdue — " + late.length, "Dates that have already passed and are still open", late) }),
         MW.kpi({ icon: "📌", label: "Today", value: ENG.num(today.length),
-          onClick: () => listModal("Today · " + t, "Everything falling due today", today) }),
+          onClick: () => listModal("Today · " + t, "Appointments and chases due today", today) }),
         MW.kpi({ icon: "🗓", label: "Next 7 Days", value: ENG.num(week.length),
           onClick: () => listModal("Next 7 days", "The week ahead, in date order", week) }),
         MW.kpi({ icon: "📅", label: "Appointments", value: ENG.num(appts.length),
@@ -309,14 +307,13 @@
       return "";
     }
 
-    /* clicking an entry goes where the work is: a derived date opens its own
-       module, an appointment opens its own record */
+    /* clicking an entry goes where the work is: an appointment opens its own
+       record, a follow-up opens the lead it belongs to */
     function openEvent(ev) {
       if (ev.source === "appt") { apptDetail(ev.raw); return; }
       UI.$("#modalHost").hidden = true;
       /* Carry the record's own id across so the destination highlights the very
-         line that was clicked. A leave mark's id has the day appended (one mark
-         per day of the absence), so send the underlying record's id instead. */
+         line that was clicked. */
       App.go(ev.go, { highlight: (ev.raw && ev.raw.id) || ev.id });
     }
 
@@ -361,55 +358,11 @@
           go: "crm" });
       });
 
-      // --- purchase orders: goods we are waiting on ---------------------
-      (D.purchaseorders || []).forEach((p) => {
-        if (!p.eta || p.status === "Received") return;
-        const pend = (p.lines || []).reduce((s, l) => s + Math.max(0, l.qty - (l.recd || 0)) * l.rate, 0);
-        out.push({ id: p.id, date: p.eta, source: "po", raw: p,
-          icon: "🛒", color: srcColor("po"), done: false, chaseable: true,
-          title: ENG.sup(p.supplierId) + " arriving", value: pend,
-          sub: p.id + " · " + (p.lines || []).length + " item(s) · " + p.status,
-          go: "purchase" });
-      });
-
-      // --- sales orders: the ship-by we agreed --------------------------
-      (D.salesorders || []).forEach((s) => {
-        if (!s.promised || s.status === "Dispatched") return;
-        out.push({ id: s.id, date: s.promised, source: "so", raw: s,
-          icon: "🧾", color: srcColor("so"), done: false, chaseable: true,
-          title: "Ship to " + ENG.custName(s.customerId), value: s.value || 0,
-          sub: s.id + " · " + (s.lines || []).length + " line(s) · " + s.priority,
-          go: "sales" });
-      });
-
-      // --- work orders: the run that must come off the line -------------
-      (D.workorders || []).forEach((w) => {
-        if (!w.due) return;
-        const finished = (w.status === "Completed" || w.status === "Dispatched") && !((+w.pendingQty || 0) > 1e-6);
-        if (finished) return;
-        const it = ENG.item(w.itemId) || {};
-        out.push({ id: w.id, date: w.due, source: "wo", raw: w,
-          icon: "⚙️", color: srcColor("wo"), done: false, chaseable: true,
-          title: trim(it.name || w.itemId, 30) + " due",
-          sub: w.id + " · " + (it.id ? ENG.qtyText(it, w.qty, 0) : ENG.num(w.qty) + " kg") + " · " + (w.status || ""),
-          go: "production" });
-      });
-
-      // --- approved leave: who will not be here -------------------------
-      // one entry PER DAY of the absence, because "is Ramesh in on the 14th?"
-      // is the question being asked, not "when did his leave start"
-      (D.hrLeaves || []).forEach((lv) => {
-        if (lv.status !== "Approved" || !lv.fromDate) return;
-        const w = (D.hrWorkers || []).find((x) => x.id === lv.workerId) || {};
-        const end = parseISO(lv.toDate || lv.fromDate);
-        for (let d = parseISO(lv.fromDate); d <= end; d = new Date(d.getTime() + DAY)) {
-          out.push({ id: lv.id + ":" + DB.helpers.iso(d), date: DB.helpers.iso(d), source: "leave", raw: lv,
-            icon: "🌴", color: srcColor("leave"), done: false, chaseable: false,
-            title: (w.name || lv.workerId) + " on leave",
-            sub: (w.dept || "") + " · " + lv.fromDate + " → " + (lv.toDate || lv.fromDate),
-            go: "hr-leave" });
-        }
-      });
+      /* Appointments and follow-ups are the whole list. PO ETAs, sales-order
+         promised dates, work-order due dates and approved leave used to be
+         derived here too; they were taken out on 2026-08-25 because this is
+         the CRM's calendar. Each of those dates is still shown by the module
+         that owns it. Do not add a non-CRM source back without asking. */
 
       return out.sort(byDateTime);
     }

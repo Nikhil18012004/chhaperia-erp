@@ -405,7 +405,7 @@
       openPO:openPO.length, poValue, openSO:openSO.length, soValue, lowStock:low,
       prod30, sold30, activeWO, alertCount: alerts().length,
       openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate,
-      calToday:calendarDue(openPO, openSO),
+      calToday:calendarDue(),
       /* Batches still owing a QC reading — the server works the list out
          (labService.pendingLabWork); this is only its count, for the nav pill.
          Every role counts the same batches, because the lab incharge works
@@ -419,17 +419,14 @@
       hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 
-  /* The Calendar's nav pill: everything chaseable that is due TODAY OR IS
-     ALREADY LATE, across every module. Leave is excluded — an absence is
-     information, not a job to do. Mirrors the Calendar's own Overdue + Today
-     cards, so the badge and the page can never tell different stories. */
-  function calendarDue(openPO, openSO){
+  /* The Calendar's nav pill: the CRM work that is due TODAY OR IS ALREADY
+     LATE — a lead owed a chase, or an appointment still open. It counts
+     exactly what the Calendar shows, so the badge and the page can never
+     tell different stories; when that page stopped carrying PO / SO / work-
+     order dates (2026-08-25, mod-calendar.js) this count lost them too. */
+  function calendarDue(){
     const t = H.iso(H.today());
-    const woOpen = w => !((w.status==="Completed"||w.status==="Dispatched") && !((+w.pendingQty||0)>1e-6));
     return (D.leads||[]).filter(l=>l.nextFollowUp && l.nextFollowUp<=t && l.stage!=="Won" && l.stage!=="Lost").length
-      + openPO.filter(p=>p.eta && p.eta<=t).length
-      + openSO.filter(s=>s.promised && s.promised<=t).length
-      + (D.workorders||[]).filter(w=>w.due && w.due<=t && woOpen(w)).length
       + (D.appointments||[]).filter(a=>a.date && a.date<=t && !a.done).length;
   }
 
