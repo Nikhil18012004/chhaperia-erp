@@ -21,7 +21,7 @@
     Won:       { color: "var(--ok)",  ic: "🏆" },
     Lost:      { color: "var(--danger)", ic: "✕" },
   };
-  const ACT_TYPES = ["Call", "Email", "Meeting", "Sample Sent", "Quotation Sent", "Site Visit", "Note"];
+  const ACT_TYPES = ["Call", "Email", "WhatsApp", "Meeting", "Sample Sent", "Quotation Sent", "Site Visit", "Note"];
   // how a sample lands once the customer has run it — drives the next move
   const SAMPLE_VERDICTS = ["Awaiting feedback", "Approved", "Rejected", "Rework needed"];
   const SOURCES = ["Exhibition (Wire India)", "Website Enquiry", "Referral", "Cold Call", "Existing Customer", "Trade Directory"];
@@ -343,6 +343,7 @@
               // one tap from the drawer to the despatch, without going via
               // Move stage — sending a sample is the common next move here
               !l.sample ? h("button", { class: "btn sm", onclick: () => sampleForm(l), html: "📦 Send sample" }) : null,
+              l.phone ? h("button", { class: "btn sm", onclick: () => whatsappForm(l), html: "💬 WhatsApp" }) : null,
               h("button", { class: "btn sm", onclick: () => moveStage(l), html: "➜ Move stage" }),
               h("button", { class: "btn sm primary", onclick: () => logActivity(l), html: "＋ Log activity" }),
             ].filter(Boolean))
@@ -1045,7 +1046,101 @@
     return { New: "info", Contacted: "warn", Sample: "info", Quoted: "violet", Won: "ok", Lost: "danger" }[st] || "mut";
   }
   function actIcon(t) {
-    return { Call: "📞", Email: "✉️", Meeting: "🤝", "Sample Sent": "📦", "Quotation Sent": "📄", "Site Visit": "🏭", Note: "📝" }[t] || "•";
+    return { Call: "📞", Email: "✉️", WhatsApp: "💬", Meeting: "🤝", "Sample Sent": "📦", "Quotation Sent": "📄", "Site Visit": "🏭", Note: "📝" }[t] || "•";
+  }
+
+  /* ============================================================
+     WHATSAPP FOLLOW-UP — the message this trade actually sends
+     The app could already open wa.me from a phone number. What it could
+     not do was write the message, or remember that it went. Two gaps:
+
+       1. The text is drafted from the deal — company, product, sample
+          courier and AWB, the last "Quotation Sent" entry — so nothing
+          is retyped and the product code is never wrong.
+       2. Pressing Send logs a WhatsApp activity on the lead in the same
+          moment, so the timeline stays true without a second step.
+
+     Nothing is sent by this app. wa.me only opens WhatsApp with the text
+     pre-filled; the person still presses send there. That is deliberate:
+     an ERP must never message a customer on its own.
+     ============================================================ */
+  const WA_TEMPLATES = [
+    { k: "follow",  l: "General follow-up",
+      t: (l) => `Hello ${who(l)}, following up on our discussion about ${prod(l)}. Do let me know if you need anything further from our side.` },
+    { k: "sample",  l: "Sample — chase feedback",
+      t: (l) => { const s = l.sample || {};
+        return `Hello ${who(l)}, checking whether the trial on the ${s.productName || prod(l)} sample${s.awb ? " (AWB " + s.awb + ")" : ""} has been run. Happy to send a further reel if it would help.`; } },
+    { k: "sampled", l: "Sample despatched",
+      t: (l) => { const s = l.sample || {};
+        return `Hello ${who(l)}, your sample of ${s.productName || prod(l)}${s.qty ? " (" + ENG.num(s.qty) + " " + (s.uom || "") + ")" : ""} was sent on ${s.sentDate || todayISO()}${s.courier ? " by " + s.courier : ""}${s.awb ? ", AWB " + s.awb : ""}. Please let me know once it reaches you.`; } },
+    { k: "quote",   l: "Quote follow-up",
+      t: (l) => { const q = lastActivity(l, "Quotation Sent");
+        return `Hello ${who(l)}, following up on our quotation${q ? " sent on " + q.date : ""} for ${prod(l)}. Happy to revise if the schedule or quantity has changed.`; } },
+    { k: "thanks",  l: "Thank you for the enquiry",
+      t: (l) => `Hello ${who(l)}, thank you for your enquiry about ${prod(l)}. I will revert with details shortly.` },
+  ];
+  /* "H. Desai" must greet as Desai, not "H.": an initial is not a name.
+     First word if it is a real word, otherwise the last one; nothing at all
+     falls back to a neutral form of address. */
+  const who = (l) => {
+    const parts = String(l.contact || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "Sir/Madam";
+    const first = parts[0];
+    return (/^[A-Za-z]\.?$/.test(first) && parts.length > 1) ? parts[parts.length - 1] : first;
+  };
+  const prod = (l) => l.productName || l.product || "our tape";
+  function lastActivity(l, type) {
+    const a = (l.activities || []).filter((x) => x.type === type).sort((x, y) => (x.date < y.date ? 1 : -1));
+    return a[0] || null;
+  }
+  /* which template fits the stage the lead is in — the desk can still pick another */
+  function suggestTemplate(l) {
+    if (l.stage === "Sample") return (l.sample && l.sample.verdict === "Awaiting feedback" && sampleAge(l) >= 7) ? "sample" : "sampled";
+    if (l.stage === "Quoted") return "quote";
+    if (l.stage === "New") return "thanks";
+    return "follow";
+  }
+
+  function whatsappForm(l) {
+    const digits = MW.phoneDigits(l.phone);
+    if (!digits) { toast("This lead has no phone number", { type: "warn" }); return; }
+    let key = suggestTemplate(l);
+    const sel = selectHTML("wa_tpl", WA_TEMPLATES.map((t) => ({ v: t.k, l: t.l })), key);
+    const body = h("div", { class: "form-grid" }, [
+      field("Template", sel, "full"),
+      field("Message", '<textarea class="input" id="wa_text" rows="5" style="min-height:110px"></textarea>', "full"),
+      h("div", { class: "muted", style: "grid-column:1/-1;font-size:12px" },
+        [h("span", { text: "Opens WhatsApp with this text ready. Nothing is sent until you press send there. " }),
+         h("b", { text: "Logged on the lead as a WhatsApp activity when you open it." })]),
+    ]);
+    const ta = () => UI.$("#wa_text");
+    const fill = () => { const t = WA_TEMPLATES.find((x) => x.k === key) || WA_TEMPLATES[0]; if (ta()) ta().value = t.t(l); };
+
+    const mo = modal({ title: "💬 Follow up on WhatsApp", sub: l.company + " · " + (l.contact || "") + " · " + l.phone, body,
+      foot: [
+        h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+        h("button", { class: "btn primary", text: "Open WhatsApp", onclick: send }),
+      ] });
+    // the modal has mounted the HTML by now, so the textarea exists to fill
+    fill();
+    const tpl = UI.$("#wa_tpl");
+    if (tpl) tpl.onchange = () => { key = tpl.value; fill(); };
+
+    function send() {
+      const text = (ta() ? ta().value : "").trim();
+      if (!text) { toast("The message is empty", { type: "warn" }); return; }
+      /* log first, then open: if the tab is blocked by a popup rule the
+         record still shows the attempt, which is the honest state */
+      l.activities = l.activities || [];
+      l.activities.push({ date: todayISO(), type: "WhatsApp", note: trim(text, 140), by: l.owner || "Sales Desk" });
+      // a follow-up that just went out earns a new chase date
+      if (l.stage !== "Won" && l.stage !== "Lost") l.nextFollowUp = DB.helpers.daysAhead(3);
+      mo.close();
+      window.open("https://wa.me/" + digits + "?text=" + encodeURIComponent(text), "_blank", "noopener");
+      toast("WhatsApp opened — logged on " + l.company, { type: "ok" });
+      App.saveDelta(() => DB.leads.update(l.id, { activities: l.activities, nextFollowUp: l.nextFollowUp }));
+      leadDetail(l.id);
+    }
   }
   /* tiny text prompt built on the modal system */
   /* ---- why a lead was lost ----

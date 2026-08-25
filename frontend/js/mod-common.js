@@ -320,5 +320,8 @@
   }
 
   global.M = M;
-  global.MW = { pageHead, readOnlyHere, loadError, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, csvMenu, dataPreview, excelMenu };
+  /* phoneDigits is exported so the CRM's WhatsApp follow-up dials the same
+     number this popover does. Two copies of the "assume +91" rule would
+     eventually disagree, and the one that is wrong sends the message nowhere. */
+  global.MW = { pageHead, readOnlyHere, loadError, kpi, chartCard, barList, donutCard, searchInput, select, dateRange, inDateRange, dl, emailLink, webLink, phoneCell, phoneDigits, csvMenu, dataPreview, excelMenu };
 })(window);
