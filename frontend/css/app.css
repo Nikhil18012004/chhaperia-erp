@@ -1192,6 +1192,20 @@ canvas{display:block;width:100%}
 .sup-ready-tag .s{color:var(--text-mut);font-size:11.5px;font-weight:600;margin-top:4px;line-height:1.35}
 .sup-empty{text-align:center;padding:50px 20px;color:var(--text-mut)}
 .sup-empty .big{font-size:46px;margin-bottom:10px}
+/* Schedule — the bucket headings between each run of job cards. Sized to be
+   read across a workshop rather than leaned into, and sticky so the floor can
+   still tell which bucket it is looking at part-way down a long list. */
+.sup-sched-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:22px 0 12px;padding:10px 14px;border-radius:12px;
+  background:var(--panel-2);border:1px solid var(--line);
+  position:sticky;top:0;z-index:2}
+.sup-sched-head:first-of-type{margin-top:4px}
+.sup-sched-ic{font-size:19px;line-height:1}
+.sup-sched-t{font-size:15px;font-weight:800;letter-spacing:.2px;color:var(--text)}
+.sup-sched-n{min-width:24px;text-align:center;padding:2px 9px;border-radius:20px;
+  background:var(--accent);color:#fff;font-size:12px;font-weight:800}
+.sup-sched-h{font-size:12px;color:var(--text-mut);margin-left:auto}
+@media(max-width:560px){ .sup-sched-h{display:none} }
 /* tablet / PC: multi-column job grid */
 @media(min-width:760px){ .sup-list{grid-template-columns:repeat(2,1fr)} }
 @media(min-width:1180px){ .sup-list{grid-template-columns:repeat(3,1fr)} }

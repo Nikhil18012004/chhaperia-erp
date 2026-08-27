@@ -143,6 +143,12 @@
       if (g.incoming.length) items.push({ id: "incoming", ic: "⏳", label: "Coming Up", pill: g.incoming.length });
       items.push({ id: "done", ic: "✅", label: "Completed" });
       items.push({ id: "all", ic: "📋", label: "All Jobs" });
+      /* The floor's own calendar. The office roles reach theirs through the
+         nav manifest in ui.js; this panel does not use that manifest at all,
+         so the entry has to be carried here — same grid, asked of the only
+         dates a supervisor has. The pill counts what has already run past its
+         due date, because that is the number worth interrupting someone for. */
+      items.push({ id: "calendar", ic: "📅", label: "Calendar", pill: this.overdueCount() });
       items.push({ sec: "Store" });
       items.push({ id: "warehouses", ic: "🏬", label: "Warehouses" });
 
@@ -163,6 +169,7 @@
       view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in");
 
       if (this.filter === "warehouses") { this.renderWarehouses(view); view.scrollTop = 0; return; }
+      if (this.filter === "calendar") { this.renderCalendar(view); view.scrollTop = 0; return; }
 
       const g = this.buckets();
       const hasIncoming = g.incoming.length > 0;
@@ -345,6 +352,258 @@
       });
       if (w.dispatched) row.appendChild(H("span", { style: "margin-left:4px;font-size:12px;font-weight:700;color:var(--ok)", text: "🚚 Dispatched" }));
       return row;
+    },
+
+    /* ============================================================
+       CALENDAR — the floor's own, and a real grid.
+
+       Same screen the office roles get from mod-workcal.js, but it
+       cannot be that module: this panel never calls ENG.init, so
+       there is no ENG.data here to read. It is built from the
+       supervisor's OWN payload instead — area-scoped work orders,
+       money-free, exactly as the server sent them.
+
+       Reuses the .cal-* CSS the other calendars use, so the floor
+       gets the same grid the office reads and nothing has to be
+       styled twice.
+
+       Tapping a day opens that day's jobs as the SAME job cards
+       every other tab uses, so a run can be started or finished
+       straight off the calendar without going back to My Jobs.
+
+       Only OPEN work is placed. A finished job's due date is
+       history, and history is what the Completed tab is for.
+       ============================================================ */
+    openJobs() {
+      const g = this.buckets();
+      return g.active.concat(g.incoming);
+    },
+    calDue(w) { return w.due ? String(w.due).slice(0, 10) : ""; },
+    /* Drives the nav pill. Counts only what is genuinely late: a job with no
+       due date cannot be overdue, however long it has been sitting. */
+    overdueCount() {
+      const t = DB.helpers.iso(DB.helpers.today());
+      return this.openJobs().filter((w) => this.calDue(w) && this.calDue(w) < t).length;
+    },
+
+    renderCalendar(view) {
+      UI.$("#crumbs").innerHTML = '<span>Chhaperia</span><span class="sep">/</span><span class="cur">Calendar</span>';
+
+      const DAY = 86400000;
+      const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const MONTHS = ["January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"];
+      const sod = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const parseISO = (s) => { const [y, m, dd] = String(s).split("-").map(Number); return new Date(y, (m || 1) - 1, dd || 1); };
+      const wdIndex = (d) => (d.getDay() + 6) % 7;           // Monday-first: a factory week
+      const weekStart = (d) => { const s = sod(d); return new Date(s.getTime() - wdIndex(s) * DAY); };
+      const fmtShort = (d) => d.getDate() + " " + MONTHS[d.getMonth()].slice(0, 3);
+      const fmtLong = (d) => WD[wdIndex(d)] + ", " + d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear();
+
+      const t = DB.helpers.iso(DB.helpers.today());
+      const weekEnd = DB.helpers.iso(new Date(DB.helpers.today().getTime() + 7 * DAY));
+      const jobs = this.openJobs();
+      const dueOf = (w) => this.calDue(w);
+
+      /* View + month live on SUP, not in this function: refresh() re-renders
+         the whole panel every time it polls, and a cursor held in a local
+         would snap the floor back to today mid-shift. */
+      if (!this.calView) this.calView = "month";
+      if (!this.calCursor) this.calCursor = sod(DB.helpers.today());
+
+      view.appendChild(pageHead(
+        "📅 Calendar",
+        "Your area's open jobs on the days they are due off the line. Tap a day to open its jobs and move them on.",
+        [ H("button", { class: "btn", onclick: () => { this.calCursor = sod(DB.helpers.today()); this.render(); }, html: "◎ Today" }),
+          H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" }) ]
+      ));
+
+      const late = jobs.filter((w) => dueOf(w) && dueOf(w) < t);
+      const today = jobs.filter((w) => dueOf(w) === t);
+      const week = jobs.filter((w) => dueOf(w) > t && dueOf(w) < weekEnd);
+
+      view.appendChild(H("div", { class: "grid kpi-grid", style: "margin-bottom:18px" }, [
+        kpi({ icon: "🔴", label: "Overdue", value: late.length,
+          deltaType: late.length ? "down" : "up", delta: late.length ? "past their due date" : "nothing late",
+          onClick: () => dayCards("Overdue", "Past the date they were due off", late) }),
+        kpi({ icon: "📌", label: "Due Today", value: today.length, deltaType: "flat", delta: "on the board today",
+          onClick: () => dayCards("Due today", t, today) }),
+        kpi({ icon: "🗓", label: "Next 7 Days", value: week.length, deltaType: "flat", delta: "the week ahead",
+          onClick: () => dayCards("Next 7 days", "The week ahead", week) }),
+        kpi({ icon: "⚙️", label: "Open Jobs", value: jobs.length, deltaType: "flat", delta: "still to finish",
+          onClick: () => dayCards("Every open job", "Still to finish in your area", jobs) }),
+      ]));
+
+      if (!jobs.length) {
+        view.appendChild(H("div", { class: "sup-empty" }, [
+          H("div", { class: "big", text: "🎉" }),
+          H("div", { text: "Nothing open in your area. You're all caught up!" }),
+        ]));
+        return;
+      }
+
+      // ---- view switch + month navigation ----
+      const seg = H("div", { class: "seg", style: "margin-bottom:14px" },
+        [["Month", "month"], ["Week", "week"], ["Agenda", "agenda"]].map(([l, k]) =>
+          H("button", { class: this.calView === k ? "on" : "", text: l,
+            onclick: () => { this.calView = k; this.render(); } })));
+      view.appendChild(seg);
+
+      const step = (dir) => {
+        const c = this.calCursor;
+        if (this.calView === "month") this.calCursor = new Date(c.getFullYear(), c.getMonth() + dir, 1);
+        else if (this.calView === "week") this.calCursor = new Date(c.getTime() + dir * 7 * DAY);
+        else this.calCursor = new Date(c.getTime() + dir * 30 * DAY);
+        this.render();
+      };
+      const periodLabel = () => {
+        const c = this.calCursor;
+        if (this.calView === "month") return MONTHS[c.getMonth()] + " " + c.getFullYear();
+        if (this.calView === "week") {
+          const a = weekStart(c), b = new Date(a.getTime() + 6 * DAY);
+          return fmtShort(a) + " – " + fmtShort(b) + ", " + b.getFullYear();
+        }
+        return "Next 30 days from " + fmtShort(c);
+      };
+      view.appendChild(H("div", { class: "toolbar" }, [
+        H("div", { class: "cal-nav" }, [
+          H("button", { class: "icon-btn", "aria-label": "Previous", onclick: () => step(-1), html: "&lsaquo;" }),
+          H("div", { class: "cal-label", text: periodLabel() }),
+          H("button", { class: "icon-btn", "aria-label": "Next", onclick: () => step(1), html: "&rsaquo;" }),
+        ]),
+        H("div", { style: "margin-left:auto" },
+          H("span", { class: "chip", text: jobs.length + (jobs.length === 1 ? " open job" : " open jobs") })),
+      ]));
+
+      // ---- jobs indexed by the day they are due ----
+      const byDate = {};
+      jobs.forEach((w) => { const d = dueOf(w); if (d) (byDate[d] || (byDate[d] = [])).push(w); });
+
+      /* One job, as a pill on the grid. Kept to the product name and the
+         stage: a pill the size of a fingertip cannot hold more, and the card
+         behind the tap carries the rest. */
+      const pill = (w) => {
+        const d = dueOf(w);
+        const tone = d && d < t ? " late" : d === t ? " now" : "";
+        const p = w.product || {};
+        return H("button", { class: "cal-ev" + tone, style: "--sc:var(--c4)",
+          title: (p.name || w.id) + " — " + ((w.stage || {}).label || w.status || ""),
+          onclick: (e) => { e.stopPropagation(); dayCards(fmtLong(parseISO(d)), d, byDate[d] || [w]); } }, [
+          H("span", { class: "cal-ev-ic", text: "⚙️" }),
+          H("span", { class: "cal-ev-t", text: trimTo(p.name || w.id, 24) }),
+        ]);
+      };
+
+      if (this.calView === "month") view.appendChild(monthGrid());
+      else if (this.calView === "week") view.appendChild(weekCols());
+      else view.appendChild(agendaList());
+
+      /* Work with no due date cannot be placed on a grid, and dropping it
+         would hide a real job. It gets its own strip under the calendar
+         instead — visible, but never counted as late. */
+      const undated = jobs.filter((w) => !dueOf(w));
+      if (undated.length) {
+        view.appendChild(H("div", { class: "sup-sched-head", style: "cursor:pointer",
+          onclick: () => dayCards("No date set", "No due date on the work order", undated) }, [
+          H("span", { class: "sup-sched-ic", text: "❔" }),
+          H("span", { class: "sup-sched-t", text: "No date set" }),
+          H("span", { class: "sup-sched-n", text: String(undated.length) }),
+          H("span", { class: "sup-sched-h", text: "tap to open — these cannot be placed on the grid" }),
+        ]));
+      }
+
+      function trimTo(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+      function monthGrid() {
+        const c = SUP.calCursor;
+        const first = new Date(c.getFullYear(), c.getMonth(), 1);
+        const start = weekStart(first);
+        const wrap = H("div", { class: "cal-wrap" });
+        wrap.appendChild(H("div", { class: "cal-head" }, WD.map((d) => H("div", { class: "cal-hd", text: d }))));
+        const grid = H("div", { class: "cal-grid" });
+        // whole weeks only — a count that is not a multiple of seven leaves the
+        // last row ragged in a 7-column grid
+        const daysInMonth = new Date(c.getFullYear(), c.getMonth() + 1, 0).getDate();
+        const lead = Math.round((first - start) / DAY);
+        const total = Math.ceil((lead + daysInMonth) / 7) * 7;
+        for (let i = 0; i < total; i++) {
+          const d = new Date(start.getTime() + i * DAY);
+          const ds = DB.helpers.iso(d);
+          const list = byDate[ds] || [];
+          const cell = H("div", { class: "cal-cell" + (d.getMonth() !== c.getMonth() ? " out" : "") + (ds === t ? " today" : ""),
+            onclick: () => { if (list.length) dayCards(fmtLong(d), ds, list); } }, [
+            H("div", { class: "cal-cell-top" }, [
+              H("span", { class: "cal-cell-n", text: String(d.getDate()) }),
+              list.length > 3 ? H("button", { class: "cal-more", text: "+" + (list.length - 3),
+                onclick: (e) => { e.stopPropagation(); dayCards(fmtLong(d), ds, list); } }) : null,
+            ].filter(Boolean)),
+            H("div", { class: "cal-cell-body" }, list.slice(0, 3).map(pill)),
+          ]);
+          grid.appendChild(cell);
+        }
+        wrap.appendChild(grid);
+        return wrap;
+      }
+
+      function weekCols() {
+        const from = weekStart(SUP.calCursor);
+        const wrap = H("div", { class: "cal-cols" });
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(from.getTime() + i * DAY);
+          const ds = DB.helpers.iso(d);
+          const list = byDate[ds] || [];
+          wrap.appendChild(H("div", { class: "cal-col" + (ds === t ? " today" : "") }, [
+            H("div", { class: "cal-col-head" }, [
+              H("span", { class: "cal-col-wd", text: WD[wdIndex(d)] }),
+              H("span", { class: "cal-col-d", text: String(d.getDate()) }),
+              H("span", { class: "cal-col-m", text: MONTHS[d.getMonth()].slice(0, 3) }),
+            ]),
+            H("div", { class: "cal-col-body" }, list.length
+              ? list.map(pill)
+              : [H("div", { class: "cal-none", text: "Nothing due" })]),
+          ]));
+        }
+        return wrap;
+      }
+
+      /* The view to work from on a phone, where a 7-column grid is unreadable
+         — and the one that answers "what is next" without any counting. */
+      function agendaList() {
+        const from = DB.helpers.iso(SUP.calCursor);
+        const to = DB.helpers.iso(new Date(SUP.calCursor.getTime() + 30 * DAY));
+        const days = Object.keys(byDate).filter((d) => d >= from && d <= to).sort();
+        if (!days.length) {
+          return H("div", { class: "sup-empty" }, [H("div", { class: "big", text: "🗓" }),
+            H("div", { text: "Nothing due in this window" })]);
+        }
+        const box = H("div", { class: "cal-agenda" });
+        days.forEach((ds) => {
+          const d = parseISO(ds);
+          box.appendChild(H("div", { class: "cal-ag-day" }, [
+            H("div", { class: "cal-ag-date" + (ds === t ? " today" : "") }, [
+              H("span", { class: "cal-ag-n", text: String(d.getDate()) }),
+              H("span", { class: "cal-ag-wd", text: WD[wdIndex(d)] + " · " + MONTHS[d.getMonth()].slice(0, 3) }),
+            ]),
+            H("div", { class: "cal-ag-rows" }, byDate[ds].map(pill)),
+          ]));
+        });
+        return box;
+      }
+
+      /* A day's work, as the same cards the rest of the panel uses — so every
+         Start/Finish button behaves identically to My Jobs. */
+      function dayCards(title, sub, rows) {
+        if (!rows || !rows.length) return;
+        const list = H("div", { class: "sup-list" });
+        rows.slice().sort((a, b) => (dueOf(a) < dueOf(b) ? -1 : dueOf(a) > dueOf(b) ? 1 : 0))
+          .forEach((w) => list.appendChild(SUP.card(w)));
+        const mo = UI.modal({
+          title: "📅 " + title,
+          sub: sub + " · " + rows.length + (rows.length === 1 ? " job" : " jobs"),
+          wide: true, body: list,
+          foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Close" })],
+        });
+      }
     },
 
     card(w) {

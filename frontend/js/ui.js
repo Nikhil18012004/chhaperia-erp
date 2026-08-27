@@ -315,6 +315,17 @@
 
   /* ---------- NAV MANIFEST ---------- */
   const NAV = [
+    /* ---- MY WORK ----
+       The one section every role carries. Which DATES it shows is decided per
+       role inside mod-workcal.js, so this single entry serves admin, office
+       and the lab incharge alike. labOk, because a screen built to show the
+       lab its own worklist is useless if the lab cannot reach it; NOT
+       labWrite, because the screen creates and edits nothing — every entry on
+       it is derived from a record another module owns. Supervisors never see
+       this nav at all: that role runs the separate SUP panel, which carries
+       its own Schedule view. */
+    {sec:"My Work", labOk:true},
+    {id:"workcal", icon:"📆", label:"Work Calendar", accent:"violet", labOk:true},
     {sec:"Overview", adminOnly:true},
     {id:"dashboard", icon:"▦", label:"Dashboard", accent:"orange", adminOnly:true},
     {id:"analytics", icon:"📈", label:"Analytics", accent:"violet", adminOnly:true},

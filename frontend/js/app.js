@@ -284,7 +284,11 @@
     },
     homeId(){
       if(this.isLab()) return "lab-reports";
-      const first = UI.NAV.find(n => n.id && !(n.adminOnly && !this.isAdmin()));
+      /* Work Calendar sits first in the nav so every role can reach it, but it
+         is not where the app opens: homeId picks the first item a role may
+         see, and without this skip that placement would quietly move office
+         off the screen it has always landed on. */
+      const first = UI.NAV.find(n => n.id && n.id !== "workcal" && !(n.adminOnly && !this.isAdmin()));
       return first ? first.id : "dashboard";
     },
 
