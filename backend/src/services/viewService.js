@@ -207,6 +207,14 @@ async function stateForSupervisor(area, username, opts) {
         completedQty: +wo.completedQty || 0,
         pendingQty: +wo.pendingQty || 0,
         dispatchedQty: +wo.dispatchedQty || 0,
+        /* Which sales order took the goods, and who it went to. The floor no
+           longer dispatches, so this stamp — written by dispatchSalesOrder — is
+           the only way the crew that packed a run learns it has gone. The order
+           number is what they recognise it by. Neither field is money, so both
+           are safe on this money-free view; the customer name is already shown
+           to slitting for labelling. */
+        dispatchedTo: wo.dispatchedTo || null,
+        dispatchedCustomer: showCustomer ? (wo.dispatchedCustomer || null) : undefined,
         partial,
         widthMM: wo.widthMM != null ? wo.widthMM : null,   // the width this run is slit to
         // and the width of the roll going in — slitting needs both to know how

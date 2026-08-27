@@ -131,7 +131,12 @@ const STAGE = {
                   owner: OWNERS.fibre.user, line: OWNERS.fibre.line, roles: ["base"] }),
   slit:  (all) => ({ key: "slitting", name: "Slitting", area: "slitting",
                      roles: all ? ["base", "paste", "pack"] : ["pack"] }),
-  pack:  () => ({ key: "packing", name: "Packing & Dispatch", area: "slitting",
+  /* Packing, not "Packing & Dispatch": the floor's last act is packing the
+     goods. Dispatch happens against a sales order in the office, so naming it
+     here implied a job this stage never had. Routes already seeded on existing
+     work orders keep the old stored name; every screen labels the stage from
+     its KEY, so they read "Packing" too. */
+  pack:  () => ({ key: "packing", name: "Packing", area: "slitting",
                   roles: [], packDefaults: true }),
 };
 

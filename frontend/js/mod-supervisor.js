@@ -6,17 +6,25 @@
    friendly job cards (no money, no sales, area-scoped).
 
    The job flows through a ROUTE of stages:
-       Coating / Lamination → Slitting → Packing & Dispatch
+       Coating / Lamination → Slitting → Packing
    A card shows the whole route; the supervisor can only act on
    the stage that is currently in THEIR area. Completing a stage
    hands the job to the next area's panel automatically.
+
+   THE FLOOR DOES NOT DISPATCH. Packing is the last thing anyone
+   here does; the job then reads "Ready to dispatch" and waits.
+   Goods leave the works only against a sales order, raised by the
+   office, and that is what flips the card to "Dispatched" — see
+   erpService.dispatchSalesOrder, which stamps the batch it shipped
+   from. Two floors reporting the same despatch was two records of
+   one lorry, and they could disagree.
    ============================================================ */
 (function (global) {
   "use strict";
   const H = UI.h, esc = UI.esc, toast = UI.toast;
   const { pageHead, kpi } = MW;
 
-  const AREA_LABEL = { coating: "Coating / Lamination", slitting: "Slitting & Dispatch", fiberglass: "Fibre-Glass + Slitting & Dispatch", all: "All Production" };
+  const AREA_LABEL = { coating: "Coating / Lamination", slitting: "Slitting & Packing", fiberglass: "Fibre-Glass + Slitting & Packing", all: "All Production" };
   const AREA_ICON = { coating: "🎨", slitting: "✂️", fiberglass: "🧵", all: "🏭" };
   const STAGE_META = {
     coating:    { ic: "🎨", label: "Coating" },
@@ -351,8 +359,11 @@
       const madeQ = (+w.completedQty || 0) + (+w.runQty || 0);
       const sentQ = +w.dispatchedQty || 0;
       const runFinished = (w.route || []).length > 0 && (w.route || []).every((s) => s.status === "Completed");
-      const readyToShip = !w.dispatched && runFinished && (madeQ - sentQ) > 0.001
-        && (this.area === "slitting" || this.area === "all");
+      /* Packed, still on the floor. This is a STATE the floor reports, not an
+         action it takes — goods leave against a sales order and nowhere else —
+         so every area reads it alike rather than only the one that used to
+         hold the dispatch button. */
+      const readyToShip = !w.dispatched && runFinished && (madeQ - sentQ) > 0.001;
 
       /* A finished run read "Packing · to start", because the chip only looked
          at the current stage's status and a completed route leaves the pointer
@@ -487,16 +498,21 @@
               ? " · " + ENG.num(madeQ - sentQ) + " kg ready to dispatch" : "") }) : null,
         ].filter(Boolean)));
       }
-      /* Goods that are MADE and not yet gone can always be dispatched — tested
-         BEFORE "is it my job", because a partial order is still the floor's job
-         while it waits for material, and that branch would otherwise swallow it
-         and offer no button at all. */
+      /* What has happened to the finished goods — read BEFORE "is it my job",
+         because a partial order is still the floor's job while it waits for
+         material and that branch would otherwise swallow the state entirely.
+         Both of these are STATUS, never a control: the floor packs, the office
+         ships. The Dispatched stamp arrives on its own when the office
+         dispatches the sales order this batch was picked on. */
       if (w.dispatched) {
-        actions.appendChild(H("div", { class: "sup-done-tag", text: "✓ Dispatched" }));
+        actions.appendChild(H("div", { class: "sup-done-tag",
+          text: "✓ Dispatched" + (w.dispatchedTo ? " · " + w.dispatchedTo : "")
+            + (w.dispatchedCustomer ? " → " + w.dispatchedCustomer : "") }));
       } else if (readyToShip) {
-        actions.appendChild(H("button", { class: "sup-act primary",
-          onclick: (e) => this.act(w, "dispatch", e.currentTarget),
-          text: "🚚 Dispatch " + ENG.num(madeQ - sentQ) + " kg" }));
+        actions.appendChild(H("div", { class: "sup-ready-tag" }, [
+          H("div", { class: "t", text: "📦 Ready to dispatch · " + ENG.num(madeQ - sentQ) + " kg packed" }),
+          H("div", { class: "s", text: "Nothing more to do here — the office ships it against the sales order" }),
+        ]));
       } else if (w.mine) {
         /* ONE BUTTON, ONE NEXT STEP.
            A coated stage runs Start → Enter Lab Report → Complete, and the
@@ -682,7 +698,7 @@
       if (btn) { btn.disabled = true; btn.textContent = "…"; }
       try {
         await DB.production.advance(w.id, action);
-        const verb = { start: "started", complete: "completed", pause: "paused", dispatch: "dispatched" }[action] || action;
+        const verb = { start: "started", complete: "completed", pause: "paused" }[action] || action;
         toast((w.product ? w.product.name : w.id) + " — stage " + verb, { type: "ok" });
         await this.refresh({ quiet: true, slim: true });
       } catch (err) {

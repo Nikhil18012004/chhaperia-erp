@@ -21,7 +21,11 @@ const GT = require("./grnTestService");
 const { getLineForItem } = require("./routing");
 const BC = require("../../../frontend/js/bomcalc");
 
-const ACTIONS = ["start", "pause", "complete", "dispatch"];
+/* Dispatch is DELIBERATELY not here. Goods leave the works against a sales
+   order and nowhere else — see erpService.dispatchSalesOrder, which posts the
+   stock movement, closes the order and stamps the batch it shipped from. The
+   floor reports what it has PACKED; the office decides what has SHIPPED. */
+const ACTIONS = ["start", "pause", "complete"];
 
 // The raw-material store the BOM draws down when finished stock is produced.
 const RAW_STORE = "WH-PNY";
@@ -56,7 +60,7 @@ function withRoute(wo, data) {
 
 /* ============================================================
    advance — move a work order's CURRENT stage.
-   action: start | pause | complete | dispatch
+   action: start | pause | complete
    ============================================================ */
 async function advance(user, woId, action, opts) {
   if (!user) throw err("Not authenticated", 401);
@@ -85,19 +89,7 @@ async function advance(user, woId, action, opts) {
   const now = new Date().toISOString();
   const by = user.username;
 
-  if (action === "dispatch") {
-    if (!route.every((r) => r.status === "Completed")) throw err("Finish packing before dispatch", 400);
-    /* A partial order ships what it HAS made. The goods on the floor are real
-       whether or not the balance has arrived, so dispatch releases the made
-       quantity and the order stays open for the rest. Only an order with
-       nothing pending is closed outright. */
-    const madeNow = r3((+wo.completedQty || 0) + (+wo.runQty || 0));
-    const already = +wo.dispatchedQty || 0;
-    if (madeNow - already <= 1e-6) throw err("Nothing new to dispatch on this order", 400);
-    wo.dispatchedQty = madeNow;
-    wo.dispatchedBy = by; wo.dispatchedAt = now;
-    if ((+wo.pendingQty || 0) <= 1e-6) wo.dispatched = true;
-  } else if (action === "start") {
+  if (action === "start") {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
     stage.status = "In Production";
     stage.startedBy = stage.startedBy || by;
@@ -1083,8 +1075,14 @@ async function updateWorkOrderStatus(user, woId, status, opts) {
     "In Production": "start", "In Progress": "start", "Released": "start",
     "Pending": "pause",
     "Completed": "complete", "Packed": "complete", "Done": "complete",
-    "Dispatched": "dispatch",
   };
+  /* Say WHY rather than "invalid status" — this used to be a working route to
+     dispatch, so anything still calling it deserves to be told where dispatch
+     lives now instead of being left guessing at a rejected value. */
+  if (status === "Dispatched") {
+    throw err("A work order is not dispatched from the floor. Goods go out against a sales " +
+      "order — dispatch it from Sales, and this batch is marked dispatched automatically.", 400);
+  }
   const action = map[status];
   if (!action) throw err("Invalid status '" + status + "'", 400);
   // the body travels on, so this older route can still answer the coating
@@ -1117,6 +1115,13 @@ function summarize(wo, data) {
     completedQty: +wo.completedQty || 0,
     pendingQty: +wo.pendingQty || 0,
     dispatchedQty: +wo.dispatchedQty || 0,
+    /* Which sales order took the goods, and who it went to. The floor no
+       longer dispatches, so this is the only way the crew that packed a run
+       finds out it has gone — and the order number is what they recognise it
+       by. Both are stamped by erpService.dispatchSalesOrder. Neither is money,
+       so both are safe on the money-free panel. */
+    dispatchedTo: wo.dispatchedTo || null,
+    dispatchedCustomer: wo.dispatchedCustomer || null,
     shortage: wo.shortage || null,
     // how the requirement was met: from finished stock, from half-made stock,
     // and how much is genuinely being manufactured

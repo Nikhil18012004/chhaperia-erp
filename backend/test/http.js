@@ -1751,7 +1751,9 @@ async function run() {
       ok("the held-back batch has not consumed anything yet", Math.abs(left - 70) < 0.01, String(left));
 
       await call("POST", "/production/wo/" + b.d.id + "/advance", A, { action: "complete", all: true });
-      await call("POST", "/production/wo/" + b.d.id + "/advance", A, { action: "dispatch" });
+      /* No dispatch step here any more — the floor cannot dispatch, and resume
+         never depended on it: it asks only that the released portion is off the
+         machines. */
       const nxt = await call("POST", "/production/wo/" + b.d.id + "/resume", A, { qty: 40 });
       ok("the next batch can be a chosen size too", Math.abs(nxt.d.runQty - 40) < 0.01, String(nxt.d.runQty));
       ok("and the remainder keeps waiting", Math.abs(nxt.d.pendingQty - 30) < 0.01, String(nxt.d.pendingQty));
@@ -1784,20 +1786,50 @@ async function run() {
       ok("40 of the 60 is released, 20 pends", Math.abs(made - 40) < 0.01 && Math.abs(p.d.pendingQty - 20) < 0.01,
         "run=" + made + " pending=" + p.d.pendingQty);
       await call("POST", "/production/wo/" + pid + "/advance", A, { action: "complete", all: true });
-      const disp = await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" });
-      ok("the made portion of a pending order can be dispatched", disp.status === 200,
-        disp.status + " " + JSON.stringify(disp.d).slice(0, 80));
-      ok("it records how much went out", Math.abs(disp.d.dispatchedQty - made) < 0.01,
-        disp.d.dispatchedQty + " vs " + made);
+
+      /* ---- NEW RULE (2026-08-25): THE FLOOR DOES NOT DISPATCH ----
+         Goods leave the works against a sales order and nowhere else. The
+         floor reports what it has PACKED; the office decides what has SHIPPED.
+         Two places recording the same lorry could disagree, and the floor's
+         version posted no stock movement and named no customer. */
+      const noDisp = await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" });
+      ok("the floor cannot dispatch a work order", noDisp.status === 400,
+        noDisp.status + " " + JSON.stringify(noDisp.d).slice(0, 80));
+      const noDisp2 = await call("POST", "/production/wo/" + pid + "/status", A, { status: "Dispatched" });
+      ok("nor through the older status route", noDisp2.status === 400, String(noDisp2.status));
+      ok("…and it is told where dispatch lives instead",
+        /sales order/i.test((noDisp2.d && noDisp2.d.error) || ""),
+        JSON.stringify(noDisp2.d));
+
+      /* The made portion still ships — through the SALES ORDER, picking this
+         batch on the line. That is the one path that posts the movement, names
+         the customer and stamps the run. */
+      const soP = await call("POST", "/sales-orders", A, { customerId: cust,
+        lines: [{ itemId: fgP.id, qty: made, rate: 100, batch: pid }] });
+      ok("a sales order can ship this batch", soP.status === 201, String(soP.status));
+      const dispP = await call("POST", "/sales-orders/" + soP.d.id + "/dispatch", A, {});
+      ok("dispatching that sales order succeeds", dispP.status === 200,
+        dispP.status + " " + JSON.stringify(dispP.d).slice(0, 80));
+      ok("and it reports shipping from the batch, not from store stock",
+        dispP.d.fromBatches === 1 && dispP.d.posted === 0, JSON.stringify(dispP.d).slice(0, 90));
+
+      const woAfter = ((await call("GET", "/state", A)).d.workorders || []).find((w) => w.id === pid);
+      ok("the run records how much went out", Math.abs((+woAfter.dispatchedQty || 0) - made) < 0.01,
+        woAfter.dispatchedQty + " vs " + made);
       ok("the order is NOT closed while quantity is still owed",
-        disp.d.dispatched === false && disp.d.pendingQty > 0,
-        "dispatched=" + disp.d.dispatched + " pending=" + disp.d.pendingQty);
-      ok("dispatching the same portion twice is refused",
-        (await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" })).status === 400);
+        woAfter.dispatched !== true && woAfter.pendingQty > 0,
+        "dispatched=" + woAfter.dispatched + " pending=" + woAfter.pendingQty);
+      ok("the run remembers WHICH order took it", woAfter.dispatchedTo === soP.d.id,
+        String(woAfter.dispatchedTo));
+
       const floor = ((await call("GET", "/state", S1x)).d.workorders || []).find((w) => w.id === pid);
       ok("the floor is told how much has gone out",
         floor && Math.abs((+floor.dispatchedQty || 0) - made) < 0.01,
         JSON.stringify(floor && floor.dispatchedQty));
+      ok("the floor is told which sales order took it",
+        floor && floor.dispatchedTo === soP.d.id, JSON.stringify(floor && floor.dispatchedTo));
+      ok("and who it went to", floor && !!floor.dispatchedCustomer,
+        JSON.stringify(floor && floor.dispatchedCustomer));
 
       /* THE CYCLE: material arrives -> the balance goes back on the floor ->
          it is made -> that portion ships too -> and the order finally closes. */
@@ -1824,13 +1856,84 @@ async function run() {
         (again.d.route || []).every((s) => !!s.firstStartedAt),
         JSON.stringify((again.d.route || []).map((s) => s.firstStartedAt)));
       await call("POST", "/production/wo/" + pid + "/advance", A, { action: "complete", all: true });
-      const last = await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" });
-      ok("the second portion dispatches too", last.status === 200 &&
-        Math.abs(last.d.dispatchedQty - 60) < 0.01, "sent=" + (last.d || {}).dispatchedQty);
-      ok("with nothing owed the order is finally closed",
-        last.d.dispatched === true && last.d.pendingQty === 0,
-        "dispatched=" + last.d.dispatched + " pending=" + last.d.pendingQty);
+
+      /* ---- A KNOWN LIMIT, PINNED HERE ON PURPOSE ----
+         A batch belongs to ONE sales order for its whole life (batchOwners
+         counts dispatched orders too), so the balance of a part-made run
+         cannot be sold on a second document against the same batch. Before
+         2026-08-25 the floor's own dispatch button was the way round this, and
+         it shipped goods with no movement, no customer and no invoice. Closing
+         that hole leaves this case with no route, and the test says so out loud
+         rather than pretending otherwise. The office ships the balance from
+         finished stock, or the rule is relaxed deliberately. */
+      const soP2 = await call("POST", "/sales-orders", A, { customerId: cust,
+        lines: [{ itemId: fgP.id, qty: 20, rate: 100, batch: pid }] });
+      ok("a batch already sold cannot be sold again on a second order", soP2.status === 409,
+        soP2.status + " " + JSON.stringify(soP2.d).slice(0, 90));
+      const noMore = await call("POST", "/production/wo/" + pid + "/advance", A, { action: "dispatch" });
+      ok("and the floor still cannot ship the balance itself", noMore.status === 400, String(noMore.status));
+
+      const woEnd = ((await call("GET", "/state", A)).d.workorders || []).find((w) => w.id === pid);
+      ok("so the run still shows only what genuinely went out on a document",
+        Math.abs((+woEnd.dispatchedQty || 0) - made) < 0.01, "sent=" + woEnd.dispatchedQty);
+      ok("and it is not marked closed on goods that never left",
+        woEnd.dispatched !== true, "dispatched=" + woEnd.dispatched);
+      await call("DELETE", "/sales-orders/" + soP.d.id, A);
       await call("DELETE", "/production/wo/" + pid, A);
+    }
+
+    /* ---- THE WHOLE POINT, END TO END ----
+       Pack a run, sell the batch, dispatch the sales order — and watch the
+       floor's card go from "ready to dispatch" to "Dispatched" without anyone
+       on the floor touching it. This is the behaviour the supervisor panel
+       renders, so it is asserted on the SUPERVISOR's own view of the job. */
+    {
+      await call("POST", "/movements", A, { id: "MV-SHIP-1", itemId: rm.id, type: "GRN",
+        qty: 50, rate: 10, wh: "WH-PNY", date: "2026-06-01", manual: true });
+      const w = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 50 });
+      ok("a full run is raised", w.status === 201, String(w.status));
+      const wid = w.d.id;
+
+      const packed = ((await call("GET", "/state", S1x)).d.workorders || []).find((x) => x.id === wid);
+      ok("before packing, the floor sees nothing dispatched",
+        packed && !packed.dispatched && (+packed.dispatchedQty || 0) === 0,
+        JSON.stringify(packed && { d: packed.dispatched, q: packed.dispatchedQty }));
+
+      await call("POST", "/production/wo/" + wid + "/advance", A, { action: "complete", all: true });
+      const donePack = ((await call("GET", "/state", S1x)).d.workorders || []).find((x) => x.id === wid);
+      ok("packing finished leaves every stage complete and still not dispatched",
+        (donePack.route || []).every((r) => r.status === "Completed") && !donePack.dispatched,
+        JSON.stringify((donePack.route || []).map((r) => r.status)));
+
+      const soS = await call("POST", "/sales-orders", A, { customerId: cust,
+        lines: [{ itemId: fgP.id, qty: 50, rate: 100, batch: wid }] });
+      ok("the packed batch is sold on a sales order", soS.status === 201, String(soS.status));
+      ok("selling it alone does NOT mark it dispatched",
+        !((await call("GET", "/state", S1x)).d.workorders || []).find((x) => x.id === wid).dispatched);
+
+      const shipped = await call("POST", "/sales-orders/" + soS.d.id + "/dispatch", A, {});
+      ok("dispatching the sales order succeeds", shipped.status === 200, String(shipped.status));
+
+      const seen = ((await call("GET", "/state", S1x)).d.workorders || []).find((x) => x.id === wid);
+      ok("THE FLOOR NOW SEES IT AS DISPATCHED", seen && seen.dispatched === true,
+        "dispatched=" + (seen && seen.dispatched));
+      ok("…with the full quantity recorded", Math.abs((+seen.dispatchedQty || 0) - 50) < 0.01,
+        String(seen.dispatchedQty));
+      ok("…naming the sales order that took it", seen.dispatchedTo === soS.d.id,
+        String(seen.dispatchedTo));
+      ok("…and the customer it went to", !!seen.dispatchedCustomer, String(seen.dispatchedCustomer));
+
+      await call("DELETE", "/sales-orders/" + soS.d.id, A);
+      await call("DELETE", "/production/wo/" + wid, A);
+      const leftover = ((await call("GET", "/state", A)).d.movements || [])
+        .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
+      if (leftover > 0.001) {
+        await call("POST", "/movements", A, { id: "MV-SHIP-Z", itemId: rm.id, type: "ADJ",
+          qty: -leftover, wh: "WH-PNY", date: "2026-06-02", manual: true });
+      }
+      ok("the store is drained again for the tests that follow",
+        Math.abs(((await call("GET", "/state", A)).d.movements || [])
+          .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0)) < 0.01);
     }
 
     /* NEW RULE (2026-08-22): a material the store has NONE of refuses the

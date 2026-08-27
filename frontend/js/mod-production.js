@@ -76,12 +76,12 @@
     const owner=productOwner(itemId);
     const stocked=materialInStore(itemId,qty);
     if(!owner)
-      return { stages:["Slitting","Packing & Dispatch"], area:"slitting", ready:true, bought:true, stocked, owner:null };
+      return { stages:["Slitting","Packing"], area:"slitting", ready:true, bought:true, stocked, owner:null };
     const stages=[];
     const fibreFirst=FIBRE_FIRST.some(p=>famMatches(famOf(itemId),p));
     if(fibreFirst) stages.push(OWNERS.fibre.label);
     stages.push(owner.label);
-    stages.push("Slitting","Packing & Dispatch");
+    stages.push("Slitting","Packing");
     const first=fibreFirst?OWNERS.fibre:owner;
     return { stages, area:first.area, line:first.line, owner:first, ready:false, bought:false, stocked };
   }

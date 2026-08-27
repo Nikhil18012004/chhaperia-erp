@@ -404,6 +404,165 @@
     return "Other";
   }
 
+  /* ---- days between an ISO date and today (negative = in the future) ---- */
+  function daysSince(iso){
+    if(!iso) return null;
+    const d = Math.round((H.today() - new Date(String(iso).slice(0,10)+"T00:00:00"))/86400000);
+    return isNaN(d) ? null : d;
+  }
+
+  /* ============================================================
+     DEAL ROT — how long a lead has sat untouched.
+     Every CRM worth using flags the deal nobody has rung in a
+     fortnight, because a pipeline's real enemy is not the lost
+     deal, it is the one quietly going stale. The tolerance differs
+     by stage: a brand-new enquiry left a week is already neglect,
+     while a lead waiting on a customer's own trial line reasonably
+     takes longer, so Sample is given the longest leash.
+     ============================================================ */
+  const ROT_DAYS = { New:7, Contacted:10, Sample:21, Quoted:14 };
+
+  /** Last time anyone actually touched this lead — newest activity,
+      else the day it was created. */
+  function lastTouch(l){
+    const acts = (l && l.activities) || [];
+    let newest = null;
+    acts.forEach(a=>{ const d=String(a.date||"").slice(0,10); if(d && (!newest || d>newest)) newest=d; });
+    return newest || (l && l.created) || null;
+  }
+
+  /** { idle, limit, rotting, ratio } — null for closed leads, which cannot rot. */
+  function leadRot(l){
+    if(!l || l.stage==="Won" || l.stage==="Lost") return null;
+    const limit = ROT_DAYS[l.stage] || 14;
+    const idle = daysSince(lastTouch(l));
+    if(idle==null) return null;
+    return { idle, limit, rotting: idle > limit, ratio: Math.min(2, idle/limit) };
+  }
+
+  /* ============================================================
+     LEAD SCORE — one 0-100 number for "who do I ring first?".
+     Deliberately explainable rather than clever: the sales desk
+     has to trust it, so every point is traceable to a reason it
+     can see on the lead. Four inputs, each capped so no single
+     one can carry a weak lead:
+       value    how big the deal is, against the current book
+       stage    how far it has actually travelled
+       warmth   how recently anyone touched it (decays)
+       signal   sample verdict + source quality — the real intent
+     ============================================================ */
+  const SOURCE_WEIGHT = {
+    "Existing Customer":10, "Referral":9, "Exhibition (Wire India)":8,
+    "Website Enquiry":6, "Trade Directory":4, "Cold Call":3,
+  };
+
+  function leadScore(l){
+    if(!l) return { score:0, parts:[] };
+    const parts = [];
+
+    // --- deal size, relative to the biggest open lead on the book (max 30)
+    const open = leads().filter(x=>x.stage!=="Won"&&x.stage!=="Lost");
+    const top = Math.max(1, ...open.map(x=>x.value||0));
+    const vPts = Math.round(Math.min(1,(l.value||0)/top)*30);
+    parts.push({ k:"Deal size", pts:vPts, max:30, why: money(l.value||0)+" of "+money(top)+" top open" });
+
+    // --- how far down the pipeline it has come (max 25)
+    const sPts = Math.round((STAGE_PROB[l.stage]||0)*25/0.6);
+    parts.push({ k:"Stage", pts:Math.min(25,sPts), max:25, why:l.stage+" · "+Math.round((STAGE_PROB[l.stage]||0)*100)+"% typical close" });
+
+    // --- warmth: touched today is full marks, decaying to nothing at 30 days (max 25)
+    const idle = daysSince(lastTouch(l));
+    const wPts = idle==null ? 0 : Math.round(Math.max(0,1-idle/30)*25);
+    parts.push({ k:"Warmth", pts:wPts, max:25,
+      why: idle==null ? "never touched" : idle<=0 ? "touched today" : idle+" days since contact" });
+
+    // --- intent signal: what the sample said, and where it came from (max 20)
+    let iPts = SOURCE_WEIGHT[l.source] || 3;
+    let iWhy = l.source || "source not set";
+    const verdict = l.sample && l.sample.verdict;
+    if(verdict==="Approved"){ iPts = 20; iWhy = "sample APPROVED"; }
+    else if(verdict==="Rework needed"){ iPts = Math.max(iPts,8); iWhy = "sample needs rework"; }
+    else if(verdict==="Rejected"){ iPts = 1; iWhy = "sample rejected"; }
+    parts.push({ k:"Intent", pts:Math.min(20,iPts), max:20, why:iWhy });
+
+    const score = parts.reduce((s,p)=>s+p.pts,0);
+    return { score:Math.max(0,Math.min(100,score)), parts,
+      band: score>=70 ? "hot" : score>=45 ? "warm" : "cold" };
+  }
+
+  /* ============================================================
+     STAGE CONVERSION — of every lead that ever reached this stage,
+     how many went on to the next one, and how long they sat there.
+     A lead that is Won reached every open stage on the way, so
+     progress is measured by pipeline ORDER, not by where the lead
+     happens to be parked today. Without that, a healthy pipeline
+     that closes fast would report 0% conversion everywhere.
+     ============================================================ */
+  function stageConversion(){
+    const ls = leads();
+    const open = STAGES.filter(s=>s!=="Won"&&s!=="Lost");
+    const rank = {}; open.forEach((s,i)=>{ rank[s]=i; });
+    // where each lead got to: Won counts as having cleared every open stage
+    const reached = (l) => l.stage==="Won" ? open.length
+                        : l.stage==="Lost" ? (rank[l.lostAtStage]!=null?rank[l.lostAtStage]:0)
+                        : (rank[l.stage]!=null?rank[l.stage]:0);
+    return open.map((st,i)=>{
+      const got  = ls.filter(l=>reached(l)>=i);
+      const next = ls.filter(l=>reached(l)>=i+1);
+      const here = ls.filter(l=>l.stage===st);
+      const ages = here.map(l=>daysSince(l.created)).filter(d=>d!=null);
+      return { stage:st, reached:got.length, advanced:next.length,
+        rate: got.length ? Math.round(next.length/got.length*100) : 0,
+        avgDays: ages.length ? Math.round(ages.reduce((a,b)=>a+b,0)/ages.length) : null };
+    });
+  }
+
+  /** Average days from creation to close, over decided leads. */
+  function salesCycleDays(){
+    const done = leads().filter(l=>l.stage==="Won"||l.stage==="Lost");
+    const ds = done.map(l=>{
+      const end = lastTouch(l), start = l.created;
+      if(!end||!start) return null;
+      const d = Math.round((new Date(end+"T00:00:00")-new Date(start+"T00:00:00"))/86400000);
+      return isNaN(d)||d<0 ? null : d;
+    }).filter(d=>d!=null);
+    return ds.length ? Math.round(ds.reduce((a,b)=>a+b,0)/ds.length) : null;
+  }
+
+  /* ============================================================
+     FORECAST — open leads bucketed by the month they are expected
+     to close, split into what is already committed (Quoted, a price
+     is on the table) and the rest of the weighted pipeline.
+     A lead with no expected-close date is not guessed at; it is
+     reported separately so the number stays honest.
+     ============================================================ */
+  function forecastByMonth(n){
+    n = n || 6;
+    const t = H.today();
+    const keys = [];
+    for(let i=0;i<n;i++){
+      const d = new Date(t.getFullYear(), t.getMonth()+i, 1);
+      keys.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));
+    }
+    const map = {}; keys.forEach(k=>{ map[k]={ key:k, commit:0, weighted:0, count:0, items:[] }; });
+    const bucket = () => ({ count:0, weighted:0, items:[] });
+    /* A close date that has already been and gone is NOT a distant deal — it
+       is a deal that slipped. Reporting it as "beyond the window" would flatter
+       the forecast and hide exactly the leads that need re-dating today. */
+    let undated = bucket(), beyond = bucket(), overdue = bucket();
+    leads().filter(l=>l.stage!=="Won"&&l.stage!=="Lost").forEach(l=>{
+      const w = (l.value||0)*(STAGE_PROB[l.stage]||0);
+      const k = String(l.expectedClose||"").slice(0,7);
+      const put = (b)=>{ b.count++; b.weighted+=w; b.items.push(l); };
+      if(!k){ put(undated); return; }
+      if(k < keys[0]){ put(overdue); return; }
+      if(!map[k]){ put(beyond); return; }
+      map[k].count++; map[k].weighted+=w; map[k].items.push(l);
+      if(l.stage==="Quoted") map[k].commit += (l.quotedValue||l.value||0);
+    });
+    return { months:keys.map(k=>map[k]), undated, beyond, overdue };
+  }
+
   /* KPIs for dashboard cards */
   function kpis(){
     return KPIS || (KPIS = computeKpis());
@@ -659,7 +818,8 @@
     inventoryValue, alerts, dailySeries, salesByProduct, purchaseBySupplier,
     stockByCategory, abcAnalysis, forecast, kpis, sup, custName,
     leads, crmStats, pipelineByStage, dueFollowUps, dormantCustomers, STAGES, STAGE_PROB,
-    LOST_REASONS, normaliseReason
+    LOST_REASONS, normaliseReason,
+    leadScore, leadRot, lastTouch, stageConversion, salesCycleDays, forecastByMonth, ROT_DAYS
   };
   global.ENG = E;
 })(window);

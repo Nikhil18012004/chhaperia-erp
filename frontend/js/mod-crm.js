@@ -60,12 +60,58 @@
       .sort((a, b) => b.age - a.age);
   }
   const ageTone = (d) => (d >= 45 ? "danger" : d >= SAMPLE_STALE_DAYS ? "warn" : "info");
+  /* ============================================================
+     BOARD FILTER — survives a re-render, because App.go("crm")
+     rebuilds the page after every save and a filter that reset on
+     each logged call would be useless the moment you started working.
+     ============================================================ */
+  /* which card is in flight, shared between the card that started the drag and
+     the column that receives it — dataTransfer alone is not readable during
+     dragover, which is exactly when the drop target has to decide */
+  const DRAG = { id: null, from: null };
+
+  const FILTER = { q: "", owner: "", source: "", flag: "" };
+  const filterOn = () => !!(FILTER.q || FILTER.owner || FILTER.source || FILTER.flag);
+  function clearFilter() { FILTER.q = ""; FILTER.owner = ""; FILTER.source = ""; FILTER.flag = ""; }
+
+  function leadMatches(l) {
+    if (FILTER.owner && (l.owner || "") !== FILTER.owner) return false;
+    if (FILTER.source && (l.source || "") !== FILTER.source) return false;
+    if (FILTER.flag === "rot") { const r = ENG.leadRot(l); if (!r || !r.rotting) return false; }
+    if (FILTER.flag === "due") {
+      if (l.stage === "Won" || l.stage === "Lost") return false;
+      if (!l.nextFollowUp || l.nextFollowUp > todayISO()) return false;
+    }
+    if (FILTER.flag === "hot") {
+      if (l.stage === "Won" || l.stage === "Lost") return false;
+      if (ENG.leadScore(l).band !== "hot") return false;
+    }
+    if (FILTER.q) {
+      const hay = [l.company, l.contact, l.city, l.productName, l.product, l.id, l.notes, l.phone, l.email]
+        .join(" ").toLowerCase();
+      if (!FILTER.q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w))) return false;
+    }
+    return true;
+  }
+  /* Re-tally each column from what survived, so the stage headers and the
+     board's own totals describe what is actually on screen. */
+  function applyFilter(pipeline) {
+    if (!filterOn()) return pipeline;
+    return pipeline.map((c) => {
+      const items = c.items.filter(leadMatches);
+      return { stage: c.stage, items, count: items.length,
+        value: items.reduce((s, l) => s + (l.value || 0), 0) };
+    });
+  }
 
   M.crm = { title: "CRM Pipeline", sub: "Sales leads & enquiries", render(root, params) {
     const stats = ENG.crmStats();
     const due = ENG.dueFollowUps();
-    const pipeline = ENG.pipelineByStage();
-    const byStage = {}; pipeline.forEach((c) => { byStage[c.stage] = c; });
+    /* The KPI strip and its drill-downs always describe the WHOLE book — a
+       filter narrows the board you are working, not the numbers you report. */
+    const fullPipeline = ENG.pipelineByStage();
+    const pipeline = applyFilter(fullPipeline);
+    const byStage = {}; fullPipeline.forEach((c) => { byStage[c.stage] = c; });
 
     const allLeads = ENG.leads();
 
@@ -76,6 +122,7 @@
         // still waiting on a verdict
         h("button", { class: "btn ghost", onclick: () => App.go("quotations", { tab: "samples" }),
           html: "📦 Samples & Quotes (" + openSamples(allLeads).length + ")" }),
+        h("button", { class: "btn ghost", onclick: () => forecastDrill(), html: "📈 Forecast" }),
         h("button", { class: "btn ghost", onclick: () => activityDrill(allLeads), html: "🕘 Activity" }),
         h("button", { class: "btn primary", onclick: () => leadForm(), html: "＋ New Lead" }) ]));
 
@@ -133,10 +180,16 @@
     ]));
 
     /* ============ PRIORITY 3 — the working surface: the board ============ */
-    root.appendChild(h("div", { class: "card-head", style: "margin:2px 0 10px" }, [h("div", {}, [
-      h("h3", { text: "Pipeline Board" }),
-      h("div", { class: "sub", text: "Swipe or navigate through stages" }),
-    ])]));
+    const shownCount = pipeline.reduce((s, c) => s + c.count, 0);
+    root.appendChild(h("div", { class: "card-head", style: "margin:2px 0 10px" }, [
+      h("div", {}, [
+        h("h3", { text: "Pipeline Board" }),
+        h("div", { class: "sub", text: filterOn()
+          ? shownCount + " of " + allLeads.length + " leads match this filter"
+          : "Drag a card to another stage, or swipe through them" }),
+      ]),
+    ]));
+    root.appendChild(filterBar(allLeads, () => App.go("crm")));
 
     /* ---- pipeline board as a CARD CAROUSEL -------------------------------
        One stage per slide; the middle one is brought forward and its
@@ -178,6 +231,34 @@
             : [h("div", { class: "crm-empty", text: "No leads here yet" })]
         ),
       ]);
+
+      /* ---- drop target: a card dragged onto this column moves stage ----
+         Won and Lost are deliberately droppable too — dragging a card onto
+         Won is the fastest close there is, and it still runs the full
+         customer + sales-order conversion rather than a silent stage write. */
+      slide.addEventListener("dragover", (e) => {
+        if (!DRAG.id || DRAG.from === col.stage) return;
+        e.preventDefault();                       // without this, no drop fires
+        e.dataTransfer.dropEffect = "move";
+        slide.classList.add("is-drop");
+      });
+      slide.addEventListener("dragleave", (e) => {
+        // only clear when the pointer has actually left the column, not merely
+        // crossed onto a child card inside it
+        if (!slide.contains(e.relatedTarget)) slide.classList.remove("is-drop");
+      });
+      slide.addEventListener("drop", (e) => {
+        e.preventDefault();
+        slide.classList.remove("is-drop");
+        const id = DRAG.id || (e.dataTransfer && e.dataTransfer.getData("text/plain"));
+        DRAG.id = null; DRAG.from = null;
+        if (!id) return;
+        const lead = ENG.leads().find((x) => x.id === id);
+        if (!lead || lead.stage === col.stage) return;
+        if (col.stage === "Won" || col.stage === "Lost") closeLead(lead, col.stage);
+        else applyStage(lead, col.stage);
+      });
+
       rail.appendChild(slide);
       const dot = h("button", { class: "crm-car-dot", type: "button", role: "tab",
         title: col.stage + " · " + col.count + " lead" + (col.count === 1 ? "" : "s"),
@@ -294,9 +375,16 @@
     function leadCard(l, meta) {
       const overdue = l.nextFollowUp && l.nextFollowUp < todayISO() && l.stage !== "Won" && l.stage !== "Lost";
       const initial = (String(l.company || "?").trim().charAt(0) || "?").toUpperCase();
+      const sc = ENG.leadScore(l);
+      const rot = ENG.leadRot(l);
+      const closed = l.stage === "Won" || l.stage === "Lost";
+
       // stamped like a table row, so a calendar chase-date can highlight this
       // exact lead on the board — see App.flashRow()
-      return h("div", { class: "crm-lead", "data-row-id": String(l.id), style: "--sc:" + meta.color,
+      const card = h("div", { class: "crm-lead" + (rot && rot.rotting ? " is-rot" : ""),
+        "data-row-id": String(l.id), "data-lead": String(l.id), style: "--sc:" + meta.color,
+        draggable: closed ? null : "true",
+        title: closed ? null : "Drag to another stage",
         onclick: () => leadDetail(l.id) }, [
         h("div", { class: "crm-lead-top" }, [
           h("div", { class: "crm-lead-ava", text: initial }),
@@ -304,8 +392,14 @@
             h("div", { class: "crm-lead-co", text: trim(l.company, 26) }),
             h("div", { class: "crm-lead-val", text: money(l.value) }),
           ]),
-        ]),
+          closed ? null : scorePip(sc),
+        ].filter(Boolean)),
         h("div", { class: "crm-lead-prod", text: trim((l.productName || l.product || "—"), 34) }),
+        rot && rot.rotting
+          ? h("div", { class: "crm-lead-rot",
+              title: "No contact logged for " + rot.idle + " days — " + l.stage + " leads should be chased within " + rot.limit,
+              html: "🥀 Going cold · " + rot.idle + "d untouched" })
+          : null,
         h("div", { class: "crm-lead-foot" }, [
           h("span", { class: "crm-lead-who", text: trim(l.contact || "—", 18) }),
           l.nextFollowUp
@@ -313,7 +407,24 @@
                 html: (overdue ? "⏰ " : "📅 ") + l.nextFollowUp.slice(5) })
             : h("span", { class: "muted", text: l.stage === "Won" ? "✓ closed" : l.stage === "Lost" ? "lost" : "" }),
         ]),
-      ]);
+      ].filter(Boolean));
+
+      if (!closed) {
+        card.addEventListener("dragstart", (e) => {
+          DRAG.id = l.id; DRAG.from = l.stage;
+          card.classList.add("is-dragging");
+          try {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", l.id);   // Firefox needs a payload
+          } catch (_) { /* older engines still work off DRAG */ }
+        });
+        card.addEventListener("dragend", () => {
+          card.classList.remove("is-dragging");
+          DRAG.id = null; DRAG.from = null;
+          UI.$$(".crm-car-slide.is-drop").forEach((s) => s.classList.remove("is-drop"));
+        });
+      }
+      return card;
     }
   }};
 
@@ -431,11 +542,15 @@
     if (outcome === "Lost") {
       const out = await lostForm(l);
       if (out === null) return;
+      /* Remember how far it got before it died. Without this the funnel cannot
+         tell a lead that was lost at Quoted from one that never got past New,
+         and every stage-conversion rate below it reads too low. */
+      if (!l.lostAtStage && l.stage !== "Lost") l.lostAtStage = l.stage;
       Object.assign(l, out, { stage: "Lost", nextFollowUp: null });
       UI.$("#modalHost").hidden = true;
       toast(l.company + " marked Lost — " + l.lostReason, { type: "warn" });
       App.saveDelta(() => DB.leads.update(l.id, { stage: "Lost", lostReason: l.lostReason,
-        lostTo: l.lostTo, lostNote: l.lostNote, nextFollowUp: null }));
+        lostTo: l.lostTo, lostNote: l.lostNote, lostAtStage: l.lostAtStage, nextFollowUp: null }));
       return;
     }
 
@@ -1191,6 +1306,375 @@
   }
 
   /* ============================================================
+     QUOTATION — the document the "Quoted" stage was always missing.
+
+     Until now the stage existed but nothing produced a price: quotedValue
+     was read in three places and written in none, so a lead could sit in
+     Quoted with no record of WHAT was quoted. This builds a real priced
+     offer on the lead, prints it on the company letterhead, and moves the
+     stage as a consequence of the quote existing rather than as a separate
+     act of bookkeeping.
+
+     It deliberately stays ON THE LEAD rather than becoming its own table:
+     a quotation that has not been accepted is a sales conversation, not an
+     order, and the moment it IS accepted the existing Won→Sales Order path
+     already turns it into one.
+     ============================================================ */
+  const QUOTE_TERMS = [
+    "Prices are ex-works unless stated otherwise.",
+    "GST extra as applicable at the prevailing rate.",
+    "Delivery subject to availability of raw material at time of order.",
+    "Payment as per agreed credit terms from date of invoice.",
+  ];
+
+  function orgProfile() {
+    const org = ENG.data.org || {};
+    const cs = org.companies;
+    if (cs && cs.length) return cs[0];
+    return { name: org.name || "", tagline: org.tagline || "", gstin: org.gst || "",
+      pan: org.pan || "", address: org.address || "", phone: org.phone || "",
+      email: org.email || "", website: org.website || "" };
+  }
+
+  function quoteForm(l) {
+    const q = l.quote || {};
+    const fgs = ENG.data.items.filter((i) => i.cat === "FG");
+    if (!fgs.length) { toast("No finished goods defined to quote", { type: "warn" }); return; }
+
+    /* Seed the first quotation from what the lead already knows — the product
+       it is about, and the sample quantity if one went out — so the common
+       case is a rate away from done. */
+    let lines = (q.lines || []).slice();
+    if (!lines.length) {
+      /* The lead's product must be resolved against the CURRENT catalogue, not
+         trusted. Older leads carry ids from a previous product list, and a line
+         holding an id the picker cannot show would quote a dangling product —
+         the select would display one thing and the saved quotation another. */
+      const known = new Set(fgs.map((f) => f.id));
+      let seedId = known.has(l.product) ? l.product
+        : (l.sample && known.has(l.sample.product)) ? l.sample.product
+        : fgs[0].id;
+      const it = ENG.item(seedId) || {};
+      const qty = (l.sample && l.sample.qty) || 1;
+      /* Price list first; failing that, work a rate back out of the estimate
+         already on the lead, so the quotation opens somewhere sensible rather
+         than at zero. */
+      const rate = it.price || (l.value && qty ? Math.round((l.value / qty) * 100) / 100 : 0);
+      lines = [{ itemId: seedId, qty, rate, gstPct: it.gstRate != null ? +it.gstRate : 18 }];
+    }
+
+    const rowHost = h("div", { class: "crm-q-lines" });
+    const totalHost = h("div", { class: "crm-q-tot" });
+
+    const num = (v) => (v == null || v === "" || isNaN(+v) ? 0 : +v);
+    /* A lead has a city but no state code, so we cannot know reliably whether
+       the supply is inter-state. Quotations therefore show a single GST line
+       and say so; the invoice, which does know the customer's state, splits it. */
+    const recalc = () => {
+      const d = GST.calcDoc({ lines: lines.map((r) => ({ qty: num(r.qty), rate: num(r.rate), gstPct: num(r.gstPct) })), interState: true });
+      totalHost.innerHTML = "";
+      totalHost.appendChild(h("div", { class: "crm-q-tot-rows" }, [
+        totRow("Taxable value", money(d.taxable)),
+        totRow("GST", money(d.totalTax)),
+        totRow("Grand total", money(d.grandTotal), true),
+      ]));
+      return d;
+    };
+    const totRow = (k, v, strong) => h("div", { class: "crm-q-tot-row" + (strong ? " strong" : "") },
+      [h("span", { text: k }), h("span", { text: v })]);
+
+    function drawRows() {
+      rowHost.innerHTML = "";
+      rowHost.appendChild(h("div", { class: "crm-q-row head" }, [
+        h("span", { text: "Product" }), h("span", { text: "Qty" }),
+        h("span", { text: "Rate" }), h("span", { text: "GST %" }),
+        h("span", { text: "Amount" }), h("span", { text: "" }),
+      ]));
+      lines.forEach((r, i) => {
+        const it = ENG.item(r.itemId) || {};
+        const amt = num(r.qty) * num(r.rate);
+        const prod = h("select", { class: "select" }, fgs.map((f) => h("option", {
+          value: f.id, selected: f.id === r.itemId ? "selected" : null,
+          text: f.name + (f.thicknessMM != null ? " · " + f.thicknessMM + " mm" : "") })));
+        prod.addEventListener("change", () => {
+          r.itemId = prod.value;
+          const nit = ENG.item(r.itemId) || {};
+          if (!num(r.rate) && nit.price) r.rate = nit.price;
+          drawRows();
+        });
+        const mk = (key, attrs) => {
+          const inp = h("input", Object.assign({ class: "input", type: "number", value: r[key] }, attrs));
+          inp.addEventListener("input", () => { r[key] = inp.value; recalc();
+            const cell = inp.closest(".crm-q-row"); if (cell) cell.querySelector(".crm-q-amt").textContent = money(num(r.qty) * num(r.rate)); });
+          return inp;
+        };
+        rowHost.appendChild(h("div", { class: "crm-q-row" }, [
+          prod,
+          h("div", { class: "crm-q-qty" }, [mk("qty", { step: "0.01", min: "0" }),
+            h("span", { class: "chip", text: it.uom || "kg" })]),
+          mk("rate", { step: "0.01", min: "0" }),
+          mk("gstPct", { step: "0.01", min: "0" }),
+          h("span", { class: "crm-q-amt", text: money(amt) }),
+          h("button", { class: "icon-btn", type: "button", title: "Remove line",
+            onclick: () => { if (lines.length === 1) { toast("A quotation needs at least one line", { type: "warn" }); return; }
+              lines.splice(i, 1); drawRows(); }, text: "✕" }),
+        ]));
+      });
+      recalc();
+    }
+
+    const body = h("div", {}, [
+      h("div", { class: "form-grid" }, [
+        field("Quotation No.", `<input class="input" id="q_no" value="${esc(q.no || nextQuoteNo())}">`),
+        field("Date", `<input class="input" id="q_date" type="date" value="${q.date || todayISO()}">`),
+        field("Valid for (days)", `<input class="input" id="q_valid" type="number" min="1" value="${q.validDays || 30}">`),
+        field("Delivery", `<input class="input" id="q_delivery" value="${esc(q.delivery || "2–3 weeks from confirmed order")}">`),
+        field("Payment Terms", `<input class="input" id="q_pay" value="${esc(q.payTerms || "30 days from invoice")}">`),
+        field("Chase reply on", `<input class="input" id="q_next" type="date" value="${l.nextFollowUp || DB.helpers.daysAhead(7)}">`),
+      ]),
+      h("h3", { style: "margin:16px 0 8px;font-size:14px", text: "What is being quoted" }),
+      rowHost,
+      h("button", { class: "btn sm ghost", type: "button", style: "margin-top:8px",
+        onclick: () => { const f = fgs[0]; lines.push({ itemId: f.id, qty: 1, rate: f.price || 0,
+          gstPct: f.gstRate != null ? +f.gstRate : 18 }); drawRows(); }, html: "＋ Add line" }),
+      totalHost,
+      h("div", { class: "field full", style: "margin-top:14px" }, [
+        h("label", { text: "Terms printed on the quotation" }),
+        h("textarea", { class: "input", id: "q_terms", rows: "4",
+          text: (q.terms || QUOTE_TERMS).join("\n") }),
+      ]),
+    ]);
+
+    const mo = modal({ title: l.quote ? "Quotation " + (q.no || "") : "New Quotation", sub: l.company,
+      xwide: true, body,
+      foot: [
+        h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+        l.quote ? h("button", { class: "btn", onclick: () => printQuote(l), html: "🖨 Print" }) : null,
+        h("button", { class: "btn primary", onclick: () => save(false), text: l.quote ? "Save Quotation" : "Save & Move to Quoted" }),
+        h("button", { class: "btn primary", onclick: () => save(true), html: "🖨 Save & Print" }),
+      ].filter(Boolean) });
+
+    drawRows();
+
+    function save(alsoPrint) {
+      const d = recalc();
+      if (!d.grandTotal) { toast("Add a quantity and a rate first", { type: "warn" }); return; }
+      const first = !l.quote;
+      const quote = {
+        no: UI.$("#q_no").value.trim() || nextQuoteNo(),
+        date: UI.$("#q_date").value || todayISO(),
+        validDays: +UI.$("#q_valid").value || 30,
+        delivery: UI.$("#q_delivery").value.trim(),
+        payTerms: UI.$("#q_pay").value.trim(),
+        terms: UI.$("#q_terms").value.split("\n").map((s) => s.trim()).filter(Boolean),
+        lines: lines.map((r) => ({ itemId: r.itemId, qty: num(r.qty), rate: num(r.rate), gstPct: num(r.gstPct) })),
+        taxable: d.taxable, tax: d.totalTax, total: d.grandTotal,
+      };
+      l.quote = quote;
+      l.quotedValue = quote.total;
+      l.quoteDate = quote.date;
+      // a priced offer IS the Quoted stage; don't make anyone move it by hand
+      if (l.stage !== "Won" && l.stage !== "Lost") l.stage = "Quoted";
+      l.nextFollowUp = UI.$("#q_next").value || DB.helpers.daysAhead(7);
+      // only the first issue writes a timeline entry; a revision corrects the
+      // record instead of stacking duplicate "Quotation Sent" rows
+      if (first) {
+        l.activities = l.activities || [];
+        l.activities.push({ date: quote.date, type: "Quotation Sent",
+          note: quote.no + " — " + money(quote.total) + " for "
+            + quote.lines.map((r) => (ENG.item(r.itemId) || {}).name || r.itemId).join(", "),
+          by: l.owner || "Sales Desk" });
+      }
+      mo.close();
+      toast(first ? l.company + " → Quoted · " + money(quote.total) : "Quotation updated", { type: "ok" });
+      App.saveDelta(() => DB.leads.update(l.id, { stage: l.stage, quote, quotedValue: l.quotedValue,
+        quoteDate: l.quoteDate, nextFollowUp: l.nextFollowUp, activities: l.activities }));
+      if (alsoPrint) printQuote(l);
+      else App.go("crm");
+    }
+  }
+
+  /* QTN-0001, continuing from whatever the highest issued number is */
+  function nextQuoteNo() {
+    const ns = ENG.leads().map((l) => {
+      const m = String((l.quote && l.quote.no) || "").match(/(\d+)\s*$/);
+      return m ? +m[1] : 0;
+    });
+    return "QTN-" + String((ns.length ? Math.max(...ns) : 0) + 1).padStart(4, "0");
+  }
+
+  /* the quotation summary inside the lead drawer */
+  function quoteBlock(l) {
+    const q = l.quote;
+    const expiry = DB.helpers.iso(new Date(new Date(q.date + "T00:00:00").getTime() + (q.validDays || 30) * 86400000));
+    const expired = expiry < todayISO() && l.stage !== "Won";
+    return h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
+      h("div", { class: "flex between aic wrap gap", style: "margin-bottom:8px" }, [
+        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "📄 Quotation " + q.no }),
+        h("div", { class: "flex aic gap" }, [
+          h("span", { html: badge(expired ? "danger" : "ok", expired ? "Expired " + expiry : "Valid to " + expiry) }),
+          h("button", { class: "btn sm ghost", onclick: () => printQuote(l), html: "🖨 Print" }),
+          h("button", { class: "btn sm ghost", onclick: () => quoteForm(l), text: "✎ Revise" }),
+        ]),
+      ]),
+      h("div", { class: "crm-q-mini" }, (q.lines || []).map((r) => {
+        const it = ENG.item(r.itemId) || {};
+        return h("div", { class: "crm-q-mini-row" }, [
+          h("span", { text: it.name || r.itemId }),
+          h("span", { class: "muted", text: ENG.num(r.qty) + " " + (it.uom || "kg") + " × " + money(r.rate) }),
+          h("span", { text: money(r.qty * r.rate) }),
+        ]);
+      })),
+      MW.dl([
+        ["Taxable", money(q.taxable)],
+        ["GST", money(q.tax)],
+        ["Total", money(q.total)],
+        ["Delivery", q.delivery || "—"],
+        ["Payment", q.payTerms || "—"],
+      ]),
+    ]);
+  }
+
+  /* ---- the printed A4 quotation ---- */
+  function printQuote(l) {
+    const q = l.quote;
+    if (!q) { toast("Build the quotation first", { type: "warn" }); return; }
+    const co = orgProfile();
+    const expiry = DB.helpers.iso(new Date(new Date(q.date + "T00:00:00").getTime() + (q.validDays || 30) * 86400000));
+    const IN = (v) => (+v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtD = (d) => { const m = String(d || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + "." + m[2] + "." + m[1] : String(d || "—"); };
+
+    const rows = (q.lines || []).map((r, i) => {
+      const it = ENG.item(r.itemId) || {};
+      const size = [it.thicknessMM != null ? it.thicknessMM + " mm" : null,
+        Array.isArray(it.widthMM) ? (it.widthMM[0] + " mm") : (it.widthMM ? it.widthMM + " mm" : null)]
+        .filter(Boolean).join(" × ");
+      return `<tr>
+        <td class="c">${i + 1}</td>
+        <td><b>${esc(it.name || r.itemId)}</b>${size ? `<div class="sm">${esc(size)}</div>` : ""}
+            ${it.typeCode ? `<div class="sm">Type ${esc(it.typeCode)}</div>` : ""}</td>
+        <td class="r">${IN(r.qty)} ${esc(it.uom || "kg")}</td>
+        <td class="r">${IN(r.rate)}</td>
+        <td class="c">${IN(r.gstPct)}%</td>
+        <td class="r">${IN(r.qty * r.rate)}</td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+<title>Quotation ${esc(q.no)} — ${esc(l.company)}</title>
+<style>
+  @page { size: A4; margin: 14mm 12mm; }
+  *{box-sizing:border-box}
+  body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#111;margin:0}
+  .doc{max-width:186mm;margin:0 auto}
+  .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:8px}
+  .co{font-size:19px;font-weight:800;letter-spacing:.2px}
+  .tag{font-size:11px;color:#555;margin-top:1px}
+  .meta{font-size:10.5px;color:#444;margin-top:5px;line-height:1.5}
+  .tt{text-align:right}
+  .tt h1{font-size:17px;margin:0 0 4px;letter-spacing:2px;text-transform:uppercase}
+  .tt .kv{font-size:11px;color:#333}
+  .tt .kv b{display:inline-block;min-width:64px;color:#666;font-weight:600}
+  .to{margin:14px 0 10px;padding:9px 11px;background:#f5f6f8;border-left:3px solid #111}
+  .to .lab{font-size:9.5px;text-transform:uppercase;letter-spacing:.8px;color:#666;font-weight:700}
+  .to .nm{font-size:13.5px;font-weight:700;margin-top:2px}
+  .to .ln{font-size:11px;color:#444}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{border:1px solid #ccc;padding:6px 7px;vertical-align:top}
+  th{background:#eceef1;font-size:10px;text-transform:uppercase;letter-spacing:.5px;text-align:left}
+  td.r,th.r{text-align:right} td.c,th.c{text-align:center}
+  .sm{font-size:10px;color:#666;margin-top:1px}
+  .sum{margin-top:8px;margin-left:auto;width:56%}
+  .sum tr td{border:none;padding:3px 7px;font-size:12px}
+  .sum tr td:last-child{text-align:right}
+  .sum tr.g td{border-top:1.5px solid #111;font-weight:800;font-size:13.5px;padding-top:6px}
+  .words{margin-top:6px;font-size:11px;font-style:italic;color:#333}
+  .terms{margin-top:14px}
+  .terms h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;margin:0 0 4px;color:#444}
+  .terms ol{margin:0;padding-left:16px;font-size:10.5px;color:#333;line-height:1.6}
+  .sign{margin-top:26px;display:flex;justify-content:space-between;align-items:flex-end}
+  .sign .for{font-size:11.5px;font-weight:700}
+  .sign .rule{margin-top:34px;border-top:1px solid #888;width:190px;font-size:10px;color:#666;padding-top:3px;text-align:center}
+  .foot{margin-top:14px;border-top:1px solid #ddd;padding-top:6px;font-size:9.5px;color:#777;text-align:center}
+  @media print{ .noprint{display:none} }
+  .noprint{margin:10px auto;max-width:186mm;text-align:right}
+  .noprint button{font:600 12px/1 "Segoe UI",Arial;padding:8px 16px;border:1px solid #111;background:#111;color:#fff;border-radius:5px;cursor:pointer}
+</style></head><body>
+<div class="noprint"><button onclick="window.print()">Print this quotation</button></div>
+<div class="doc">
+  <div class="hd">
+    <div>
+      <div class="co">${esc(co.name || "—")}</div>
+      ${co.tagline ? `<div class="tag">${esc(co.tagline)}</div>` : ""}
+      <div class="meta">
+        ${co.address ? esc(co.address) + "<br>" : ""}
+        ${co.phone ? "Tel " + esc(co.phone) + " &nbsp;" : ""}${co.email ? esc(co.email) : ""}
+        ${co.gstin ? "<br>GSTIN " + esc(co.gstin) : ""}${co.pan ? " &nbsp;·&nbsp; PAN " + esc(co.pan) : ""}
+      </div>
+    </div>
+    <div class="tt">
+      <h1>Quotation</h1>
+      <div class="kv"><b>No.</b> ${esc(q.no)}</div>
+      <div class="kv"><b>Date</b> ${fmtD(q.date)}</div>
+      <div class="kv"><b>Valid to</b> ${fmtD(expiry)}</div>
+      <div class="kv"><b>Ref</b> ${esc(l.id)}</div>
+    </div>
+  </div>
+
+  <div class="to">
+    <div class="lab">Quotation for</div>
+    <div class="nm">${esc(l.company)}</div>
+    ${l.contact ? `<div class="ln">Kind attn: ${esc(l.contact)}</div>` : ""}
+    ${l.city ? `<div class="ln">${esc(l.city)}</div>` : ""}
+    ${l.phone ? `<div class="ln">Tel ${esc(l.phone)}</div>` : ""}
+    ${l.email ? `<div class="ln">${esc(l.email)}</div>` : ""}
+  </div>
+
+  <table>
+    <thead><tr>
+      <th class="c" style="width:6%">#</th><th>Description</th>
+      <th class="r" style="width:16%">Quantity</th><th class="r" style="width:14%">Rate</th>
+      <th class="c" style="width:9%">GST</th><th class="r" style="width:17%">Amount</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+
+  <table class="sum">
+    <tr><td>Taxable value</td><td>${IN(q.taxable)}</td></tr>
+    <tr><td>GST</td><td>${IN(q.tax)}</td></tr>
+    <tr class="g"><td>Grand total</td><td>${IN(q.total)}</td></tr>
+  </table>
+  <div class="words">${esc(GST.amountInWords(q.total))}</div>
+
+  <div class="terms">
+    <h3>Terms &amp; Conditions</h3>
+    <ol>
+      ${q.delivery ? `<li>Delivery: ${esc(q.delivery)}</li>` : ""}
+      ${q.payTerms ? `<li>Payment: ${esc(q.payTerms)}</li>` : ""}
+      <li>This quotation is valid until ${fmtD(expiry)}.</li>
+      ${(q.terms || []).map((t) => `<li>${esc(t)}</li>`).join("")}
+    </ol>
+  </div>
+
+  <div class="sign">
+    <div style="font-size:10.5px;color:#666;max-width:52%">
+      We look forward to your valued order and remain at your disposal for any clarification.
+    </div>
+    <div style="text-align:center">
+      <div class="for">For ${esc(co.name || "")}</div>
+      <div class="rule">Authorised Signatory</div>
+    </div>
+  </div>
+
+  <div class="foot">This is a computer-generated quotation and is valid without signature.</div>
+</div></body></html>`;
+
+    const w = window.open("", "_blank");
+    if (!w) { toast("Popup blocked — allow popups for this site to print", { type: "warn" }); return; }
+    w.document.write(html); w.document.close();
+  }
+
+  /* ============================================================
      CREATE / EDIT LEAD
      ============================================================ */
   function leadForm(existing) {
@@ -1210,14 +1694,51 @@
       field("Source", selectHTML("l_source", SOURCES.map((s) => ({ v: s, l: s })), f("source", "Website Enquiry"))),
       field("Owner", `<input class="input" id="l_owner" value="${esc(f("owner", "Sales Desk"))}">`),
       field("Next Follow-up", `<input class="input" id="l_next" type="date" value="${f("nextFollowUp", DB.helpers.daysAhead(3)) || DB.helpers.daysAhead(3)}">`),
+      /* Without this the forecast has nothing to bucket on — it was already
+         shown on the lead drawer but there was never a way to enter it. */
+      field("Expected Close", `<input class="input" id="l_close" type="date" value="${f("expectedClose", "") || ""}">`),
       field("Notes", `<textarea class="input" id="l_notes" placeholder="Requirement, volumes, remarks…">${esc(f("notes", ""))}</textarea>`, "full"),
     ]);
+    const dupHost = h("div", { class: "field full" });
+    body.appendChild(dupHost);
 
     const mo = modal({ title: edit ? "Edit Lead" : "New Lead", sub: edit ? l.id : "Capture a sales enquiry", body,
       foot: [
         h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
         h("button", { class: "btn primary", onclick: save, text: edit ? "Save Changes" : "Create Lead" }),
       ] });
+
+    /* ---- duplicate watch ----
+       Two people on the floor taking the same enquiry is how a CRM ends up
+       with the same company three times. This warns while there is still time
+       to open the existing record instead, but never blocks the save — a real
+       second enquiry from the same company is perfectly legitimate. */
+    const coInput = UI.$("#l_company");
+    if (coInput) {
+      const check = () => {
+        dupHost.innerHTML = "";
+        const v = coInput.value.trim().toLowerCase();
+        if (v.length < 3) return;
+        const norm = (s) => String(s || "").toLowerCase().replace(/\b(pvt|private|ltd|limited|llp|inc|co|company|industries|enterprises)\b|[^a-z0-9]/g, "");
+        const key = norm(v);
+        if (!key) return;
+        const hitLeads = ENG.leads().filter((x) => x.id !== l.id && norm(x.company) === key);
+        const hitCust = (ENG.data.customers || []).filter((c) => norm(c.name) === key);
+        if (!hitLeads.length && !hitCust.length) return;
+        dupHost.appendChild(h("div", { class: "crm-dup" }, [
+          h("div", { class: "crm-dup-t", html: "⚠️ Already on the books" }),
+          h("div", { class: "crm-dup-b" }, [
+            ...hitCust.map((c) => h("div", { class: "crm-dup-row",
+              text: "Customer " + c.id + " — " + c.name + (c.city ? " · " + c.city : "") })),
+            ...hitLeads.map((x) => h("button", { class: "crm-dup-row link", type: "button",
+              onclick: () => { mo.close(); leadDetail(x.id); },
+              text: "Lead " + x.id + " — " + x.stage + " · " + money(x.value) + " · open it →" })),
+          ]),
+        ]));
+      };
+      coInput.addEventListener("input", check);
+      check();
+    }
 
     function save() {
       const company = UI.$("#l_company").value.trim();
@@ -1237,6 +1758,7 @@
         source: UI.$("#l_source").value,
         owner: UI.$("#l_owner").value.trim() || "Sales Desk",
         nextFollowUp: (obj.stage === "Won" || obj.stage === "Lost") ? null : UI.$("#l_next").value,
+        expectedClose: UI.$("#l_close").value || null,
         notes: UI.$("#l_notes").value.trim(),
       });
       if (!edit) ENG.data.leads.push(obj);
@@ -1257,6 +1779,91 @@
      dashboard helpers
      ============================================================ */
   function cssv(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+  /* ============================================================
+     FILTER BAR — search, owner, source and the three flags a sales
+     desk actually sorts by: what is due, what is going cold, and
+     what is worth the most attention.
+     ============================================================ */
+  function filterBar(allLeads, rerender) {
+    const owners = [...new Set(allLeads.map((l) => l.owner).filter(Boolean))].sort();
+    const sources = [...new Set(allLeads.map((l) => l.source).filter(Boolean))].sort();
+
+    const nRot = allLeads.filter((l) => { const r = ENG.leadRot(l); return r && r.rotting; }).length;
+    const nDue = allLeads.filter((l) => l.stage !== "Won" && l.stage !== "Lost"
+      && l.nextFollowUp && l.nextFollowUp <= todayISO()).length;
+    const nHot = allLeads.filter((l) => l.stage !== "Won" && l.stage !== "Lost"
+      && ENG.leadScore(l).band === "hot").length;
+
+    const q = h("input", { class: "input crm-filter-q", type: "search", value: FILTER.q,
+      placeholder: "Search company, contact, city, product…", "aria-label": "Search leads" });
+    /* Re-rendering on every keystroke would rebuild the whole board and steal
+       focus, so the search waits until typing pauses. */
+    let t = 0;
+    q.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => { FILTER.q = q.value.trim(); rerender(); }, 220);
+    });
+
+    const sel = (label, val, opts, onSet) => {
+      const s = h("select", { class: "select crm-filter-sel", "aria-label": label },
+        [h("option", { value: "", text: label })].concat(
+          opts.map((o) => h("option", { value: o, selected: o === val ? "selected" : null, text: o }))));
+      s.addEventListener("change", () => { onSet(s.value); rerender(); });
+      return s;
+    };
+
+    const flagChip = (key, ic, label, n) =>
+      h("button", { class: "crm-chip" + (FILTER.flag === key ? " on" : "") + (n ? "" : " empty"),
+        type: "button", disabled: n ? null : "disabled",
+        onclick: () => { FILTER.flag = FILTER.flag === key ? "" : key; rerender(); },
+        html: ic + " " + label + " <b>" + n + "</b>" });
+
+    return h("div", { class: "crm-filter" }, [
+      q,
+      owners.length > 1 ? sel("Any owner", FILTER.owner, owners, (v) => { FILTER.owner = v; }) : null,
+      sources.length > 1 ? sel("Any source", FILTER.source, sources, (v) => { FILTER.source = v; }) : null,
+      h("div", { class: "crm-chips" }, [
+        flagChip("due", "⏰", "Due", nDue),
+        flagChip("rot", "🥀", "Going cold", nRot),
+        flagChip("hot", "🔥", "Hot", nHot),
+      ]),
+      filterOn()
+        ? h("button", { class: "btn sm ghost", onclick: () => { clearFilter(); rerender(); }, text: "✕ Clear" })
+        : null,
+    ].filter(Boolean));
+  }
+
+  /* the score as a small ring — colour carries the band, the number carries
+     the detail, and the tooltip carries the reasoning */
+  function scorePip(sc) {
+    const pip = h("button", { class: "crm-pip " + sc.band, type: "button",
+      style: "--p:" + sc.score,
+      "aria-label": "Lead score " + sc.score + " out of 100",
+      title: "Lead score " + sc.score + "/100 — tap for the breakdown",
+      onclick: (e) => { e.stopPropagation(); scoreDrill(sc); } },
+      [h("span", { class: "crm-pip-n", text: String(sc.score) })]);
+    return pip;
+  }
+
+  function scoreDrill(sc) {
+    modal({ title: "Lead score · " + sc.score + "/100",
+      sub: "Why this lead sits where it does in the chase order",
+      body: h("div", {}, [
+        h("div", { class: "crm-score-bars" }, sc.parts.map((p) => h("div", { class: "crm-score-row" }, [
+          h("div", { class: "crm-score-k" }, [
+            h("span", { text: p.k }),
+            h("span", { class: "crm-score-pts", text: p.pts + " / " + p.max }),
+          ]),
+          h("div", { class: "crm-score-track" },
+            [h("span", { style: "width:" + Math.round(p.pts / p.max * 100) + "%" })]),
+          h("div", { class: "crm-score-why", text: p.why }),
+        ]))),
+        h("div", { class: "muted", style: "font-size:12px;margin-top:14px;line-height:1.5",
+          text: "Score is recomputed from the lead itself every time this page draws — "
+            + "nothing is stored, so correcting a value or logging a call moves it immediately." }),
+      ]) });
+  }
 
   /* ---- PRIORITY BLOCK: today's follow-ups ---- */
   function followUpBlock(due, overdueList, todayList, staleSamples) {
@@ -1348,6 +1955,7 @@
     // every open stage, in pipeline order — otherwise the segments shown stop
     // adding up to the weighted total in the title
     const open = ENG.STAGES.filter((s) => s !== "Won" && s !== "Lost");
+    const conv = {}; ENG.stageConversion().forEach((c) => { conv[c.stage] = c; });
     const funnel = h("div", { class: "crm-funnel" });
     open.forEach((st, i) => {
       const col = byStage[st] || { count: 0, value: 0, items: [] };
@@ -1360,7 +1968,19 @@
         age != null ? h("div", { class: "crm-fseg-age", text: "sitting " + age + " days" }) : null,
         h("div", { class: "crm-fbar" }),
       ]));
-      funnel.appendChild(h("div", { class: "crm-fchev", text: i < open.length - 1 ? "›" : "→" }));
+      /* The gap between two stages is where the drop-off actually happens, so
+         that is where the conversion rate belongs — how many of everything
+         that ever reached this stage went on to the next one. */
+      const c = conv[st];
+      funnel.appendChild(c
+        ? h("div", { class: "crm-fchev has-rate",
+            title: c.advanced + " of " + c.reached + " leads that reached " + st + " moved on"
+              + (c.avgDays != null ? " · those still here are " + c.avgDays + " days old" : "") }, [
+            h("span", { class: "crm-fchev-ic", text: i < open.length - 1 ? "›" : "→" }),
+            h("span", { class: "crm-fchev-rate" + (c.rate >= 50 ? " good" : c.rate >= 25 ? "" : " poor"),
+              text: c.rate + "%" }),
+          ])
+        : h("div", { class: "crm-fchev", text: i < open.length - 1 ? "›" : "→" }));
     });
     funnel.appendChild(h("div", { class: "crm-fout" }, [
       h("div", { class: "crm-fseg-stage", style: "color:var(--ok)", html: "🏆 Won" }),
@@ -1392,6 +2012,88 @@
           h("div", { class: "crm-card-val", style: "font-size:14px", text: money(stats.weighted) }),
         ]),
       ]) });
+  }
+
+  /* ============================================================
+     FORECAST — open leads laid out on the months they are expected
+     to close. Two numbers per month, deliberately kept apart:
+       committed — a price is already with the customer (Quoted)
+       weighted  — everything open, discounted by stage probability
+     A lead with no expected-close date is reported on its own rather
+     than being quietly dropped into this month, because a forecast
+     that hides its own blind spot is worse than no forecast.
+     ============================================================ */
+  function forecastDrill() {
+    const f = ENG.forecastByMonth(6);
+    const cycle = ENG.salesCycleDays();
+    const peak = Math.max(1, ...f.months.map((m) => Math.max(m.weighted, m.commit)));
+    const totW = f.months.reduce((s, m) => s + m.weighted, 0);
+    const totC = f.months.reduce((s, m) => s + m.commit, 0);
+
+    const monthLabel = (k) => {
+      const [y, mo] = k.split("-");
+      return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][+mo - 1]
+        + " " + String(y).slice(2);
+    };
+
+    const bars = h("div", { class: "crm-fc" }, f.months.map((m) => h("div", { class: "crm-fc-col" + (m.count ? " crm-click" : ""),
+      title: m.count ? m.count + " lead" + (m.count === 1 ? "" : "s") + " expected to close in " + monthLabel(m.key) : "Nothing expected to close",
+      onclick: m.count ? () => { UI.$("#modalHost").hidden = true; monthDrill(m, monthLabel(m.key)); } : null }, [
+      /* Two bars side by side, not stacked: committed is the FULL quoted
+         value while weighted is the discounted one, so neither contains the
+         other and overlaying them would read as a part-to-whole that isn't. */
+      h("div", { class: "crm-fc-stack" }, [
+        h("div", { class: "crm-fc-bar weighted", style: "height:" + Math.round(m.weighted / peak * 100) + "%",
+          title: "Weighted " + money(m.weighted) }),
+        h("div", { class: "crm-fc-bar commit", style: "height:" + Math.round(m.commit / peak * 100) + "%",
+          title: m.commit ? "Quoted " + money(m.commit) : "Nothing quoted yet" }),
+      ]),
+      h("div", { class: "crm-fc-m", text: monthLabel(m.key) }),
+      h("div", { class: "crm-fc-v", text: m.weighted ? money(m.weighted) : "—" }),
+    ])));
+
+    modal({ title: "Forecast · next 6 months", wide: true,
+      sub: money(totW) + " weighted" + (totC ? " · " + money(totC) + " already quoted" : "")
+        + (cycle != null ? " · deals take " + cycle + " days on average" : ""),
+      body: h("div", {}, [
+        bars,
+        h("div", { class: "crm-fc-key" }, [
+          h("span", {}, [h("i", { class: "k commit" }), "Committed — quotation already with the customer"]),
+          h("span", {}, [h("i", { class: "k weighted" }), "Weighted — open value × stage probability"]),
+        ]),
+        (f.undated.count || f.beyond.count || f.overdue.count) ? h("div", { class: "crm-fc-note" }, [
+          f.overdue.count ? h("div", { class: "crm-drill-row", style: "cursor:pointer",
+            onclick: () => { UI.$("#modalHost").hidden = true; monthDrill(f.overdue, "Past their expected close"); } }, [
+            h("div", { style: "flex:1;min-width:0" }, [
+              h("div", { class: "crm-drill-co", text: "⏳ " + f.overdue.count + " lead" + (f.overdue.count === 1 ? "" : "s") + " already past the close date" }),
+              h("div", { class: "crm-drill-sub", text: "Slipped out of the forecast — re-date them or close them" }),
+            ]),
+            h("div", { class: "crm-card-val", text: money(f.overdue.weighted) }),
+          ]) : null,
+          f.undated.count ? h("div", { class: "crm-drill-row", style: "cursor:pointer",
+            onclick: () => { UI.$("#modalHost").hidden = true; monthDrill(f.undated, "No expected close date"); } }, [
+            h("div", { style: "flex:1;min-width:0" }, [
+              h("div", { class: "crm-drill-co", text: "⚠️ " + f.undated.count + " lead" + (f.undated.count === 1 ? "" : "s") + " with no close date" }),
+              h("div", { class: "crm-drill-sub", text: "Not counted in any month above — set an expected close to forecast them" }),
+            ]),
+            h("div", { class: "crm-card-val", text: money(f.undated.weighted) }),
+          ]) : null,
+          f.beyond.count ? h("div", { class: "crm-drill-row", style: "cursor:pointer",
+            onclick: () => { UI.$("#modalHost").hidden = true; monthDrill(f.beyond, "Beyond 6 months"); } }, [
+            h("div", { style: "flex:1;min-width:0" }, [
+              h("div", { class: "crm-drill-co", text: "🗓️ " + f.beyond.count + " expected beyond this window" }),
+              h("div", { class: "crm-drill-sub", text: "Closing later than the six months shown" }),
+            ]),
+            h("div", { class: "crm-card-val", text: money(f.beyond.weighted) }),
+          ]) : null,
+        ].filter(Boolean)) : null,
+      ].filter(Boolean)) });
+  }
+
+  function monthDrill(bucket, label) {
+    modal({ title: label, wide: true,
+      sub: bucket.count + " lead" + (bucket.count === 1 ? "" : "s") + " · " + money(bucket.weighted) + " weighted",
+      body: leadRows(bucket.items || [], (l) => l.stage + " · " + (l.expectedClose || "no close date") ) });
   }
 
   /* open leads → where they came from */

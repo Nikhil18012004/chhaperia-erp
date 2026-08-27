@@ -1181,6 +1181,15 @@ canvas{display:block;width:100%}
 .sup-lab-fld label .u{font-weight:500;font-size:11px;color:var(--text-mut)}
 .sup-lab-fld .input{width:100%}
 .sup-done-tag{flex:1;text-align:center;padding:13px;color:var(--ok);font-weight:800;background:var(--ok-soft,rgba(22,163,74,.12));border-radius:12px}
+/* Packed and waiting on the office. Sized and placed exactly like the button
+   that used to sit here, but flat and unclickable — the floor reports this
+   state, it does not act on it. Deliberately NOT green: the job is not
+   finished business until the lorry has gone. */
+.sup-ready-tag{flex:1;text-align:center;padding:11px 13px;border-radius:12px;
+  background:color-mix(in srgb,var(--info) 12%,transparent);
+  border:1px dashed color-mix(in srgb,var(--info) 45%,transparent);cursor:default}
+.sup-ready-tag .t{color:var(--info);font-weight:800;font-size:14px;line-height:1.3}
+.sup-ready-tag .s{color:var(--text-mut);font-size:11.5px;font-weight:600;margin-top:4px;line-height:1.35}
 .sup-empty{text-align:center;padding:50px 20px;color:var(--text-mut)}
 .sup-empty .big{font-size:46px;margin-bottom:10px}
 /* tablet / PC: multi-column job grid */
@@ -3119,4 +3128,155 @@ select.ls-in{padding-left:3px;cursor:pointer}
 @media (max-width:900px){
   .ls-gal-act .mini{width:32px;height:32px;border-radius:8px}
   .ls-gal-print{height:32px;padding:0 12px}
+}
+
+
+/* ============================================================
+   CRM — PIPELINE UPGRADE
+   Filter bar, lead score, deal-rot flag, drag-and-drop affordance,
+   stage conversion, forecast and the quotation builder.
+   These sit at the end of the file on purpose: several of them
+   extend rules declared in the CRM block above (.crm-lead,
+   .crm-fchev, .crm-car-slide), and an override at equal
+   specificity has to come after what it overrides.
+   ============================================================ */
+
+/* ---- filter bar ---------------------------------------------------------
+   One row on a desktop, wrapping to as many as it needs on a tablet. The
+   search box is the only thing that grows; the selects stay at their
+   natural width so the chips keep their place on the line. */
+.crm-filter{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 14px}
+.crm-filter-q{flex:1 1 260px;min-width:0;height:36px}
+.crm-filter-sel{flex:0 0 auto;height:36px;max-width:200px}
+.crm-chips{display:flex;gap:7px;flex-wrap:wrap}
+.crm-chip{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px;
+  border:1px solid var(--line);border-radius:var(--radius-pill);background:var(--panel);
+  font:600 12px/1 inherit;color:var(--text-dim);cursor:pointer;transition:var(--tr);white-space:nowrap}
+.crm-chip b{font-family:var(--mono);font-weight:800;font-size:11.5px}
+.crm-chip:hover:not(:disabled){border-color:var(--line-strong);color:var(--text)}
+.crm-chip.on{background:color-mix(in srgb,var(--accent) 13%,var(--panel));
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.crm-chip.empty,.crm-chip:disabled{opacity:.42;cursor:default}
+
+/* ---- lead score ring ----------------------------------------------------
+   A conic sweep of --p percent. The ring carries the band by colour so it
+   reads at a glance on a crowded board; the number is for when it doesn't. */
+.crm-pip{flex:0 0 auto;width:32px;height:32px;border-radius:50%;border:0;padding:0;cursor:pointer;
+  display:grid;place-items:center;position:relative;background:conic-gradient(
+    var(--pc) calc(var(--p,0)*1%), color-mix(in srgb,var(--line) 60%,transparent) 0);
+  --pc:var(--text-mut);transition:var(--tr)}
+.crm-pip::before{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--panel)}
+.crm-car-slide.is-active .crm-pip::before{background:var(--panel-2)}
+.crm-pip.hot{--pc:var(--danger)} .crm-pip.warm{--pc:var(--warn)} .crm-pip.cold{--pc:var(--text-mut)}
+.crm-pip-n{position:relative;font:800 11px/1 var(--mono);color:var(--text)}
+.crm-pip:hover{transform:scale(1.09)}
+
+/* ---- a lead going cold --------------------------------------------------
+   The card keeps its stage colour; only a warm left edge and one line of
+   text change, so "going cold" reads as a state of the lead rather than as
+   a second, competing category of card. */
+.crm-lead.is-rot{border-left:3px solid var(--warn)}
+.crm-lead-rot{margin-top:7px;font-size:10.5px;font-weight:700;color:var(--warn);
+  background:color-mix(in srgb,var(--warn) 11%,transparent);border-radius:7px;
+  padding:4px 8px;line-height:1.3}
+
+/* ---- drag and drop ------------------------------------------------------
+   The dragged card fades in place; the column it is over lifts its tint and
+   dashes its border so the drop target is never ambiguous. */
+.crm-lead.is-dragging{opacity:.4;transform:none;cursor:grabbing}
+.crm-car-slide.is-drop{outline:2px dashed color-mix(in srgb,var(--sc) 70%,transparent);
+  outline-offset:-4px;background:color-mix(in srgb,var(--sc) 9%,var(--panel))}
+@media(hover:hover){ .crm-lead[draggable=true]{cursor:grab} }
+
+/* ---- stage conversion, shown in the funnel's gaps ---------------------- */
+.crm-fchev.has-rate{display:flex;flex-direction:column;align-items:center;gap:2px;justify-content:center}
+.crm-fchev-ic{font-size:16px;line-height:1}
+.crm-fchev-rate{font:800 10px/1 var(--mono);color:var(--text-mut);white-space:nowrap}
+.crm-fchev-rate.good{color:var(--ok)}
+.crm-fchev-rate.poor{color:var(--danger)}
+
+/* ---- score breakdown ---------------------------------------------------- */
+.crm-score-bars{display:flex;flex-direction:column;gap:14px}
+.crm-score-row{display:grid;grid-template-columns:1fr;gap:5px}
+.crm-score-k{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  font-size:13px;font-weight:700}
+.crm-score-pts{font:800 12px/1 var(--mono);color:var(--text-mut)}
+.crm-score-track{height:7px;border-radius:99px;background:var(--panel-3);overflow:hidden}
+.crm-score-track>span{display:block;height:100%;border-radius:99px;background:var(--accent)}
+.crm-score-why{font-size:11.5px;color:var(--text-mut)}
+
+/* ---- forecast ----------------------------------------------------------
+   Committed sits IN FRONT of weighted in the same column rather than beside
+   it: the committed figure is a subset of the weighted one, and two adjacent
+   bars would invite reading it as an additional amount. */
+.crm-fc{display:flex;align-items:flex-end;gap:10px;height:190px;margin:4px 0 12px}
+.crm-fc-col{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px;
+  height:100%;border-radius:10px;padding:6px 4px 0;transition:var(--tr)}
+.crm-fc-col.crm-click{cursor:pointer}
+.crm-fc-col.crm-click:hover{background:var(--panel-3)}
+.crm-fc-stack{flex:1;width:100%;max-width:58px;margin:0 auto;display:flex;align-items:flex-end;
+  justify-content:center;gap:3px;min-height:2px}
+.crm-fc-bar{flex:1 1 0;min-width:0;border-radius:5px 5px 0 0;min-height:2px}
+.crm-fc-bar.weighted{background:color-mix(in srgb,var(--accent) 34%,transparent)}
+.crm-fc-bar.commit{background:var(--accent)}
+.crm-fc-m{font-size:11px;font-weight:700;color:var(--text-dim);white-space:nowrap}
+.crm-fc-v{font:700 10.5px/1 var(--mono);color:var(--text-mut);white-space:nowrap}
+.crm-fc-key{display:flex;gap:18px;flex-wrap:wrap;font-size:11.5px;color:var(--text-mut);
+  border-top:1px solid var(--line);padding-top:10px}
+.crm-fc-key span{display:inline-flex;align-items:center;gap:7px}
+.crm-fc-key i.k{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+.crm-fc-key i.k.commit{background:var(--accent)}
+.crm-fc-key i.k.weighted{background:color-mix(in srgb,var(--accent) 34%,transparent)}
+.crm-fc-note{margin-top:14px;border-top:1px solid var(--line);padding-top:6px}
+
+/* ---- duplicate warning in the lead form -------------------------------- */
+.crm-dup{border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line));border-radius:var(--radius-sm);
+  background:color-mix(in srgb,var(--warn) 9%,transparent);padding:10px 12px}
+.crm-dup-t{font-size:12px;font-weight:800;color:var(--warn);margin-bottom:5px}
+.crm-dup-b{display:flex;flex-direction:column;gap:3px}
+.crm-dup-row{font-size:12px;color:var(--text-dim);text-align:left;line-height:1.45}
+.crm-dup-row.link{background:none;border:0;padding:0;cursor:pointer;color:var(--accent);font-weight:650}
+.crm-dup-row.link:hover{text-decoration:underline}
+
+/* ---- quotation builder --------------------------------------------------
+   Six columns on a desktop. Below 780px the grid would crush the product
+   select to nothing, so each line becomes its own labelled block instead. */
+.crm-q-lines{display:flex;flex-direction:column;gap:7px}
+.crm-q-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1.3fr) minmax(0,1fr) 78px minmax(0,1fr) 34px;
+  gap:8px;align-items:center}
+.crm-q-row.head{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-mut);
+  font-weight:700;padding:0 2px}
+.crm-q-row.head span:nth-child(3),.crm-q-row.head span:nth-child(4),
+.crm-q-row.head span:nth-child(5){text-align:right}
+.crm-q-row .input,.crm-q-row .select{height:34px}
+.crm-q-row input[type=number]{text-align:right}
+.crm-q-qty{display:flex;align-items:center;gap:5px;min-width:0}
+.crm-q-qty .input{min-width:0}
+.crm-q-qty .chip{flex:0 0 auto;font-size:10.5px}
+.crm-q-amt{text-align:right;font:800 12.5px/1 var(--mono)}
+.crm-q-tot{margin-top:14px;display:flex;justify-content:flex-end}
+.crm-q-tot-rows{min-width:270px;border-top:1px solid var(--line-strong);padding-top:9px}
+.crm-q-tot-row{display:flex;justify-content:space-between;gap:20px;font-size:13px;padding:3px 0}
+.crm-q-tot-row span:last-child{font-family:var(--mono);font-weight:700}
+.crm-q-tot-row.strong{font-weight:800;font-size:15px;border-top:1px solid var(--line);
+  margin-top:5px;padding-top:8px}
+.crm-q-mini{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.crm-q-mini-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;align-items:baseline}
+.crm-q-mini-row span:first-child{font-weight:650;flex:1;min-width:0}
+.crm-q-mini-row span:last-child{font-family:var(--mono);font-weight:700}
+
+@media(max-width:780px){
+  .crm-q-row.head{display:none}
+  .crm-q-row{grid-template-columns:1fr 1fr;gap:7px;border:1px solid var(--line);
+    border-radius:var(--radius-sm);padding:10px;background:var(--panel-2)}
+  .crm-q-row>.select{grid-column:1/-1}
+  .crm-q-amt{grid-column:1/2;align-self:center;text-align:left;font-size:13.5px}
+  .crm-q-row>.icon-btn{grid-column:2/3;justify-self:end}
+  .crm-q-tot-rows{min-width:0;width:100%}
+}
+@media(max-width:640px){
+  .crm-fc{height:150px;gap:5px}
+  .crm-fc-m{font-size:9.5px}
+  .crm-fc-v{display:none}
+  .crm-filter-sel{flex:1 1 140px;max-width:none}
 }
