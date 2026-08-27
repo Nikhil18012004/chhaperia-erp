@@ -855,6 +855,15 @@ async function produceFinished(user, body) {
      same web, measured before it is slit. */
   const gate = await LAB.finishedStockGate(recipeOwnerId, body, data);
   if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
+  /* A reading OUTSIDE its limits no longer refuses the booking (ruled
+     2026-08-27): the stock goes into the store it was booked to, the verdict
+     rides on the ledger row's note, and the certificate is filed against the
+     batch — linked to this booking — for the office to act on. */
+  const labTag = gate.refNo
+    ? " · batch " + gate.refNo + (gate.result === "Fail"
+      ? " · LAB FAIL" + ((gate.failed || []).length ? ": " + gate.failed.join(", ") : "")
+      : gate.result === "Pass" ? " · lab pass" : "")
+    : "";
 
   const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
   const Y = bom.yield || 1;
@@ -931,7 +940,7 @@ async function produceFinished(user, body) {
   moves.push({ id: mvId(), date, itemId: item.id, wh: warehouse.id, type: "PROD",
     qty: Math.abs(qty), rate: item.cost || 0, ref,
     note: (isWip ? "Work in process added at " : "Finished stock added at ") + warehouse.name
-      + (tapeWidth ? " · " + tapeWidth + " mm tape width" : ""), by });
+      + (tapeWidth ? " · " + tapeWidth + " mm tape width" : "") + labTag, by });
 
   await repo.addMovements(moves);
 
@@ -942,18 +951,28 @@ async function produceFinished(user, body) {
   if (tapeWidth && !isWip) patch.tapeWidthMM = tapeWidth;
   if (body.thicknessMM != null && body.thicknessMM !== "") patch.thicknessMM = +body.thicknessMM || null;
   if (body.gsm != null && body.gsm !== "") patch.gsm = +body.gsm || null;
+  /* A half-made roll is the same web as its parent, so it carries the parent's
+     thickness. Without this every jumbo booked in read "—" in the ledger's
+     thickness column: the WIP item had none of its own to print. */
+  if (isWip && patch.thicknessMM == null && item.thicknessMM == null && recipeOwner.thicknessMM != null) {
+    patch.thicknessMM = recipeOwner.thicknessMM;
+  }
   if (Object.keys(patch).length) await repo.putItem(Object.assign({}, item, patch));
 
   /* the batch's certificate, now that the stock is really in. Readings taken
      on the floor are the PRODUCTION set; the lab incharge adds theirs to the
-     same document later, exactly as for a coated work order. */
+     same document later, exactly as for a coated work order. Either way the
+     certificate is told which booking it covers, so the ledger can open it. */
   let labReport = null;
   if (gate.values) {
     labReport = await LAB.createReport({
       productId: gate.product.id, refNo: gate.refNo, source: "production",
-      values: gate.values,
+      values: gate.values, stockRef: ref, itemId: item.id,
       testedBy: body.testedBy != null ? String(body.testedBy) : (user.name || user.username),
     }, user);
+  } else if (gate.reportId) {
+    // measured earlier — the existing certificate now also names this booking
+    labReport = await LAB.updateReport(gate.reportId, { stockRef: ref, itemId: item.id }, user);
   }
 
   return {
@@ -963,7 +982,9 @@ async function produceFinished(user, body) {
     fromStock: { fgQty: fromStock.fgQty, wipQty: fromStock.wipQty, makeQty },
     consumed,
     batchNo: gate.refNo || null,
-    labReport: labReport ? { id: labReport.id, result: labReport.prodResult } : null,
+    labReport: labReport ? { id: labReport.id,
+      result: gate.result != null ? gate.result : labReport.prodResult,
+      failed: gate.failed || [] } : null,
   };
 }
 

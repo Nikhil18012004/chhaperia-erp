@@ -688,5 +688,16 @@
     changePassword: { ic:"🔒", label:"Change Password", run:()=>App.forcePasswordChange() },
   });
 
+  /* The caret left in a number field turns the mouse wheel into a spinner:
+     scrolling a form changed the quantity under the pointer (reported
+     2026-08-27, after the arrow buttons were already hidden). Chrome spins
+     only a FOCUSED number input, so the wheel takes the focus away first —
+     the value stays where it was typed and the page scrolls as it would
+     anywhere else. */
+  document.addEventListener("wheel",(e)=>{
+    const t=e.target;
+    if(t&&t.tagName==="INPUT"&&t.type==="number"&&t===document.activeElement) t.blur();
+  },{capture:true,passive:true});
+
   document.addEventListener("DOMContentLoaded",()=>App.boot());
 })(window);

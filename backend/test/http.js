@@ -1438,6 +1438,43 @@ async function run() {
     // a batch already measured does not have to be measured twice
     const again = await book({ refNo: "LOT-1" });
     ok("adding more to a batch already measured needs no re-entry", again.status === 201, again.status + "");
+    ok("and the certificate names both bookings it covers", (() => {
+      const r = again.d.labReport || {}; return r.id === good.d.labReport.id; })(), JSON.stringify(again.d.labReport));
+
+    /* A reading OUTSIDE its limits books the stock all the same (ruled
+       2026-08-27): what changes is that the ledger row says so and the
+       certificate is filed as a Fail, linked to the booking, for the office
+       to act on. Thickness 0.9 is far past the 0.2–0.3 limit; tensile 1 is
+       under the 30 minimum. */
+    const bad = await book({ refNo: "LOT-BAD", labValues: { thickness: 0.9, tensile: 1 } });
+    ok("a reading outside its limits still books the stock", bad.status === 201,
+      bad.status + " " + JSON.stringify(bad.d).slice(0, 120));
+    ok("…and the reply says the batch FAILED, and on what",
+      !!bad.d.labReport && bad.d.labReport.result === "Fail"
+        && /Thickness/.test((bad.d.labReport.failed || []).join(",")) && /Tensile/.test((bad.d.labReport.failed || []).join(",")),
+      JSON.stringify(bad.d.labReport));
+    ok("the failed stock really landed", (await onHand("FG-LABGATE")) === before + 30,
+      before + " -> " + (await onHand("FG-LABGATE")));
+    const stBad = (await call("GET", "/state", A)).d;
+    const mvBad = (stBad.movements || []).find((m) => m.ref === bad.d.ref && m.type === "PROD");
+    ok("the ledger row carries the verdict",
+      !!mvBad && /LAB FAIL/.test(mvBad.note || "") && /LOT-BAD/.test(mvBad.note || "") && /Thickness/.test(mvBad.note || ""),
+      mvBad && mvBad.note);
+    const lrBad = (stBad.labReports || []).find((r) => r.id === bad.d.labReport.id);
+    ok("the certificate is filed as a Fail and names the booking it covers",
+      !!lrBad && lrBad.result === "Fail" && (lrBad.stockRefs || []).indexOf(bad.d.ref) >= 0 && lrBad.itemId === "FG-LABGATE",
+      JSON.stringify(lrBad && { result: lrBad.result, stockRefs: lrBad.stockRefs, itemId: lrBad.itemId }));
+    const lrGood = (stBad.labReports || []).find((r) => r.id === good.d.labReport.id);
+    ok("a passing batch's certificate lists every booking made against it",
+      !!lrGood && (lrGood.stockRefs || []).indexOf(good.d.ref) >= 0 && (lrGood.stockRefs || []).indexOf(again.d.ref) >= 0,
+      JSON.stringify(lrGood && lrGood.stockRefs));
+    // more of the SAME failed batch is not refused either — it is flagged the same way
+    const badAgain = await book({ refNo: "LOT-BAD" });
+    ok("more of a failed batch books too, flagged the same way",
+      badAgain.status === 201 && !!badAgain.d.labReport && badAgain.d.labReport.result === "Fail",
+      badAgain.status + " " + JSON.stringify(badAgain.d.labReport));
+    const mvBad2 = ((await call("GET", "/state", A)).d.movements || []).find((m) => m.ref === badAgain.d.ref && m.type === "PROD");
+    ok("…on the ledger row as well", !!mvBad2 && /LAB FAIL/.test(mvBad2.note || ""), mvBad2 && mvBad2.note);
 
     /* the sheet the form builds itself from — parameters, never limits */
     const sheet = await call("GET", "/production/finished/FG-LABGATE/lab", C);
@@ -1458,6 +1495,14 @@ async function run() {
     const wipNoVals = await call("POST", "/production/finished", C,
       { itemId: "WIP-LABGATE", qty: 5, wh: "WH-WIP", gsm: 100, refNo: "LOT-W1" });
     ok("and it cannot be booked unmeasured either", wipNoVals.status === 409, wipNoVals.status + "");
+    /* a jumbo has no thickness of its own — booking it stamps the parent's on
+       it, so the ledger's thickness column no longer reads "—" for the roll */
+    await call("PATCH", "/items/FG-LABGATE", A, { thicknessMM: 0.25 });
+    const wipBook = await call("POST", "/production/finished", C,
+      { itemId: "WIP-LABGATE", qty: 5, wh: "WH-WIP", gsm: 100, refNo: "LOT-W1", labValues: { thickness: 0.25, tensile: 40 } });
+    const wipItem = ((await call("GET", "/state", A)).d.items || []).find((i) => i.id === "WIP-LABGATE") || {};
+    ok("a booked jumbo inherits its parent's thickness", wipBook.status === 201 && wipItem.thicknessMM === 0.25,
+      wipBook.status + " thicknessMM=" + wipItem.thicknessMM);
     // put the master back as it was — a later section asserts no WIP item exists
     await call("DELETE", "/items/WIP-LABGATE", A);
 
@@ -2100,9 +2145,14 @@ async function run() {
   const fgBal = (afterState.movements || []).filter((m) => m.itemId === fg && m.ref === woP.id)
     .reduce((n, m) => n + (+m.qty || 0), 0);
   ok("so the job leaves the finished-goods balance untouched", fgBal === 0, String(fgBal));
+  /* WIP-LABGATE is the lab-gate section's own jumbo fixture: since 2026-08-27
+     that section books it in (to prove a jumbo inherits its parent's
+     thickness), and an item with stock can no longer be deleted — so it is
+     the one WIP item allowed to exist here. This job must not have made any. */
   ok("no WIP item exists in the item master at all",
-    (afterState.items || []).every((i) => i.cat !== "WIP" && !/^WIP-/.test(i.id)),
-    (afterState.items || []).filter((i) => i.cat === "WIP").length + " WIP items");
+    (afterState.items || []).filter((i) => i.id !== "WIP-LABGATE")
+      .every((i) => i.cat !== "WIP" && !/^WIP-/.test(i.id)),
+    (afterState.items || []).filter((i) => i.cat === "WIP" && i.id !== "WIP-LABGATE").length + " WIP items");
   const woPdone = (afterState.workorders || []).find((w) => w.id === woP.id);
   ok("the job still completed normally", (woPdone.route || []).every((r) => r.status === "Completed"));
   await call("PUT", "/boms/" + fg, A, { yield: 90, lines: [[rm, 0.7]] });   // restore

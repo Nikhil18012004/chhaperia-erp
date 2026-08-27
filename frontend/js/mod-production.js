@@ -1524,6 +1524,10 @@
             canSource?{fgQty:fsFgWanted, wipQty:fsWipWanted}:{}));
           mo.close();
           const used=(r&&r.consumed||[]).length;
+          /* A reading outside its limits books the stock all the same, and is
+             told apart from a good one NOWHERE here (ruled 2026-08-27): the
+             same "booked" message either way. The verdict lives on the batch's
+             certificate, reachable from the ledger row's details. */
           toast(ENG.num(qty,2)+" "+postUom+" added"+(used?" · "+used+" material(s) issued":""),
             {type:"ok",title:(catNow==="FG"?"Finished stock booked":"Work in process booked")});
           await App.reloadState();
@@ -1536,6 +1540,13 @@
 
     function woForm(){
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
+      /* The number this order WILL get, worked out exactly the way the server
+         works it out (highest existing number + 1, four digits) and shown in
+         the dialog's title, so the office can write it on the job sheet while
+         the form is still open. The server still assigns the real one on
+         Create; the toast names it. */
+      const woNo=(()=>{ let max=0; (ENG.data.workorders||[]).forEach(w=>{ const m=/(\d+)/.exec(w.id||""); if(m) max=Math.max(max,+m[1]); });
+        return "WO-"+String(max+1).padStart(4,"0"); })();
       const body=h("div",{class:"form-grid"},[
         fgPicker("w_item", fgs, fgs[0]&&fgs[0].id),
         U.field("Quantity",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
@@ -1843,7 +1854,7 @@
         if(createBtn) createBtn.disabled = makeQty>0 && noneAtAll.length>0;
       };
       const createBtn=h("button",{class:"btn primary",onclick:save,text:"Create Work Order"});
-      const mo=modal({title:"New Work Order", sub:"Plan a production run", body,
+      const mo=modal({title:"New Work Order · "+woNo, sub:"Plan a production run", body,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), createBtn]});
       setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); /* the width decides WHICH finished stock can be used, so it re-nets the
    whole plan rather than just refreshing its own hint */

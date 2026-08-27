@@ -284,6 +284,13 @@ async function buildReport(body, existing, user) {
     labBy: body.labBy != null ? String(body.labBy).trim()
       : (target === "lab" && user ? user.username : (base.labBy || "")),
     woId: body.woId != null ? String(body.woId).trim() : (base.woId || ""),
+    /* The stock bookings this certificate covers. A batch booked into a store
+       carries its FP- movement ref here — the movements table has no column
+       for a certificate, so this is how a ledger row finds its report. A
+       batch may be booked more than once, hence a list. */
+    stockRefs: Array.from(new Set([].concat(base.stockRefs || [],
+      body.stockRef ? [String(body.stockRef)] : []))),
+    itemId: body.itemId != null ? String(body.itemId) : (base.itemId || ""),
     assignee: body.assignee != null ? (String(body.assignee).trim() || "Pending") : (base.assignee || "Pending"),
     testedBy: body.testedBy != null ? String(body.testedBy).trim() : (base.testedBy || ""),
     remarks: body.remarks != null ? String(body.remarks).trim() : (base.remarks || ""),
@@ -505,16 +512,15 @@ async function finishedStockGate(itemId, body, data) {
   const already = existing
     && (setComplete(existing.prodValues, params) || setComplete(existing.labValues, params));
   if (already) {
-    /* Measured, but measured how? A batch already on the books as a Fail must
-       not be bookable into a finished store just because its certificate is
-       complete — that was the same blind spot the coating gate had. */
-    if (existing.prodResult === "Fail" || existing.labResult === "Fail") {
-      return Object.assign({ ok: false, reason: "failed", refNo, reportId: existing.id }, base, {
-        message: "Batch " + refNo + " FAILED its test — it cannot be booked into finished stock. "
-          + "An administrator must rule on the batch first.",
-      });
-    }
-    return Object.assign({ ok: true, reason: "already-measured", refNo, reportId: existing.id }, base);
+    /* Measured already — and measured how? A batch on the books as a Fail is
+       still booked (ruled 2026-08-27: a failed reading does not keep stock off
+       the ledger — the ledger row carries the verdict and the certificate
+       stays filed against the batch for the office to act on). The verdict is
+       returned so the movement can say so; it never refuses. */
+    const useLab = setComplete(existing.labValues, params);
+    return Object.assign({ ok: true, reason: "already-measured", refNo, reportId: existing.id,
+      result: (useLab ? existing.labResult : existing.prodResult) || "Pending",
+      failed: failedLabels(useLab ? existing.labResults : existing.prodResults, params) }, base);
   }
 
   const supplied = body.labValues || body.values || null;
@@ -527,19 +533,18 @@ async function finishedStockGate(itemId, body, data) {
         + missing.map((p) => p.label).join(", ") + ".",
     });
   }
-  /* A complete reading is not automatically an acceptable one — grade the
-     figures the caller just supplied before letting the stock into a store. */
+  /* A complete reading is graded here so the caller can SAY what it was —
+     a figure outside its limits books the stock all the same (see above);
+     what changes is that the ledger row and the certificate both say Fail. */
   const graded = evaluate(supplied, product.spec, params);
-  if (graded.result === "Fail") {
-    const bad = params.filter((p) => graded.results[p.key] === "fail").map((p) => p.label);
-    return Object.assign({ ok: false, reason: "failed", refNo }, base, {
-      message: "These readings put batch " + refNo + " outside its limits ("
-        + (bad.join(", ") || "one or more parameters")
-        + ") — it cannot be booked into finished stock. An administrator must rule on the batch first.",
-    });
-  }
   return Object.assign({ ok: true, reason: "supplied", refNo, values: pickValues(supplied, params),
-    reportId: existing ? existing.id : null }, base);
+    reportId: existing ? existing.id : null,
+    result: graded.result, failed: failedLabels(graded.results, params) }, base);
+}
+/** The labels of the parameters a graded set failed on. */
+function failedLabels(results, params) {
+  results = results || {};
+  return (params || []).filter((p) => results[p.key] === "fail").map((p) => p.label);
 }
 
 /**

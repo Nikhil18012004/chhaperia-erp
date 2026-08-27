@@ -126,10 +126,22 @@
   }
 
   /* ----- item detail drawer/modal ----- */
-  function itemDetail(id){
+  /* opts.labOnly + opts.labReportId — opened from a LEDGER ROW: the foot
+     offers the certificate of that row's reference / batch (nothing if it has
+     none). Opened from Stock Items (no opts) there is NO lab material here at
+     all — the "Lab reports (N)" card, the 🧪 Lab Report and 🧪 QC Parameters
+     buttons were taken out 2026-08-27 at the user's request; the file lives
+     under Lab Reports, the verdicts on the Stock Ledger, and the incoming-test
+     parameters are edited from the GRN Testing dialog in Purchase Orders. */
+  function itemDetail(id, opts){
+    opts=opts||{};
     const it=ENG.item(id), st=ENG.status(id), u=ENG.usage(id), s=ENG.stock(id);
     const led=ENG.ledger(id).slice(-12).reverse();
     const ser = last30Series(id);
+    const featured=opts.labReportId||null;
+    const labs=(opts.labOnly&&featured)
+      ? [(ENG.data.labReports||[]).find(r=>r.id===featured)].filter(Boolean)
+      : [];
     const body=h("div",{},[
       // statgrid: these six tiles are small enough to stay two-up on a phone
       // instead of collapsing to one per row (see app.css)
@@ -192,17 +204,15 @@
     const mayEdit=!App.canWrite||App.canWrite("inventory");
     const mayLedger=!App.canAccess||App.canAccess("ledger");
     const mayBuy=!App.canAccess||App.canAccess("purchase");
-    /* WHICH readings a material needs is the lab incharge's trade as much as
-       admin's, so both reach this editor. The LIMITS inside it are admin's
-       alone — whoever takes a reading must not be able to move the yardstick it
-       is graded against (the server enforces the same split). */
-    const mayQc=(App.isAdmin&&App.isAdmin()||App.isLab&&App.isLab())&&it.cat!=="WIP";
     modal({title:it.name, sub:it.id+" · "+catName(it.cat), wide:true, body,
       foot:[
         mayLedger?h("button",{class:"btn",onclick:()=>{App.go("ledger",{item:id});UI.$("#modalHost").hidden=true;},text:"📒 Full Ledger"}):null,
+        // from a LEDGER ROW only: the certificate that row's booking was graded on
+        (labs.length&&(!App.canAccess||App.canAccess("lab-reports")))
+          ?h("button",{class:"btn",title:"Batch "+(labs[0].refNo||labs[0].id)+" · "+labs[0].id,
+              onclick:()=>{App.go("lab-reports",{open:labs[0].id});UI.$("#modalHost").hidden=true;},
+              text:"🧪 Lab Report"+(labs.length>1?" ("+labs.length+")":"")}):null,
         (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${esc(ENG.qtyText(it,st.suggest,0))})`}):null,
-        mayQc?h("button",{class:"btn",title:"Which parameters this material is tested on when it is received, and their pass/fail limits",
-          onclick:()=>qcForm(it),text:"🧪 QC Parameters"}):null,
         mayEdit?h("button",{class:"btn ghost",onclick:()=>itemForm(it),text:"✎ Edit"}):null
       ].filter(Boolean)});
   }
@@ -785,36 +795,100 @@
     if(/^PO-/i.test(ref) && (ENG.data.purchaseorders||[]).some(p=>p.id===ref)) return {sec:"purchase", id:ref};
     return null;
   }
+  /* The certificate a finished-stock booking was measured on. The certificate
+     names the bookings it covers (stockRefs) — the movement itself has no room
+     for a report id — so the lookup runs that way round. The lab role gets
+     these reports with the verdict withheld, so `result` may be absent. */
+  function labReportFor(m){
+    if(!m||!m.ref) return null;
+    const ref=String(m.ref).trim(), bn=ref.replace(/^WO[\s-]*/i,"");
+    /* a booking names its certificate outright — but the certificate belongs
+       to the PRODUCED item only. The raw materials issued by the same booking
+       share its reference and must not wear its report (ruled 2026-08-27). */
+    const byRef=(ENG.data.labReports||[]).find(r=>(r.stockRefs||[]).indexOf(ref)>=0
+      && (r.itemId ? r.itemId===m.itemId : m.type==="PROD"));
+    if(byRef) return byRef;
+    if(m.type==="ISSUE") return null;   // consumed material never carries a certificate
+    // …otherwise the reference IS the batch (a work order, or a hand-typed lot
+    // number), matched only among this material's own certificates
+    return labReportsFor(m.itemId).find(r=>String(r.woId||"")===ref
+      || String(r.refNo||"").trim()===ref || String(r.refNo||"").trim()===bn)||null;
+  }
+  /* Every certificate filed against a material: the ones its bookings were
+     measured on, plus any written against the lab product that tests it. */
+  function labReportsFor(itemId){
+    const it=ENG.item(itemId)||{};
+    const ownerId=it.cat==="WIP"&&it.stageOf?it.stageOf:itemId;
+    const lp=(ENG.data.labProducts||[]).find(p=>p.itemId&&String(p.itemId)===ownerId)
+      ||(ENG.data.labProducts||[]).find(p=>p.code&&"FG-"+p.code===ownerId)||null;
+    const seen={}, out=[];
+    (ENG.data.labReports||[]).forEach(r=>{
+      if(!(r.itemId===itemId || (lp&&r.productId===lp.id))) return;
+      if(seen[r.id]) return; seen[r.id]=1; out.push(r);
+    });
+    return out.sort((a,b)=>String(b.reportDate||b.createdAt||"").localeCompare(String(a.reportDate||a.createdAt||"")));
+  }
+  /* what the ledger prints under a booking's reference: the batch and, for
+     anyone allowed to see it, whether it passed */
+  function labBadge(m){
+    const lr=labReportFor(m); if(!lr) return "";
+    const res=lr.result==="Fail"?`<b style="color:var(--danger)">FAIL</b>`
+      : lr.result==="Pass"?`<b style="color:var(--ok)">PASS</b>` : "";
+    return `<div class="cell-sub" title="Lab report ${esc(lr.id)}">🧪 ${esc(lr.refNo||lr.id)}${res?" · "+res:""}</div>`;
+  }
   /* A ledger row opens what it points at: its document when it has one the
      user may see, otherwise the material itself — a row is never a dead end. */
   function openMove(m){
     const doc=refTarget(m);
     if(doc && App.canAccess && App.canAccess(doc.sec)){ App.go(doc.sec,{open:doc.id}); return; }
-    if(m.itemId && ENG.item(m.itemId)) itemDetail(m.itemId);
+    /* a ledger row opens the material showing ONLY the certificate of THAT
+       reference / batch (ruled 2026-08-27) — never the material's whole file */
+    const lr=labReportFor(m);
+    if(m.itemId && ENG.item(m.itemId)) itemDetail(m.itemId, {labOnly:true, ref:m.ref, labReportId:lr?lr.id:null});
   }
 
   /* ============== STOCK LEDGER ============== */
   M.ledger = { title:"Stock Ledger", sub:"Every movement, running balance", render(root, params){
-    /* .toLowerCase() matters: the row test lower-cases what it searches, so an
-        item code arriving from a link — "RM-MICA-TAPE-CP25H-130MIC" — never
-        matched and the ledger opened on "No movements match" every time it was
-        reached from a material. */
-    let filter={q:params&&params.item?String(params.item).toLowerCase():"", type:"all", wh:"all", from:"", to:""};
+    /* params.item is an EXACT material id. Reached from a material (📒 Full
+       Ledger in its details, or a row in a warehouse's drill-down) the ledger
+       shows that material alone — it is pinned as a chip in the toolbar, × lets
+       every material back in. It used to drop the code into the text search
+       instead, which also matched every sibling code it is a prefix of
+       (FG-CP25G took FG-CP25GE and FG-CP25GH along) and every raw-material
+       issue whose note named it: 5 of the 63 rows shown were the material
+       asked for (measured 2026-08-27). The chip clears params.item too, since
+       the 15s refresh re-renders with the same params. */
+    let filter={q:"", item:params&&params.item&&ENG.item(params.item)?String(params.item):"", type:"all", wh:"all", from:"", to:""};
     root.appendChild(pageHead("Stock Ledger","Complete audit trail — receipts, issues, production, sales & adjustments with auto running balance"));
     const tableHost=h("div");
+    const itemChip=h("span",{class:"chip",style:"gap:8px",title:"Only this material's movements are listed"});
+    function syncChip(){
+      itemChip.replaceChildren();
+      if(!filter.item){ itemChip.hidden=true; return; }
+      const it=ENG.item(filter.item)||{name:filter.item,id:filter.item};
+      itemChip.append(
+        h("span",{text:"📦 "+it.name}),
+        h("span",{class:"mono muted",text:it.id}),
+        h("button",{class:"btn sm ghost",style:"padding:0 6px;line-height:1.4;font-size:13px",title:"Show every material",
+          onclick:()=>{ filter.item=""; if(params) delete params.item; syncChip(); draw(); },text:"×"})
+      );
+      itemChip.hidden=false;
+    }
     const bar=h("div",{class:"toolbar"},[
       MW.searchInput("Search item, reference…", v=>{filter.q=v.toLowerCase();draw();}),
+      itemChip,
       MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP","XFER"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;draw();}),
       MW.select([{value:"all",label:"All Warehouses"},...ENG.data.warehouses.map(w=>({value:w.id,label:w.name}))], v=>{filter.wh=v;draw();}),
       MW.dateRange(filter, draw, {label:"Movement Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"ledCount"}))
     ]);
-    if(filter.q){ bar.querySelector("input").value=filter.q; }
+    syncChip();
     root.appendChild(bar); root.appendChild(tableHost);
 
     function draw(){
       let data=ENG.data.movements.slice().reverse();
       data=data.filter(m=>{
+        if(filter.item&&m.itemId!==filter.item) return false;
         if(filter.type!=="all"&&m.type!==filter.type) return false;
         if(filter.wh!=="all"&&m.wh!==filter.wh) return false;
         if(!MW.inDateRange(m.date, filter)) return false;
@@ -833,11 +907,13 @@
         /* the reference is the movement's own story — a receipt names its PO,
            an issue its work order, a sale its sales order. Rows that lead to a
            document say so; the row click below takes you there. */
-        {key:"ref",label:"Reference",width:"96px",render:r=>{
+        {key:"ref",label:"Reference",width:"110px",render:r=>{
           const doc=refTarget(r);
-          return doc
+          return (doc
             ? `<span class="mono code" style="color:var(--accent);font-weight:600">${esc(r.ref)}</span>`
-            : `<span class="mono code">${esc(r.ref||"—")}</span>`;
+            : `<span class="mono code">${esc(r.ref||"—")}</span>`)
+            // a booked batch shows its lab verdict here; the row opens the certificate
+            +labBadge(r);
         },sort:r=>r.ref},
         /* the weight rides under the quantity where the quantity is not one
            already, instead of a column that reads "—" on almost every row */
@@ -961,8 +1037,12 @@
        movement pointing at it) stays */
     function canEditWh(){ const r=(App.user&&App.user.role)||""; return r==="admin"||r==="office"; }
 
-    /* drill-down: every material held in this warehouse */
+    /* drill-down: every material held in this warehouse. A row opens that
+       material's FULL ledger (every store, every movement — asked for
+       2026-08-27); a role without the ledger gets the material's details. */
     function whDetail(w){
+      const mayLedger=!App.canAccess||App.canAccess("ledger");
+      const openRow=r=>{ mo.close(); if(mayLedger) App.go("ledger",{item:r.it.id}); else itemDetail(r.it.id); };
       const rows=ENG.data.items.map(it=>{
         const st=ENG.stock(it.id), q=st.byWh[w.id]||0;
         return {it, q, cost:st.avgCost, val:q*st.avgCost};
@@ -988,7 +1068,7 @@
           {key:"cost",label:"Avg Cost",num:true,width:"88px",render:r=>"₹"+ENG.num(ENG.dispRate(r.it,r.cost),2),sort:r=>r.cost},
           {key:"val",label:"Value",num:true,width:"88px",render:r=>ENG.money(r.val),sort:r=>r.val},
           {key:"share",label:"Share",num:true,width:"66px",render:r=>totalVal>0?ENG.num(r.val/totalVal*100,1)+"%":"—",sort:r=>r.val},
-        ],{empty:q?"No materials match":"No stock in this warehouse"}));
+        ],{onRow:openRow,empty:q?"No materials match":"No stock in this warehouse"}));
       }
       const body=h("div",{},[
         h("div",{class:"toolbar",style:"margin-bottom:10px"},[
@@ -999,7 +1079,7 @@
       ]);
       // wide: the Weight column takes this to 8 columns, which overflowed the
       // default dialog and clipped Share off the right edge
-      const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand", body, wide:true,
+      const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand · click a material for its full ledger", body, wide:true,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
       draw();
     }
@@ -1111,6 +1191,15 @@
      not — a material already counted in kilograms, or web now read in
      kilograms, would just print the same number twice */
   function weighsSeparately(it){ return !!it && !ENG.isKg(it) && !ENG.readsAsKg(it); }
+  /* A half-made roll has no thickness of its own — it is its parent product's
+     web before slitting — so the parent's thickness is what every list prints
+     for it. Without this the ledger read "—" on every jumbo booked in. */
+  function thkOf(it){
+    if(!it) return null;
+    let t=it.thicknessMM!=null?it.thicknessMM:it.thickness;
+    if((t==null||t==="")&&it.stageOf){ const p=ENG.item(it.stageOf)||{}; t=p.thicknessMM!=null?p.thicknessMM:p.thickness; }
+    return t;
+  }
   /* `opts.hsn` adds the HSN under the code (Stock Items wants it, a movement
      list does not); `opts.cat` adds the Category column. Widths are declared
      because without them the browser hands the widest NOWRAP cell whatever it
@@ -1129,9 +1218,9 @@
       /* thickness IS the identity of a sheet material — two mica tapes with
          the same name and a different thickness are different stock */
       {key:"thk",label:"Thk",num:true,width:"66px",
-        render:r=>{const t=it(r).thicknessMM!=null?it(r).thicknessMM:it(r).thickness;
+        render:r=>{const t=thkOf(it(r));
           return t!=null&&t!==""?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},
-        sort:r=>+(it(r).thicknessMM!=null?it(r).thicknessMM:it(r).thickness)||0},
+        sort:r=>+thkOf(it(r))||0},
     ];
     if(opts.cat!==false) cols.push(
       {key:"cat",label:"Category",width:"84px",
@@ -1317,10 +1406,10 @@
     return it.grade? nm+" — "+it.grade : nm; }
 
   // expose for other modules
-  /* qcForm is shared because the parameter list is edited from TWO places: the
-     material master here, and the test report itself — the lab incharge notices
-     a missing parameter while standing at the delivery, not while browsing
-     Stock Items. One editor, both entry points. */
+  /* qcForm is reached from the GRN test report in Purchase Orders — the lab
+     incharge notices a missing parameter while standing at the delivery. It
+     used to be offered from the material master here as well; that button was
+     taken out 2026-08-27 at the user's request, so the export is the only way in. */
   window._erpUtil = Object.assign(window._erpUtil||{}, {field, selectHTML, searchSelect, ssSet, ssAddOption, downloadCSV, trim, catName, moveBadge, nextSeqId, genMoveId, baseCode, familyCode, matDisplay, itemForm, receiveStockForm, qcForm});
 
   // register quick actions for the ⌘K command palette
