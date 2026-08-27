@@ -6,10 +6,12 @@
    shown here — the entry form captures measured values only, and the
    backend grades Pass/Fail on submit.
 
-   Two views (segmented): "Test Reports" and "Products" (the lab
-   product master; admin can also set the hidden spec there).
-   Reports are graded server-side, so writes go through a reload
-   (not optimistic) to bring back the computed result.
+   Three views (segmented): "Finished Goods" (batch certificates),
+   "Raw Materials (GRN)" (incoming-material tests, raised ONLY against a
+   purchase order's goods receipt — added 2026-08-27 at the user's ask)
+   and "Products" (the lab product master; admin can also set the
+   hidden spec there). Reports are graded server-side, so writes go
+   through a reload (not optimistic) to bring back the computed result.
    ============================================================ */
 (function () {
   "use strict";
@@ -71,7 +73,9 @@
   function resultBadge(r) { return r === "Pass" ? badge("ok", "Pass") : r === "Fail" ? badge("danger", "Fail") : badge("mut", "Pending"); }
   const prodById = (id) => products().find((p) => p.id === id);
 
-  let VIEW = "reports";   // "reports" | "products" — persists across re-render
+  let VIEW = "reports";   // "reports" | "incoming" | "products" — persists across re-render
+  // within Raw Materials (GRN): the worklist or the filed tests
+  let ITAB = "pending";   // "pending" | "done"
   // within Test Reports: the worklist, the finished certificates, or everything
   let TAB = "pending";    // "pending" | "done" | "all"
 
@@ -94,7 +98,7 @@
        nobody made. A certificate leaves his list the moment he files it.
        Everyone else gets the full three-tab view. */
     const labOnly = App.isLab();
-    if (labOnly) VIEW = "reports";
+    if (labOnly && VIEW === "products") VIEW = "reports";
 
     /* No "New Report" button anywhere: a certificate is only ever raised
        against a real batch — by the coating floor, by whoever books finished
@@ -103,28 +107,36 @@
     const newBtn = (!labOnly && VIEW === "products")
       ? h("button", { class: "btn primary", onclick: () => productForm(), html: "＋ New Product" })
       : null;
+    const subText = VIEW === "incoming"
+      ? "Incoming raw materials are tested only against the goods receipt of a purchase order — every line here came in on a PO, and nothing that did not can be tested."
+      : labOnly
+        ? "Pending lists every batch awaiting a reading; enter the measured values against a batch number and it moves to Completed. Values are graded against the product's TDS spec on submit."
+        : "Test certificates for finished goods. A report carries the parameters this product's entry under Products states a limit for; measured values are graded against that spec on submit.";
     root.appendChild(pageHead(
       labOnly ? "Lab Reports" : "Lab Reports — Quality Control",
-      labOnly
-        ? "Pending lists every batch awaiting a reading; enter the measured values against a batch number and it moves to Completed. Values are graded against the product's TDS spec on submit."
-        : "Test certificates for finished goods. A report carries the parameters this product's entry under Products states a limit for; measured values are graded against that spec on submit.",
-      // the Excel menu follows the visible tab: certificates vs the product master
-      labOnly ? [] : [MW.excelMenu(VIEW === "reports" ? "labreports" : "labproducts"), newBtn].filter(Boolean)));
+      subText,
+      // the Excel menu follows the visible tab: certificates vs the product
+      // master; the GRN worklist prints per receipt (the GRN cum test report)
+      labOnly ? [] : [VIEW === "incoming" ? null : MW.excelMenu(VIEW === "reports" ? "labreports" : "labproducts"), newBtn].filter(Boolean)));
 
-    // segmented view switch — the incharge has only the one view
-    if (!labOnly) {
-      root.appendChild(h("div", { class: "flex gap", style: "margin-bottom:16px" }, [
-        segBtn("reports", "🧪 Test Reports"),
-        segBtn("products", "📦 Products"),
-      ]));
-    }
+    /* segmented view switch — the incharge has the two worklists and no
+       product master */
+    root.appendChild(h("div", { class: "flex gap", style: "margin-bottom:16px" }, [
+      segBtn("reports", "🧪 Finished Goods"),
+      segBtn("incoming", "🚚 Raw Materials (GRN)"),
+      labOnly ? null : segBtn("products", "📦 Products"),
+    ].filter(Boolean)));
 
-    /* Incoming-material testing is NOT shown here. It lives in Procurement,
-       against the goods receipt that brought the material in — that is where the
-       delivery, the supplier and the receipt document already are, and a second
-       worklist on this page only split the same job across two screens. This
-       page is the finished-goods certificates and nothing else. */
-    if (VIEW === "reports") renderReports(root, labOnly); else renderProducts(root);
+    /* Incoming-material testing used to live ONLY in Procurement, against the
+       goods receipt that brought the material in. The user asked (2026-08-27)
+       for it here as well, in the lab's own section — but still strictly via
+       the purchase order: the worklist is the server's list of received PO
+       lines owing a reading, and the row opens the same GRN test form the
+       receipt does. There is no way on this page to test a material that did
+       not arrive on a PO. */
+    if (VIEW === "reports") renderReports(root, labOnly);
+    else if (VIEW === "incoming") renderIncoming(root, labOnly);
+    else renderProducts(root);
 
     if (params && params.openNew) { params.openNew = false; if (!labOnly && VIEW === "products") productForm(); }
     if (params && params.openPending) { params.openPending = false; pendingModal(); return; }
@@ -216,6 +228,127 @@
     const key = "chh_labpending_" + ((App.user && App.user.username) || "?");
     try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, "1"); } catch { /* private mode */ }
     setTimeout(pendingModal, 350);
+  }
+
+  /* ============================================================
+     RAW MATERIALS (GRN) — incoming-material tests, via purchase orders
+     The worklist is ENG.data.grnTestPending, computed server-side
+     (grnTestService.pendingTests): every line of every posted goods
+     receipt whose material has test parameters and no complete reading
+     yet. A row opens the GRN test form from Procurement (shared through
+     _erpUtil), so the reading is filed against the receipt exactly as it
+     is from the PO screen, and the PO reflects it. Filed tests come from
+     ENG.data.grnTests; the lab incharge's copy carries no verdict (the
+     server withholds it), so his rows read "Tested", never Pass/Fail.
+     ============================================================ */
+  const grnPending = () => ENG.data.grnTestPending || [];
+  const grnTests = () => (ENG.data.grnTests || []).filter((t) => t.complete);
+  const grnById = (id) => (ENG.data.grns || []).find((g) => g.id === id) || null;
+  const supplierName = (id) => ((ENG.data.suppliers || []).find((s) => s.id === id) || {}).name || (id || "—");
+  const itemCat = (id) => { const it = ENG.item && ENG.item(id); return it && it.cat ? (U.catName ? U.catName(it.cat) : it.cat) : "—"; };
+
+  /* one badge per filed test — the same order of precedence Procurement uses:
+     an unruled failure first, then the settled outcomes, then the verdict —
+     and never a grade the payload did not carry */
+  function grnBadge(t, labOnly) {
+    if (!t || !t.complete) return badge("warn", "Test due");
+    if (t.result === "Fail" && !t.decision) return badge("danger", "⛔ Approval due");
+    if (t.decision === "quarantined") return badge("danger", "Quarantined");
+    if (t.decision === "released") return badge("warn", "Failed · released");
+    if (t.result === "Fail") return badge("danger", "✗ Fail");
+    if (labOnly || !t.result) return badge("ok", "✓ Tested");
+    return t.result === "Pass" ? badge("ok", "✓ Pass") : badge("info", t.result);
+  }
+  function openGrnTest(row) {
+    if (!U || !U.grnTestForm) { toast("Procurement is not loaded — open the receipt from Procurement instead", { type: "warn" }); return; }
+    // the form reloads state on save, which re-renders this page
+    U.grnTestForm(row.grnId, row.itemId);
+  }
+  function openGrnPanel(t) {
+    const g = grnById(t.grnId);
+    if (!g || !U || !U.grnTestPanel) { toast("Goods receipt " + t.grnId + " is not on file", { type: "warn" }); return; }
+    U.grnTestPanel(g);
+  }
+
+  function renderIncoming(root, labOnly) {
+    let filter = { q: "" };
+    const pend = grnPending();
+    const done = grnTests();
+    const me = (App.user && App.user.username) || "";
+    const rulings = (ENG.data.grnQcDecisions || []).length;
+
+    root.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" }, labOnly ? [
+      kpi({ icon: "🚚", label: "Awaiting test", value: ENG.num(pend.length) }),
+      kpi({ icon: "✅", label: "Filed by you", value: ENG.num(done.filter((t) => t.testedBy === me).length) }),
+      kpi({ icon: "📥", label: "Goods receipts", value: ENG.num((ENG.data.grns || []).filter((g) => g.status !== "Cancelled").length) }),
+    ] : [
+      kpi({ icon: "🚚", label: "Awaiting test", value: ENG.num(pend.length) }),
+      kpi({ icon: "✅", label: "Passed", value: ENG.num(done.filter((t) => t.result === "Pass").length) }),
+      kpi({ icon: "⛔", label: "Failed", value: ENG.num(done.filter((t) => t.result === "Fail").length) }),
+      /* a failed lot waiting on a ruling is material the factory may be about
+         to use — the tile goes straight to the admin's queue */
+      (() => { const c = kpi({ icon: "⚖️", label: "Ruling due", value: ENG.num(rulings), delta: rulings ? "Decide now" : "None", deltaType: rulings ? "down" : "up" });
+        if (rulings && isAdmin() && U && U.qcDecisionQueue) { c.style.cursor = "pointer"; c.setAttribute("role", "button"); c.onclick = () => U.qcDecisionQueue(); }
+        return c; })(),
+    ]));
+
+    const seg = h("div", { class: "seg", style: "margin-bottom:14px" });
+    const segBtn2 = (label, key) => {
+      const b = h("button", { class: ITAB === key ? "on" : "", text: label,
+        onclick: () => { ITAB = key; [...seg.children].forEach((c) => c.classList.remove("on")); b.classList.add("on"); draw(); } });
+      return b;
+    };
+    seg.appendChild(segBtn2("Awaiting test" + (pend.length ? " (" + pend.length + ")" : ""), "pending"));
+    seg.appendChild(segBtn2("Tested", "done"));
+    root.appendChild(seg);
+
+    root.appendChild(h("div", { class: "toolbar" }, [
+      searchInput("Search material, code, PO, GRN, supplier…", (v) => { filter.q = v.toLowerCase(); draw(); }),
+      h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "grnCount" })),
+    ]));
+    root.appendChild(h("div", { class: "muted", style: "font-size:11.5px;margin:-4px 0 10px;line-height:1.6",
+      text: "Every line arrived on a purchase order. A raw material is tested only against its goods receipt — to test a delivery that is not listed, receive its PO first." }));
+    const host = h("div"); root.appendChild(host);
+
+    const hay = (r) => [r.itemName, r.itemId, r.poId, r.grnId, r.invNo, supplierName(r.supplierId)].join(" ").toLowerCase();
+    const matches = (r) => !filter.q || hay(r).includes(filter.q);
+    const poCell = (r) => `<div style="font-weight:700">${esc(r.poId || "—")}</div><div class="muted" style="font-size:10.5px">${esc(r.grnId)}${r.invNo ? " · inv " + esc(r.invNo) : ""}</div>`;
+    const matCell = (r) => `<div style="font-weight:600">${esc(U.trim(r.itemName || r.itemId, 44))}</div><div class="muted" style="font-size:11px">${esc(r.itemId)} · ${esc(itemCat(r.itemId))}</div>`;
+
+    function draw() {
+      const c = UI.$("#grnCount");
+      host.innerHTML = "";
+      if (ITAB === "pending") {
+        const data = pend.filter(matches);
+        if (c) c.textContent = data.length + " material" + (data.length === 1 ? "" : "s") + " awaiting";
+        host.appendChild(table(data, [
+          { key: "date", label: "Received", width: "100px", render: (r) => esc(r.date || "—"), sort: (r) => r.date || "" },
+          { key: "po", label: "Purchase Order", width: "150px", render: poCell, sort: (r) => r.poId || "" },
+          { key: "mat", label: "Material", cls: "nm", render: matCell, sort: (r) => r.itemName || "" },
+          { key: "sup", label: "Supplier", render: (r) => esc(supplierName(r.supplierId)), sort: (r) => supplierName(r.supplierId) },
+          { key: "params", label: "Parameters", width: "96px", render: (r) => ENG.num(r.params || 0) + " to read", sort: (r) => r.params || 0 },
+          { key: "act", label: "", noSort: true, width: "96px", render: (r) => actionCell([["🧪 Test", () => openGrnTest(r)]]) },
+        ], { onRow: openGrnTest, sort: "date", dir: -1,
+          empty: pend.length ? "No material matches" : "Nothing awaiting — every received material has been tested" }));
+        return;
+      }
+      const data = done.filter(matches).sort((a, b) => String(b.testedAt || b.date || "").localeCompare(String(a.testedAt || a.date || "")));
+      if (c) c.textContent = data.length + " test" + (data.length === 1 ? "" : "s");
+      host.appendChild(table(data, [
+        { key: "date", label: "Tested", width: "100px", render: (t) => esc(String(t.testedAt || t.date || "—").slice(0, 10)), sort: (t) => t.testedAt || t.date || "" },
+        { key: "po", label: "Purchase Order", width: "150px", render: poCell, sort: (t) => t.poId || "" },
+        { key: "mat", label: "Material", cls: "nm", render: matCell, sort: (t) => t.itemName || "" },
+        { key: "sup", label: "Supplier", render: (t) => esc(supplierName(t.supplierId)), sort: (t) => supplierName(t.supplierId) },
+        { key: "sample", label: "Sample", width: "90px", render: (t) => t.sampleSize == null ? `<span class="muted">—</span>` : ENG.num(t.sampleSize) + " " + esc(t.uom || ""), sort: (t) => t.sampleSize || 0 },
+        { key: "res", label: labOnly ? "Status" : "Result", width: "128px", render: (t) => grnBadge(t, labOnly), sort: (t) => (t.result || "") + (t.decision || "") },
+        { key: "by", label: "Tested by", width: "110px", render: (t) => esc(t.testedBy || "—"), sort: (t) => t.testedBy || "" },
+        { key: "act", label: "", noSort: true, width: "128px", render: (t) => actionCell([
+          ["View", () => openGrnPanel(t)],
+          ["Print", () => { const g = grnById(t.grnId); if (g && U && U.printGrn) U.printGrn(g); else toast("Goods receipt " + t.grnId + " is not on file", { type: "warn" }); }],
+        ]) },
+      ], { onRow: openGrnPanel, empty: done.length ? "No test matches" : "No incoming material has been tested yet" }));
+    }
+    draw();
   }
 
   /* ============================================================
@@ -692,5 +825,7 @@
   window.ERPActions = Object.assign(window.ERPActions || {}, {
     labPendingWork: { mod: "lab-reports", ic: "🧪", label: "Pending lab work",
       run: () => App.go("lab-reports", { view: "reports", openPending: true }) },
+    grnPendingWork: { mod: "lab-reports", ic: "🚚", label: "Raw material tests (GRN)",
+      run: () => App.go("lab-reports", { view: "incoming" }) },
   });
 })();

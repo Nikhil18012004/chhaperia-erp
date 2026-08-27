@@ -591,7 +591,9 @@
          (labService.pendingLabWork); this is only its count, for the nav pill.
          Every role counts the same batches, because the lab incharge works
          the same list the office sees. */
-      labPending:(D.labPending||[]).length,
+      // the Lab Reports badge: batches awaiting a certificate PLUS received
+      // PO lines awaiting an incoming test — both worklists live on that page
+      labPending:(D.labPending||[]).length+(D.grnTestPending||[]).length,
       /* Two separate counts on the Procurement pill's behalf: materials the
          lab still has to measure, and failed lots waiting on an admin ruling.
          A ruling is the more urgent of the two — the stock is live meanwhile. */
