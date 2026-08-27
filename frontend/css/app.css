@@ -187,6 +187,11 @@
 .kpi-grid.compact .kpi-label{font-size:10.5px;letter-spacing:.04em}
 .kpi-grid.compact .kpi-delta{font-size:10.5px;margin-top:7px;padding:2px 7px}
 .kpi-grid.compact .chart-box{display:none}                 /* drop sparkline so 6 fit cleanly */
+/* five headline tiles in one row (the two work calendars: overdue / today / week / open / done) */
+.kpi-grid.five{grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.kpi-grid.five .kpi{padding:13px 14px}
+@media(max-width:1240px){ .kpi-grid.five{grid-template-columns:repeat(3,minmax(0,1fr))} }
+@media(max-width:640px){ .kpi-grid.five{grid-template-columns:repeat(2,minmax(0,1fr))} }
 @media(max-width:1240px){ .kpi-grid.compact{grid-template-columns:repeat(3,minmax(0,1fr))} }
 @media(max-width:640px){ .kpi-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))} }
 
@@ -3329,6 +3334,7 @@ select.ls-in{padding-left:3px;cursor:pointer}
   background:var(--panel-3);color:var(--text-mut);white-space:nowrap;letter-spacing:.02em}
 .cal-row-tag.late{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
 .cal-row-tag.now{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.cal-row-tag.done{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
 .cal-row-tag.big{font-size:12px;padding:6px 12px}
 .cal-ag-date.late{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));color:var(--danger)}
 .cal-ag-date:hover{border-color:var(--line-strong)}

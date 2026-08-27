@@ -391,13 +391,18 @@
        every other tab uses, so a run can be started or finished
        straight off the calendar without going back to My Jobs.
 
-       Only OPEN work is placed. A finished job's due date is
-       history, and history is what the Completed tab is for.
+       Open AND finished work is placed (ruling 2026-08-27: the floor
+       asked to see what is done as well as what is pending). A
+       finished job sits on its due day ticked off — it is never
+       counted as late, and the headline numbers stay about open work.
        ============================================================ */
     openJobs() {
       const g = this.buckets();
       return g.active.concat(g.incoming);
     },
+    doneJobs() { return this.buckets().done; },
+    /* every job the grid places — open first, then finished */
+    calJobs() { return this.openJobs().concat(this.doneJobs()); },
     calDue(w) { return w.due ? String(w.due).slice(0, 10) : ""; },
     /* Drives the nav pill. Counts only what is genuinely late: a job with no
        due date cannot be overdue, however long it has been sitting. */
@@ -412,7 +417,10 @@
       const { DAY, WD, MONTHS, sod, parseISO, wdIndex, weekStart, fmtShort } = CAL;
       const t = DB.helpers.iso(DB.helpers.today());
       const weekEnd = DB.helpers.iso(new Date(DB.helpers.today().getTime() + 7 * DAY));
-      const jobs = this.openJobs();
+      const open = this.openJobs(), finished = this.doneJobs();
+      const doneIds = new Set(finished.map((w) => w.id));
+      const isDone = (w) => doneIds.has(w.id);
+      const jobs = open.concat(finished);
       const dueOf = (w) => this.calDue(w);
 
       /* View + month live on SUP, not in this function: refresh() re-renders
@@ -423,17 +431,18 @@
 
       view.appendChild(pageHead(
         "📅 Calendar",
-        "Your area's open jobs on the days they are due off the line. Tap a day to open its jobs and move them on.",
+        "Your area's jobs on the days they are due off the line — open ones to move on, finished ones ticked off. Tap a day to open it.",
         [ H("button", { class: "btn", onclick: () => { this.calCursor = sod(DB.helpers.today()); this.render(); }, html: "◎ Today" }),
           H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" }) ]
       ));
 
-      const late = jobs.filter((w) => dueOf(w) && dueOf(w) < t);
-      const today = jobs.filter((w) => dueOf(w) === t);
-      const week = jobs.filter((w) => dueOf(w) > t && dueOf(w) < weekEnd);
+      // the headline numbers are about OPEN work; finished jobs get their own tile
+      const late = open.filter((w) => dueOf(w) && dueOf(w) < t);
+      const today = open.filter((w) => dueOf(w) === t);
+      const week = open.filter((w) => dueOf(w) > t && dueOf(w) < weekEnd);
       const openSheet = (kind, ds) => this.openSheet({ kind, ds });
 
-      view.appendChild(H("div", { class: "grid kpi-grid", style: "margin-bottom:18px" }, [
+      view.appendChild(H("div", { class: "grid kpi-grid five", style: "margin-bottom:18px" }, [
         kpi({ icon: "🔴", label: "Overdue", value: late.length,
           deltaType: late.length ? "down" : "up", delta: late.length ? "past their due date" : "nothing late",
           onClick: () => openSheet("late") }),
@@ -441,14 +450,16 @@
           onClick: () => openSheet("today") }),
         kpi({ icon: "🗓", label: "Next 7 Days", value: week.length, deltaType: "flat", delta: "the week ahead",
           onClick: () => openSheet("week") }),
-        kpi({ icon: "⚙️", label: "Open Jobs", value: jobs.length, deltaType: "flat", delta: "still to finish",
+        kpi({ icon: "⚙️", label: "Open Jobs", value: open.length, deltaType: "flat", delta: "still to finish",
           onClick: () => openSheet("open") }),
+        kpi({ icon: "✅", label: "Completed", value: finished.length, deltaType: "up", delta: "handed off / dispatched",
+          onClick: () => openSheet("done") }),
       ]));
 
       if (!jobs.length) {
         view.appendChild(H("div", { class: "sup-empty" }, [
           H("div", { class: "big", text: "🎉" }),
-          H("div", { text: "Nothing open in your area. You're all caught up!" }),
+          H("div", { text: "Nothing in your area yet — nothing open, nothing finished." }),
         ]));
         this.syncSheet();
         return;
@@ -484,7 +495,7 @@
           H("button", { class: "icon-btn", "aria-label": "Next", onclick: () => step(1), html: "&rsaquo;" }),
         ]),
         H("div", { style: "margin-left:auto" },
-          H("span", { class: "chip", text: jobs.length + (jobs.length === 1 ? " open job" : " open jobs") })),
+          H("span", { class: "chip", text: open.length + " open · " + finished.length + " done" })),
       ]));
 
       // ---- jobs indexed by the day they are due ----
@@ -497,7 +508,7 @@
          the stage it is at go underneath. The sheet behind the tap carries
          the whole name. */
       const pill = (w) => {
-        const d = dueOf(w), st = this.dueState(w), p = w.product || {};
+        const d = dueOf(w), st = this.dueState(w, isDone(w)), p = w.product || {};
         return H("button", { class: "cal-ev sup-ev" + (st.cls ? " " + st.cls : ""), style: "--sc:var(--c4)",
           title: (p.name || w.id) + " — " + w.id + " · " + this.stageLabel(w),
           onclick: (e) => { e.stopPropagation(); openDay(d); } }, [
@@ -510,7 +521,7 @@
       /* The same job as a full row, for the agenda — where there is room for
          the whole product name and the due state in plain words. */
       const row = (w) => {
-        const st = this.dueState(w), p = w.product || {};
+        const st = this.dueState(w, isDone(w)), p = w.product || {};
         return H("button", { class: "cal-row sup-row" + (st.cls ? " " + st.cls : ""), style: "--sc:var(--c4)",
           onclick: () => openDay(dueOf(w)) }, [
           H("span", { class: "cal-row-tx" }, [
@@ -606,7 +617,7 @@
       /* Work with no due date cannot be placed on a grid, and dropping it
          would hide a real job. It gets its own strip under the calendar
          instead — visible, but never counted as late. */
-      const undated = jobs.filter((w) => !dueOf(w));
+      const undated = open.filter((w) => !dueOf(w));
       if (undated.length) {
         view.appendChild(H("div", { class: "sup-sched-head", style: "cursor:pointer",
           onclick: () => openSheet("undated") }, [
@@ -622,7 +633,9 @@
     },
 
     /* ---- what a job's due date means today, in the floor's words ---- */
-    dueState(w) {
+    dueState(w, done) {
+      // a finished job is ticked off, never late — whatever its date says
+      if (done) return { cls: "done", text: w.dispatched ? "Dispatched" : "Done" };
       const d = this.calDue(w);
       if (!d) return { cls: "", text: "No date" };
       const days = Math.round((CAL.parseISO(d) - CAL.sod(DB.helpers.today())) / CAL.DAY);
@@ -665,16 +678,22 @@
       const t = DB.helpers.iso(DB.helpers.today());
       const weekEnd = DB.helpers.iso(new Date(DB.helpers.today().getTime() + 7 * CAL.DAY));
       const due = (w) => this.calDue(w);
+      const doneIds = new Set(this.doneJobs().map((w) => w.id));
+      const isDone = (w) => doneIds.has(w.id);
       const pick = {
+        // a day's sheet carries everything on that day; the headline sheets stay about open work
         day:     (w) => due(w) === spec.ds,
-        late:    (w) => due(w) && due(w) < t,
-        today:   (w) => due(w) === t,
-        week:    (w) => due(w) > t && due(w) < weekEnd,
-        open:    () => true,
-        undated: (w) => !due(w),
+        late:    (w) => !isDone(w) && due(w) && due(w) < t,
+        today:   (w) => !isDone(w) && due(w) === t,
+        week:    (w) => !isDone(w) && due(w) > t && due(w) < weekEnd,
+        open:    (w) => !isDone(w),
+        done:    (w) => isDone(w),
+        undated: (w) => !isDone(w) && !due(w),
       }[spec.kind] || (() => false);
-      return this.openJobs().filter(pick)
-        .sort((a, b) => (due(a) < due(b) ? -1 : due(a) > due(b) ? 1 : (a.id < b.id ? -1 : 1)));
+      // open jobs first, then the finished ones, each run in date order
+      return this.calJobs().filter(pick)
+        .sort((a, b) => (isDone(a) !== isDone(b) ? (isDone(a) ? 1 : -1)
+          : due(a) < due(b) ? -1 : due(a) > due(b) ? 1 : (a.id < b.id ? -1 : 1)));
     },
 
     sheetHead(spec, rows) {
@@ -695,6 +714,7 @@
         today:   { ic: "📌", title: "Due today",      line: "on the board today" },
         week:    { ic: "🗓", title: "Next 7 days",    line: "due in the week ahead" },
         open:    { ic: "⚙️", title: "Every open job", line: "still to finish in your area" },
+        done:    { ic: "✅", title: "Completed",      line: "finished — handed off or dispatched" },
         undated: { ic: "❔", title: "No date set",    line: "no due date on the work order, so not on the grid" },
       }[spec.kind] || { ic: "📅", title: "Jobs", line: "" };
       return { title: B.title, headSub: area, big: B.ic, small: jobsTxt,
@@ -742,7 +762,7 @@
     sheetFoot(spec, close) {
       const foot = [];
       if (spec.kind === "day") {
-        const days = Object.keys(this.openJobs().reduce((m, w) => { const d = this.calDue(w); if (d) m[d] = 1; return m; }, {})).sort();
+        const days = Object.keys(this.calJobs().reduce((m, w) => { const d = this.calDue(w); if (d) m[d] = 1; return m; }, {})).sort();
         const prev = days.filter((d) => d < spec.ds).pop() || null;
         const next = days.find((d) => d > spec.ds) || null;
         const lbl = (ds) => { const d = CAL.parseISO(ds); return CAL.WD[CAL.wdIndex(d)] + " " + CAL.fmtShort(d); };

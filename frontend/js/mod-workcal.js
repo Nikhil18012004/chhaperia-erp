@@ -8,7 +8,12 @@
    separate screen rather than a widening of that one:
 
      Calendar       (Sales & CRM)  — appointments + lead follow-ups
-     Work Calendar  (My Work)      — what MY role owes, by date
+     Work Calendar  (My Work)      — what MY role owes, by date, AND
+                                    what it has already done (ruling
+                                    2026-08-27: finished work stays
+                                    on the grid, ticked off — a
+                                    received PO, a shipped SO, a made
+                                    WO, a filed test)
 
    WHAT EACH ROLE SEES is decided by `roles` on each SOURCE below.
    That list is presentation only and is not a security boundary:
@@ -66,9 +71,9 @@
   /* What the strap line should say, per role — the screen is the same, but
      what it is FOR is not. */
   const ROLE_SUB = {
-    admin: "Every date the business owes — arrivals, despatches, runs, tests and leave",
-    office: "What the office owes — arrivals to chase, despatches to ship and follow-ups to make",
-    lab: "What the lab owes — batches waiting on a reading and deliveries waiting on a test",
+    admin: "Every date the business owes — arrivals, despatches, runs, tests and leave — with finished work ticked off",
+    office: "What the office owes — arrivals to chase, despatches to ship, follow-ups to make — and what is already done",
+    lab: "What the lab owes — batches waiting on a reading, deliveries waiting on a test — and the tests already filed",
   };
 
   M.workcal = { title: "Work Calendar", sub: "Your dates, by role", render(root, params) {
@@ -78,6 +83,7 @@
     const on = {}; mine.forEach((s) => { on[s.key] = true; });
     let view = "month";
     let q = "";
+    let showDone = true;   // finished work stays on the grid unless the chip hides it
     let cursor = startOfDay(DB.helpers.today());
 
     root.appendChild(pageHead("Work Calendar",
@@ -85,7 +91,7 @@
       [ h("button", { class: "btn", onclick: () => { cursor = startOfDay(DB.helpers.today()); draw(); },
           html: "◎ Today" }) ]));
 
-    const kpiHost = h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" });
+    const kpiHost = h("div", { class: "grid kpi-grid five", style: "margin-bottom:16px" });
     root.appendChild(kpiHost);
 
     const seg = h("div", { class: "seg", style: "margin-bottom:14px" },
@@ -113,6 +119,14 @@
       ]);
       return b;
     }));
+    /* finished work is shown ticked off; this chip hides it for a pure to-do view */
+    const doneChip = h("button", { class: "cal-chip on", style: "--sc:var(--ok)", title: "Show or hide finished work",
+      onclick: () => { showDone = !showDone; doneChip.classList.toggle("on", showDone); draw(); } }, [
+      h("span", { class: "cal-chip-d" }),
+      h("span", { text: "✅ Completed" }),
+      h("span", { class: "cal-chip-n", id: "wcDone" }),
+    ]);
+    chips.appendChild(doneChip);
     root.appendChild(chips);
 
     const host = h("div"); root.appendChild(host);
@@ -135,12 +149,14 @@
 
     function draw() {
       const all = buildEvents();
-      const shown = all.filter((e) => on[e.source] && matches(e, q));
+      const shown = all.filter((e) => on[e.source] && (showDone || !e.done) && matches(e, q));
 
       mine.forEach((s) => {
         const el = chips.querySelector('[data-src="' + s.key + '"]');
         if (el) el.textContent = String(all.filter((e) => e.source === s.key).length);
       });
+      const dc = UI.$("#wcDone");
+      if (dc) dc.textContent = String(all.filter((e) => e.done).length);
       const c = UI.$("#wcCount");
       if (c) c.textContent = shown.length + (shown.length === 1 ? " entry" : " entries");
 
@@ -182,6 +198,7 @@
       const today = all.filter((e) => e.date === t);
       const week = all.filter((e) => e.date >= t && e.date < weekEnd);
       const open = all.filter((e) => !e.done && e.chaseable);
+      const done = all.filter((e) => e.done);
       kpiHost.innerHTML = "";
       [ MW.kpi({ icon: "🔴", label: "Overdue", value: ENG.num(late.length),
           delta: late.length ? "Needs chasing" : "All clear", deltaType: late.length ? "down" : "up",
@@ -192,6 +209,9 @@
           onClick: () => listModal("Next 7 days", "The week ahead, in date order", week) }),
         MW.kpi({ icon: "📋", label: "Open Items", value: ENG.num(open.length),
           onClick: () => listModal("Everything open", "Every dated job still owing something", open) }),
+        MW.kpi({ icon: "✅", label: "Completed", value: ENG.num(done.length),
+          delta: done.length ? "ticked off" : "nothing yet", deltaType: "up",
+          onClick: () => listModal("Completed — " + done.length, "Finished work, on the date it was due", done) }),
       ].forEach((k) => kpiHost.appendChild(k));
     }
 
@@ -369,31 +389,38 @@
           go: "crm" });
       });
 
-      // --- purchase orders: goods we are waiting on ----------------------
+      /* Finished work is kept (done: true) rather than dropped: it sits on the
+         day it was due, ticked off, so the grid answers "what happened" as
+         well as "what is owed". A done entry is never late and never counted
+         among the open items — see drawKpis and toneCls. */
+
+      // --- purchase orders: goods we are waiting on, or have received ---
       if (want("po")) (D.purchaseorders || []).forEach((p) => {
-        if (!p.eta || p.status === "Received") return;
+        if (!p.eta) return;
+        const done = p.status === "Received";
         const pend = (p.lines || []).reduce((s, l) => s + Math.max(0, l.qty - (l.recd || 0)) * l.rate, 0);
-        push({ id: p.id, date: p.eta, source: "po", raw: p, icon: "🛒",
-          title: ENG.sup(p.supplierId) + " arriving", value: pend, owner: "Procurement",
+        push({ id: p.id, date: p.eta, source: "po", raw: p, icon: "🛒", done,
+          title: ENG.sup(p.supplierId) + (done ? " arrived" : " arriving"), value: pend, owner: "Procurement",
           sub: p.id + " · " + (p.lines || []).length + " item(s) · " + p.status, go: "purchase" });
       });
 
-      // --- sales orders: the ship-by we agreed ---------------------------
+      // --- sales orders: the ship-by we agreed, or the despatch that went ---
       if (want("so")) (D.salesorders || []).forEach((s) => {
-        if (!s.promised || s.status === "Dispatched") return;
-        push({ id: s.id, date: s.promised, source: "so", raw: s, icon: "🧾",
-          title: "Ship to " + ENG.custName(s.customerId), value: s.value || 0, owner: "Sales Orders",
-          sub: s.id + " · " + (s.lines || []).length + " line(s) · " + s.priority, go: "sales" });
+        if (!s.promised) return;
+        const done = s.status === "Dispatched";
+        push({ id: s.id, date: s.promised, source: "so", raw: s, icon: "🧾", done,
+          title: (done ? "Shipped to " : "Ship to ") + ENG.custName(s.customerId), value: s.value || 0, owner: "Sales Orders",
+          sub: s.id + " · " + (s.lines || []).length + " line(s) · "
+            + (done ? "Dispatched" + (s.dispatchDate ? " " + s.dispatchDate : "") : s.priority), go: "sales" });
       });
 
-      // --- work orders: the run that must come off the line --------------
+      // --- work orders: the run that must come off the line, or did -------
       if (want("wo")) (D.workorders || []).forEach((w) => {
         if (!w.due) return;
         const finished = (w.status === "Completed" || w.status === "Dispatched") && !((+w.pendingQty || 0) > 1e-6);
-        if (finished) return;
         const it = ENG.item(w.itemId) || {};
-        push({ id: w.id, date: w.due, source: "wo", raw: w, icon: "⚙️",
-          title: trim(it.name || w.itemId, 30) + " due", owner: "Production",
+        push({ id: w.id, date: w.due, source: "wo", raw: w, icon: "⚙️", done: finished,
+          title: trim(it.name || w.itemId, 30) + (finished ? " made" : " due"), owner: "Production",
           sub: w.id + " · " + (it.id ? ENG.qtyText(it, w.qty, 0) : ENG.num(w.qty) + " kg") + " · " + (w.status || ""),
           go: "production" });
       });
@@ -409,6 +436,30 @@
           title: "Test " + trim(p.productName || p.productCode || p.woId, 26), owner: "Lab Reports",
           sub: p.woId + " · " + (p.productCode || "") + (p.stage === "production" ? " · floor reading" : " · lab reading"),
           go: "lab-reports" });
+      });
+
+      /* --- readings already filed ----------------------------------------
+         A certificate IS the test done: it sits on its report date, ticked,
+         with the verdict in the sub line, so the lab sees what it cleared
+         (or failed) and when. */
+      if (want("lab")) (D.labReports || []).forEach((r) => {
+        const verdict = r.labResult || r.result;
+        if (verdict !== "Pass" && verdict !== "Fail") return;
+        const date = r.reportDate || String(r.createdAt || "").slice(0, 10);
+        if (!date) return;
+        push({ id: r.id, date, source: "lab", raw: r, icon: "🧪", done: true,
+          title: "Tested " + trim(r.productName || r.productCode || r.woId || r.id, 26), owner: "Lab Reports",
+          sub: [r.woId, r.productCode, verdict].filter(Boolean).join(" · "), go: "lab-reports" });
+      });
+
+      /* --- incoming tests already done ----------------------------------- */
+      if (want("grnt")) (D.grnTests || []).forEach((g) => {
+        const verdict = g.result;
+        if (!g.complete && verdict !== "Pass" && verdict !== "Fail") return;
+        if (!g.date) return;
+        push({ id: g.id || (g.grnId + ":" + g.itemId), date: g.date, source: "grnt", raw: g, icon: "🔬", done: true,
+          title: "Tested " + trim(g.itemName || g.itemId, 26), owner: "Procurement",
+          sub: g.grnId + " · " + (verdict && verdict !== "Pending" ? verdict : "Tested"), go: "purchase" });
       });
 
       /* --- deliveries waiting on an incoming test ----------------------
