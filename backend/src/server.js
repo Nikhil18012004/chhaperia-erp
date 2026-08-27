@@ -175,6 +175,7 @@ async function boot() {
     const hr = await hrService.ensureHr();
     if (hr.changed) console.log("  ├─ HR       : seeded " + hr.workers + " workers + attendance");
     if (hr.moved) console.log("  ├─ HR       : moved " + hr.moved + " daily-wage worker(s) to monthly pay");
+    if (hr.leaveMoved) console.log("  ├─ HR       : leave types are now Paid / Unpaid (" + hr.leaveMoved + " old type(s)/record(s) moved)");
   } catch (e) { console.error("[hr seed]", e.message); }
 
   // seed demo transport agencies (dispatch directory) on first run

@@ -48,6 +48,22 @@
     const hr = (ENG.data.settings || {}).hr || {};
     return hr.noRoomAllowance != null ? (+hr.noRoomAllowance || 0) : 1000;
   }
+  /* paid leave: at most this many paid days in any one month (HR Settings →
+     Leave; server default 1, 0 = no limit). Further paid-leave days in that
+     month are unpaid and do not use the annual quota. */
+  function paidLeaveCap() {
+    const hr = (ENG.data.settings || {}).hr || {};
+    return hr.paidLeaveMaxPerMonth != null ? (+hr.paidLeaveMaxPerMonth || 0) : 1;
+  }
+  function eachISO(from, to) {
+    const out = []; let d = new Date(from + "T12:00:00"); const end = new Date(to + "T12:00:00");
+    while (d <= end) { out.push(DB.helpers.iso(d)); d.setDate(d.getDate() + 1); }
+    return out;
+  }
+  /* the payslip's "N leave day(s) over the monthly paid limit" note */
+  function capNote(s) {
+    return s.leaveOverCap ? " · " + num(s.leaveOverCap, 0) + " leave day" + (s.leaveOverCap === 1 ? "" : "s") + " over the monthly paid limit went unpaid" : "";
+  }
 
   /* run an HR API call, reload the dataset, land on the given view */
   async function save(apiCall, tab) {
@@ -667,7 +683,32 @@
       U.field("From", `<input class="input" id="l_from" type="date" value="${iso()}">`),
       U.field("To", `<input class="input" id="l_to" type="date" value="${iso()}">`),
       U.field("Reason", `<input class="input" id="l_reason" placeholder="Optional">`, "full"),
+      h("div", { id: "l_hint", class: "dim", style: "grid-column:1/-1;font-size:12px;line-height:1.5" }),
     ]);
+    /* paid leave is capped per month — say up front how many of these days
+       will actually be paid, counting the worker's other requests that month */
+    const hint = () => {
+      const box = UI.$("#l_hint"); if (!box) return;
+      const t = lts.find((x) => x.id === UI.$("#l_type").value) || {};
+      const from = UI.$("#l_from").value, to = UI.$("#l_to").value, wk = UI.$("#l_wk").value;
+      const cap = paidLeaveCap();
+      if (t.paid === false) { box.textContent = "Unpaid leave — these days are deducted from pay."; return; }
+      if (!cap || !from || !to || to < from) { box.textContent = ""; return; }
+      const used = {};
+      (ENG.data.hrLeaves || []).forEach((l) => {
+        if (l.workerId !== wk || l.status === "Rejected") return;
+        const lt = lts.find((x) => x.id === l.type) || {};
+        if (lt.paid === false) return;
+        eachISO(l.fromDate, l.toDate || l.fromDate).forEach((d) => { used[d.slice(0, 7)] = (used[d.slice(0, 7)] || 0) + 1; });
+      });
+      let paid = 0, unpaid = 0;
+      eachISO(from, to).forEach((d) => { const m = d.slice(0, 7); if ((used[m] || 0) < cap) { used[m] = (used[m] || 0) + 1; paid++; } else unpaid++; });
+      box.textContent = unpaid
+        ? "Only " + cap + " paid leave day" + (cap === 1 ? "" : "s") + " a month: " + paid + " of these " + (paid + unpaid) + " day(s) will be paid, " + unpaid + " unpaid."
+        : "Within the monthly paid-leave limit — all " + paid + " day(s) paid.";
+    };
+    ["l_wk", "l_type", "l_from", "l_to"].forEach((id) => { const el = body.querySelector("#" + id); if (el) el.addEventListener("change", hint); });
+    setTimeout(hint, 0);
     const mo = modal({ title: "Apply Leave", sub: "Raise a leave request", body,
       foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
         h("button", { class: "btn primary", onclick: () => { const p = { workerId: UI.$("#l_wk").value, type: UI.$("#l_type").value, fromDate: UI.$("#l_from").value, toDate: UI.$("#l_to").value, reason: UI.$("#l_reason").value }; if (p.toDate < p.fromDate) { toast("End date before start", { type: "warn" }); return; } mo.close(); save(() => DB.hr.leave.apply(p), "leave"); }, text: "Submit" })] });
@@ -900,9 +941,17 @@
       if (t.paid === false) return;
       const entitled = t.accrual === "earned" ? monthsWorked.size
         : (t.accrual === "none" ? 0 : (+t.quota || 0));
-      const taken = (ENG.data.hrLeaves || []).filter((l) => l.workerId === workerId
-        && l.type === t.id && l.status === "Approved" && String(l.fromDate || "").startsWith(year))
-        .reduce((n, l) => n + (+l.days || 0), 0);
+      // paid types count at most `cap` days in any month — the same rule the
+      // server applies in leaveBalances / computeSlip
+      const cap = paidLeaveCap();
+      const byMonth = {};
+      (ENG.data.hrLeaves || []).forEach((l) => {
+        if (l.workerId !== workerId || l.type !== t.id || l.status !== "Approved") return;
+        eachISO(l.fromDate, l.toDate || l.fromDate).forEach((d) => {
+          if (d.startsWith(year)) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
+        });
+      });
+      const taken = Object.values(byMonth).reduce((n, c) => n + (cap > 0 ? Math.min(c, cap) : c), 0);
       if (entitled <= 0 && taken <= 0) return;
       rows.push({ name: t.name, entitled, taken, balance: Math.round((entitled - taken) * 10) / 10 });
     });
@@ -923,9 +972,9 @@
     /* [label, this month, year to date, optional note] */
     // a monthly worker is a fixed salary pro-rated to the days actually worked;
     // a daily worker is a rate per day. Say which, in the worker's own terms.
-    const basicNote = s.payType === "monthly"
+    const basicNote = (s.payType === "monthly"
       ? money(s.monthPerDay) + "/day (" + money(s.monthlyCtc) + " ÷ " + days(s.monthWorkingDays) + " working days) × " + days(s.payableDays) + " paid"
-      : days(s.payableDays) + " days × " + money(s.dailyRate);
+      : days(s.payableDays) + " days × " + money(s.dailyRate)) + capNote(s);
     const earn = [
       ["Basic", s.basicEarned, y.basic, basicNote],
       s.otPay ? ["Overtime", s.otPay, y.ot, days(s.otHours) + " h × " + money(s.hourly || 0)] : null,
@@ -1200,9 +1249,9 @@
       ]),
       h("div", { class: "pay-cols" }, [
         moneyTable("Earnings", [
-          ["Basic earned", s.basicEarned, s.payType === "monthly"
+          ["Basic earned", s.basicEarned, (s.payType === "monthly"
             ? money(s.monthPerDay) + "/day (" + money(s.monthlyCtc) + " ÷ " + num(s.monthWorkingDays, 0) + " working days) × " + num(s.payableDays, 1) + " paid"
-            : num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
+            : num(s.payableDays, 1) + " days × " + money(s.dailyRate)) + capNote(s)],
           s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
           s.roomAllowance ? ["Accommodation allowance", s.roomAllowance, "own accommodation — no company room"] : null,
           s.allowances ? ["Allowances", s.allowances, ""] : null,
@@ -1359,6 +1408,16 @@
       h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
         text: "Set per worker under Workers → Accommodation. Paid flat on top of salary in any month the worker was paid for at least one day; it counts in gross (ESI) but not in the PF basic. Set 0 to switch it off." }),
     ]));
+
+    // leave — the monthly cap on paid days (the annual quota lives on the type)
+    grid.appendChild(h("div", { class: "card" }, [
+      h("div", { class: "card-head" }, [h("h3", { text: "🌴 Leave" }), h("div", { class: "sub", text: "Paid leave, per month" })]),
+      h("div", { class: "form-grid" }, [
+        U.field("Paid leave days allowed per month", `<input class="input" id="c_plcap" type="number" step="1" min="0" value="${cfg.paidLeaveMaxPerMonth != null ? cfg.paidLeaveMaxPerMonth : 1}">`),
+      ]),
+      h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
+        text: "The annual quota sits on the leave type below (Paid Leave: 15 days a year). In any one month only this many of a worker's paid-leave days are paid — the rest go unpaid and do not use the quota. Set 0 for no monthly limit." }),
+    ]));
     box.appendChild(grid);
 
     // biometric device
@@ -1378,7 +1437,7 @@
     // leave types
     const lts = leaveTypes();
     box.appendChild(h("div", { class: "card", style: "margin-top:20px" }, [
-      h("div", { class: "card-head" }, [h("h3", { text: "🗂 Leave Types" }), h("div", { class: "sub", text: "Define entitlements & accrual — used by the Leave tab" })]),
+      h("div", { class: "card-head" }, [h("h3", { text: "🗂 Leave Types" }), h("div", { class: "sub", text: "Two by ruling — Paid Leave (15 days a year, paid days capped per month above) and Unpaid Leave" })]),
       table(lts, [
         { key: "id", label: "Code", render: (r) => `<span class="mono strong">${r.id}</span>`, noSort: true },
         { key: "name", label: "Name", cls: "nm", render: (r) => esc(r.name), noSort: true },
@@ -1406,6 +1465,7 @@
       const patch = {
         standardDayHours: +gv("c_std") || 8, otMultiplier: +gv("c_otm") || 2, halfDayBelowHours: +gv("c_half") || 4,
         weekOff, deviceKey: gv("c_devkey").trim(), noRoomAllowance: Math.max(0, +gv("c_room") || 0),
+        paidLeaveMaxPerMonth: Math.max(0, +gv("c_plcap") || 0),
         deductions: {
           pf: { on: ck("c_pf_on"), rate: +gv("c_pf_rate") || 0, wageCapMonthly: +gv("c_pf_cap") || 0, employerRate: +gv("c_pf_emp") || 0 },
           esi: { on: ck("c_esi_on"), empRate: +gv("c_esi_rate") || 0, employerRate: +gv("c_esi_emp") || 0, grossThreshold: +gv("c_esi_th") || 0 },

@@ -45,6 +45,10 @@ const HR_DEFAULTS = {
   // the plant houses its workers; one who stays in their OWN accommodation
   // instead is paid this much on top of salary, flat, every month (0 = off)
   noRoomAllowance: 1000,
+  // paid leave: at most this many PAID days in any one month (ruling
+  // 2026-08-27 — "15 days a year and 1 per month"); a worker's further
+  // paid-leave days in that month go unpaid. 0 = no monthly limit.
+  paidLeaveMaxPerMonth: 1,
   deductions: {
     pf:  { on: true, rate: 12, wageCapMonthly: 15000, employerRate: 12 },
     esi: { on: true, empRate: 0.75, employerRate: 3.25, grossThreshold: 21000 },
@@ -221,16 +225,34 @@ function earnedLeaveDays(attendance, workerId, year) {
   return months.size;
 }
 
-/** Live leave balances for a worker: quota (or earned) − approved-this-year. */
+/** Approved days of one leave type in a year, counted PER MONTH so the monthly
+    cap on paid leave applies: a paid type counts at most `cap` days in any
+    month — the rest of that month's days were unpaid and must not eat the
+    annual quota. 0 = no cap. Keep in step with paidLeavePending() in
+    frontend/js/mod-hr.js, which shows the same figure on the payslip. */
+function leaveDaysTaken(leaves, workerId, type, year, cap) {
+  const byMonth = {};
+  (leaves || []).forEach((l) => {
+    if (l.workerId !== workerId || l.type !== type || l.status !== "Approved") return;
+    eachDate(l.fromDate, l.toDate || l.fromDate).forEach((d) => {
+      if (d.startsWith(year)) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
+    });
+  });
+  return Object.values(byMonth).reduce((s, n) => s + (cap > 0 ? Math.min(n, cap) : n), 0);
+}
+
+/** Live leave balances for a worker: quota (or earned) − approved-this-year,
+    with paid types counted under the monthly cap. */
 async function leaveBalances(workerId) {
   const st = await repo.getState();
+  const cfg = await getConfig();
   const year = String(new Date().getFullYear());
   const earned = earnedLeaveDays(st.hrAttendance || [], workerId, year);
   return (st.hrLeaveTypes || []).map((t) => {
     const entitled = t.accrual === "earned" ? earned : (t.accrual === "none" ? 0 : t.quota);
-    const taken = st.hrLeaves.filter((l) => l.workerId === workerId && l.type === t.id && l.status === "Approved" && l.fromDate.startsWith(year))
-      .reduce((s, l) => s + (l.days || 0), 0);
-    return { type: t.id, name: t.name, entitled, taken, balance: round(entitled - taken, 1) };
+    const cap = t.paid === false ? 0 : num(cfg.paidLeaveMaxPerMonth);
+    const taken = leaveDaysTaken(st.hrLeaves, workerId, t.id, year, cap);
+    return { type: t.id, name: t.name, entitled, taken, balance: round(entitled - taken, 1), maxPerMonth: cap };
   });
 }
 
@@ -356,16 +378,23 @@ async function advanceStatus(workerId) {
 
 /** Compute one worker's payslip for a period (YYYY-MM) from attendance. */
 async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
-  const att = (await repo.attendanceForPeriod(period)).filter((a) => a.workerId === worker.id);
-  let present = 0, otHours = 0, paidLeave = 0, unpaidLeave = 0, absent = 0;
+  const att = (await repo.attendanceForPeriod(period)).filter((a) => a.workerId === worker.id)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  let present = 0, otHours = 0, paidLeave = 0, unpaidLeave = 0, absent = 0, leaveOverCap = 0;
+  // paid leave is capped per month (ruling 2026-08-27: 15 days a year, at most
+  // one PAID day in any month): the earliest paid-type days of the month are
+  // the paid ones, the rest of them go unpaid. 0 = no cap.
+  const cap = num(cfg.paidLeaveMaxPerMonth);
   att.forEach((a) => {
     if (a.status === "P") present += 1;
     else if (a.status === "HD") present += 0.5;
     else if (a.status === "L") {
       // honour the leave type's `paid` flag; unpaid types are excluded from payable days.
       // No resolver (e.g. computeSlip called directly) → treat as paid for back-compat.
-      if (!isPaidLeaveDay || isPaidLeaveDay(a)) paidLeave += 1;
-      else unpaidLeave += 1;
+      if (!isPaidLeaveDay || isPaidLeaveDay(a)) {
+        if (cap > 0 && paidLeave >= cap) { unpaidLeave += 1; leaveOverCap += 1; }
+        else paidLeave += 1;
+      } else unpaidLeave += 1;
     } else if (a.status === "A") absent += 1;
     otHours += num(a.otHours);
   });
@@ -406,7 +435,7 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
     workerId: worker.id, name: worker.name, dept: worker.dept, payType: worker.payType,
     dailyRate: worker.dailyRate, monthlyCtc: num(worker.monthlyCtc), monthWorkingDays, monthPerDay,
     ownAccommodation: worker.ownAccommodation, roomAllowance,
-    present: round(present, 1), paidLeave, unpaidLeave, absent, payableDays: round(payableDays, 1),
+    present: round(present, 1), paidLeave, unpaidLeave, leaveOverCap, absent, payableDays: round(payableDays, 1),
     otHours: round(otHours), otPay: 0, allowances, hourly: 0,
     basicEarned, gross,
     deductions: { pf, esi, pt }, employer: { pf: employerPf, esi: employerEsi }, advances, net,
@@ -566,16 +595,41 @@ async function migrateToMonthly() {
   return stale.length;
 }
 
+/* The two leave types the plant runs (ruling 2026-08-27): paid leave, 15 days a
+   year with at most one paid day in any month (cfg.paidLeaveMaxPerMonth), and
+   unpaid leave with no quota. */
+const LEAVE_MODEL = "paid-unpaid-2026-08-27";
+const LEAVE_TYPES = [
+  { id: "PL",  name: "Paid Leave",   quota: 15, accrual: "fixed", paid: true,  color: "#0fb5ae" },
+  { id: "LWP", name: "Unpaid Leave", quota: 0,  accrual: "none",  paid: false, color: "#c00" },
+];
+/** One-time move from the old seed (EL / CL / SL / LWP) to the two types. Runs
+    once per database — recorded in settings.hr.leaveModel — so an admin who
+    later adds a type is never fought. Old leave records are re-pointed: any
+    paid type becomes PL, any unpaid one LWP; their dates and status stay. On an
+    empty database this simply installs the two types. */
+async function migrateLeaveTypes() {
+  const cfg = await getConfig();
+  if (cfg.leaveModel === LEAVE_MODEL) return 0;
+  const st = await repo.getState();
+  const old = st.hrLeaveTypes || [];
+  const paidIds = new Set(old.filter((t) => t.paid !== false).map((t) => t.id));
+  for (const t of LEAVE_TYPES) await repo.putLeaveType(t);
+  for (const t of old) if (t.id !== "PL" && t.id !== "LWP") await repo.deleteLeaveType(t.id);
+  let moved = 0;
+  for (const l of (st.hrLeaves || [])) {
+    if (l.type === "PL" || l.type === "LWP") continue;
+    l.type = paidIds.has(l.type) ? "PL" : "LWP";
+    await repo.putLeave(l); moved++;
+  }
+  await setConfig({ leaveModel: LEAVE_MODEL });
+  return old.filter((t) => t.id !== "PL" && t.id !== "LWP").length + moved;
+}
+
 async function ensureHr() {
   const moved = await migrateToMonthly();
-  if (!await repo.hrIsEmpty()) return { changed: false, moved, workers: (await repo.getState()).hrWorkers.length };
-  const LEAVE_SEED = [["EL", "Earned Leave", 12, "earned"], ["CL", "Casual Leave", 7, "fixed"],
-    ["SL", "Sick Leave", 7, "fixed"]];
-  for (let i = 0; i < LEAVE_SEED.length; i++) {
-    const [id, name, quota, accrual] = LEAVE_SEED[i];
-    await repo.putLeaveType({ id, name, quota, accrual, paid: true,
-      color: ["#0fb5ae", "#7c5cff", "#e0a000"][i] });
-  }
+  const leaveMoved = await migrateLeaveTypes();
+  if (!await repo.hrIsEmpty()) return { changed: false, moved, leaveMoved, workers: (await repo.getState()).hrWorkers.length };
   // [name, dept, designation, monthly CTC, stays in own accommodation?]
   const demo = [
     ["Ramesh Kumar", "coating", "Machine Operator", 16000, false],
@@ -616,11 +670,12 @@ async function ensureHr() {
         inTime: "09:00", outTime: `${pad(outH)}:${pad(outM)}`, hours, otHours: ot, source: "device" });
     }
   }
-  return { changed: true, moved, workers: workers.length };
+  return { changed: true, moved, leaveMoved, workers: workers.length };
 }
 
 module.exports = {
   getConfig, setConfig, HR_DEFAULTS, ensureHr, normalizeWorker, migrateToMonthly,
+  leaveDaysTaken, migrateLeaveTypes, LEAVE_TYPES,
   listWorkers, createWorker, updateWorker, deleteWorker,
   ingestPunch, setAttendance, recomputeAttendance, recentPunches,
   saveLeaveType, deleteLeaveType, leaveBalances, applyLeave, decideLeave, deleteLeave,

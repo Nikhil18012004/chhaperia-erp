@@ -925,6 +925,51 @@ async function run() {
     for (const id of ["EMP-ROOM-D", "EMP-ROOM-C", "EMP-ROOM-IN", "EMP-ROOM-OUT", "EMP-ROOM-ABS"]) await call("DELETE", "/hr/workers/" + id, A);
   }
 
+  section("Two leave types — paid leave is capped at one paid day a month");
+  {
+    const stTypes = (await call("GET", "/state", A)).d.hrLeaveTypes || [];
+    const ids = stTypes.map((t) => t.id).sort().join(",");
+    ok("a fresh install has exactly Paid Leave and Unpaid Leave", ids === "LWP,PL", ids);
+    const pl = stTypes.find((t) => t.id === "PL") || {}, lwp = stTypes.find((t) => t.id === "LWP") || {};
+    ok("paid leave is 15 days a year", pl.quota === 15 && pl.paid !== false && pl.accrual === "fixed", JSON.stringify(pl));
+    ok("unpaid leave has no quota and is not paid", lwp.paid === false && !lwp.quota, JSON.stringify(lwp));
+    const cfg0 = (await call("GET", "/hr/config", A)).d || {};
+    ok("and at most one paid day in any month", cfg0.paidLeaveMaxPerMonth === 1, String(cfg0.paidLeaveMaxPerMonth));
+
+    // this year's August, so the live balance (which is per current year) sees the leave
+    const per = String(new Date().getFullYear()) + "-08";
+    const W = "EMP-LEAVE-CAP";
+    await call("POST", "/hr/workers", A, { id: W, name: "Leave Cap Tester", dept: "packing", monthlyCtc: 26000, joined: "2020-01-01" });
+    for (let d = 1; d <= 20; d++) await call("POST", "/hr/attendance", A, { workerId: W, date: per + "-" + String(d).padStart(2, "0"), status: "P" });
+    const apply = async (type, from, to) => {
+      const r = await call("POST", "/hr/leaves", A, { workerId: W, type, fromDate: from, toDate: to });
+      ok("a " + type + " request is accepted", r.status === 201 && r.d && r.d.id, JSON.stringify(r.d).slice(0, 120));
+      await call("POST", "/hr/leaves/" + r.d.id + "/decide", A, { status: "Approved" });
+    };
+    await apply("PL", per + "-24", per + "-26");     // three paid-leave days in one month
+    await apply("LWP", per + "-27", per + "-27");    // and one unpaid one
+    const slipOf = async () => ((await call("POST", "/hr/payroll/run", A, { period: per, workerIds: [W] })).d.payslips || []).find((s) => s.workerId === W);
+    const s1 = await slipOf();
+    ok("three paid-leave days in one month: one is paid…", !!s1 && s1.paidLeave === 1, s1 && String(s1.paidLeave));
+    ok("…the other two go unpaid, alongside the unpaid-leave day", s1.unpaidLeave === 3 && s1.leaveOverCap === 2,
+      JSON.stringify({ unpaid: s1.unpaidLeave, over: s1.leaveOverCap }));
+    ok("so 21 days are paid — 20 present + 1 leave", s1.payableDays === 21 && s1.basicEarned === Math.round(s1.monthPerDay * 21 * 100) / 100,
+      JSON.stringify({ d: s1.payableDays, b: s1.basicEarned, pd: s1.monthPerDay }));
+    const bal = ((await call("GET", "/hr/leave-balances/" + W, A)).d.balances || []).find((b) => b.type === "PL") || {};
+    ok("only the paid day counts against the 15", bal.taken === 1 && bal.balance === 14, JSON.stringify(bal));
+
+    await call("PATCH", "/hr/config", A, { paidLeaveMaxPerMonth: 0 });
+    const s2 = await slipOf();
+    ok("with no monthly limit all three are paid", s2.paidLeave === 3 && s2.leaveOverCap === 0 && s2.payableDays === 23,
+      JSON.stringify({ p: s2.paidLeave, over: s2.leaveOverCap, d: s2.payableDays }));
+    const bal2 = ((await call("GET", "/hr/leave-balances/" + W, A)).d.balances || []).find((b) => b.type === "PL") || {};
+    ok("and all three then use the quota", bal2.taken === 3, String(bal2.taken));
+    await call("PATCH", "/hr/config", A, { paidLeaveMaxPerMonth: 1 });
+
+    await call("DELETE", "/hr/payroll/PR-" + per, A);
+    await call("DELETE", "/hr/workers/" + W, A);
+  }
+
   section("Lab role: scoped payload + write limits");
   const lab = await login("lab", "lab@123");
   const LB = lab.token;
