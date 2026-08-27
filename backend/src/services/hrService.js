@@ -49,6 +49,10 @@ const HR_DEFAULTS = {
   // 2026-08-27 — "15 days a year and 1 per month"); a worker's further
   // paid-leave days in that month go unpaid. 0 = no monthly limit.
   paidLeaveMaxPerMonth: 1,
+  // attendance bonus (ruling 2026-08-27): a full month — no leave, no absence,
+  // no half day — earns this flat sum, but not in a worker's first N months
+  attendanceBonus: 1000,
+  attendanceBonusAfterMonths: 3,
   deductions: {
     pf:  { on: true, rate: 12, wageCapMonthly: 15000, employerRate: 12 },
     esi: { on: true, empRate: 0.75, employerRate: 3.25, grossThreshold: 21000 },
@@ -76,6 +80,14 @@ async function setConfig(patch) {
   return s.hr;
 }
 function isWeekOff(dateStr, cfg) { return (cfg.weekOff || []).includes(new Date(dateStr + "T12:00:00").getDay()); }
+/** YYYY-MM-DD plus n calendar months (a day past the target month's end
+    rolls forward, the same way Date does). */
+function addMonths(dateStr, n) {
+  const [y, m, d] = String(dateStr || "").slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const x = new Date(y, m - 1 + n, d);
+  return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+}
 function eachDate(from, to) {
   const out = []; let d = new Date(from + "T12:00:00"); const end = new Date(to + "T12:00:00");
   while (d <= end) { out.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); d.setDate(d.getDate() + 1); }
@@ -418,8 +430,23 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   // for a month in which they were not paid for a single day. It is part of
   // gross (so ESI sees it) but not of basic (so PF does not).
   const roomAllowance = worker.ownAccommodation && payableDays > 0 ? round(num(cfg.noRoomAllowance)) : 0;
+  // Attendance bonus (ruling 2026-08-27): a full month — present every working
+  // day, no leave of either kind, no absence, no half day — earns a flat sum,
+  // but not before the worker has completed the first N months of service
+  // (counted from `joined`). Like the room allowance it is in gross, not in
+  // the PF basic. The note says why it was or was not paid.
+  const bonusAmt = round(num(cfg.attendanceBonus));
+  const afterMonths = num(cfg.attendanceBonusAfterMonths);
+  const eligibleFrom = worker.joined && afterMonths > 0 ? addMonths(worker.joined, afterMonths) : "";
+  const seasoned = !eligibleFrom || `${y}-${pad(m)}-01` >= eligibleFrom;
+  const fullMonth = monthWorkingDays > 0 && absent === 0 && paidLeave === 0 && unpaidLeave === 0 && present >= monthWorkingDays;
+  const attendanceBonus = bonusAmt > 0 && seasoned && fullMonth ? bonusAmt : 0;
+  const attendanceBonusNote = !bonusAmt ? ""
+    : attendanceBonus ? "no leave or absence all month"
+    : !seasoned ? "not before " + eligibleFrom.slice(0, 7) + " (first " + afterMonths + " months of service)"
+    : absent + " absent · " + (paidLeave + unpaidLeave) + " leave · " + round(Math.max(0, monthWorkingDays - present), 1) + " day(s) short of " + monthWorkingDays;
   const allowances = num(worker.allowances);
-  const gross = round(basicEarned + roomAllowance + allowances);
+  const gross = round(basicEarned + roomAllowance + attendanceBonus + allowances);
 
   const d = cfg.deductions || {};
   const pf = d.pf && d.pf.on ? round((num(d.pf.rate) / 100) * Math.min(basicEarned, num(d.pf.wageCapMonthly) || basicEarned)) : 0;
@@ -434,7 +461,7 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   return {
     workerId: worker.id, name: worker.name, dept: worker.dept, payType: worker.payType,
     dailyRate: worker.dailyRate, monthlyCtc: num(worker.monthlyCtc), monthWorkingDays, monthPerDay,
-    ownAccommodation: worker.ownAccommodation, roomAllowance,
+    ownAccommodation: worker.ownAccommodation, roomAllowance, attendanceBonus, attendanceBonusNote,
     present: round(present, 1), paidLeave, unpaidLeave, leaveOverCap, absent, payableDays: round(payableDays, 1),
     otHours: round(otHours), otPay: 0, allowances, hourly: 0,
     basicEarned, gross,
@@ -595,12 +622,12 @@ async function migrateToMonthly() {
   return stale.length;
 }
 
-/* The two leave types the plant runs (ruling 2026-08-27): paid leave, 15 days a
-   year with at most one paid day in any month (cfg.paidLeaveMaxPerMonth), and
-   unpaid leave with no quota. */
-const LEAVE_MODEL = "paid-unpaid-2026-08-27";
+/* The two leave types the plant runs (ruling 2026-08-27): paid leave, earned
+   one day per month worked ("make it 1 month") with at most one paid day taken
+   in any month (cfg.paidLeaveMaxPerMonth), and unpaid leave with no quota. */
+const LEAVE_MODEL = "paid-unpaid-2026-08-27b";   // b: paid leave accrues monthly, not 15 fixed
 const LEAVE_TYPES = [
-  { id: "PL",  name: "Paid Leave",   quota: 15, accrual: "fixed", paid: true,  color: "#0fb5ae" },
+  { id: "PL",  name: "Paid Leave",   quota: 12, accrual: "earned", paid: true,  color: "#0fb5ae" },
   { id: "LWP", name: "Unpaid Leave", quota: 0,  accrual: "none",  paid: false, color: "#c00" },
 ];
 /** One-time move from the old seed (EL / CL / SL / LWP) to the two types. Runs
@@ -675,7 +702,7 @@ async function ensureHr() {
 
 module.exports = {
   getConfig, setConfig, HR_DEFAULTS, ensureHr, normalizeWorker, migrateToMonthly,
-  leaveDaysTaken, migrateLeaveTypes, LEAVE_TYPES,
+  leaveDaysTaken, migrateLeaveTypes, LEAVE_TYPES, addMonths,
   listWorkers, createWorker, updateWorker, deleteWorker,
   ingestPunch, setAttendance, recomputeAttendance, recentPunches,
   saveLeaveType, deleteLeaveType, leaveBalances, applyLeave, decideLeave, deleteLeave,

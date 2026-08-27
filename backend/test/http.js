@@ -862,6 +862,8 @@ async function run() {
   section("Pay is monthly only — and the no-room allowance");
   {
     const per = "2027-01";                       // 31 days, 5 Sundays → 26 working days
+    // a full month would also earn the attendance bonus — that has its own section
+    await call("PATCH", "/hr/config", A, { attendanceBonus: 0 });
     const attend = async (id, otDay) => {
       for (let d = 1; d <= 26; d++) {
         const row = { workerId: id, date: per + "-" + String(d).padStart(2, "0"), status: "P" };
@@ -914,7 +916,7 @@ async function run() {
     await call("PATCH", "/hr/config", A, { noRoomAllowance: 0 });
     const r3 = await call("POST", "/hr/payroll/run", A, { period: per, workerIds: ["EMP-ROOM-OUT"] });
     ok("and 0 switches it off", slipOf(r3, "EMP-ROOM-OUT").roomAllowance === 0 && slipOf(r3, "EMP-ROOM-OUT").gross === 26000);
-    await call("PATCH", "/hr/config", A, { noRoomAllowance: was });
+    await call("PATCH", "/hr/config", A, { noRoomAllowance: was, attendanceBonus: 1000 });
 
     // moving into a company room stops it from the next run
     await call("PATCH", "/hr/workers/EMP-ROOM-OUT", A, { ownAccommodation: false });
@@ -931,7 +933,7 @@ async function run() {
     const ids = stTypes.map((t) => t.id).sort().join(",");
     ok("a fresh install has exactly Paid Leave and Unpaid Leave", ids === "LWP,PL", ids);
     const pl = stTypes.find((t) => t.id === "PL") || {}, lwp = stTypes.find((t) => t.id === "LWP") || {};
-    ok("paid leave is 15 days a year", pl.quota === 15 && pl.paid !== false && pl.accrual === "fixed", JSON.stringify(pl));
+    ok("paid leave accrues one day per month worked", pl.accrual === "earned" && pl.paid !== false, JSON.stringify(pl));
     ok("unpaid leave has no quota and is not paid", lwp.paid === false && !lwp.quota, JSON.stringify(lwp));
     const cfg0 = (await call("GET", "/hr/config", A)).d || {};
     ok("and at most one paid day in any month", cfg0.paidLeaveMaxPerMonth === 1, String(cfg0.paidLeaveMaxPerMonth));
@@ -956,7 +958,8 @@ async function run() {
     ok("so 21 days are paid — 20 present + 1 leave", s1.payableDays === 21 && s1.basicEarned === Math.round(s1.monthPerDay * 21 * 100) / 100,
       JSON.stringify({ d: s1.payableDays, b: s1.basicEarned, pd: s1.monthPerDay }));
     const bal = ((await call("GET", "/hr/leave-balances/" + W, A)).d.balances || []).find((b) => b.type === "PL") || {};
-    ok("only the paid day counts against the 15", bal.taken === 1 && bal.balance === 14, JSON.stringify(bal));
+    ok("only the paid day counts against the balance (one month worked = one day earned)",
+      bal.taken === 1 && bal.entitled === 1 && bal.balance === 0, JSON.stringify(bal));
 
     await call("PATCH", "/hr/config", A, { paidLeaveMaxPerMonth: 0 });
     const s2 = await slipOf();
@@ -968,6 +971,54 @@ async function run() {
 
     await call("DELETE", "/hr/payroll/PR-" + per, A);
     await call("DELETE", "/hr/workers/" + W, A);
+  }
+
+  section("Attendance bonus — a full month, after the first three months of service");
+  {
+    const per = "2027-01";                         // 31 days, 5 Sundays → 26 working days
+    const cfg0 = (await call("GET", "/hr/config", A)).d || {};
+    ok("the bonus is ₹1,000 after 3 months by default", cfg0.attendanceBonus === 1000 && cfg0.attendanceBonusAfterMonths === 3,
+      JSON.stringify({ b: cfg0.attendanceBonus, m: cfg0.attendanceBonusAfterMonths }));
+    const mk = (id, joined) => call("POST", "/hr/workers", A, { id, name: id, dept: "packing", monthlyCtc: 26000, joined });
+    // present on every working day, except what `skip` says about a date
+    const mark = async (id, skip) => {
+      for (let d = 1; d <= 31; d++) {
+        if (new Date(2027, 0, d).getDay() === 0) continue;             // Sundays are the week-off
+        const ds = per + "-" + String(d).padStart(2, "0");
+        const st = (skip || {})[ds] || "P";
+        if (st === "leave") continue;                                  // the approved leave writes that day
+        await call("POST", "/hr/attendance", A, { workerId: id, date: ds, status: st });
+      }
+    };
+    await mk("EMP-AB-FULL", "2020-01-01");  await mark("EMP-AB-FULL");
+    await mk("EMP-AB-ABS", "2020-01-01");   await mark("EMP-AB-ABS", { [per + "-05"]: "A" });
+    await mk("EMP-AB-HALF", "2020-01-01");  await mark("EMP-AB-HALF", { [per + "-05"]: "HD" });
+    await mk("EMP-AB-LEAVE", "2020-01-01"); await mark("EMP-AB-LEAVE", { [per + "-05"]: "leave" });
+    const lv = await call("POST", "/hr/leaves", A, { workerId: "EMP-AB-LEAVE", type: "PL", fromDate: per + "-05", toDate: per + "-05" });
+    await call("POST", "/hr/leaves/" + lv.d.id + "/decide", A, { status: "Approved" });
+    await mk("EMP-AB-NEW", "2026-11-10");   await mark("EMP-AB-NEW");
+    const IDS = ["EMP-AB-FULL", "EMP-AB-ABS", "EMP-AB-HALF", "EMP-AB-LEAVE", "EMP-AB-NEW"];
+    const run = async () => {
+      const r = await call("POST", "/hr/payroll/run", A, { period: per, workerIds: IDS });
+      const m = {}; (r.d.payslips || []).forEach((s) => { m[s.workerId] = s; }); return m;
+    };
+    let S = await run();
+    ok("present every working day: the bonus is paid", S["EMP-AB-FULL"].attendanceBonus === 1000, String(S["EMP-AB-FULL"].attendanceBonus));
+    ok("…in the gross", S["EMP-AB-FULL"].gross === 27000, String(S["EMP-AB-FULL"].gross));
+    ok("…but not in the PF wage", S["EMP-AB-FULL"].deductions.pf === 1800, String(S["EMP-AB-FULL"].deductions.pf));
+    ok("one absence loses it", S["EMP-AB-ABS"].attendanceBonus === 0 && /1 absent/.test(S["EMP-AB-ABS"].attendanceBonusNote), S["EMP-AB-ABS"].attendanceBonusNote);
+    ok("a half day loses it", S["EMP-AB-HALF"].attendanceBonus === 0 && /0\.5 day/.test(S["EMP-AB-HALF"].attendanceBonusNote), S["EMP-AB-HALF"].attendanceBonusNote);
+    ok("a paid leave day loses it too — leave is leave", S["EMP-AB-LEAVE"].attendanceBonus === 0 && /1 leave/.test(S["EMP-AB-LEAVE"].attendanceBonusNote), S["EMP-AB-LEAVE"].attendanceBonusNote);
+    ok("a worker in their first three months gets none", S["EMP-AB-NEW"].attendanceBonus === 0 && /2027-02/.test(S["EMP-AB-NEW"].attendanceBonusNote), S["EMP-AB-NEW"].attendanceBonusNote);
+    await call("PATCH", "/hr/workers/EMP-AB-NEW", A, { joined: "2026-09-15" });
+    S = await run();
+    ok("…and earns it once the three months are behind them", S["EMP-AB-NEW"].attendanceBonus === 1000, S["EMP-AB-NEW"].attendanceBonusNote);
+    await call("PATCH", "/hr/config", A, { attendanceBonus: 0 });
+    S = await run();
+    ok("0 in HR settings switches it off", S["EMP-AB-FULL"].attendanceBonus === 0 && S["EMP-AB-FULL"].gross === 26000, String(S["EMP-AB-FULL"].gross));
+    await call("PATCH", "/hr/config", A, { attendanceBonus: 1000 });
+    await call("DELETE", "/hr/payroll/PR-" + per, A);
+    for (const id of IDS) await call("DELETE", "/hr/workers/" + id, A);
   }
 
   section("Lab role: scoped payload + write limits");

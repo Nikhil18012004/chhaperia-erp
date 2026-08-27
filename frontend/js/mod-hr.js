@@ -829,7 +829,11 @@
       { key: "present", label: "Days", num: true, render: (r) => num(r.payableDays, 1), sort: (r) => r.payableDays },
       { key: "ot", label: "OT h", num: true, render: (r) => r.otHours ? num(r.otHours, 1) : "—", sort: (r) => r.otHours },
       { key: "gross", label: "Gross", num: true, sort: (r) => r.gross,
-        render: (r) => money(r.gross) + (r.roomAllowance ? `<div class="cell-sub">incl. ${esc(money(r.roomAllowance))} room allowance</div>` : "") },
+        render: (r) => {
+          const extras = [r.roomAllowance ? money(r.roomAllowance) + " room allowance" : "",
+            r.attendanceBonus ? money(r.attendanceBonus) + " attendance bonus" : ""].filter(Boolean);
+          return money(r.gross) + (extras.length ? `<div class="cell-sub">incl. ${esc(extras.join(" · "))}</div>` : "");
+        } },
       { key: "pf", label: "PF", num: true, render: (r) => r.deductions.pf ? money(r.deductions.pf) : "—", sort: (r) => r.deductions.pf },
       { key: "esi", label: "ESI", num: true, render: (r) => r.deductions.esi ? money(r.deductions.esi) : "—", sort: (r) => r.deductions.esi },
       { key: "pt", label: "PT", num: true, render: (r) => r.deductions.pt ? money(r.deductions.pt) : "—", sort: (r) => r.deductions.pt },
@@ -917,7 +921,7 @@
     const sum = (f) => rows.reduce((n, p) => n + (+f(p) || 0), 0);
     return {
       basic: sum((p) => p.basicEarned), ot: sum((p) => p.otPay), allow: sum((p) => p.allowances),
-      room: sum((p) => p.roomAllowance),
+      room: sum((p) => p.roomAllowance), bonus: sum((p) => p.attendanceBonus),
       gross: sum((p) => p.gross), net: sum((p) => p.net),
       pf: sum((p) => (p.deductions || {}).pf), esi: sum((p) => (p.deductions || {}).esi),
       pt: sum((p) => (p.deductions || {}).pt), adv: sum((p) => p.advances),
@@ -982,6 +986,7 @@
       ["Basic", s.basicEarned, y.basic, basicNote],
       s.otPay ? ["Overtime", s.otPay, y.ot, days(s.otHours) + " h × " + money(s.hourly || 0)] : null,
       s.roomAllowance ? ["Accommodation Allowance", s.roomAllowance, y.room, "own accommodation — no company room"] : null,
+      s.attendanceBonus ? ["Attendance Bonus", s.attendanceBonus, y.bonus, "no leave or absence all month"] : null,
       s.allowances ? ["Allowances", s.allowances, y.allow, ""] : null,
     ].filter(Boolean);
     const ded = [
@@ -1257,6 +1262,7 @@
             : num(s.payableDays, 1) + " days × " + money(s.dailyRate)) + capNote(s)],
           s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
           s.roomAllowance ? ["Accommodation allowance", s.roomAllowance, "own accommodation — no company room"] : null,
+          s.attendanceBonus ? ["Attendance bonus", s.attendanceBonus, "no leave or absence all month"] : null,
           s.allowances ? ["Allowances", s.allowances, ""] : null,
         ].filter(Boolean), "Gross earnings", s.gross),
         moneyTable("Deductions", [
@@ -1268,7 +1274,9 @@
       ]),
       h("div", { class: "pay-net" }, [h("span", { text: "NET PAY" }), h("b", { text: money2(s.net) })]),
       h("div", { class: "muted", style: "font-size:11.5px;margin-top:8px" },
-        "Employer contribution — PF " + money(emp.pf || 0) + " · ESI " + money(emp.esi || 0)),
+        "Employer contribution — PF " + money(emp.pf || 0) + " · ESI " + money(emp.esi || 0)
+        // a worker asking "why no bonus this month?" gets the answer here
+        + (s.attendanceBonusNote && !s.attendanceBonus ? " · Attendance bonus not earned: " + s.attendanceBonusNote : "")),
     ]);
     const foot = [];
     if (run.status !== "Finalized") foot.push(h("button", { class: "btn ghost", onclick: () => advanceForm(s, run), text: "₹ Advance" }));
@@ -1419,7 +1427,18 @@
         U.field("Paid leave days allowed per month", `<input class="input" id="c_plcap" type="number" step="1" min="0" value="${cfg.paidLeaveMaxPerMonth != null ? cfg.paidLeaveMaxPerMonth : 1}">`),
       ]),
       h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
-        text: "The annual quota sits on the leave type below (Paid Leave: 15 days a year). In any one month only this many of a worker's paid-leave days are paid — the rest go unpaid and do not use the quota. Set 0 for no monthly limit." }),
+        text: "Paid Leave accrues one day per month worked (the type below). In any one month only this many of a worker's paid-leave days are paid — the rest go unpaid and do not use the balance. Set 0 for no monthly limit." }),
+    ]));
+
+    // attendance bonus — a full month, after the first months of service
+    grid.appendChild(h("div", { class: "card" }, [
+      h("div", { class: "card-head" }, [h("h3", { text: "🏅 Attendance Bonus" }), h("div", { class: "sub", text: "For a full month" })]),
+      h("div", { class: "form-grid" }, [
+        U.field("Bonus (₹/month)", `<input class="input" id="c_abonus" type="number" step="1" min="0" value="${cfg.attendanceBonus != null ? cfg.attendanceBonus : 1000}">`),
+        U.field("Not in the first (months of service)", `<input class="input" id="c_amonths" type="number" step="1" min="0" value="${cfg.attendanceBonusAfterMonths != null ? cfg.attendanceBonusAfterMonths : 3}">`),
+      ]),
+      h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
+        text: "Paid to a worker who was present every working day of the month — no leave of either kind, no absence, no half day — once the first months of service (from Joined On) are behind them. In gross (ESI), not in the PF basic. Set 0 to switch it off." }),
     ]));
     box.appendChild(grid);
 
@@ -1440,7 +1459,7 @@
     // leave types
     const lts = leaveTypes();
     box.appendChild(h("div", { class: "card", style: "margin-top:20px" }, [
-      h("div", { class: "card-head" }, [h("h3", { text: "🗂 Leave Types" }), h("div", { class: "sub", text: "Two by ruling — Paid Leave (15 days a year, paid days capped per month above) and Unpaid Leave" })]),
+      h("div", { class: "card-head" }, [h("h3", { text: "🗂 Leave Types" }), h("div", { class: "sub", text: "Two by ruling — Paid Leave (one day per month worked, at most one paid day taken a month) and Unpaid Leave" })]),
       table(lts, [
         { key: "id", label: "Code", render: (r) => `<span class="mono strong">${r.id}</span>`, noSort: true },
         { key: "name", label: "Name", cls: "nm", render: (r) => esc(r.name), noSort: true },
@@ -1469,6 +1488,7 @@
         standardDayHours: +gv("c_std") || 8, otMultiplier: +gv("c_otm") || 2, halfDayBelowHours: +gv("c_half") || 4,
         weekOff, deviceKey: gv("c_devkey").trim(), noRoomAllowance: Math.max(0, +gv("c_room") || 0),
         paidLeaveMaxPerMonth: Math.max(0, +gv("c_plcap") || 0),
+        attendanceBonus: Math.max(0, +gv("c_abonus") || 0), attendanceBonusAfterMonths: Math.max(0, +gv("c_amonths") || 0),
         deductions: {
           pf: { on: ck("c_pf_on"), rate: +gv("c_pf_rate") || 0, wageCapMonthly: +gv("c_pf_cap") || 0, employerRate: +gv("c_pf_emp") || 0 },
           esi: { on: ck("c_esi_on"), empRate: +gv("c_esi_rate") || 0, employerRate: +gv("c_esi_emp") || 0, grossThreshold: +gv("c_esi_th") || 0 },
