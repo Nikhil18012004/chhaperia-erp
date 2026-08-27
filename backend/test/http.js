@@ -632,8 +632,9 @@ async function run() {
      ============================================================ */
   section("Payroll advances — recovered monthly, never double-counted");
   {
-    const W = { id: "EMP-ADV", name: "Advance Test Worker", dept: "packing", payType: "daily",
-      dailyRate: 700, joined: "2020-01-01" };
+    // ₹18,200 over May 2026's 26 working days = ₹700/day, so the sums below are unchanged
+    const W = { id: "EMP-ADV", name: "Advance Test Worker", dept: "packing", payType: "monthly",
+      monthlyCtc: 18200, joined: "2020-01-01" };
     await call("POST", "/hr/workers", A, W);
     // give the worker a full month of attendance so there is pay to deduct from
     const per = "2026-05";
@@ -807,8 +808,8 @@ async function run() {
   {
     const per = "2026-04";
     const mk = async (id, name, rate) => {
-      await call("POST", "/hr/workers", A, { id, name, dept: "packing", payType: "daily",
-        dailyRate: rate, joined: "2020-01-01" });
+      await call("POST", "/hr/workers", A, { id, name, dept: "packing", payType: "monthly",
+        monthlyCtc: rate * 26, joined: "2020-01-01" });
       for (let d = 1; d <= 26; d++) {
         await call("POST", "/hr/attendance", A, { workerId: id, date: per + "-" + String(d).padStart(2, "0"), status: "P" });
       }
@@ -856,6 +857,72 @@ async function run() {
     await call("DELETE", "/hr/workers/EMP-SEL-1", A);
     await call("DELETE", "/hr/workers/EMP-SEL-2", A);
     await call("DELETE", "/hr/workers/EMP-SEL-3", A);
+  }
+
+  section("Pay is monthly only — and the no-room allowance");
+  {
+    const per = "2027-01";                       // 31 days, 5 Sundays → 26 working days
+    const attend = async (id, otDay) => {
+      for (let d = 1; d <= 26; d++) {
+        const row = { workerId: id, date: per + "-" + String(d).padStart(2, "0"), status: "P" };
+        if (d === otDay) row.otHours = 2;
+        await call("POST", "/hr/attendance", A, row);
+      }
+    };
+    const slipOf = (r, id) => (r.d.payslips || []).find((s) => s.workerId === id);
+
+    // a daily wage is no longer a thing: whatever a client sends, the worker is monthly
+    const legacy = await call("POST", "/hr/workers", A, { id: "EMP-ROOM-D", name: "Old Daily Worker", dept: "packing",
+      payType: "daily", dailyRate: 600, joined: "2020-01-01" });
+    ok("a worker posted with a daily rate is stored as monthly", legacy.status === 201 && legacy.d.payType === "monthly",
+      JSON.stringify({ s: legacy.status, p: legacy.d && legacy.d.payType }));
+    ok("…at rate × 26 as the CTC", legacy.d.monthlyCtc === 15600, String(legacy.d.monthlyCtc));
+    ok("and housed by the company unless said otherwise", legacy.d.ownAccommodation === false, String(legacy.d.ownAccommodation));
+    ok("a given CTC is never overridden by a stray daily rate",
+      (await call("POST", "/hr/workers", A, { id: "EMP-ROOM-C", name: "CTC Given", dept: "packing", payType: "daily",
+        dailyRate: 600, monthlyCtc: 20000, joined: "2020-01-01" })).d.monthlyCtc === 20000);
+
+    await call("POST", "/hr/workers", A, { id: "EMP-ROOM-IN", name: "Company Room", dept: "packing", monthlyCtc: 26000, joined: "2020-01-01" });
+    await call("POST", "/hr/workers", A, { id: "EMP-ROOM-OUT", name: "Own Accommodation", dept: "packing", monthlyCtc: 26000,
+      ownAccommodation: true, joined: "2020-01-01" });
+    await call("POST", "/hr/workers", A, { id: "EMP-ROOM-ABS", name: "Never Came", dept: "packing", monthlyCtc: 26000,
+      ownAccommodation: true, joined: "2020-01-01" });
+    await attend("EMP-ROOM-IN", 5); await attend("EMP-ROOM-OUT");
+
+    const r = await call("POST", "/hr/payroll/run", A, { period: per, workerIds: ["EMP-ROOM-IN", "EMP-ROOM-OUT", "EMP-ROOM-ABS"] });
+    const sIn = slipOf(r, "EMP-ROOM-IN"), sOut = slipOf(r, "EMP-ROOM-OUT"), sAbs = slipOf(r, "EMP-ROOM-ABS");
+    ok("a full month on ₹26,000 is ₹1,000/day × 26", !!sIn && sIn.monthPerDay === 1000 && sIn.basicEarned === 26000,
+      sIn && JSON.stringify({ pd: sIn.monthPerDay, b: sIn.basicEarned }));
+    ok("a worker in a company room gets no allowance", sIn.roomAllowance === 0 && sIn.gross === 26000,
+      JSON.stringify({ r: sIn.roomAllowance, g: sIn.gross }));
+    ok("one in their own accommodation gets ₹1,000 on top", !!sOut && sOut.roomAllowance === 1000, sOut && String(sOut.roomAllowance));
+    ok("…which is in the gross", sOut.gross === 27000, String(sOut.gross));
+    ok("but not in the basic — the PF wage is untouched", sOut.basicEarned === 26000 && sOut.deductions.pf === sIn.deductions.pf,
+      JSON.stringify({ b: sOut.basicEarned, pfOut: sOut.deductions.pf, pfIn: sIn.deductions.pf }));
+    ok("a month with no paid day pays no allowance either", !!sAbs && sAbs.payableDays === 0 && sAbs.roomAllowance === 0 && sAbs.gross === 0,
+      sAbs && JSON.stringify({ d: sAbs.payableDays, r: sAbs.roomAllowance, g: sAbs.gross }));
+    ok("overtime hours are recorded on a monthly salary but not paid as such", sIn.otHours === 2 && sIn.otPay === 0,
+      JSON.stringify({ h: sIn.otHours, p: sIn.otPay }));
+
+    // the amount is a setting, not a constant
+    const was = ((await call("GET", "/hr/config", A)).d || {}).noRoomAllowance;
+    ok("the default allowance is ₹1,000", was === 1000, String(was));
+    await call("PATCH", "/hr/config", A, { noRoomAllowance: 1500 });
+    const r2 = await call("POST", "/hr/payroll/run", A, { period: per, workerIds: ["EMP-ROOM-OUT"] });
+    ok("changing it in HR settings changes the next run", slipOf(r2, "EMP-ROOM-OUT").roomAllowance === 1500,
+      String(slipOf(r2, "EMP-ROOM-OUT").roomAllowance));
+    await call("PATCH", "/hr/config", A, { noRoomAllowance: 0 });
+    const r3 = await call("POST", "/hr/payroll/run", A, { period: per, workerIds: ["EMP-ROOM-OUT"] });
+    ok("and 0 switches it off", slipOf(r3, "EMP-ROOM-OUT").roomAllowance === 0 && slipOf(r3, "EMP-ROOM-OUT").gross === 26000);
+    await call("PATCH", "/hr/config", A, { noRoomAllowance: was });
+
+    // moving into a company room stops it from the next run
+    await call("PATCH", "/hr/workers/EMP-ROOM-OUT", A, { ownAccommodation: false });
+    const r4 = await call("POST", "/hr/payroll/run", A, { period: per, workerIds: ["EMP-ROOM-OUT"] });
+    ok("taking a company room stops it from the next run", slipOf(r4, "EMP-ROOM-OUT").roomAllowance === 0);
+
+    await call("DELETE", "/hr/payroll/PR-" + per, A);
+    for (const id of ["EMP-ROOM-D", "EMP-ROOM-C", "EMP-ROOM-IN", "EMP-ROOM-OUT", "EMP-ROOM-ABS"]) await call("DELETE", "/hr/workers/" + id, A);
   }
 
   section("Lab role: scoped payload + write limits");

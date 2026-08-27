@@ -1,7 +1,9 @@
 /* ============================================================
    CHHAPERIA ERP — BACKEND · Human Resources service
    Workers/labour master, biometric attendance, leave and a
-   configurable daily-wage payroll engine.
+   configurable monthly-salary payroll engine. Pay is MONTHLY only
+   (ruling 2026-08-27): a CTC pro-rated to the days actually paid,
+   plus a flat allowance for a worker who does not take a company room.
 
    Design notes
    ------------
@@ -40,6 +42,9 @@ const HR_DEFAULTS = {
   timezone: "Asia/Kolkata",   // factory-local tz; zoned device punches are normalised to this
   weekOff: [0],               // 0=Sun … 6=Sat
   halfDayBelowHours: 4,       // a present day under this = half day
+  // the plant houses its workers; one who stays in their OWN accommodation
+  // instead is paid this much on top of salary, flat, every month (0 = off)
+  noRoomAllowance: 1000,
   deductions: {
     pf:  { on: true, rate: 12, wageCapMonthly: 15000, employerRate: 12 },
     esi: { on: true, empRate: 0.75, employerRate: 3.25, grossThreshold: 21000 },
@@ -91,6 +96,22 @@ function normalizeTs(ts, cfg) {
 /* ============================================================
    WORKERS
    ============================================================ */
+/** Pay is MONTHLY only (ruling 2026-08-27). A worker that still carries a
+    daily rate — an older row, or an old import sheet — becomes a monthly
+    worker at rate × 26 (the standard month the dashboard already assumes)
+    unless a CTC was given. `ownAccommodation` is the opt-IN that earns the
+    no-room allowance: anything but an explicit yes means "housed by us", so
+    a blank column or an old record never pays money by accident. */
+function normalizeWorker(w) {
+  if (w.payType !== "monthly") {
+    if (!num(w.monthlyCtc) && num(w.dailyRate) > 0) w.monthlyCtc = round(num(w.dailyRate) * 26);
+    w.payType = "monthly";
+  }
+  w.dailyRate = num(w.dailyRate);
+  w.monthlyCtc = num(w.monthlyCtc);
+  w.ownAccommodation = w.ownAccommodation === true || /^(true|1|yes|y)$/i.test(String(w.ownAccommodation));
+  return w;
+}
 async function listWorkers() { return (await repo.getState()).hrWorkers; }
 async function createWorker(w) {
   w = w || {};
@@ -99,9 +120,7 @@ async function createWorker(w) {
   else if (await repo.getWorker(w.id)) throw err("Worker " + w.id + " already exists", 409);
   if (w.deviceUid && await repo.getWorkerByDevice(w.deviceUid) && (await repo.getWorkerByDevice(w.deviceUid)).id !== w.id)
     throw err("Device id " + w.deviceUid + " is already mapped to another worker", 409);
-  w.payType = w.payType || "daily";
-  w.dailyRate = num(w.dailyRate);
-  w.monthlyCtc = num(w.monthlyCtc);
+  normalizeWorker(w);
   w.joined = w.joined || todayISO();
   return await repo.putWorker(w);
 }
@@ -113,8 +132,7 @@ async function updateWorker(id, patch) {
     const owner = await repo.getWorkerByDevice(merged.deviceUid);
     if (owner && owner.id !== id) throw err("Device id " + merged.deviceUid + " is already mapped to " + owner.id, 409);
   }
-  merged.dailyRate = num(merged.dailyRate);
-  merged.monthlyCtc = num(merged.monthlyCtc);
+  normalizeWorker(merged);
   return await repo.putWorker(merged);
 }
 async function deleteWorker(id) {
@@ -353,29 +371,26 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   });
   const payableDays = present + paidLeave;
 
-  let basicEarned, gross;
-  // for a monthly worker these describe how the CTC became a per-day rate, so
-  // the payslip can show "Monthly ₹X · ₹Y/day (Z working days) × N paid days"
-  let monthWorkingDays = 0, monthPerDay = 0;
-  if (worker.payType === "monthly") {
-    const y = +period.split("-")[0], m = +period.split("-")[1];
-    const daysInMonth = new Date(y, m, 0).getDate();
-    let workingDays = 0;
-    // the calendar month less its week-offs (Sundays by default) — so a 31-day
-    // month with 5 Sundays is 26 working days, a 30-day with 4 is 26, etc.
-    for (let d = 1; d <= daysInMonth; d++) if (!isWeekOff(`${y}-${pad(m)}-${pad(d)}`, cfg)) workingDays++;
-    monthWorkingDays = workingDays;
-    monthPerDay = round(num(worker.monthlyCtc) / (workingDays || 1));
-    basicEarned = round(monthPerDay * payableDays);
-    gross = basicEarned;
-  } else {
-    basicEarned = round(num(worker.dailyRate) * payableDays);
-    const hourly = num(worker.dailyRate) / (cfg.standardDayHours || 8);
-    const otPay = round(otHours * hourly * (cfg.otMultiplier || 2));
-    const allow = num((worker.allowances || 0));
-    gross = round(basicEarned + otPay + allow);
-    var otPayOut = otPay, allowOut = allow, hourlyOut = round(hourly);
-  }
+  // Everyone is on a monthly salary: the CTC becomes a per-day rate over the
+  // calendar month less its week-offs (Sundays by default — so a 31-day month
+  // with 5 Sundays is 26 working days, a 30-day with 4 is 26, etc.) and is
+  // paid for the days actually present or on paid leave. The payslip shows
+  // "Monthly ₹X · ₹Y/day (Z working days) × N paid days". A row that still
+  // carries a daily rate is read through the same rule as every write path.
+  worker = normalizeWorker(Object.assign({}, worker));
+  const y = +period.split("-")[0], m = +period.split("-")[1];
+  const daysInMonth = new Date(y, m, 0).getDate();
+  let monthWorkingDays = 0;
+  for (let d = 1; d <= daysInMonth; d++) if (!isWeekOff(`${y}-${pad(m)}-${pad(d)}`, cfg)) monthWorkingDays++;
+  const monthPerDay = round(num(worker.monthlyCtc) / (monthWorkingDays || 1));
+  const basicEarned = round(monthPerDay * payableDays);
+  // The no-room allowance: the plant houses its workers, and one who stays in
+  // their own accommodation is paid a flat sum on top every month — but not
+  // for a month in which they were not paid for a single day. It is part of
+  // gross (so ESI sees it) but not of basic (so PF does not).
+  const roomAllowance = worker.ownAccommodation && payableDays > 0 ? round(num(cfg.noRoomAllowance)) : 0;
+  const allowances = num(worker.allowances);
+  const gross = round(basicEarned + roomAllowance + allowances);
 
   const d = cfg.deductions || {};
   const pf = d.pf && d.pf.on ? round((num(d.pf.rate) / 100) * Math.min(basicEarned, num(d.pf.wageCapMonthly) || basicEarned)) : 0;
@@ -390,8 +405,9 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   return {
     workerId: worker.id, name: worker.name, dept: worker.dept, payType: worker.payType,
     dailyRate: worker.dailyRate, monthlyCtc: num(worker.monthlyCtc), monthWorkingDays, monthPerDay,
+    ownAccommodation: worker.ownAccommodation, roomAllowance,
     present: round(present, 1), paidLeave, unpaidLeave, absent, payableDays: round(payableDays, 1),
-    otHours: round(otHours), otPay: otPayOut || 0, allowances: allowOut || 0, hourly: hourlyOut || 0,
+    otHours: round(otHours), otPay: 0, allowances, hourly: 0,
     basicEarned, gross,
     deductions: { pf, esi, pt }, employer: { pf: employerPf, esi: employerEsi }, advances, net,
     // the balance either side of this recovery, so the payslip can show it
@@ -540,8 +556,19 @@ async function payslips(payrunId) { return await repo.payslipsForRun(payrunId); 
    SEED — populate demo HR data on first run (idempotent).
    Mirrors ensureCrm: only fills when the workers table is empty.
    ============================================================ */
+/** Every worker is paid monthly since 2026-08-27. Rows written before that
+    still say "daily": move each one across (rate × 26 becomes the CTC unless
+    one was already set) so payroll never silently pays a ₹0 salary. Runs at
+    boot, touches only the rows that need it, so it is a no-op thereafter. */
+async function migrateToMonthly() {
+  const stale = ((await repo.getState()).hrWorkers || []).filter((w) => w.payType !== "monthly");
+  for (const w of stale) await repo.putWorker(normalizeWorker(w));
+  return stale.length;
+}
+
 async function ensureHr() {
-  if (!await repo.hrIsEmpty()) return { changed: false, workers: (await repo.getState()).hrWorkers.length };
+  const moved = await migrateToMonthly();
+  if (!await repo.hrIsEmpty()) return { changed: false, moved, workers: (await repo.getState()).hrWorkers.length };
   const LEAVE_SEED = [["EL", "Earned Leave", 12, "earned"], ["CL", "Casual Leave", 7, "fixed"],
     ["SL", "Sick Leave", 7, "fixed"]];
   for (let i = 0; i < LEAVE_SEED.length; i++) {
@@ -549,15 +576,16 @@ async function ensureHr() {
     await repo.putLeaveType({ id, name, quota, accrual, paid: true,
       color: ["#0fb5ae", "#7c5cff", "#e0a000"][i] });
   }
+  // [name, dept, designation, monthly CTC, stays in own accommodation?]
   const demo = [
-    ["Ramesh Kumar", "coating", "Machine Operator", 620],
-    ["Suresh Patil", "coating", "Coating Helper", 520],
-    ["Lakshmi Devi", "slitting", "Slitting Operator", 560],
-    ["Anil Yadav", "slitting", "Packing Helper", 500],
-    ["Farida Begum", "fiberglass", "Weaving Operator", 580],
-    ["Mahesh Naik", "fiberglass", "Fibre-Glass Helper", 510],
-    ["Geeta Sharma", "packing", "Packing & QC", 540],
-    ["Vijay Rao", "admin", "Store Keeper", 700],
+    ["Ramesh Kumar", "coating", "Machine Operator", 16000, false],
+    ["Suresh Patil", "coating", "Coating Helper", 13500, false],
+    ["Lakshmi Devi", "slitting", "Slitting Operator", 14500, true],
+    ["Anil Yadav", "slitting", "Packing Helper", 13000, false],
+    ["Farida Begum", "fiberglass", "Weaving Operator", 15000, false],
+    ["Mahesh Naik", "fiberglass", "Fibre-Glass Helper", 13500, false],
+    ["Geeta Sharma", "packing", "Packing & QC", 14000, true],
+    ["Vijay Rao", "admin", "Store Keeper", 18000, false],
   ];
   /* .map() would collect promises, not workers. Built one at a time so each
      row is written — and awaited — before the next. */
@@ -565,8 +593,8 @@ async function ensureHr() {
   for (let i = 0; i < demo.length; i++) {
     const d = demo[i];
     workers.push(await repo.putWorker({
-      id: "EMP-" + String(1001 + i).slice(1), name: d[0], dept: d[1], designation: d[2], payType: "daily",
-      dailyRate: d[3], deviceUid: String(1001 + i), active: true, joined: "2025-01-15",
+      id: "EMP-" + String(1001 + i).slice(1), name: d[0], dept: d[1], designation: d[2], payType: "monthly",
+      monthlyCtc: d[3], ownAccommodation: d[4], deviceUid: String(1001 + i), active: true, joined: "2025-01-15",
       phone: "9" + (400000000 + i * 111111), shift: "General",
     }));
   }
@@ -588,11 +616,11 @@ async function ensureHr() {
         inTime: "09:00", outTime: `${pad(outH)}:${pad(outM)}`, hours, otHours: ot, source: "device" });
     }
   }
-  return { changed: true, workers: workers.length };
+  return { changed: true, moved, workers: workers.length };
 }
 
 module.exports = {
-  getConfig, setConfig, HR_DEFAULTS, ensureHr,
+  getConfig, setConfig, HR_DEFAULTS, ensureHr, normalizeWorker, migrateToMonthly,
   listWorkers, createWorker, updateWorker, deleteWorker,
   ingestPunch, setAttendance, recomputeAttendance, recentPunches,
   saveLeaveType, deleteLeaveType, leaveBalances, applyLeave, decideLeave, deleteLeave,

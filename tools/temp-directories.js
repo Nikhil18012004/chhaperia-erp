@@ -265,13 +265,15 @@ function buildWorkers(ids, deviceStart) {
     used.add(name);
     const dept = DEPTS[i % DEPTS.length];
     const designation = pick(r, DESIGNATIONS[dept]);
-    const monthly = /Supervisor|Assistant|Keeper|Clerk|Operator$/.test(designation) && r() > 0.72;
+    // pay is monthly only; staff-grade designations earn more, and about one
+    // worker in four stays in their own accommodation (the no-room allowance)
+    const staff = /Supervisor|Assistant|Keeper|Clerk|Operator$/.test(designation);
     const y = between(r, 2019, 2025);
     return {
       id, name, dept, designation,
-      payType: monthly ? "monthly" : "daily",
-      dailyRate: monthly ? 0 : between(r, 480, 860),
-      monthlyCtc: monthly ? between(r, 18, 46) * 1000 : 0,
+      payType: "monthly",
+      monthlyCtc: (staff ? between(r, 36, 92) : between(r, 25, 45)) * 500,
+      ownAccommodation: r() > 0.75,
       deviceUid: String(deviceStart + i),
       phone: String(between(r, 70, 99)) + String(between(r, 10000000, 99999999)),
       joined: y + "-" + String(between(r, 1, 12)).padStart(2, "0") + "-" + String(between(r, 1, 28)).padStart(2, "0"),

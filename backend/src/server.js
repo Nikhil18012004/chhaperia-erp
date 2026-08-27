@@ -171,8 +171,11 @@ async function boot() {
   catch (e) { console.error("[crm restore]", e.message); }
 
   // seed demo HR data (workers + leave types + recent attendance) on first run
-  try { const hr = await hrService.ensureHr(); if (hr.changed) console.log("  ├─ HR       : seeded " + hr.workers + " workers + attendance"); }
-  catch (e) { console.error("[hr seed]", e.message); }
+  try {
+    const hr = await hrService.ensureHr();
+    if (hr.changed) console.log("  ├─ HR       : seeded " + hr.workers + " workers + attendance");
+    if (hr.moved) console.log("  ├─ HR       : moved " + hr.moved + " daily-wage worker(s) to monthly pay");
+  } catch (e) { console.error("[hr seed]", e.message); }
 
   // seed demo transport agencies (dispatch directory) on first run
   try { const dp = await erpService.ensureDispatch(); if (dp.changed) console.log("  ├─ Dispatch : seeded " + dp.count + " transport agencies"); }

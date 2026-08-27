@@ -361,7 +361,7 @@ async function saveState(data) {
     await replace("hrWorkers", "hr_workers", (w) => {
       const { id, name, dept, designation, payType, dailyRate, monthlyCtc, deviceUid, active, joined, ...rest } = w;
       return x.run(HW, { id, name: name || "", dept: dept || null, designation: designation || null,
-        pay_type: payType || "daily", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
+        pay_type: payType || "monthly", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
         device_uid: deviceUid || null, active: active === false ? 0 : 1, joined: joined || null, doc: J(rest) });
     });
 
@@ -1008,7 +1008,7 @@ async function putWorker(w, x0) {
     "`pay_type`=`new`.`pay_type`, `daily_rate`=`new`.`daily_rate`, `monthly_ctc`=`new`.`monthly_ctc`, " +
     "`device_uid`=`new`.`device_uid`, `active`=`new`.`active`, `joined`=`new`.`joined`, `doc`=`new`.`doc`",
     { id, name: name || "", dept: dept || null, designation: designation || null,
-      pay_type: payType || "daily", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
+      pay_type: payType || "monthly", daily_rate: dailyRate || 0, monthly_ctc: monthlyCtc || 0,
       device_uid: deviceUid || null, active: active === false ? 0 : 1, joined: joined || null, doc: J(rest) });
   return getWorker(id, x);
 }

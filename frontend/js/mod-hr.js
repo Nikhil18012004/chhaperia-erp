@@ -2,8 +2,9 @@
    CHHAPERIA ERP — HUMAN RESOURCES & PAYROLL  (frontend)
    Tabs: Dashboard · Workers · Attendance (muster + biometric)
          · Leave · Payroll · Settings
-   Daily-wage base with fully-configurable OT + PF/ESI/PT and
-   admin-defined leave types. Biometric device pushes punches to
+   Monthly-salary base (pay is monthly only; a worker in their own
+   accommodation gets a flat no-room allowance) with configurable
+   PF/ESI/PT and admin-defined leave types. Biometric device pushes punches to
    /api/hr/punch; the server derives the daily muster.
    ============================================================ */
 (function () {
@@ -41,6 +42,12 @@
   function leaves() { return ENG.data.hrLeaves || []; }
   function payruns() { return ENG.data.hrPayruns || []; }
   function payslips() { return ENG.data.hrPayslips || []; }
+  /* the flat monthly sum paid to a worker who stays in their own accommodation
+     instead of a company room (HR Settings → Accommodation; server default ₹1,000) */
+  function noRoomAllowance() {
+    const hr = (ENG.data.settings || {}).hr || {};
+    return hr.noRoomAllowance != null ? (+hr.noRoomAllowance || 0) : 1000;
+  }
 
   /* run an HR API call, reload the dataset, land on the given view */
   async function save(apiCall, tab) {
@@ -51,11 +58,11 @@
   const TAB_RENDER = { dashboard: tabDashboard, workers: tabWorkers, attendance: tabAttendance,
     leave: tabLeave, payroll: tabPayroll, settings: tabSettings };
   const TAB_HEAD = {
-    dashboard: ["Human Resources & Payroll", "Workforce, biometric attendance, leave and daily-wage payroll — at a glance."],
+    dashboard: ["Human Resources & Payroll", "Workforce, biometric attendance, leave and monthly payroll — at a glance."],
     workers: ["Workers", "Your workforce — labours & staff, wage rates and biometric IDs."],
     attendance: ["Attendance", "Biometric muster roll, overtime and manual corrections."],
     leave: ["Leave", "Requests, approvals and live balances."],
-    payroll: ["Payroll", "Attendance-driven daily-wage payslips with statutory deductions."],
+    payroll: ["Payroll", "Monthly salaries paid to attendance, with statutory deductions."],
     settings: ["HR Settings", "Overtime, deduction rules, biometric device and leave types."],
   };
   const TAB_TITLE = { dashboard: "HR · Overview", workers: "HR · Workers", attendance: "HR · Attendance",
@@ -96,13 +103,13 @@
     const onLeave = todayAtt.filter((a) => a.status === "L").length;
     const absent = todayAtt.filter((a) => a.status === "A").length;
     const pending = leaves().filter((l) => l.status === "Pending").length;
-    const wageCapacity = active.reduce((s, w) => s + (w.payType === "monthly" ? (w.monthlyCtc || 0) : (w.dailyRate || 0) * 26), 0);
+    const wageCapacity = active.reduce((s, w) => s + (w.monthlyCtc || 0) + (w.ownAccommodation ? noRoomAllowance() : 0), 0);
 
     host.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" }, [
       kpi({ icon: "👷", label: "Active Workers", value: num(active.length) }),
       kpi({ icon: "✅", label: "Present Today", value: num(present), delta: absent ? absent + " absent" : "full house", deltaType: absent ? "down" : "up" }),
       kpi({ icon: "🌴", label: "On Leave Today", value: num(onLeave) }),
-      kpi({ icon: "💰", label: "Est. Monthly Wage Bill", value: money(wageCapacity), delta: "at ~26 days", deltaType: "flat" }),
+      kpi({ icon: "💰", label: "Est. Monthly Wage Bill", value: money(wageCapacity), delta: "CTC + room allowances", deltaType: "flat" }),
     ]));
 
     // attendance by department (today)
@@ -172,8 +179,9 @@
         { key: "id", label: "Code", render: (r) => `<span class="mono strong">${r.id}</span>`, sort: (r) => r.id },
         { key: "name", label: "Worker", render: (r) => `<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${esc(r.designation || "—")}</div>`, sort: (r) => r.name },
         { key: "dept", label: "Department", render: (r) => badge("mut", cap(r.dept || "—")), sort: (r) => r.dept || "" },
-        { key: "pay", label: "Pay", render: (r) => r.payType === "monthly" ? "Monthly" : "Daily", sort: (r) => r.payType },
-        { key: "rate", label: "Rate", num: true, render: (r) => r.payType === "monthly" ? money(r.monthlyCtc) + "/mo" : money(r.dailyRate) + "/day", sort: (r) => r.dailyRate || r.monthlyCtc },
+        { key: "ctc", label: "Monthly CTC", num: true, render: (r) => money(r.monthlyCtc), sort: (r) => r.monthlyCtc || 0 },
+        { key: "stay", label: "Accommodation", sort: (r) => (r.ownAccommodation ? 1 : 0),
+          render: (r) => r.ownAccommodation ? badge("warn", "Own · +" + money(noRoomAllowance()) + "/mo") : badge("mut", "Company room") },
         { key: "device", label: "Biometric ID", render: (r) => r.deviceUid ? `<span class="mono">${esc(r.deviceUid)}</span>` : '<span class="muted">—</span>', sort: (r) => r.deviceUid || "" },
         { key: "active", label: "Status", render: (r) => r.active === false ? badge("mut", "Inactive") : badge("ok", "Active"), sort: (r) => (r.active === false ? 1 : 0) },
       ], { onRow: (r) => workerDetail(r.id), empty: "No workers — add one with ＋ New Worker" }));
@@ -187,8 +195,8 @@
     const body = h("div", {}, [
       MW.dl([
         ["Department", cap(w.dept || "—")], ["Designation", w.designation || "—"],
-        ["Pay Type", w.payType === "monthly" ? "Monthly salary" : "Daily wage"],
-        [w.payType === "monthly" ? "Monthly CTC" : "Daily Rate", w.payType === "monthly" ? money(w.monthlyCtc) : money(w.dailyRate)],
+        ["Monthly CTC", money(w.monthlyCtc)],
+        ["Accommodation", w.ownAccommodation ? "Own accommodation · +" + money(noRoomAllowance()) + "/month" : "Company room"],
         ["Biometric ID", w.deviceUid || "—"], ["Phone", w.phone || "—"], ["Joined", w.joined || "—"],
         ["Shift", w.shift || "General"], ["PF No.", w.pfNo || "—"], ["ESI No.", w.esiNo || "—"],
         ["Bank A/C", w.bankAcc ? (w.bankAcc + " · " + (w.bankIfsc || "")) : "—"],
@@ -216,16 +224,17 @@
   }
 
   function workerForm(w) {
-    const edit = !!w; w = w || { payType: "daily", active: true };
+    const edit = !!w; w = w || { payType: "monthly", active: true };
     const f = (k, d) => (w[k] != null ? w[k] : (d == null ? "" : d));
     const body = h("div", { class: "form-grid" }, [
       U.field("Worker Code", `<input class="input" id="w_id" value="${esc(f("id"))}" ${edit ? "disabled" : ""} placeholder="Auto (EMP-000N) if blank">`),
       U.field("Full Name", `<input class="input" id="w_name" value="${esc(f("name"))}" placeholder="e.g. Ramesh Kumar">`),
       U.field("Department", U.selectHTML("w_dept", DEPTS.map((d) => ({ v: d, l: cap(d) })), f("dept", "coating"))),
       U.field("Designation", `<input class="input" id="w_desig" value="${esc(f("designation"))}" placeholder="e.g. Machine Operator">`),
-      U.field("Pay Type", U.selectHTML("w_ptype", [{ v: "daily", l: "Daily wage" }, { v: "monthly", l: "Monthly salary" }], f("payType", "daily"))),
-      U.field("Daily Rate (₹/day)", `<input class="input" id="w_rate" type="number" value="${f("dailyRate", 0)}">`),
-      U.field("Monthly CTC (₹, if monthly)", `<input class="input" id="w_ctc" type="number" value="${f("monthlyCtc", 0)}">`),
+      U.field("Monthly CTC (₹)", `<input class="input" id="w_ctc" type="number" value="${f("monthlyCtc", 0)}">`),
+      // the plant houses its workers; one who stays elsewhere is paid the no-room allowance
+      U.field("Accommodation", U.selectHTML("w_stay", [{ v: "0", l: "Company room" },
+        { v: "1", l: "Own accommodation (+" + money(noRoomAllowance()) + "/month)" }], w.ownAccommodation ? "1" : "0")),
       U.field("Biometric Device ID", `<input class="input" id="w_dev" value="${esc(f("deviceUid"))}" placeholder="Punch-machine user id">`),
       U.field("Phone", `<input class="input" id="w_phone" value="${esc(f("phone"))}">`),
       U.field("Joined On", `<input class="input" id="w_join" type="date" value="${f("joined", iso())}">`),
@@ -241,8 +250,8 @@
     function doSave() {
       const g = (id) => { const el = UI.$("#" + id); return el ? el.value : ""; };
       const name = g("w_name").trim(); if (!name) { toast("Name is required", { type: "warn" }); return; }
-      const payload = { name, dept: g("w_dept"), designation: g("w_desig").trim(), payType: g("w_ptype"),
-        dailyRate: +g("w_rate") || 0, monthlyCtc: +g("w_ctc") || 0, deviceUid: g("w_dev").trim() || null,
+      const payload = { name, dept: g("w_dept"), designation: g("w_desig").trim(), payType: "monthly",
+        monthlyCtc: +g("w_ctc") || 0, ownAccommodation: g("w_stay") === "1", deviceUid: g("w_dev").trim() || null,
         phone: g("w_phone").trim(), joined: g("w_join"), pfNo: g("w_pf").trim(), esiNo: g("w_esi").trim(),
         bankAcc: g("w_bank").trim(), bankIfsc: g("w_ifsc").trim(), active: g("w_active") === "1" };
       mo.close();
@@ -416,15 +425,16 @@
           <span class="pill ${active ? "on" : "off"}">${active ? "Active" : "Inactive"}</span></div>
         <div class="role">${esc(w.designation || "—")}<i>·</i>${esc(cap(w.dept || "—"))} Department</div>
         <div class="chips">
-          ${chip(w.payType === "monthly" ? "Monthly Salary" : "Daily Wage")}
+          ${chip("Monthly Salary")}
+          ${chip(w.ownAccommodation ? "Own Accommodation" : "Company Room")}
           ${chip("Shift " + (w.shift || "General"))}
           ${chip("Joined " + dmy(w.joined))}
           ${chip("Service " + serviceLen(w.joined))}
         </div>
       </div>
       <aside class="rate">
-        <b>${w.payType === "monthly" ? RS(w.monthlyCtc) : RS(w.dailyRate)}</b>
-        <span>${w.payType === "monthly" ? "Monthly CTC" : "Rate Per Day"}</span>
+        <b>${RS(w.monthlyCtc)}</b>
+        <span>Monthly CTC</span>
       </aside>
     </div>
 
@@ -443,11 +453,11 @@
 
       ${sec("Pay, Statutory & Bank", `<div class="panel"><div class="cols">
         <div><table class="kv"><tbody>${kv([
-          ["Pay Type", w.payType === "monthly" ? "Monthly salary" : "Daily wage"],
+          ["Pay Type", "Monthly salary"],
           ["Monthly CTC", RS(w.monthlyCtc) + " / month"], ["UAN", w.uan], ["Bank A/C Number", w.bankAcc],
         ])}</tbody></table></div>
         <div><table class="kv"><tbody>${kv([
-          ["Daily Rate", RS(w.dailyRate) + " / day"], ["PF Number", w.pfNo],
+          ["Accommodation", w.ownAccommodation ? "Own · " + RS(noRoomAllowance()) + " / month allowance" : "Company room"], ["PF Number", w.pfNo],
           ["ESI Number", w.esiNo], ["Bank IFSC", w.bankIfsc],
         ])}</tbody></table></div>
       </div></div>`)}
@@ -774,7 +784,8 @@
       { key: "worker", label: "Worker", render: (r) => `<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${cap(r.dept || "")}</div>`, sort: (r) => r.name },
       { key: "present", label: "Days", num: true, render: (r) => num(r.payableDays, 1), sort: (r) => r.payableDays },
       { key: "ot", label: "OT h", num: true, render: (r) => r.otHours ? num(r.otHours, 1) : "—", sort: (r) => r.otHours },
-      { key: "gross", label: "Gross", num: true, render: (r) => money(r.gross), sort: (r) => r.gross },
+      { key: "gross", label: "Gross", num: true, sort: (r) => r.gross,
+        render: (r) => money(r.gross) + (r.roomAllowance ? `<div class="cell-sub">incl. ${esc(money(r.roomAllowance))} room allowance</div>` : "") },
       { key: "pf", label: "PF", num: true, render: (r) => r.deductions.pf ? money(r.deductions.pf) : "—", sort: (r) => r.deductions.pf },
       { key: "esi", label: "ESI", num: true, render: (r) => r.deductions.esi ? money(r.deductions.esi) : "—", sort: (r) => r.deductions.esi },
       { key: "pt", label: "PT", num: true, render: (r) => r.deductions.pt ? money(r.deductions.pt) : "—", sort: (r) => r.deductions.pt },
@@ -862,6 +873,7 @@
     const sum = (f) => rows.reduce((n, p) => n + (+f(p) || 0), 0);
     return {
       basic: sum((p) => p.basicEarned), ot: sum((p) => p.otPay), allow: sum((p) => p.allowances),
+      room: sum((p) => p.roomAllowance),
       gross: sum((p) => p.gross), net: sum((p) => p.net),
       pf: sum((p) => (p.deductions || {}).pf), esi: sum((p) => (p.deductions || {}).esi),
       pt: sum((p) => (p.deductions || {}).pt), adv: sum((p) => p.advances),
@@ -917,6 +929,7 @@
     const earn = [
       ["Basic", s.basicEarned, y.basic, basicNote],
       s.otPay ? ["Overtime", s.otPay, y.ot, days(s.otHours) + " h × " + money(s.hourly || 0)] : null,
+      s.roomAllowance ? ["Accommodation Allowance", s.roomAllowance, y.room, "own accommodation — no company room"] : null,
       s.allowances ? ["Allowances", s.allowances, y.allow, ""] : null,
     ].filter(Boolean);
     const ded = [
@@ -1191,6 +1204,7 @@
             ? money(s.monthPerDay) + "/day (" + money(s.monthlyCtc) + " ÷ " + num(s.monthWorkingDays, 0) + " working days) × " + num(s.payableDays, 1) + " paid"
             : num(s.payableDays, 1) + " days × " + money(s.dailyRate)],
           s.otPay ? ["Overtime", s.otPay, num(s.otHours, 1) + " h × " + money(s.hourly || 0)] : null,
+          s.roomAllowance ? ["Accommodation allowance", s.roomAllowance, "own accommodation — no company room"] : null,
           s.allowances ? ["Allowances", s.allowances, ""] : null,
         ].filter(Boolean), "Gross earnings", s.gross),
         moneyTable("Deductions", [
@@ -1334,6 +1348,17 @@
       dedRow("ESI (State Insurance)", "esi", [["Employee %", "c_esi_rate", (d.esi || {}).empRate], ["Employer %", "c_esi_emp", (d.esi || {}).employerRate], ["Gross ≤ ₹", "c_esi_th", (d.esi || {}).grossThreshold]], (d.esi || {}).on),
       dedRow("Professional Tax (Karnataka)", "pt", [["Nil up to ₹", "c_pt_th", ptThreshold], ["Amount above ₹", "c_pt_amt", ptAmount]], (d.pt || {}).on),
     ]));
+
+    // accommodation — the plant houses its workers; the exception is paid for
+    grid.appendChild(h("div", { class: "card" }, [
+      h("div", { class: "card-head" }, [h("h3", { text: "🏠 Accommodation" }),
+        h("div", { class: "sub", text: "A company room, or this much extra" })]),
+      h("div", { class: "form-grid" }, [
+        U.field("No-room allowance (₹/month)", `<input class="input" id="c_room" type="number" step="1" min="0" value="${cfg.noRoomAllowance != null ? cfg.noRoomAllowance : 1000}">`),
+      ]),
+      h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
+        text: "Set per worker under Workers → Accommodation. Paid flat on top of salary in any month the worker was paid for at least one day; it counts in gross (ESI) but not in the PF basic. Set 0 to switch it off." }),
+    ]));
     box.appendChild(grid);
 
     // biometric device
@@ -1380,7 +1405,7 @@
       const weekOff = []; for (let i = 0; i < 7; i++) if (ck("c_wo_" + i)) weekOff.push(i);
       const patch = {
         standardDayHours: +gv("c_std") || 8, otMultiplier: +gv("c_otm") || 2, halfDayBelowHours: +gv("c_half") || 4,
-        weekOff, deviceKey: gv("c_devkey").trim(),
+        weekOff, deviceKey: gv("c_devkey").trim(), noRoomAllowance: Math.max(0, +gv("c_room") || 0),
         deductions: {
           pf: { on: ck("c_pf_on"), rate: +gv("c_pf_rate") || 0, wageCapMonthly: +gv("c_pf_cap") || 0, employerRate: +gv("c_pf_emp") || 0 },
           esi: { on: ck("c_esi_on"), empRate: +gv("c_esi_rate") || 0, employerRate: +gv("c_esi_emp") || 0, grossThreshold: +gv("c_esi_th") || 0 },

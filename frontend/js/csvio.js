@@ -235,11 +235,13 @@
     },
     hrworkers: {
       label: "Workers", idKey: "id", kind: "array", path: "hrWorkers", autoId: "EMP-",
-      cols: [C("id", "Worker Code"), C("name", "Full Name"), C("dept", "Department"), C("designation", "Designation"), C("payType", "Pay Type"),
-        C("dailyRate", "Daily Rate (Rs/day)", "num"), C("monthlyCtc", "Monthly CTC (Rs)", "num"), C("deviceUid", "Biometric Device ID"), C("phone", "Phone"),
+      // pay is monthly only; "Own Accommodation" is the opt-in for the no-room
+      // allowance, so a blank cell means a company room (nothing extra paid)
+      cols: [C("id", "Worker Code"), C("name", "Full Name"), C("dept", "Department"), C("designation", "Designation"),
+        C("monthlyCtc", "Monthly CTC (Rs)", "num"), C("ownAccommodation", "Own Accommodation (Yes/No)", "bool"), C("deviceUid", "Biometric Device ID"), C("phone", "Phone"),
         C("joined", "Joined On"), C("pfNo", "PF Number"), C("esiNo", "ESI Number"), C("bankAcc", "Bank A/C"), C("bankIfsc", "Bank IFSC"),
         C("active", "Status (Active)", "bool"), C("shift", "Shift")],
-      form: ["id", "name", "dept", "designation", "payType", "dailyRate", "monthlyCtc",
+      form: ["id", "name", "dept", "designation", "monthlyCtc", "ownAccommodation",
         "deviceUid", "phone", "joined", "pfNo", "esiNo", "bankAcc", "bankIfsc", "active"],
     },
     hrattendance: {

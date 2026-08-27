@@ -8,6 +8,7 @@
 const repo = require("../db/repository");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
+const HR = require("./hrService");
 const BC = require("../../../frontend/js/bomcalc");
 // the same tax engine the invoice prints from, so a quotation's money and the
 // order it becomes can never disagree on a figure
@@ -91,6 +92,8 @@ async function saveState(data) {
   if (orphan) throw err(`Movement ${orphan.id || ""} references unknown item ${orphan.itemId}`, 400);
   // keep any newly-introduced work orders / products stage-ready
   S.ensureStageModel(data);
+  // pay is monthly only — an imported sheet may still carry daily rates
+  if (Array.isArray(data.hrWorkers)) data.hrWorkers.forEach((w) => { if (w) HR.normalizeWorker(w); });
   return await repo.saveState(data);
 }
 

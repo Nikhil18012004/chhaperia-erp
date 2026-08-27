@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS `hr_workers` (
   `name`        TEXT         NOT NULL,
   `dept`        VARCHAR(64),
   `designation` VARCHAR(128),
-  `pay_type`    VARCHAR(32)  DEFAULT 'daily',
+  `pay_type`    VARCHAR(32)  DEFAULT 'monthly',
   `daily_rate`  DOUBLE       DEFAULT 0,
   `monthly_ctc` DOUBLE       DEFAULT 0,
   `device_uid`  VARCHAR(100),
