@@ -236,7 +236,10 @@
     DB.hr.balances(id).then(({ balances }) => { const box = UI.$("#wk_bal"); if (!box) return; box.innerHTML = "";
       if (!balances.length) { box.appendChild(h("span", { class: "muted", text: "No leave types configured." })); return; }
       balances.forEach((b) => box.appendChild(h("div", { class: "chip", style: "padding:8px 12px" },
-        h("span", { html: `<b>${esc(b.name)}</b> · ${b.balance} left <span class="muted">/ ${b.entitled}</span>` })))); }).catch(() => {});
+        // a type with no quota (unpaid leave) has nothing to be "left" of — say what was taken
+        h("span", { html: `<b>${esc(b.name)}</b> · ` + (b.entitled > 0
+          ? `${b.balance} left <span class="muted">/ ${b.entitled}</span>`
+          : `${b.taken} taken <span class="muted">· no quota</span>`) })))); }).catch(() => {});
   }
 
   function workerForm(w) {
