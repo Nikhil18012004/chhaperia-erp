@@ -187,11 +187,6 @@
 .kpi-grid.compact .kpi-label{font-size:10.5px;letter-spacing:.04em}
 .kpi-grid.compact .kpi-delta{font-size:10.5px;margin-top:7px;padding:2px 7px}
 .kpi-grid.compact .chart-box{display:none}                 /* drop sparkline so 6 fit cleanly */
-/* five headline tiles in one row (the two work calendars: overdue / today / week / open / done) */
-.kpi-grid.five{grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
-.kpi-grid.five .kpi{padding:13px 14px}
-@media(max-width:1240px){ .kpi-grid.five{grid-template-columns:repeat(3,minmax(0,1fr))} }
-@media(max-width:640px){ .kpi-grid.five{grid-template-columns:repeat(2,minmax(0,1fr))} }
 @media(max-width:1240px){ .kpi-grid.compact{grid-template-columns:repeat(3,minmax(0,1fr))} }
 @media(max-width:640px){ .kpi-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))} }
 
@@ -419,7 +414,7 @@ textarea.input{height:auto;padding:10px 12px;resize:vertical;min-height:78px;lin
 .fx-dir{margin-left:6px;font-size:10px;font-weight:800}
 .fx-dir.up{color:var(--ok)}
 .fx-dir.down{color:var(--danger)}
-/* A row the calendar (or anything else) navigated TO: hold it lit long enough
+/* A row another screen navigated TO: hold it lit long enough
    to find, then fade out so the table reads normally again. */
 @keyframes rowFlash{
   0%{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
@@ -1400,137 +1395,6 @@ canvas{display:block;width:100%}
    needs to be and pushes wide tables into a sideways scroll. */
 .tbl td .cell-sub + .cell-sub{ margin-top:2px; }
 .tbl td .cell-sub{ display:block; }
-
-/* ============================================================
-   CALENDAR
-   Built from the same parts as the rest of the app — panel, line,
-   radius, the --c1..--c8 accents — so a new grid does not read as a
-   bolted-on widget. Each entry carries its source colour in --sc.
-   ============================================================ */
-.cal-nav{display:flex;align-items:center;gap:8px}
-.cal-label{font-weight:800;font-size:15px;min-width:190px;text-align:center;letter-spacing:-.01em}
-
-/* ---- source filter chips: click to hide a whole stream ---- */
-.cal-chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
-.cal-chip{--sc:var(--c1);display:inline-flex;align-items:center;gap:7px;cursor:pointer;
-  font-size:11.5px;font-weight:700;padding:5px 11px;border-radius:var(--radius-pill);
-  border:1px solid var(--line);background:var(--panel-2);color:var(--text-mut);
-  transition:background .15s,color .15s,border-color .15s,opacity .15s;opacity:.62}
-.cal-chip:hover{color:var(--text-dim);border-color:var(--line-strong)}
-.cal-chip.on{opacity:1;color:var(--text);border-color:var(--sc);background:var(--panel)}
-.cal-chip-d{width:9px;height:9px;border-radius:50%;background:var(--sc);flex:0 0 auto}
-.cal-chip:not(.on) .cal-chip-d{background:var(--line-strong)}
-.cal-chip-n{font-variant-numeric:tabular-nums;opacity:.7;font-weight:800}
-
-/* ---- month grid ---- */
-.cal-wrap{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
-/* minmax(0,1fr), NOT 1fr: a bare 1fr floors each track at the cell's
-   min-content, and an entry pill carries a nowrap title — so seven day
-   columns insisted on ~210px each (1481px of grid) and .cal-wrap's
-   overflow:hidden quietly ate the last days of every week, on a desktop
-   as much as a tablet. Zeroing the floor lets the track shrink and hands
-   the truncation back to .cal-ev-t's ellipsis, where it belongs. */
-.cal-head{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:var(--panel-2);
-  border-bottom:1px solid var(--line)}
-.cal-hd{padding:9px 10px;font-size:11px;font-weight:800;text-transform:uppercase;
-  letter-spacing:.06em;color:var(--text-mut);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
-.cal-cell{min-height:112px;min-width:0;padding:6px 7px 8px;border-right:1px solid var(--line);
-  border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:4px;cursor:pointer;
-  transition:background .15s}
-.cal-cell:nth-child(7n){border-right:none}
-.cal-cell:hover{background:var(--panel-2)}
-/* a day outside the month being viewed stays visible but recedes */
-.cal-cell.out{opacity:.42}
-.cal-cell.today{background:var(--accent-soft)}
-.cal-cell.today .cal-cell-n{background:var(--accent-grad);color:#fff;
-  width:23px;height:23px;border-radius:50%;display:grid;place-items:center}
-.cal-cell-top{display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:23px;min-width:0}
-.cal-cell-n{font-size:12px;font-weight:800;color:var(--text-dim);font-variant-numeric:tabular-nums}
-.cal-more{border:none;background:transparent;cursor:pointer;font-size:10.5px;font-weight:800;
-  color:var(--text-mut);padding:1px 4px;border-radius:5px}
-.cal-more:hover{background:var(--line);color:var(--text)}
-.cal-cell-body{display:flex;flex-direction:column;gap:3px;min-width:0}
-
-/* ---- an entry, as a pill in the month grid ---- */
-.cal-ev{--sc:var(--c1);display:flex;align-items:center;gap:5px;width:100%;cursor:pointer;
-  border:none;border-left:3px solid var(--sc);background:var(--panel-2);
-  border-radius:5px;padding:3px 6px;text-align:left;font-size:11px;font-weight:600;
-  color:var(--text-dim);min-width:0;transition:background .15s,color .15s}
-.cal-ev:hover{background:var(--line);color:var(--text)}
-.cal-ev-ic{flex:0 0 auto;font-size:10px}
-.cal-ev-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* a date that has passed and is still open is the whole point of the view */
-.cal-ev.late{background:var(--danger-soft,#fdecec);color:var(--danger);border-left-color:var(--danger)}
-.cal-ev.now{background:var(--accent-soft);color:var(--text)}
-.cal-ev.done{opacity:.5;text-decoration:line-through}
-
-/* ---- week / day columns ---- */
-.cal-cols{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
-.cal-cols.one{grid-template-columns:1fr}
-.cal-col{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-  overflow:hidden;display:flex;flex-direction:column;min-width:0}
-.cal-col.today{border-color:var(--accent)}
-.cal-col-head{display:flex;align-items:baseline;gap:6px;padding:9px 11px;
-  background:var(--panel-2);border-bottom:1px solid var(--line)}
-.cal-col.today .cal-col-head{background:var(--accent-soft)}
-.cal-col-wd{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-mut)}
-.cal-col-d{font-size:17px;font-weight:800;letter-spacing:-.02em}
-.cal-col-m{font-size:11px;color:var(--text-mut);font-weight:700}
-.cal-col-add{margin-left:auto;border:none;background:transparent;cursor:pointer;
-  color:var(--text-mut);font-size:13px;padding:0 2px;border-radius:5px}
-.cal-col-add:hover{color:var(--accent)}
-.cal-col-body{padding:8px;display:flex;flex-direction:column;gap:6px;min-height:70px}
-.cal-none{font-size:11.5px;color:var(--text-mut);padding:10px 4px;text-align:center}
-
-/* ---- an entry, as a full row (week / day / agenda / drill-downs) ---- */
-.cal-row{--sc:var(--c1);display:flex;align-items:center;gap:9px;width:100%;cursor:pointer;
-  border:1px solid var(--line);border-left:3px solid var(--sc);background:var(--panel-2);
-  border-radius:8px;padding:8px 10px;text-align:left;color:inherit;
-  transition:background .15s,border-color .15s,transform .12s}
-.cal-row:hover{background:var(--panel);border-color:var(--line-strong);transform:translateX(2px)}
-.cal-row-ic{flex:0 0 auto;font-size:14px}
-.cal-row-tx{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
-.cal-row-t{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cal-row-s{font-size:11px;color:var(--text-mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cal-row-time{font-size:11.5px;font-weight:800;color:var(--text-dim);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.cal-row-v{font-size:12px;font-weight:800;flex:0 0 auto}
-.cal-row.late{border-left-color:var(--danger);background:var(--danger-soft,#fdecec)}
-.cal-row.late .cal-row-t{color:var(--danger)}
-.cal-row.now{border-left-color:var(--accent)}
-.cal-row.done{opacity:.55}
-.cal-row.done .cal-row-t{text-decoration:line-through}
-.cal-day-list{display:flex;flex-direction:column;gap:7px}
-
-/* ---- agenda ---- */
-.cal-agenda{display:flex;flex-direction:column;gap:14px}
-.cal-ag-day{display:flex;gap:14px;align-items:flex-start}
-.cal-ag-date{flex:0 0 58px;text-align:center;padding:8px 0;border-radius:10px;
-  background:var(--panel-2);border:1px solid var(--line)}
-.cal-ag-date.today{background:var(--accent-grad);border-color:transparent;color:#fff}
-.cal-ag-n{display:block;font-size:19px;font-weight:800;line-height:1.1;letter-spacing:-.02em}
-.cal-ag-wd{display:block;font-size:10px;font-weight:700;text-transform:uppercase;
-  letter-spacing:.04em;opacity:.75;margin-top:2px}
-.cal-ag-rows{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
-
-/* ---- narrow screens: the 7-column grid stops being readable ---- */
-@media (max-width:900px){
-  .cal-cols{grid-template-columns:repeat(2,1fr)}
-}
-@media (max-width:640px){
-  .cal-label{min-width:0;flex:1;font-size:13.5px}
-  .cal-cols{grid-template-columns:1fr}
-  .cal-cell{min-height:76px;padding:4px}
-  .cal-hd{padding:7px 4px;font-size:9.5px}
-  /* only the first letter of the weekday fits */
-  .cal-hd{overflow:hidden;white-space:nowrap}
-  .cal-ev-t{display:none}
-  .cal-ev{justify-content:center;padding:3px 4px}
-  .cal-ag-day{gap:9px}
-  .cal-ag-date{flex-basis:46px}
-  .cal-chips{gap:6px;margin-bottom:10px}
-  .cal-chip{padding:4px 9px;font-size:11px}
-}
 
 /* ============================================================
    PHONE DENSITY PASS
@@ -2988,30 +2852,6 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .ls{min-height:0}
 }
 
-/* ---- phones: the month calendar ----
-   Seven columns of a 360px screen leave about 34px of usable cell
-   — narrower than the event pill's own left border and padding,
-   so its text was rendering as a column of single letters. The
-   cell keeps its square in the month, and each entry falls back
-   to the coloured bar it already draws down its edge. The day is
-   still tappable, which is where the detail was always read. */
-@media (max-width:640px){
-  .cal-hd{padding:7px 2px;font-size:9px;letter-spacing:0;text-align:center}
-  .cal-cell{min-height:62px;padding:4px 3px 5px;gap:3px}
-  .cal-cell-top{min-height:19px}
-  .cal-cell-n{font-size:11px}
-  .cal-cell.today .cal-cell-n{width:19px;height:19px;font-size:10px}
-  /* min-height:0 as well: the ≤900px touch pass above gives the pill a
-     24px tap floor, and here the pill stops being the tap target at all */
-  .cal-ev{height:5px;min-height:0;padding:0;gap:0;border-left:none;border-radius:3px;background:var(--sc)}
-  .cal-ev-ic,.cal-ev-t{display:none}
-  /* late and today are the two states worth seeing from across the
-     month, so they keep a solid colour rather than their soft fill */
-  .cal-ev.late{background:var(--danger)}
-  .cal-ev.now{background:var(--accent)}
-  .cal-more{font-size:9.5px;padding:0 3px}
-}
-
 /* ---- small phones: rows of small controls ----
    Eight accent swatches and the symbol row both fit by arithmetic
    and not by much. The gap gives way before the control does, so
@@ -3306,68 +3146,3 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .crm-filter-sel{flex:1 1 140px;max-width:none}
 }
 
-
-/* ============================================================
-   SUPERVISOR — CALENDAR
-   The floor's grid reuses .cal-*; this is what it adds on top.
-   ============================================================ */
-
-/* ---- the pill, on two lines --------------------------------------------
-   Product on the first, order number and stage on the second. Five pills
-   that all read "FIRES P INORGANI…" told the floor nothing; the order
-   number is what tells them apart, and the stage is what the floor is
-   actually asking. The sheet behind the tap carries the whole name. */
-.cal-ev.sup-ev{padding:4px 7px 5px;gap:0;align-items:stretch}
-.cal-ev-tx{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3}
-.cal-ev-s{font:600 10px/1.3 var(--mono);opacity:.72;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cal-cell.has{cursor:pointer}
-.cal-cell.has .cal-more{color:var(--text-dim);background:var(--panel-3)}
-
-/* ---- the agenda row ----------------------------------------------------
-   Room for the whole product name (never truncated here), what it is and
-   where it stands, and the due state in words on the right. */
-.cal-row.sup-row{align-items:center;gap:12px}
-.sup-row .cal-row-t,.sup-row .cal-row-s{white-space:normal}
-.sup-row .cal-row-t{font-size:13.5px;line-height:1.3}
-.sup-row .cal-row-s{margin-top:2px;line-height:1.4}
-.cal-row-tag{flex:0 0 auto;font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:20px;
-  background:var(--panel-3);color:var(--text-mut);white-space:nowrap;letter-spacing:.02em}
-.cal-row-tag.late{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
-.cal-row-tag.now{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
-.cal-row-tag.done{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
-.cal-row-tag.big{font-size:12px;padding:6px 12px}
-.cal-ag-date.late{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));color:var(--danger)}
-.cal-ag-date:hover{border-color:var(--line-strong)}
-
-/* ---- the day sheet -----------------------------------------------------
-   The same job cards as My Jobs, but the column count comes from the
-   DIALOG's width, not the viewport's: My Jobs goes three-up at 1180px of
-   screen, and three columns inside a 960px dialog clipped the third card
-   off the right edge. auto-fill never makes a column it cannot fit. */
-.modal .sup-list{grid-template-columns:repeat(auto-fill,minmax(min(100%,430px),1fr))}
-.sup-sheet-top{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-  margin:-20px -20px 16px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
-.sup-sheet-date{flex:0 0 auto;min-width:56px;text-align:center;padding:6px 8px;border-radius:10px;
-  background:var(--panel-2);border:1px solid var(--line);color:var(--text)}
-.sup-sheet-date.late{border-color:color-mix(in srgb,var(--danger) 55%,var(--line));color:var(--danger)}
-.sup-sheet-date.now{background:var(--accent-grad);border-color:transparent;color:#fff}
-.sup-sheet-date .n{display:block;font-size:21px;font-weight:800;line-height:1.05;letter-spacing:-.02em}
-.sup-sheet-date.ico .n{font-size:19px}
-.sup-sheet-date .m{display:block;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
-  opacity:.8;margin-top:3px;white-space:nowrap}
-.sup-sheet-main{flex:1;min-width:220px}
-.sup-sheet-t{font-size:14.5px;font-weight:800;letter-spacing:-.01em}
-.sup-sheet-s{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:7px}
-.sup-sheet-s .chip b{font-family:var(--mono);font-weight:800}
-.sup-sheet-nav{display:flex;gap:8px;margin-right:auto}
-.sup-sheet .sup-empty{padding:36px 20px}
-
-@media(max-width:640px){
-  /* the month pill is a 5px bar on a phone — both lines go with it */
-  .cal-ev.sup-ev{padding:0;height:5px}
-  .cal-ev-tx{display:none}
-  .sup-sheet-top{margin:-14px -14px 12px;padding:10px 14px;gap:10px}
-  .sup-sheet-main{min-width:160px}
-  .sup-sheet-nav{margin-right:0;flex:1 1 100%}
-  .sup-sheet-nav .btn{flex:1;justify-content:center}
-}

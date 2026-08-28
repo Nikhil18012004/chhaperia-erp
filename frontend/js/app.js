@@ -284,11 +284,8 @@
     },
     homeId(){
       if(this.isLab()) return "lab-reports";
-      /* Work Calendar sits first in the nav so every role can reach it, but it
-         is not where the app opens: homeId picks the first item a role may
-         see, and without this skip that placement would quietly move office
-         off the screen it has always landed on. */
-      const first = UI.NAV.find(n => n.id && n.id !== "workcal" && !(n.adminOnly && !this.isAdmin()));
+      // the first item a role may see is where the app opens
+      const first = UI.NAV.find(n => n.id && !(n.adminOnly && !this.isAdmin()));
       return first ? first.id : "dashboard";
     },
 
@@ -357,7 +354,7 @@
       }
       this._leaveGuard=null;
       /* WHERE YOU CAME FROM, with the state it was in. A jump across tabs —
-         inventory to the ledger, the calendar to a lead — remembers the tab
+         inventory to the ledger, a lead to its customer — remembers the tab
          it left AND its params, so "back" lands on the screen as it was, not
          a fresh copy of the module. Re-rendering the same tab is not a jump
          and must not eat the trail. */
@@ -406,8 +403,8 @@
       try{ mod.render(view, params); }
       catch(err){ console.error("Module error:",err); view.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"⚠"}),h("div",{text:"Module failed to render: "+err.message})])); }
       view.scrollTop=0;
-      /* params.highlight names a record this navigation was ABOUT — the
-         calendar sends the lead whose follow-up you clicked. Landing on the
+      /* params.highlight names a record this navigation was ABOUT — a jump
+         from another screen sends the row it was about. Landing on the
          module and leaving you to find the line again is what made those marks
          feel like they went nowhere, so bring it into view and flash it. */
       if(params&&params.highlight!=null) this.flashRow(String(params.highlight));

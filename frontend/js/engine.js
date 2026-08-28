@@ -586,7 +586,6 @@
       openPO:openPO.length, poValue, openSO:openSO.length, soValue, lowStock:low,
       prod30, sold30, activeWO, alertCount: alerts().length,
       openLeads:crm.open, crmWeighted:crm.weighted, crmWinRate:crm.winRate,
-      calToday:calendarDue(),
       /* Batches still owing a QC reading — the server works the list out
          (labService.pendingLabWork); this is only its count, for the nav pill.
          Every role counts the same batches, because the lab incharge works
@@ -604,11 +603,6 @@
       hrPendingLeaves:(D.hrLeaves||[]).filter(l=>l.status==="Pending").length };
   }
 
-  /* The Calendar's nav pill: the CRM work that is due TODAY OR IS ALREADY
-     LATE — a lead owed a chase, or an appointment still open. It counts
-     exactly what the Calendar shows, so the badge and the page can never
-     tell different stories; when that page stopped carrying PO / SO / work-
-     order dates (2026-08-25, mod-calendar.js) this count lost them too. */
   /* ============================================================
      CUSTOMERS WHO HAVE GONE QUIET
      The CRM watches prospects closely and forgets the people who already
@@ -655,11 +649,6 @@
     return out.sort((a,b)=> (b.silent/b.usual) - (a.silent/a.usual));
   }
 
-  function calendarDue(){
-    const t = H.iso(H.today());
-    return (D.leads||[]).filter(l=>l.nextFollowUp && l.nextFollowUp<=t && l.stage!=="Won" && l.stage!=="Lost").length
-      + (D.appointments||[]).filter(a=>a.date && a.date<=t && !a.done).length;
-  }
 
   /* ============================================================
      READY TO SELL — finished work orders held for a sales order.

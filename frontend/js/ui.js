@@ -315,17 +315,6 @@
 
   /* ---------- NAV MANIFEST ---------- */
   const NAV = [
-    /* ---- MY WORK ----
-       The one section every role carries. Which DATES it shows is decided per
-       role inside mod-workcal.js, so this single entry serves admin, office
-       and the lab incharge alike. labOk, because a screen built to show the
-       lab its own worklist is useless if the lab cannot reach it; NOT
-       labWrite, because the screen creates and edits nothing — every entry on
-       it is derived from a record another module owns. Supervisors never see
-       this nav at all: that role runs the separate SUP panel, which carries
-       its own Schedule view. */
-    {sec:"My Work", labOk:true},
-    {id:"workcal", icon:"📆", label:"Work Calendar", accent:"violet", labOk:true},
     {sec:"Overview", adminOnly:true},
     {id:"dashboard", icon:"▦", label:"Dashboard", accent:"orange", adminOnly:true},
     {id:"analytics", icon:"📈", label:"Analytics", accent:"violet", adminOnly:true},
@@ -353,9 +342,6 @@
     // the road from a reel to an order: every sample sent and every price
     // offered, on one page — the pill counts the quotes still open
     {id:"quotations", icon:"📄", label:"Samples & Quotations", accent:"pink", pillKey:"openQuotes"},
-    // sits under CRM because that is who books appointments, but the grid
-    // itself spans procurement, sales, production and HR
-    {id:"calendar", icon:"📅", label:"Calendar", accent:"violet", pillKey:"calToday"},
     /* Procurement is open to the lab incharge (labOk) but NOT writable by them
        (no labWrite): they go there to test what a goods receipt brought in, so
        they read the orders and the receipts and file readings — they never
