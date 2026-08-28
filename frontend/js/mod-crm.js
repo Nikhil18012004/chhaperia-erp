@@ -379,7 +379,7 @@
       const rot = ENG.leadRot(l);
       const closed = l.stage === "Won" || l.stage === "Lost";
 
-      // stamped like a table row, so a calendar chase-date can highlight this
+      // stamped like a table row, so a jump from another screen can highlight this
       // exact lead on the board — see App.flashRow()
       const card = h("div", { class: "crm-lead" + (rot && rot.rotting ? " is-rot" : ""),
         "data-row-id": String(l.id), "data-lead": String(l.id), style: "--sc:" + meta.color,
@@ -448,8 +448,9 @@
         (l.stage !== "Won" && l.stage !== "Lost")
           ? h("div", { class: "flex gap" }, [
               // one tap from the drawer to the despatch, without going via
-              // Move stage — sending a sample is the common next move here
-              !l.sample ? h("button", { class: "btn sm", onclick: () => sampleForm(l), html: "📦 Send sample" }) : null,
+              // Move stage — sending a sample is the common next move here.
+              // Not once a price has gone out: no sample follows a quotation
+              (!l.sample && !quotedAlready(l)) ? h("button", { class: "btn sm", onclick: () => sampleForm(l), html: "📦 Send sample" }) : null,
               l.phone ? h("button", { class: "btn sm", onclick: () => whatsappForm(l), html: "💬 WhatsApp" }) : null,
               // the document that follows the sample: opens the quotation form
               // with this lead's customer and product already on it
@@ -514,7 +515,11 @@
   function moveStage(l) {
     const body = h("div", { class: "flex wrap gap" }, ENG.STAGES.map((st) => {
       const m = STAGE_META[st] || {};
+      // no sample after a quotation: the Sample stage is shut to a quoted lead
+      const shut = st === "Sample" && quotedAlready(l);
       return h("button", { class: "btn" + (st === l.stage ? " primary" : ""),
+        disabled: shut ? "disabled" : null,
+        title: shut ? "A quotation has gone out — no sample follows it" : null,
         onclick: () => { applyStage(l, st); mo.close(); },
         html: (m.ic || "") + " " + st });
     }));
@@ -522,8 +527,12 @@
   }
   function applyStage(l, st) {
     // Sample is the one stage that carries a physical despatch, so the move
-    // asks what went out instead of leaving it to be remembered later
-    if (st === "Sample") { sampleForm(l); return; }
+    // asks what went out instead of leaving it to be remembered later —
+    // unless a price has already gone out: no sample follows a quotation
+    if (st === "Sample") {
+      if (quotedAlready(l)) { toast(l.company + " has been quoted — no sample goes out after a quotation", { type: "warn" }); return; }
+      sampleForm(l); return;
+    }
     l.stage = st;
     if (st === "Won" || st === "Lost") l.nextFollowUp = null;
     else if (!l.nextFollowUp || l.nextFollowUp < todayISO()) l.nextFollowUp = DB.helpers.daysAhead(3);
@@ -749,7 +758,10 @@
       // correct the record instead of stacking up duplicate "Sample Sent" rows
       const first = !l.sample;
       l.sample = sample;
-      l.stage = "Sample";
+      // the first despatch moves the lead to Sample; a later edit of the record
+      // (a verdict, a corrected AWB) leaves the stage where it is — a quoted
+      // lead must not fall back behind its quotation
+      if (first) l.stage = "Sample";
       l.nextFollowUp = UI.$("#s_next").value || DB.helpers.daysAhead(7);
       if (first) {
         l.activities = l.activities || [];
@@ -764,7 +776,7 @@
       toast(first ? l.company + " → Sample" : "Sample details updated", { type: "ok" });
       // no page change: the save re-renders whichever screen this was opened
       // from — the lead drawer on the CRM, or the Samples tab
-      App.saveDelta(() => DB.leads.update(l.id, { stage: "Sample", sample,
+      App.saveDelta(() => DB.leads.update(l.id, { stage: l.stage, sample,
         nextFollowUp: l.nextFollowUp, activities: l.activities }));
     }
   }
@@ -847,6 +859,13 @@
   /* an approved sample with no price on the table yet — money left lying */
   const needsQuote = (l) => !!l.sample && l.sample.verdict === "Approved" && l.stage !== "Won" && l.stage !== "Lost"
     && !quotes().some((q) => q.leadId === l.id && q.status !== "Lost");
+  /* A price has gone out to this lead — in the quotations book, or the older
+     quote carried on the lead itself, or simply by being moved to Quoted.
+     After that no sample is sent (ruling 2026-08-28: "after giving quotations
+     we won't send any sample in the CRM"): the reel goes out BEFORE the
+     price, to earn it, never after. Lost quotations count — the price was
+     still given. */
+  const quotedAlready = (l) => l.stage === "Quoted" || +l.quotedValue > 0 || quotes().some((q) => q.leadId === l.id);
   const quoteDays = (q) => daysBetween(q.lastUpdated || q.date, todayISO());
   /* open quotes the customer has gone quiet on, longest first */
   function staleQuotes() {
@@ -978,8 +997,10 @@
 
   /* ---- a reel goes out against an enquiry; pick which one ---- */
   function pickLeadForSample() {
-    const cands = ENG.leads().filter((l) => l.stage !== "Won" && l.stage !== "Lost" && !l.sample);
-    if (!cands.length) { toast("Every open lead already has a sample out — open the lead to update it", { type: "warn" }); return; }
+    // an open lead with no reel out yet — and no price out either: the sample
+    // goes before the quotation, never after it
+    const cands = ENG.leads().filter((l) => l.stage !== "Won" && l.stage !== "Lost" && !l.sample && !quotedAlready(l));
+    if (!cands.length) { toast("No open lead is waiting for a sample — every one has a reel out already or has been quoted", { type: "warn" }); return; }
     const body = h("div", { class: "form-grid" }, [
       field("Lead (enquiry) *", selectHTML("ps_lead", cands.map((l) => ({ v: l.id, l: l.company + " · " + (l.productName || l.product || "") + " · " + l.id })), cands[0].id), "full"),
     ]);
