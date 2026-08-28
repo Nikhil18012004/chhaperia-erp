@@ -24,6 +24,10 @@
     leave: "hr-leave", payroll: "hr-payroll", settings: "hr-settings" };
   const DEPTS = ["coating", "slitting", "fiberglass", "packing", "admin", "maintenance"];
   const STATUS_META = { P: ["ok", "Present"], HD: ["warn", "Half day"], A: ["danger", "Absent"], L: ["info", "Leave"], WO: ["mut", "Week-off"] };
+  /* Sunday is the weekly off for every worker (ruling 2026-08-28) — a
+     constant here as on the server (hrService WEEK_OFF), never a setting */
+  const isWeekOff = (ds) => new Date(String(ds).slice(0, 10) + "T12:00:00").getDay() === 0;
+  const workingISO = (from, to) => eachISO(from, to).filter((d) => !isWeekOff(d));
 
   let curTab = "dashboard";
   // what the payroll tab is currently showing, so the header's print-all
@@ -123,7 +127,9 @@
 
     host.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" }, [
       kpi({ icon: "👷", label: "Active Workers", value: num(active.length) }),
-      kpi({ icon: "✅", label: "Present Today", value: num(present), delta: absent ? absent + " absent" : "full house", deltaType: absent ? "down" : "up" }),
+      kpi({ icon: "✅", label: "Present Today", value: num(present),
+        delta: isWeekOff(today) ? "Sunday · weekly off" : (absent ? absent + " absent" : "full house"),
+        deltaType: isWeekOff(today) ? "flat" : (absent ? "down" : "up") }),
       kpi({ icon: "🌴", label: "On Leave Today", value: num(onLeave) }),
       kpi({ icon: "💰", label: "Est. Monthly Wage Bill", value: money(wageCapacity), delta: "CTC + room allowances", deltaType: "flat" }),
     ]));
@@ -572,8 +578,9 @@
           let letter = "", cls = "";
           if (a) { letter = a.status; const meta = STATUS_META[a.status] || ["mut", ""]; cls = "s-" + meta[0];
             if (a.status === "P") p++; else if (a.status === "HD") p += 0.5; ot += a.otHours || 0; }
-          else if (wd === 0) { letter = "·"; cls = "s-mut"; }
-          const title = a ? (STATUS_META[a.status] ? STATUS_META[a.status][1] : a.status) + (a.otHours ? " · OT " + a.otHours + "h" : "") : "Mark " + ds;
+          else if (wd === 0) { letter = "WO"; cls = "s-mut"; }
+          const title = a ? (STATUS_META[a.status] ? STATUS_META[a.status][1] : a.status) + (a.otHours ? " · OT " + a.otHours + "h" : "")
+            : (wd === 0 ? "Sunday — weekly off (tap only if the worker came in)" : "Mark " + ds);
           tr.appendChild(h("td", { style: "text-align:center;padding:2px 1px;cursor:pointer", title, onclick: () => dayEntry(w, ds, a) },
             letter ? h("span", { class: "badge-s " + cls, style: "min-width:20px;display:inline-block", text: letter }) : h("span", { class: "muted", text: "" })));
           // phone strip cell: weekday + day number + status pip, tap to edit
@@ -695,26 +702,31 @@
       const t = lts.find((x) => x.id === UI.$("#l_type").value) || {};
       const from = UI.$("#l_from").value, to = UI.$("#l_to").value, wk = UI.$("#l_wk").value;
       const cap = paidLeaveCap();
-      if (t.paid === false) { box.textContent = "Unpaid leave — these days are deducted from pay."; return; }
-      if (!cap || !from || !to || to < from) { box.textContent = ""; return; }
+      const span = from && to && to >= from ? eachISO(from, to) : [];
+      const work = span.filter((d) => !isWeekOff(d));
+      const sundays = span.length - work.length;
+      const sunNote = sundays ? " Sunday is the weekly off — " + sundays + " of these " + span.length + " day(s) " + (sundays === 1 ? "is" : "are") + " not counted." : "";
+      if (span.length && !work.length) { box.textContent = "Those dates are all on the weekly off — Sunday is not a leave day."; return; }
+      if (t.paid === false) { box.textContent = "Unpaid leave — these days are deducted from pay." + sunNote; return; }
+      if (!cap || !from || !to || to < from) { box.textContent = sunNote.trim(); return; }
       const used = {};
       (ENG.data.hrLeaves || []).forEach((l) => {
         if (l.workerId !== wk || l.status === "Rejected") return;
         const lt = lts.find((x) => x.id === l.type) || {};
         if (lt.paid === false) return;
-        eachISO(l.fromDate, l.toDate || l.fromDate).forEach((d) => { used[d.slice(0, 7)] = (used[d.slice(0, 7)] || 0) + 1; });
+        workingISO(l.fromDate, l.toDate || l.fromDate).forEach((d) => { used[d.slice(0, 7)] = (used[d.slice(0, 7)] || 0) + 1; });
       });
       let paid = 0, unpaid = 0;
-      eachISO(from, to).forEach((d) => { const m = d.slice(0, 7); if ((used[m] || 0) < cap) { used[m] = (used[m] || 0) + 1; paid++; } else unpaid++; });
-      box.textContent = unpaid
+      work.forEach((d) => { const m = d.slice(0, 7); if ((used[m] || 0) < cap) { used[m] = (used[m] || 0) + 1; paid++; } else unpaid++; });
+      box.textContent = (unpaid
         ? "Only " + cap + " paid leave day" + (cap === 1 ? "" : "s") + " a month: " + paid + " of these " + (paid + unpaid) + " day(s) will be paid, " + unpaid + " unpaid."
-        : "Within the monthly paid-leave limit — all " + paid + " day(s) paid.";
+        : "Within the monthly paid-leave limit — all " + paid + " day(s) paid.") + sunNote;
     };
     ["l_wk", "l_type", "l_from", "l_to"].forEach((id) => { const el = body.querySelector("#" + id); if (el) el.addEventListener("change", hint); });
     setTimeout(hint, 0);
     const mo = modal({ title: "Apply Leave", sub: "Raise a leave request", body,
       foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
-        h("button", { class: "btn primary", onclick: () => { const p = { workerId: UI.$("#l_wk").value, type: UI.$("#l_type").value, fromDate: UI.$("#l_from").value, toDate: UI.$("#l_to").value, reason: UI.$("#l_reason").value }; if (p.toDate < p.fromDate) { toast("End date before start", { type: "warn" }); return; } mo.close(); save(() => DB.hr.leave.apply(p), "leave"); }, text: "Submit" })] });
+        h("button", { class: "btn primary", onclick: () => { const p = { workerId: UI.$("#l_wk").value, type: UI.$("#l_type").value, fromDate: UI.$("#l_from").value, toDate: UI.$("#l_to").value, reason: UI.$("#l_reason").value }; if (p.toDate < p.fromDate) { toast("End date before start", { type: "warn" }); return; } if (!workingISO(p.fromDate, p.toDate).length) { toast("Those dates are all on the weekly off — Sunday is not a leave day", { type: "warn" }); return; } mo.close(); save(() => DB.hr.leave.apply(p), "leave"); }, text: "Submit" })] });
   }
 
   /* ============================================================
@@ -954,7 +966,7 @@
       const byMonth = {};
       (ENG.data.hrLeaves || []).forEach((l) => {
         if (l.workerId !== workerId || l.type !== t.id || l.status !== "Approved") return;
-        eachISO(l.fromDate, l.toDate || l.fromDate).forEach((d) => {
+        workingISO(l.fromDate, l.toDate || l.fromDate).forEach((d) => {
           if (d.startsWith(year)) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
         });
       });
@@ -1384,7 +1396,6 @@
     const pt = (d.pt && d.pt.slabs) || [{ upTo: 24999, amt: 0 }, { upTo: 999999999, amt: 200 }];
     const ptThreshold = (pt[0] && pt[0].upTo) || 24999;
     const ptAmount = (pt[pt.length - 1] && pt[pt.length - 1].amt) || 0;
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     box.innerHTML = "";
     const grid = h("div", { class: "grid cols-2" });
 
@@ -1396,9 +1407,11 @@
         U.field("OT Multiplier", `<input class="input" id="c_otm" type="number" step="0.5" value="${cfg.otMultiplier}">`),
         U.field("Half-day below (hrs)", `<input class="input" id="c_half" type="number" step="0.5" value="${cfg.halfDayBelowHours}">`),
       ]),
+      // not a choice any more: Sunday is the weekly off for every worker
       h("div", { style: "margin-top:8px" }, [h("label", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "Weekly Off" }),
-        h("div", { class: "flex gap wrap", style: "margin-top:6px" }, days.map((dn, i) => h("label", { class: "chip", style: "cursor:pointer" }, [
-          h("input", { type: "checkbox", id: "c_wo_" + i, checked: (cfg.weekOff || []).includes(i) ? "checked" : null }), " " + dn])))]),
+        h("div", { class: "flex aic gap wrap", style: "margin-top:6px" }, [
+          h("span", { class: "chip", text: "☀️ Sunday" }),
+          h("span", { class: "muted", style: "font-size:12px", text: "for every worker — pay divides the month by its working days, and a Sunday inside a leave is not a leave day" })])]),
     ]));
 
     // deductions
@@ -1483,10 +1496,9 @@
     function gv(id) { const el = UI.$("#" + id); return el ? el.value : ""; }
     function ck(id) { const el = UI.$("#" + id); return !!(el && el.checked); }
     function saveCfg() {
-      const weekOff = []; for (let i = 0; i < 7; i++) if (ck("c_wo_" + i)) weekOff.push(i);
       const patch = {
         standardDayHours: +gv("c_std") || 8, otMultiplier: +gv("c_otm") || 2, halfDayBelowHours: +gv("c_half") || 4,
-        weekOff, deviceKey: gv("c_devkey").trim(), noRoomAllowance: Math.max(0, +gv("c_room") || 0),
+        deviceKey: gv("c_devkey").trim(), noRoomAllowance: Math.max(0, +gv("c_room") || 0),
         paidLeaveMaxPerMonth: Math.max(0, +gv("c_plcap") || 0),
         attendanceBonus: Math.max(0, +gv("c_abonus") || 0), attendanceBonusAfterMonths: Math.max(0, +gv("c_amonths") || 0),
         deductions: {

@@ -1021,6 +1021,59 @@ async function run() {
     for (const id of IDS) await call("DELETE", "/hr/workers/" + id, A);
   }
 
+  section("Weekly off is Sunday, for every worker");
+  {
+    /* Ruling 2026-08-28. Sunday is fixed — a config patch cannot move it —
+       and a Sunday inside a leave is nobody's leave day: not applied, not
+       written to the muster, not counted against the quota or the monthly
+       paid cap, not on the slip. January 2027: the 1st is a Friday, so the
+       2nd is a Saturday, the 3rd a Sunday and the 4th a Monday. */
+    const per = "2027-01";
+    const cfg = (await call("GET", "/hr/config", A)).d || {};
+    ok("the config reads Sunday as the weekly off", JSON.stringify(cfg.weekOff) === "[0]", JSON.stringify(cfg.weekOff));
+    const moved = await call("PATCH", "/hr/config", A, { weekOff: [6] });
+    ok("…and a patch cannot move it", moved.status === 200 && JSON.stringify(moved.d.weekOff) === "[0]", JSON.stringify(moved.d && moved.d.weekOff));
+    ok("…not even through the stored settings", JSON.stringify(((await call("GET", "/hr/config", A)).d || {}).weekOff) === "[0]");
+
+    const W = "EMP-SUN";
+    await call("POST", "/hr/workers", A, { id: W, name: "Sunday Rule", dept: "packing", monthlyCtc: 26000, joined: "2020-01-01" });
+    const lv = await call("POST", "/hr/leaves", A, { workerId: W, type: "PL", fromDate: per + "-02", toDate: per + "-04" });
+    ok("a Saturday-to-Monday leave is TWO days — the Sunday is not one", lv.status === 201 && lv.d.days === 2, JSON.stringify({ s: lv.status, days: lv.d && lv.d.days }));
+    await call("POST", "/hr/leaves/" + lv.d.id + "/decide", A, { status: "Approved" });
+    const rows = ((await call("GET", "/state", A)).d.hrAttendance || []).filter((a) => a.workerId === W);
+    ok("approval writes L on the Saturday and the Monday only",
+      rows.some((a) => a.date === per + "-02" && a.status === "L") && rows.some((a) => a.date === per + "-04" && a.status === "L")
+        && !rows.some((a) => a.date === per + "-03"), rows.map((a) => a.date + ":" + a.status).join(","));
+    const sun = await call("POST", "/hr/leaves", A, { workerId: W, type: "PL", fromDate: per + "-10", toDate: per + "-10" });
+    ok("a leave that is only a Sunday is refused", sun.status === 400 && /weekly off/i.test(sun.d.error || sun.d.message || ""), JSON.stringify(sun.d));
+    // the balance is this year's, so the quota check takes a Sat–Mon span in
+    // the current year (the first Saturday of January, to the Monday after)
+    const cap = +(cfg.paidLeaveMaxPerMonth || 0);
+    const yy = new Date().getFullYear();
+    let sat = 1; while (new Date(yy, 0, sat).getDay() !== 6) sat++;
+    const iso = (d) => yy + "-01-" + String(d).padStart(2, "0");
+    const lv2 = await call("POST", "/hr/leaves", A, { workerId: W, type: "PL", fromDate: iso(sat), toDate: iso(sat + 2) });
+    await call("POST", "/hr/leaves/" + lv2.d.id + "/decide", A, { status: "Approved" });
+    const bal = ((await call("GET", "/hr/leave-balances/" + W, A)).d.balances || []).find((b) => b.type === "PL") || {};
+    ok("the balance counts the two working days (under the monthly paid cap), not the Sunday", bal.taken === (cap > 0 ? Math.min(2, cap) : 2), JSON.stringify(bal));
+
+    // present on every other working day of the month → the slip sees 2 leave days, never 3
+    for (let d = 1; d <= 31; d++) {
+      const ds = per + "-" + String(d).padStart(2, "0");
+      if (new Date(2027, 0, d).getDay() === 0 || ds === per + "-02" || ds === per + "-04") continue;
+      await call("POST", "/hr/attendance", A, { workerId: W, date: ds, status: "P" });
+    }
+    // a stray L written ON a Sunday (old data) must not count either
+    await call("POST", "/hr/attendance", A, { workerId: W, date: per + "-17", status: "L", note: "legacy" });
+    const r = await call("POST", "/hr/payroll/run", A, { period: per, force: true, workerIds: [W] });
+    const s = ((r.d && r.d.payslips) || [])[0] || {};
+    ok("the slip: 26 working days, 24 present, 2 leave — the Sundays are nobody's leave",
+      s.monthWorkingDays === 26 && s.present === 24 && (s.paidLeave + s.unpaidLeave) === 2,
+      JSON.stringify({ wd: s.monthWorkingDays, p: s.present, pl: s.paidLeave, ul: s.unpaidLeave }));
+    await call("DELETE", "/hr/payroll/PR-" + per, A);
+    await call("DELETE", "/hr/workers/" + W, A);
+  }
+
   section("Lab role: scoped payload + write limits");
   const lab = await login("lab", "lab@123");
   const LB = lab.token;

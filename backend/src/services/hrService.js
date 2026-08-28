@@ -40,7 +40,7 @@ const HR_DEFAULTS = {
   standardDayHours: 8,        // overtime accrues beyond this per day
   otMultiplier: 2,            // Factories Act §59: 2× ordinary wage
   timezone: "Asia/Kolkata",   // factory-local tz; zoned device punches are normalised to this
-  weekOff: [0],               // 0=Sun … 6=Sat
+  weekOff: [0],               // Sunday — FIXED for every worker (ruling 2026-08-28), see WEEK_OFF
   halfDayBelowHours: 4,       // a present day under this = half day
   // the plant houses its workers; one who stays in their OWN accommodation
   // instead is paid this much on top of salary, flat, every month (0 = off)
@@ -69,17 +69,28 @@ function deepMerge(base, over) {
   }
   return out;
 }
+/* THE WEEKLY OFF IS SUNDAY, FOR EVERY WORKER — ruling 2026-08-28 ("week off
+   will be sunday for all the workers"). It used to be a per-weekday checkbox
+   in HR settings; now it is a constant: the config always reads [0], a patch
+   cannot change it, and payroll, leave and the muster all ask isWeekOff(). */
+const WEEK_OFF = [0];   // 0=Sun … 6=Sat
 async function getConfig() {
   const s = await repo.getSettings() || {};
-  return deepMerge(HR_DEFAULTS, s.hr || {});
+  const cfg = deepMerge(HR_DEFAULTS, s.hr || {});
+  cfg.weekOff = WEEK_OFF.slice();
+  return cfg;
 }
 async function setConfig(patch) {
   const s = await repo.getSettings() || {};
-  s.hr = deepMerge(await getConfig(), patch || {});
+  patch = Object.assign({}, patch || {}); delete patch.weekOff;
+  s.hr = deepMerge(await getConfig(), patch);
+  s.hr.weekOff = WEEK_OFF.slice();
   await repo.updateSettings(s);
   return s.hr;
 }
-function isWeekOff(dateStr, cfg) { return (cfg.weekOff || []).includes(new Date(dateStr + "T12:00:00").getDay()); }
+function isWeekOff(dateStr) { return WEEK_OFF.includes(new Date(dateStr + "T12:00:00").getDay()); }
+/** The working days between two dates inclusive — the week-offs left out. */
+function workingDates(from, to) { return eachDate(from, to).filter((d) => !isWeekOff(d)); }
 /** YYYY-MM-DD plus n calendar months (a day past the target month's end
     rolls forward, the same way Date does). */
 function addMonths(dateStr, n) {
@@ -220,6 +231,10 @@ async function saveLeaveType(t) {
 async function deleteLeaveType(id) { return await repo.deleteLeaveType(id); }
 
 function daysBetween(from, to) { return eachDate(from, to).length; }
+/* A Sunday inside a leave is nobody's leave day: it was the weekly off anyway.
+   So leave is measured in WORKING days — applied, counted against the quota
+   and the monthly paid cap, and written to the muster — and a request that
+   covers nothing but the weekly off is refused. */
 
 /** How many days an "earned" leave type has accrued this year: ONE DAY PER
     MONTH WORKED. A month counts once the worker has any attendance in it, so
@@ -246,7 +261,7 @@ function leaveDaysTaken(leaves, workerId, type, year, cap) {
   const byMonth = {};
   (leaves || []).forEach((l) => {
     if (l.workerId !== workerId || l.type !== type || l.status !== "Approved") return;
-    eachDate(l.fromDate, l.toDate || l.fromDate).forEach((d) => {
+    workingDates(l.fromDate, l.toDate || l.fromDate).forEach((d) => {
       if (d.startsWith(year)) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
     });
   });
@@ -274,7 +289,10 @@ async function applyLeave(l) {
   if (!l.type || !await repo.getLeaveType(l.type)) throw err("Unknown leave type", 400);
   if (!l.fromDate || !l.toDate) throw err("Leave needs from and to dates", 400);
   if (l.toDate < l.fromDate) throw err("End date is before start date", 400);
-  const days = l.days != null ? num(l.days) : daysBetween(l.fromDate, l.toDate);
+  const working = workingDates(l.fromDate, l.toDate).length;
+  if (!working) throw err("Those dates fall on the weekly off — Sunday is not a leave day", 400);
+  // a caller may state fewer days than the span (a half day), never more
+  const days = l.days != null ? Math.min(num(l.days), working) : working;
   const lv = { id: l.id || nextId((await repo.getState()).hrLeaves, "LV-"), workerId: l.workerId, type: l.type,
     fromDate: l.fromDate, toDate: l.toDate, days, status: l.status || "Pending",
     reason: l.reason || null, appliedOn: l.appliedOn || todayISO() };
@@ -290,7 +308,7 @@ async function decideLeave(id, status, user) {
   await repo.putLeave(lv);
   // reflect an approved leave on the muster so payroll pays it as a leave day
   if (status === "Approved") {
-    for (const d of eachDate(lv.fromDate, lv.toDate)) {
+    for (const d of workingDates(lv.fromDate, lv.toDate)) {
       const existing = await repo.getAttendance(lv.workerId, d);
       if (!existing || existing.source !== "device") {
         await repo.putAttendance({ workerId: lv.workerId, date: d, status: "L", note: lv.type + " leave", source: "leave" });
@@ -398,6 +416,10 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   // the paid ones, the rest of them go unpaid. 0 = no cap.
   const cap = num(cfg.paidLeaveMaxPerMonth);
   att.forEach((a) => {
+    // a leave or an absence marked on the weekly off is not one — the day was
+    // off anyway (rows written before Sundays were fixed); a day WORKED on the
+    // weekly off is still a day worked, so P / HD go through
+    if (isWeekOff(a.date) && a.status !== "P" && a.status !== "HD") return;
     if (a.status === "P") present += 1;
     else if (a.status === "HD") present += 0.5;
     else if (a.status === "L") {
@@ -422,7 +444,7 @@ async function computeSlip(worker, period, cfg, isPaidLeaveDay, advance) {
   const y = +period.split("-")[0], m = +period.split("-")[1];
   const daysInMonth = new Date(y, m, 0).getDate();
   let monthWorkingDays = 0;
-  for (let d = 1; d <= daysInMonth; d++) if (!isWeekOff(`${y}-${pad(m)}-${pad(d)}`, cfg)) monthWorkingDays++;
+  for (let d = 1; d <= daysInMonth; d++) if (!isWeekOff(`${y}-${pad(m)}-${pad(d)}`)) monthWorkingDays++;
   const monthPerDay = round(num(worker.monthlyCtc) / (monthWorkingDays || 1));
   const basicEarned = round(monthPerDay * payableDays);
   // The no-room allowance: the plant houses its workers, and one who stays in
@@ -685,7 +707,7 @@ async function ensureHr() {
     for (let back = 24; back >= 1; back--) {
       const dt = new Date(t.getFullYear(), t.getMonth(), t.getDate() - back);
       const ds = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-      if (dt.getDay() === 0) continue;                 // Sunday weekly-off
+      if (isWeekOff(ds)) continue;                     // the weekly off
       const k = (wi + back) % 13;
       if (k === 0) { await repo.putAttendance({ workerId: w.id, date: ds, status: "A", source: "manual" }); continue; }
       const half = k === 5;
@@ -701,7 +723,7 @@ async function ensureHr() {
 }
 
 module.exports = {
-  getConfig, setConfig, HR_DEFAULTS, ensureHr, normalizeWorker, migrateToMonthly,
+  getConfig, setConfig, HR_DEFAULTS, WEEK_OFF, isWeekOff, workingDates, ensureHr, normalizeWorker, migrateToMonthly,
   leaveDaysTaken, migrateLeaveTypes, LEAVE_TYPES, addMonths,
   listWorkers, createWorker, updateWorker, deleteWorker,
   ingestPunch, setAttendance, recomputeAttendance, recentPunches,
