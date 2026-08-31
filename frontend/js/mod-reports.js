@@ -47,47 +47,8 @@
         ])
       ]));
     });
-    root.appendChild(h("h2",{style:"font-size:15px;font-weight:800;margin:4px 0 12px",text:"Operational reports"}));
     root.appendChild(grid);
 
-    /* ---- EVERY SECTION'S OWN SHEET -----------------------------------------
-       The Excel ▾ button on Customers, Suppliers, CRM, Quotations, Dispatch,
-       Workers and Attendance exports that section's table; the other ten
-       sections in the registry had no button anywhere and could only be
-       exported by importing something first. All of them are listed here,
-       BUILT FROM THE REGISTRY rather than typed out, so a sheet added to
-       csvio.js appears on this page without anyone remembering to add it. */
-    const EX_IC={ items:"📦", workorders:"⚙️", salesorders:"🧾", quotations:"📄",
-      purchaseorders:"🛒", customers:"🤝", suppliers:"🏭", movements:"📒",
-      boms:"🧬", leads:"🎯", labreports:"🧪", labproducts:"⚗️",
-      transporters:"🚚", hrworkers:"👷", hrattendance:"🕓" };
-    const exKeys=Object.keys((window.CSVIO&&CSVIO.ENTITIES)||{});
-    if(exKeys.length){
-      root.appendChild(h("h2",{style:"font-size:15px;font-weight:800;margin:26px 0 4px",text:"Data sheets"}));
-      root.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-bottom:12px",
-        text:"The full table behind each section, exactly as it is stored — the same sheet its own Excel ▾ button produces, and the same shape an import expects back."}));
-      const exGrid=h("div",{class:"grid cols-3"});
-      exKeys.forEach(key=>{
-        const ent=CSVIO.ENTITIES[key];
-        let n=0; try{ n=(CSVIO.entityRecords(key)||[]).length; }catch(e){ n=0; }
-        const open=()=>{
-          const t=CSVIO.entityTable(key);
-          if(!t||!t.rows.length){ toast("Nothing to export in "+(ent.label||key),{type:"warn"}); return; }
-          MW.dataPreview({title:t.label, head:t.header, rows:t.rows,
-            name:"chhaperia_"+key+".xlsx", sheet:t.label});
-        };
-        exGrid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:open},[
-          h("div",{class:"flex aic",style:"gap:10px"},[
-            h("span",{style:"font-size:17px",text:EX_IC[key]||"🗂"}),
-            h("h3",{style:"font-size:14px",text:ent.label||key}),
-            h("span",{class:"chip",style:"margin-left:auto",text:ENG.num(n)+" row"+(n===1?"":"s")}),
-          ]),
-          h("div",{class:"muted",style:"font-size:11.5px;margin-top:6px",
-            text:ent.cols.length+" columns · "+ent.cols.slice(0,3).map(c=>c.label).join(", ")+(ent.cols.length>3?"…":"")}),
-        ]));
-      });
-      root.appendChild(exGrid);
-    }
 
     /* data preview engine — the table shows first; the .xlsx download
        happens from the preview's Download button */
