@@ -232,6 +232,25 @@
       const themeBtn=$("#themeToggle"); if(themeBtn) themeBtn.hidden=!admin;
     },
 
+    /* ---- nav dropdown state — which sections are open ----
+       Per browser (localStorage), not a server setting: how a person folds
+       their own menu is theirs, like scroll position. First run opens only
+       the section the current page lives in. */
+    navState(){
+      if(!this.navOpen){
+        try{ this.navOpen = JSON.parse(localStorage.getItem("chhaperia.navOpen")) || {}; }
+        catch(e){ this.navOpen = {}; }
+        if(typeof this.navOpen !== "object" || Array.isArray(this.navOpen)) this.navOpen = {};
+      }
+      return this.navOpen;
+    },
+    saveNavState(){ try{ localStorage.setItem("chhaperia.navOpen", JSON.stringify(this.navOpen||{})); }catch(e){} },
+    secOfView(id){
+      let sec=null;
+      for(const n of UI.NAV){ if(n.sec){ sec=n.sec; continue; } if(n.id===id) return sec; }
+      return null;
+    },
+
     buildNav(){
       const nav=$("#nav"); nav.innerHTML="";
       const isAdmin = this.user && this.user.role === "admin";
@@ -242,12 +261,36 @@
          business. buildNav runs on every save, which is what made a change
          anywhere in the app sit for a second before the screen came back. */
       const k = ENG.kpis();
+      const open = this.navState();
+      const activeSec = this.secOfView(this.current);
+      let itemsHost = null;
       UI.NAV.forEach(n=>{
         // the lab incharge gets an explicit allowlist, not "everything minus
         // admin-only" — the server enforces the same shape (viewService.stateForLab)
         if(isLab){ if(!n.labOk) return; }
         else if(n.adminOnly && !isAdmin) return; // hide admin-only items from office
-        if(n.sec){ nav.appendChild(h("div",{class:"nav-section",text:n.sec})); return; }
+        if(n.sec){
+          const secName=n.sec;
+          // a saved fold wins; otherwise only the active page's section starts open
+          const isOpen = open[secName]!=null ? !!open[secName] : secName===activeSec;
+          const grp=h("div",{class:"nav-group"+(isOpen?" open":""),"data-sec":secName});
+          const head=h("button",{class:"nav-section",type:"button","aria-expanded":String(isOpen),
+            onclick:()=>{
+              const now=!grp.classList.contains("open");
+              grp.classList.toggle("open",now);
+              head.setAttribute("aria-expanded",String(now));
+              this.navState()[secName]=now; this.saveNavState();
+              this.decorateNavHeads();
+            }},[
+            h("span",{class:"nav-sec-lbl",text:secName}),
+            h("span",{class:"nav-sec-badge",hidden:true}),
+            h("span",{class:"nav-sec-chev","aria-hidden":"true",text:"▾"}),
+          ]);
+          itemsHost=h("div",{class:"nav-group-items"});
+          grp.appendChild(head); grp.appendChild(itemsHost);
+          nav.appendChild(grp);
+          return;
+        }
         const item=h("div",{class:"nav-item"+(n.id===this.current?" active":""),"data-id":n.id,
           role:"button",tabindex:"0","aria-label":n.label,
           onclick:()=>this.go(n.id),
@@ -261,7 +304,27 @@
         if(n.id==="inventory"){ const low=k.lowStock; if(low) item.appendChild(h("span",{class:"pill danger",text:low})); }
         // orders with quantity waiting on material — amber, it needs the office
         if(n.id==="production"){ const p=k.pendingWO; if(p) item.appendChild(h("span",{class:"pill warn",text:p})); }
-        nav.appendChild(item);
+        (itemsHost||nav).appendChild(item);
+      });
+      // a role can pass a section head yet fail every item in it — no empty folds
+      $$(".nav-group",nav).forEach(g=>{ if(!g.querySelector(".nav-item")) g.remove(); });
+      this.decorateNavHeads();
+    },
+
+    /* A closed section must not bury its alerts: the head carries the sum of
+       its hidden items' pills, coloured by the most urgent one inside. */
+    decorateNavHeads(){
+      $$("#nav .nav-group").forEach(g=>{
+        const badge=g.querySelector(".nav-sec-badge"); if(!badge) return;
+        if(g.classList.contains("open")){ badge.hidden=true; return; }
+        let sum=0, cls="";
+        g.querySelectorAll(".nav-item .pill").forEach(p=>{
+          const v=parseInt(p.textContent,10); if(v>0) sum+=v;
+          if(p.classList.contains("danger")) cls="danger";
+          else if(p.classList.contains("warn") && cls!=="danger") cls="warn";
+        });
+        if(sum>0){ badge.textContent=sum>99?"99+":String(sum); badge.className="nav-sec-badge"+(cls?" "+cls:""); badge.hidden=false; }
+        else badge.hidden=true;
       });
     },
 
@@ -383,6 +446,18 @@
       location.hash=id;
       // nav active state
       $$(".nav-item").forEach(el=>el.classList.toggle("active", el.getAttribute("data-id")===id));
+      // navigating opens the destination's own section — the active item is
+      // never left inside a closed fold (⌘K and cross-links land here too)
+      const actEl=$('#nav .nav-item[data-id="'+id+'"]');
+      const grp=actEl && actEl.closest(".nav-group");
+      if(grp && !grp.classList.contains("open")){
+        grp.classList.add("open");
+        const hd=grp.querySelector(".nav-section");
+        if(hd) hd.setAttribute("aria-expanded","true");
+        const sec=grp.getAttribute("data-sec");
+        if(sec){ this.navState()[sec]=true; this.saveNavState(); }
+        this.decorateNavHeads();
+      }
       // auto accent
       if(this.autoAccent){ const meta=UI.NAV.find(n=>n.id===id); if(meta&&meta.accent){ document.documentElement.setAttribute("data-accent",meta.accent); } }
       else { document.documentElement.setAttribute("data-accent", this.accent); }

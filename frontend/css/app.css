@@ -29,10 +29,33 @@
 .nav{flex:1;overflow-y:auto;padding:12px 12px 6px;display:flex;flex-direction:column;gap:4px}
 .nav-section{font-size:10px;letter-spacing:.18em;color:#59637a;text-transform:uppercase;
   padding:16px 12px 6px;font-weight:800}
+/* ---- section dropdowns (App.buildNav wraps each section in .nav-group;
+   the supervisor shell renders bare .nav-section divs and keeps its flat
+   look — everything interactive is scoped under .nav-group) ---- */
+.nav-group{display:flex;flex-direction:column;gap:4px}
+.nav-group-items{display:flex;flex-direction:column;gap:4px}
+.nav-group:not(.open)>.nav-group-items{display:none}
+.nav-group>.nav-section{display:flex;align-items:center;gap:8px;width:100%;
+  background:none;border:none;cursor:pointer;font-family:inherit;text-align:left;
+  transition:color var(--tr)}
+.nav-group>.nav-section:hover{color:#8b96ad}
+.nav-sec-lbl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-sec-chev{font-size:10px;letter-spacing:0;opacity:.7;transition:transform var(--tr)}
+.nav-group:not(.open) .nav-sec-chev{transform:rotate(-90deg)}
+/* a closed fold's alert total — the .pill look, warn/danger like the items' own */
+.nav-sec-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:14px;letter-spacing:0;
+  background:var(--accent-soft);color:var(--accent-300)}
+.nav-sec-badge.warn{background:var(--warn-soft);color:var(--warn)}
+.nav-sec-badge.danger{background:var(--danger-soft);color:var(--danger)}
+/* collapsed rail: dropdowns off — every icon stays reachable, the head is a divider */
+.collapsed .nav-group:not(.open)>.nav-group-items{display:flex}
+.collapsed .nav-group>.nav-section{pointer-events:none}
+.collapsed .nav-sec-chev,.collapsed .nav-sec-badge,.collapsed .nav-sec-lbl{display:none}
 /* collapsed rail: hide the section label (it squished/wrapped) and show a
    clean centered divider between icon groups instead */
 .collapsed .nav-section{font-size:0;letter-spacing:0;padding:12px 0 8px}
 .collapsed .nav-section::after{content:"";display:block;width:22px;height:2px;border-radius:2px;margin:0 auto;background:var(--sidebar-line)}
+.collapsed .nav-group>.nav-section::after{margin:0 auto}
 .nav-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:var(--sidebar-text);
   cursor:pointer;font-weight:600;font-size:13px;position:relative;transition:var(--tr);white-space:nowrap}
 /* emoji glyphs rendered as a uniform monochrome icon set — colour is the
