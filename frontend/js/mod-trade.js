@@ -2085,14 +2085,20 @@
         const uom=(ENG.item(itemId)||{}).uom||"kg";
         // the batch reads as its plain number, carrying the run's size and the
         // quantity still free, so the operator picks the right ready stock
+        const custName=id=>{ const c=(ENG.data.customers||[]).find(x=>x.id===id); return c?(c.name||c.id):null; };
         const opts=ready.map(b=>{
           const size=lineSize({itemId:b.itemId,width:b.widthMM});
+          /* Who the run was made FOR, where the office named someone. A batch
+             run for this very customer is the one the desk wants, and a batch
+             run for a DIFFERENT one is worth seeing before it is claimed. */
+          const forWhom=custName(b.customerId);
           /* The same three figures the hint below uses, so the two agree. The
              unit is stated once, on the first figure — the desk was reading
              bare numbers and could not tell kg from metres. */
           return {v:b.id, l:batchNo(b.id)+(size?" · "+size:"")
             +" · "+ENG.num(b.ordered,1)+" "+uom+" ordered · "+ENG.num(b.made,1)+" produced"
-            +(b.pending>0.001?" · "+ENG.num(b.pending,1)+" pending":"")};
+            +(b.pending>0.001?" · "+ENG.num(b.pending,1)+" pending":"")
+            +(forWhom?" · for "+forWhom:"")};
         });
         // keep a batch that is already on this order even once fully claimed
         (editSo&&editSo.lines||[]).forEach(l=>{
@@ -2326,6 +2332,16 @@
     }
     draw();
   }};
+
+  /* ============== CUSTOMERS ============== */
+  /* Where the client is, and what their invoice is raised in. A record saved
+     before these fields existed falls back through its country to India/INR,
+     so nothing in the list reads as blank or broken.
+     Module level, NOT inside a render closure: the sales order form reads them
+     too, and losing them is what made "＋ New Sales Order" throw
+     "custCcy is not defined" and open nothing at all. */
+  function custCountry(c){ const k=CCY.country(c&&c.country); return k?k.name:((c&&c.country)||"India"); }
+  function custCcy(c){ return String((c&&c.currency)||CCY.forCountry(c&&c.country)||"INR").toUpperCase(); }
 
   M.customers = { title:"Customers", sub:"Client master & orders", render(root,params){
     root.appendChild(pageHead("Customers","HT cable manufacturers and order history",[
@@ -2646,12 +2662,6 @@
     });
   }
 
-  /* ---- CUSTOMER MASTER: country decides the currency ------------------------
-     The desk types where the client IS; the money their invoice is raised in
-     follows from that (ccy.js holds the table). It is a DEFAULT, not a lock —
-     the picker stays open, because a buyer in Vietnam or Nigeria very often
-     settles an export in dollars whatever is legal tender at home. Whatever
-     ends up here is what a sales order for this client opens in. */
   /* ============================================================
      COMPLAINTS — a customer's problem, tied to the batch it came from
      ============================================================ */
@@ -2868,6 +2878,12 @@
       ].filter(Boolean)});
   }
 
+  /* ---- CUSTOMER MASTER: country decides the currency ------------------------
+     The desk types where the client IS; the money their invoice is raised in
+     follows from that (ccy.js holds the table). It is a DEFAULT, not a lock —
+     the picker stays open, because a buyer in Vietnam or Nigeria very often
+     settles an export in dollars whatever is legal tender at home. Whatever
+     ends up here is what a sales order for this client opens in. */
   function customerForm(edit){
     const yr=String(DB.helpers.today().getFullYear());
     const v=k=>esc(edit?(edit[k]||""):"");

@@ -1422,15 +1422,23 @@
       dedRow("Professional Tax (Karnataka)", "pt", [["Nil up to ₹", "c_pt_th", ptThreshold], ["Amount above ₹", "c_pt_amt", ptAmount]], (d.pt || {}).on),
     ]));
 
-    // accommodation — the plant houses its workers; the exception is paid for
+    /* THE PERKS, in ONE card and each under its own name. They were a card
+       apiece and read as unrelated policies, but they are the same kind of
+       thing: a flat sum paid on top of salary, counted in gross and never in
+       the PF basic — so that shared rule is stated once, on the card, and
+       each perk states only what is its own. */
     grid.appendChild(h("div", { class: "card" }, [
-      h("div", { class: "card-head" }, [h("h3", { text: "🏠 Accommodation" }),
-        h("div", { class: "sub", text: "A company room, or this much extra" })]),
-      h("div", { class: "form-grid" }, [
-        U.field("No-room allowance (₹/month)", `<input class="input" id="c_room" type="number" step="1" min="0" value="${cfg.noRoomAllowance != null ? cfg.noRoomAllowance : 1000}">`),
+      h("div", { class: "card-head" }, [h("h3", { text: "🎁 Perks & Allowances" }),
+        h("div", { class: "sub", text: "Paid on top of salary — each counts in gross (ESI), none in the PF basic" })]),
+      h("div", { class: "perk-list" }, [
+        perkRow("🏠", "Accommodation", "A company room, or this much extra",
+          [["No-room allowance", "c_room", cfg.noRoomAllowance != null ? cfg.noRoomAllowance : 1000, "₹ / month"]],
+          "Set per worker under Workers → Accommodation. Paid flat on top of salary in any month the worker was paid for at least one day."),
+        perkRow("🏅", "Attendance Bonus", "A full month, once the worker is past their first months",
+          [["Bonus", "c_abonus", cfg.attendanceBonus != null ? cfg.attendanceBonus : 1000, "₹ / month"],
+           ["Qualifies after", "c_amonths", cfg.attendanceBonusAfterMonths != null ? cfg.attendanceBonusAfterMonths : 3, "months of service"]],
+          "Earned by a worker who was present every working day of the month — no leave of either kind, no absence, no half day — counted from Joined On."),
       ]),
-      h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
-        text: "Set per worker under Workers → Accommodation. Paid flat on top of salary in any month the worker was paid for at least one day; it counts in gross (ESI) but not in the PF basic. Set 0 to switch it off." }),
     ]));
 
     // leave — the monthly cap on paid days (the annual quota lives on the type)
@@ -1443,16 +1451,6 @@
         text: "Paid Leave accrues one day per month worked (the type below). In any one month only this many of a worker's paid-leave days are paid — the rest go unpaid and do not use the balance. Set 0 for no monthly limit." }),
     ]));
 
-    // attendance bonus — a full month, after the first months of service
-    grid.appendChild(h("div", { class: "card" }, [
-      h("div", { class: "card-head" }, [h("h3", { text: "🏅 Attendance Bonus" }), h("div", { class: "sub", text: "For a full month" })]),
-      h("div", { class: "form-grid" }, [
-        U.field("Bonus (₹/month)", `<input class="input" id="c_abonus" type="number" step="1" min="0" value="${cfg.attendanceBonus != null ? cfg.attendanceBonus : 1000}">`),
-        U.field("Not in the first (months of service)", `<input class="input" id="c_amonths" type="number" step="1" min="0" value="${cfg.attendanceBonusAfterMonths != null ? cfg.attendanceBonusAfterMonths : 3}">`),
-      ]),
-      h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
-        text: "Paid to a worker who was present every working day of the month — no leave of either kind, no absence, no half day — once the first months of service (from Joined On) are behind them. In gross (ESI), not in the PF basic. Set 0 to switch it off." }),
-    ]));
     box.appendChild(grid);
 
     // biometric device
@@ -1483,6 +1481,44 @@
       ], { onRow: (r) => leaveTypeForm(r), empty: "No leave types — add one with ＋ Leave Type" }),
     ]));
 
+    /* ONE PERK, as its own tile: the icon, its name and what it is for, a badge
+       saying what it is currently worth, its figures, and the rule underneath.
+       Each field carries its unit (₹ / month, months of service) BESIDE the box
+       rather than in a parenthesis in its label — the numbers are what the eye
+       lands on and they were reading as bare digits.
+       The badge is live: both perks are switched off by setting the money to 0,
+       and a tile that says "Off" states that far more plainly than a lone zero
+       in a box, which is why the notes no longer have to spell it out. */
+    function perkRow(icon, label, sub, fields, note) {
+      const moneyId = fields[0][1];
+      const state = h("span", { class: "perk-state" });
+      const box = h("div", { class: "perk" }, [
+        h("div", { class: "perk-head" }, [
+          h("span", { class: "perk-ic", text: icon }),
+          h("div", { class: "perk-id" }, [
+            h("b", { class: "perk-name", text: label }),
+            h("span", { class: "perk-sub", text: sub })]),
+          state,
+        ]),
+        h("div", { class: "perk-fields" }, fields.map(([lb, id, val, unit]) => h("label", { class: "perk-f" }, [
+          h("span", { class: "perk-f-lbl", text: lb }),
+          h("span", { class: "perk-f-in" }, [
+            h("input", { class: "input", id, type: "number", step: "1", min: "0", value: val != null ? val : 0 }),
+            h("span", { class: "perk-f-unit", text: unit })]),
+        ]))),
+        h("p", { class: "perk-note", text: note }),
+      ]);
+      const paint = () => {
+        const el = box.querySelector("#" + moneyId);
+        const amt = el ? Math.max(0, +el.value || 0) : 0;
+        state.textContent = amt > 0 ? money(amt) + " / month" : "Off";
+        state.classList.toggle("off", !(amt > 0));
+        box.classList.toggle("is-off", !(amt > 0));
+      };
+      box.addEventListener("input", paint);
+      paint();
+      return box;
+    }
     function dedRow(label, key, fields, on) {
       return h("div", { style: "padding:10px 0;border-bottom:1px solid var(--line)" }, [
         h("label", { class: "flex aic gap", style: "cursor:pointer;margin-bottom:8px" }, [

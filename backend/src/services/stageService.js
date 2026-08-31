@@ -546,10 +546,29 @@ function issuingWarehouse(rid, itemsById, movements, held) {
   return best || "WH-PNY";
 }
 
+/** What one store actually holds of a material right now. */
+function onHandIn(rid, wh, movements) {
+  let n = 0;
+  (movements || []).forEach((m) => { if (m.itemId === rid && m.wh === wh) n += (+m.qty || 0); });
+  return n;
+}
+
 function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements, held) {
   const st = plan[stageKey];
   if (!st) return [];
-  const whFor = (rid) => issuingWarehouse(rid, itemsById, movements, held);
+  /* The office may name the store each material comes out of when it raises
+     the order (a material can sit in several). That choice is honoured here,
+     so the issue posts where the planner said it would — but only while it is
+     still a store this issue MAY draw on: one put into quarantine since, or
+     one the stock has since moved out of, falls back to the standing rule
+     rather than posting an issue against a store that cannot cover it. */
+  const chosen = (wo && wo.materialWarehouses) || {};
+  const block = held instanceof Set ? held : new Set(held || []);
+  const whFor = (rid) => {
+    const want = chosen[rid];
+    if (want && !block.has(want) && onHandIn(rid, want, movements) > 0) return want;
+    return issuingWarehouse(rid, itemsById, movements, held);
+  };
   const moves = [];
   st.consume.forEach(([rid, q]) => {
     if (!q) return;
@@ -730,7 +749,7 @@ module.exports = {
   LINES_BY_AREA, startArea, lineForProduct, OWNERS, productOwner, materialCheck, routeStagesFor,
   materialRole, areaCovers,
   planForRequirement, plannedStages, finishedStockFor, wipStockFor, drawFrom,
-  computeStagePlan, stageMovements, issuingWarehouse,
+  computeStagePlan, stageMovements, issuingWarehouse, onHandIn,
   freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,
   stageForArea, currentStage, ensureStageModel,
 };

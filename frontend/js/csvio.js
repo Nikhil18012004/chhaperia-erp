@@ -138,8 +138,9 @@
     workorders: {
       label: "Work Orders", idKey: "id", kind: "array", path: "workorders", autoId: "WO-",
       cols: [C("id", "W.O. Number"), C("date", "Start Date"), C("itemId", "Product Item Code"), C("qty", "Quantity", "num"), C("status", "Status"), C("due", "Due Date"),
-        C("line", "Production Line"), C("progress", "Progress (%)", "num"), C("priority", "Priority")],
-      form: ["id", "itemId", "qty", "line", "due", "priority"],
+        C("line", "Production Line"), C("progress", "Progress (%)", "num"), C("priority", "Priority"),
+        C("customerId", "Customer ID")],
+      form: ["id", "itemId", "qty", "line", "due", "priority", "customerId"],
     },
     salesorders: {
       label: "Sales Orders", idKey: "id", kind: "array", path: "salesorders", autoId: "SO-",

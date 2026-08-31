@@ -1088,27 +1088,55 @@
     function transferForm(){
       const whs=ENG.data.warehouses;
       if(whs.length<2){ toast("Need at least two warehouses to move stock",{type:"warn"}); return; }
-      // materials that actually have stock in a given warehouse, each label
-      // carrying its on-hand qty so you pick from real, in-stock options
+      /* Materials that actually have stock in a given warehouse.
+         THE NAME IS NEVER CUT. It used to be trimmed to 26 characters, which is
+         the very fault the identity rule above was written to end: this plant
+         stocks "COTTON FABRIC — DEVESH", "… DOLLAR" and "… DOLLER", and at 26
+         characters all three read as the same roll. The label carries what
+         tells one material from another — its name and grade, its code, and the
+         thickness and GSM that ARE the identity of a sheet material — then
+         what is on hand. */
+      function matLabel(it, q){
+        const bits=[matDisplay(it)];
+        if(it.id) bits.push(it.id);
+        const t=thkOf(it); if(t!=null&&t!=="") bits.push(ENG.num(t,3)+" mm");
+        if(it.gsm!=null&&it.gsm!=="") bits.push(ENG.num(it.gsm,0)+" g/m²");
+        return bits.join(" · ")+" — "+onHand(it,q)+" on hand";
+      }
+      /* EVERY FIGURE IN THIS DIALOG IS IN THE ITEM'S OWN STOCKING UNIT, with kg
+         appended for reference — because that is the unit the box below takes
+         and the unit save() checks the stock against. Mica tape is kept in
+         metres and READ in kilograms elsewhere in the app (ENG.qtyText), and
+         showing "188.42 kg on hand" over a box that wants metres is how someone
+         moves 5 of something they meant 1,149 of. */
+      /* kg is spelled out rather than left to ENG.kgSuffix, which stays silent
+         for web that READS as kilograms elsewhere — correct where qtyText has
+         already converted, wrong here where the figure in front of it is metres. */
+      function onHand(it,q){
+        const base=ENG.num(q,2)+" "+(it.uom||"");
+        if(ENG.isKg(it)) return base;
+        const w=ENG.kg(it,q);
+        return w==null? base : base+" · "+ENG.num(w, w<10?2:0)+" kg";
+      }
       function matsIn(whId){
         return ENG.data.items.map(it=>({it, q:(ENG.stock(it.id).byWh[whId])||0}))
           .filter(x=>x.q>0.001).sort((a,b)=>b.q-a.q)
-          /* the label carries kg for reference; the quantity you TYPE stays in
-             the item's own unit, so nobody moves 24 of something they meant
-             1,200 of */
-          .map(x=>({v:x.it.id, l:trim(x.it.name,26)+" — "+ENG.num(x.q,2)+" "+(x.it.uom||"")+ENG.kgSuffix(x.it,x.q)}));
+          .map(x=>({v:x.it.id, l:matLabel(x.it, x.q)}));
       }
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           field("From Warehouse", selectHTML("t_from", whs.map(w=>({v:w.id,l:w.name})), whs[0].id)),
           field("To Warehouse", selectHTML("t_to", whs.map(w=>({v:w.id,l:w.name})), whs[1].id)),
           h("div",{class:"field full",id:"t_item_wrap"}),
-          field("Quantity to move", `<input class="input" id="t_qty" type="number" step="0.001" min="0" value="0">`),
+          h("div",{class:"field"},[h("label",{id:"t_qty_lbl",text:"Quantity to move"}),
+            h("div",{html:`<input class="input" id="t_qty" type="number" step="0.001" min="0" value="0">`})]),
           field("Note (optional)", `<input class="input" id="t_note" placeholder="e.g. Rebalancing stock">`),
         ]),
-        h("div",{id:"t_avail",class:"muted",style:"margin-top:2px;font-size:12.5px"})
+        h("div",{id:"t_avail",style:"margin-top:4px"})
       ]);
-      const mo=modal({title:"Move Stock Between Warehouses", sub:"Transfers on-hand quantity — total stock & valuation stay the same", body,
+      // wide: the material panel names the roll in full and shows both ends of
+      // the move side by side, which the default dialog width squeezes
+      const mo=modal({title:"Move Stock Between Warehouses", sub:"Transfers on-hand quantity — total stock & valuation stay the same", body, wide:true,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn primary",onclick:save,text:"Move Stock"})]});
       // Material list is scoped to whatever "From" warehouse is selected,
@@ -1127,12 +1155,71 @@
         UI.$("#t_qty").value="0";
         avail();
       }
+      /* WHAT IS BEING MOVED, in full. This was one line — "Available: 1200 KG
+         in main store." — which named neither the material nor where it was
+         going, so the only description of the roll on the whole screen was the
+         picker's own label, and that label was truncated.
+         Now: the material written the way every other list writes it, its
+         spec, and BOTH ends of the move side by side, so what the store will
+         hold afterwards is read before the transfer is posted rather than
+         after. */
       function avail(){
-        const el=UI.$("#t_item"), id=el?el.value:"", from=UI.$("#t_from").value, it=ENG.item(id)||{};
-        const q=id?((ENG.stock(id)||{byWh:{}}).byWh[from]||0):0;
-        UI.$("#t_avail").innerHTML = id ? `Available: <b>${ENG.num(q,2)} ${esc(it.uom||"")}</b> in ${esc(whName(from))}` : "";
+        const el=UI.$("#t_item"), id=el?el.value:"";
+        const from=UI.$("#t_from").value, to=UI.$("#t_to").value;
+        const host=UI.$("#t_avail"); if(!host) return;
+        host.innerHTML="";
+        if(!id) return;
+        const it=ENG.item(id)||{};
+        const st=ENG.stock(id)||{byWh:{}};
+        const qFrom=(st.byWh||{})[from]||0, qTo=(st.byWh||{})[to]||0;
+        const t=thkOf(it);
+        const spec=[
+          catName(it.cat),
+          (t!=null&&t!=="")?ENG.num(t,3)+" mm":null,
+          (it.gsm!=null&&it.gsm!=="")?ENG.num(it.gsm,0)+" g/m²":null,
+          (it.width!=null&&it.width!=="")?ENG.num(it.width,0)+" mm wide":null,
+          it.uom?"stocked in "+it.uom:null,
+          it.hsn?"HSN "+it.hsn:null,
+        ].filter(Boolean).join(" · ");
+        const card=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:12px 14px"});
+        card.appendChild(h("div",{class:"flex between aic wrap",style:"gap:8px"},[
+          h("div",{style:"min-width:0"},[
+            h("div",{style:"font-weight:700;font-size:13.5px",text:matDisplay(it)}),
+            h("div",{class:"muted mono",style:"font-size:11px;margin-top:2px",text:it.id||""}),
+          ]),
+          h("span",{class:"chip",text:"Avg cost ₹"+ENG.num(st.avgCost||0,2)+" / "+(it.uom||"unit")}),
+        ]));
+        if(spec) card.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin-top:5px",text:spec}));
+        /* the two ends of the move, and what each store is left holding — the
+           figure the person posting the transfer is actually deciding on */
+        const end=(label,wh,now,after)=>h("div",{style:"flex:1;min-width:150px"},[
+          h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),
+          h("div",{style:"font-weight:700;font-size:13px;margin-top:2px",text:whName(wh)}),
+          h("div",{class:"mono",style:"font-size:12px;margin-top:2px",text:onHand(it,now)}),
+          after==null?null:h("div",{class:"muted",style:"font-size:11px;margin-top:1px",
+            text:"after the move: "+ENG.num(after,2)+" "+(it.uom||"")}),
+        ].filter(Boolean));
+        const qty=+((UI.$("#t_qty")||{}).value)||0;
+        const moving=(qty>0 && qty<=qFrom+0.0001 && from!==to)?qty:null;
+        card.appendChild(h("div",{class:"flex wrap",style:"gap:14px;margin-top:11px;padding-top:10px;border-top:1px solid var(--line)"},[
+          end("Moving out of", from, qFrom, moving==null?null:qFrom-moving),
+          end("Moving in to", to, qTo, moving==null?null:qTo+moving),
+        ]));
+        if(from===to) card.appendChild(h("div",{style:"font-size:11.5px;color:var(--warn);margin-top:8px",
+          text:"Pick a different store to move into — the two are the same."}));
+        else if(qty>qFrom+0.0001) card.appendChild(h("div",{style:"font-size:11.5px;color:var(--danger);margin-top:8px",
+          text:whName(from)+" holds only "+onHand(it,qFrom)+"."}));
+        host.appendChild(card);
+        /* the box takes the item's OWN unit — say which, on the box, rather
+           than leaving it to be inferred from a figure somewhere else */
+        const lbl=UI.$("#t_qty_lbl");
+        if(lbl) lbl.textContent="Quantity to move"+(it.uom?" ("+it.uom+")":"");
       }
       UI.$("#t_from").onchange=renderMats;
+      // the panel shows both ends and what each is left with, so it follows the
+      // destination and the quantity as well as the material
+      UI.$("#t_to").onchange=avail;
+      UI.$("#t_qty").oninput=avail;
       renderMats();
       function save(){
         const from=UI.$("#t_from").value, to=UI.$("#t_to").value, id=UI.$("#t_item").value;

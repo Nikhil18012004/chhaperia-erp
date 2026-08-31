@@ -275,19 +275,284 @@
 
   /* ----- data preview: every "Export" action shows the table FIRST; the
      actual .xlsx download happens from the preview's Download button ----- */
+  /* ---- THE PREVIEW EVERY EXPORT GOES THROUGH ------------------------------
+     Reports, each section's Excel ▾, Stock Items and the payroll run all land
+     here, so this is the one place worth teaching to ask HOW MUCH.
+     It used to show every row and download every row: the only way to send
+     somebody last month's ledger was to export the whole thing and cut it up in
+     Excel afterwards. The sheet is SCOPED before it leaves now — by text, by
+     date, by how many rows, and by which columns — and Download and Print both
+     write exactly what is on screen, never more.
+     All of it is optional: open the preview, press Download, and you get the
+     whole table exactly as before. */
   function dataPreview(opts){
     const head=opts.head||[], rows=opts.rows||[];
-    const cols=head.map((hd,i)=>({key:"c"+i,label:hd,num:i>0&&!isNaN(parseFloat(rows[0]&&rows[0][i])),
-      render:r=>UI.esc(String(r["c"+i]==null||r["c"+i]===""?"—":r["c"+i])),sort:r=>r["c"+i]}));
-    const data=rows.map(r=>{const o={};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
-    UI.modal({title:opts.title, sub:rows.length+" rows", wide:true,
-      body:UI.table(data,cols,{empty:"No data"}),
-      foot:[UI.h("button",{class:"btn primary",onclick:()=>{
-        CSVIO.downloadXLSX(opts.name||"data.xlsx", head, rows, opts.sheet||opts.title);
-        UI.toast(opts.title+" downloaded",{type:"ok",title:"Download started"});
-      },html:"⬇ Download"})]});
-  }
+    /* Which column holds a date, if any. Detected from the DATA, not from the
+       heading, so it works on a sheet whose date column is called "Promised" or
+       "Report Date" as readily as one called "Date". */
+    const isDate=v=>typeof v==="string" && /^\d{4}-\d{2}-\d{2}/.test(v.trim());
+    let dateIdx=-1;
+    for(let i=0;i<head.length && dateIdx<0;i++){
+      const seen=rows.slice(0,40).map(r=>r[i]).filter(v=>v!=null&&v!=="");
+      if(seen.length && seen.every(isDate)) dateIdx=i;
+    }
+    // qRaw keeps the operator's own typing for the printed masthead; q is the
+    // folded copy the matching runs on
+    const state={ q:"", qRaw:"", range:{from:"",to:""}, limit:0, cols:head.map(()=>true) };
 
+    const countChip=h("span",{class:"chip"});
+    const tableHost=h("div");
+    let colChip=null;
+    const LIMITS=[{value:"0",label:"All rows"},{value:"25",label:"First 25"},{value:"50",label:"First 50"},
+      {value:"100",label:"First 100"},{value:"250",label:"First 250"},{value:"500",label:"First 500"},
+      {value:"1000",label:"First 1000"}];
+
+    /* The rows this export will actually carry, in this order: text, then date,
+       then the row cap. Columns are dropped last, so a column can be kept out of
+       the sheet while still being searched on. */
+    function scoped(){
+      let out=rows;
+      if(state.q){ const q=state.q;
+        out=out.filter(r=>r.some(v=>String(v==null?"":v).toLowerCase().includes(q))); }
+      if(dateIdx>=0 && (state.range.from||state.range.to))
+        out=out.filter(r=>inDateRange(r[dateIdx], state.range));
+      if(state.limit>0) out=out.slice(0,state.limit);
+      return out;
+    }
+    const keptIdx=()=>head.map((_,i)=>i).filter(i=>state.cols[i]);
+    const outHead=()=>keptIdx().map(i=>head[i]);
+    const outRows=()=>{ const k=keptIdx(); return scoped().map(r=>k.map(i=>r[i])); };
+
+    function draw(){
+      const k=keptIdx(), body=scoped();
+      const cols=k.map(i=>({key:"c"+i,label:head[i],
+        num:i>0&&!isNaN(parseFloat(rows[0]&&rows[0][i])),
+        render:r=>UI.esc(String(r["c"+i]==null||r["c"+i]===""?"—":r["c"+i])),sort:r=>r["c"+i]}));
+      const data=body.map(r=>{const o={};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
+      tableHost.innerHTML="";
+      tableHost.appendChild(UI.table(data,cols,{empty:"Nothing matches this selection"}));
+      countChip.textContent = body.length===rows.length
+        ? rows.length+" row"+(rows.length===1?"":"s")
+        : body.length+" of "+rows.length+" rows";
+      if(colChip) colChip.textContent = k.length===head.length
+        ? "All "+head.length+" columns" : k.length+" of "+head.length+" columns";
+    }
+
+    /* the columns picker: one tick per column, in a small popover */
+    function columnsControl(){
+      const list=h("div",{class:"ni-menu dp-cols",hidden:true},
+        head.map((hd,i)=>{
+          const box=h("input",{type:"checkbox",style:"width:14px;height:14px;accent-color:var(--accent)"});
+          box.checked=state.cols[i];
+          box.addEventListener("change",()=>{
+            // a sheet with no columns is not a sheet — always leave one standing
+            if(!box.checked && keptIdx().length<=1){ box.checked=true; return; }
+            state.cols[i]=box.checked; draw();
+          });
+          return h("label",{class:"ni-opt dp-col"},[box,h("span",{text:hd||("Column "+(i+1))})]);
+        }));
+      const all=h("button",{class:"ni-opt dp-col-all",text:"Select all",onclick:e=>{e.stopPropagation();
+        state.cols=head.map(()=>true);
+        list.querySelectorAll("input").forEach(b=>{b.checked=true;}); draw();}});
+      list.insertBefore(all,list.firstChild);
+      colChip=h("span",{});
+      const trig=h("button",{class:"btn sm"},[colChip,h("span",{class:"caret",text:" ▾"})]);
+      const wrap=h("div",{class:"ni-drop"},[trig,list]);
+      const onDoc=e=>{ if(!wrap.contains(e.target)){ list.hidden=true; document.removeEventListener("click",onDoc); } };
+      trig.addEventListener("click",e=>{ e.stopPropagation();
+        if(list.hidden){ list.hidden=false; setTimeout(()=>document.addEventListener("click",onDoc),0); }
+        else { list.hidden=true; document.removeEventListener("click",onDoc); } });
+      return wrap;
+    }
+
+    const bar=h("div",{class:"dp-bar"},[
+      searchInput("Filter rows…", v=>{ state.qRaw=String(v||"").trim();
+        state.q=state.qRaw.toLowerCase(); draw(); }),
+      dateIdx>=0 ? dateRange(state.range, ()=>draw(), {label:head[dateIdx]||"Date"}) : null,
+      select(LIMITS, v=>{ state.limit=+v||0; draw(); }, "0"),
+      columnsControl(),
+      h("div",{style:"margin-left:auto"},countChip),
+    ].filter(Boolean));
+
+    const body=h("div",{},[bar,tableHost]);
+    draw();
+
+    /* PRINT — the same scoped table on paper.
+       A report read at a desk and a report signed off in a meeting are the same
+       figures; only the medium differs, so print takes its rows from where the
+       download takes them rather than from the full set.
+
+       LAYING OUT AN ARBITRARY TABLE is the whole problem here: these sheets run
+       from 6 columns (Reorder) to 19 (Production Pending), and one fixed layout
+       cannot serve both. So the sheet is MEASURED before it is written:
+
+         · each column is sized from the widest thing actually in it, so a
+           19-character product name gets room and a 3-character code does not
+           take the same slice — the table then fills the paper edge to edge
+           instead of leaving a third of it white;
+         · the page turns to landscape only when portrait genuinely cannot hold
+           the measured width, not merely because there are many columns;
+         · the type is the LARGEST that still fits, found by measurement rather
+           than by a fixed ladder, so a narrow sheet is never needlessly tiny;
+         · the header repeats on every sheet and no row is split by a page break.
+
+       Numeric columns are right-aligned and never wrap, so figures stay in a
+       column the eye can run down; text wraps instead of forcing the table
+       wider than the paper. */
+    function printScoped(){
+      const hd=outHead(), bd=outRows(), k=keptIdx();
+      if(!bd.length){ UI.toast("Nothing to print in this selection",{type:"warn"}); return; }
+      const w=window.open("","_blank");
+      if(!w){ UI.toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
+      const esc=UI.esc, org=(ENG.data.org||{});
+
+      /* A column is numeric when every value that is present reads as a number.
+         Sampled across the sheet rather than taken from the first row, which is
+         blank often enough to mis-classify a whole column. */
+      const numeric=k.map(i=>{
+        const seen=rows.slice(0,60).map(r=>r[i]).filter(v=>v!=null&&String(v).trim()!=="");
+        return seen.length>0 && seen.every(v=>!isNaN(parseFloat(String(v).replace(/[,%₹\s]/g,""))));
+      });
+
+      /* ---- MEASURE ----
+         The widest content in each column, in characters. A heading is part of
+         the measurement (it has to fit too), and a runaway text column is capped
+         so one long remark cannot starve every other column of width. */
+      const FLOOR=4;
+      // the true widest, measured once; the cap is applied over it below
+      const raw=hd.map((label,j)=>{
+        let m=String(label==null?"":label).length;
+        for(let i=0;i<bd.length && i<400;i++){
+          const L=String(bd[i][j]==null?"":bd[i][j]).length;
+          if(L>m) m=L;
+        }
+        return Math.max(FLOOR, m);
+      });
+
+      /* ---- FIT ----
+         A4 at an 8mm margin leaves 194mm across in portrait and 281mm in
+         landscape. A character of Segoe UI at f px is about 0.5f px wide, and
+         1px is 0.2646mm; each column also spends ~3mm on its padding and rules.
+         Solve that for the largest type that still fits, and only turn the page
+         when portrait cannot hold a readable size. */
+      const MM_PER_PX=0.2646, CHAR=0.5, GUTTER=3;
+      const fitFont=(usableMM,total)=>{
+        const forText=usableMM-(hd.length*GUTTER);
+        if(forText<=0) return 0;
+        return forText/(total*CHAR*MM_PER_PX);
+      };
+      /* Cap how much width any ONE column may claim, and tighten that cap until
+         the type is readable. A long remark wrapping over three lines costs far
+         less than every figure on the sheet shrinking to fit it on one — so on a
+         wide sheet the text columns give up width to buy legible type for all
+         nineteen. The first cap that clears 8.4px wins; if none does, the
+         tightest is used. */
+      const CAPS=[34,26,20,16,13];
+      let chars=null, totalChars=0, fs=0, wide=false;
+      for(let ci=0; ci<CAPS.length; ci++){
+        const cap=CAPS[ci];
+        const c=raw.map(x=>Math.min(cap,x));
+        const tot=c.reduce((a,b)=>a+b,0);
+        const pf=fitFont(194,tot), lf=fitFont(281,tot);
+        // portrait is preferred — it is the paper everything else in this
+        // office is filed on — and given up only when it cannot stay legible
+        const land = pf<8.2 && lf>pf;
+        const f = Math.max(6.8, Math.min(11, land?lf:pf));
+        chars=c; totalChars=tot; fs=f; wide=land;
+        if(f>=8.4) break;
+      }
+      const pad = fs>=9.5 ? "4px 6px" : fs>=8 ? "3px 5px" : "2.5px 4px";
+      const page = wide ? "A4 landscape" : "A4 portrait";
+      // every column gets the share of the paper its own content asks for
+      const widths=chars.map(c=>(c/totalChars*100).toFixed(3)+"%");
+
+      const css=[
+        "@page{size:"+page+";margin:8mm}",
+        "*{box-sizing:border-box}",
+        'body{font:12px/1.4 "Segoe UI",Arial,sans-serif;color:#111;margin:0;padding:0}',
+        /* masthead — the same shape as the quotation and GRN sheets, so a
+           report filed beside them reads as the same company's paper */
+        ".hd{display:flex;justify-content:space-between;align-items:flex-start;"
+          +"border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px}",
+        ".co{font-size:15px;font-weight:800;letter-spacing:.2px;line-height:1.2}",
+        ".tag{font-size:9.5px;color:#555;margin-top:1px}",
+        ".ids{font-size:9px;color:#444;margin-top:2px}",
+        ".tt{text-align:right;flex:0 0 auto;padding-left:14px}",
+        ".tt h1{font-size:13.5px;margin:0 0 2px;letter-spacing:1.2px;text-transform:uppercase}",
+        ".tt .kv{font-size:9px;color:#444;line-height:1.5}",
+        ".tt .kv b{color:#666;font-weight:600}",
+        /* the scope, stated once, so a filtered sheet can never be mistaken
+           for the complete one */
+        ".scope{font-size:9px;color:#333;background:#f3f4f6;border-left:3px solid #111;"
+          +"padding:4px 8px;margin-bottom:7px;line-height:1.45}",
+        ".scope b{color:#111}",
+        /* fixed layout + the measured colgroup below is what makes the table
+           fill the paper in the proportions the CONTENT asks for */
+        "table{width:100%;border-collapse:collapse;table-layout:fixed}",
+        "th,td{border:1px solid #c8ccd0;padding:"+pad+";font-size:"+fs.toFixed(2)+"px;"
+          +"line-height:1.3;text-align:left;vertical-align:top;"
+          +"overflow-wrap:break-word;word-break:break-word}",
+        "th{background:#eceef1;font-weight:800;text-transform:uppercase;"
+          +"letter-spacing:.2px;font-size:"+Math.max(6.4,fs-0.6).toFixed(2)+"px}",
+        "td.r,th.r{text-align:right;word-break:normal;overflow-wrap:normal}",
+        "tbody tr:nth-child(even){background:#fafbfc}",
+        /* the header repeats on every sheet and no row is torn in half */
+        "thead{display:table-header-group}",
+        "tr{page-break-inside:avoid;break-inside:avoid}",
+        ".foot{margin-top:8px;border-top:1px solid #ddd;padding-top:4px;"
+          +"font-size:8.5px;color:#777;display:flex;justify-content:space-between}",
+        "@media print{.noprint{display:none}}",
+        ".noprint{margin:0 0 9px;text-align:right}",
+        '.noprint button{font:600 12px/1 "Segoe UI",Arial;padding:8px 16px;border:1px solid #111;'
+          +"background:#111;color:#fff;border-radius:5px;cursor:pointer}",
+      ].join("\n");
+
+      const scope=[];
+      if(state.q) scope.push("matching “"+state.qRaw+"”");
+      if(dateIdx>=0&&(state.range.from||state.range.to))
+        scope.push((head[dateIdx]||"Date")+" "+(state.range.from||"the start")+" to "+(state.range.to||"today"));
+      if(state.limit>0) scope.push("first "+state.limit+" rows");
+      if(k.length<head.length) scope.push(k.length+" of "+head.length+" columns");
+
+      const printedOn=DB.helpers.iso(DB.helpers.today());
+      const html='<!doctype html><html><head><meta charset="utf-8">'
+        +"<title>"+esc(opts.title||"Report")+"</title><style>"+css+"</style></head><body>"
+        +'<div class="noprint"><button onclick="window.print()">Print this report</button></div>'
+        +'<div class="hd">'
+          +'<div><div class="co">'+esc(org.name||"")+"</div>"
+          +(org.tagline?'<div class="tag">'+esc(org.tagline)+"</div>":"")
+          +'<div class="ids">'+esc([org.address,org.gst?"GSTIN "+org.gst:""].filter(Boolean).join("  ·  "))+"</div></div>"
+          +'<div class="tt"><h1>'+esc(opts.title||"Report")+"</h1>"
+          +'<div class="kv"><b>Rows</b> '+bd.length+(bd.length===rows.length?"":" of "+rows.length)+"</div>"
+          +'<div class="kv"><b>Printed</b> '+esc(printedOn)+"</div></div>"
+        +"</div>"
+        +(scope.length?'<div class="scope"><b>This sheet is a selection:</b> '+esc(scope.join("  ·  "))+"</div>":"")
+        +"<table><colgroup>"+widths.map(x=>'<col style="width:'+x+'">').join("")+"</colgroup>"
+        +"<thead><tr>"
+        +hd.map((x,j)=>"<th"+(numeric[j]?' class="r"':"")+">"+esc(String(x==null?"":x))+"</th>").join("")
+        +"</tr></thead><tbody>"
+        +bd.map(r=>"<tr>"+r.map((v,j)=>"<td"+(numeric[j]?' class="r"':"")+">"
+            +esc(String(v==null||v===""?"—":v))+"</td>").join("")+"</tr>").join("")
+        +"</tbody></table>"
+        +'<div class="foot"><span>'+esc(org.name||"")+" · "+esc(opts.title||"Report")+"</span>"
+        +"<span>"+bd.length+" row"+(bd.length===1?"":"s")+" · "+esc(printedOn)+"</span></div>"
+        +"</body></html>";
+      w.document.write(html);
+      w.document.close();
+      setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} },300);
+    }
+    UI.modal({title:opts.title,
+      sub:"Narrow it down before you take it away — Download and Print both carry exactly what is on screen",
+      wide:true, body,
+      foot:[
+        UI.h("button",{class:"btn",onclick:printScoped,html:"🖨 Print"}),
+        UI.h("button",{class:"btn primary",onclick:()=>{
+          const bd=outRows();
+          if(!bd.length){ UI.toast("Nothing to download in this selection",{type:"warn"}); return; }
+          CSVIO.downloadXLSX(opts.name||"data.xlsx", outHead(), bd, opts.sheet||opts.title);
+          UI.toast(bd.length+" row"+(bd.length===1?"":"s")+" downloaded",{type:"ok",title:opts.title});
+        },html:"⬇ Download"})]});
+  }
   /* ----- Excel split-button: hover (or tap) → Import / Export ----- */
   // onExport: opens the data preview (download lives inside it). opts.onImport
   // overrides the generic auto-detecting import dialog (CSVImportUI); opts.entity

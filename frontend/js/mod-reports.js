@@ -9,17 +9,32 @@
 
   /* ============== REPORTS ============== */
   M.reports = { title:"Reports", sub:"Exportable business reports", render(root){
-    root.appendChild(pageHead("Reports & Exports","Generate and download key operational reports"));
+    root.appendChild(pageHead("Reports & Exports",
+      "Every report and sheet the system can produce, in one place — each opens on screen first, and downloads as .xlsx from there"));
 
     const reports=[
       {ic:"📦",name:"Stock Valuation Report",desc:"On-hand qty, avg cost & total value per item",accent:"--c1",fn:repStock},
       {ic:"🔻",name:"Reorder / Low-Stock Report",desc:"Items below reorder with suggested order qty",accent:"--c6",fn:repReorder},
       {ic:"📒",name:"Stock Movement Ledger",desc:"Full transaction history with running balance",accent:"--c7",fn:repLedger},
-      {ic:"🛒",name:"Open Purchase Orders",desc:"Pending inbound goods & values by supplier",accent:"--c2",fn:repPO},
+      {ic:"🛒",name:"Open Purchase Orders",desc:"Orders still owing goods, soonest ETA first",accent:"--c2",fn:repPO},
+      {ic:"📑",name:"Purchase Order Register",desc:"Every order raised — what, from whom, for how much, landed or not",accent:"--c2",fn:repPoRegister},
+      {ic:"🧾",name:"Purchase Order Lines",desc:"One row per material ordered, with rate, value and what is still due",accent:"--c7",fn:repPoLines},
       {ic:"🧾",name:"Sales Order Backlog",desc:"Open demand, promised dates & fulfillability",accent:"--c8",fn:repSO},
       {ic:"🧬",name:"BOM Cost Roll-up",desc:"Material cost & margin for each finished tape",accent:"--c3",fn:repBOM},
       {ic:"📊",name:"ABC Classification",desc:"Pareto inventory ranking by consumption value",accent:"--c5",fn:repABC},
       {ic:"⚙️",name:"Production Output Report",desc:"Work orders, output & yield over time",accent:"--c4",fn:repProd},
+      /* THE REST OF THE BUSINESS. Stock, buying, selling and making each had a
+         report here; the lab, the CRM, the quote desk, the dispatch gate and
+         the question "where is it actually kept" had none, and were reachable
+         only from their own page — so this section was never the one place to
+         come for a figure. */
+      {ic:"🏬",name:"Stock by Warehouse",desc:"What each store holds, item by item, with value",accent:"--c2",fn:repByWh},
+      {ic:"🧪",name:"Lab Test Reports",desc:"Every test filed, its readings and pass / fail",accent:"--c7",fn:repLab},
+      {ic:"📄",name:"Quotation Pipeline",desc:"Quotes raised, rounds, status and value",accent:"--c8",fn:repQuotes},
+      {ic:"🎯",name:"CRM Lead Pipeline",desc:"Leads by stage, owner and expected value",accent:"--c5",fn:repLeads},
+      {ic:"🚚",name:"Dispatch Register",desc:"What went out, to whom, on which vehicle",accent:"--c4",fn:repDispatch},
+      {ic:"⏸",name:"Orders Awaiting Material",desc:"Work orders held short, and what each is waiting on",accent:"--c6",fn:repPending},
+      {ic:"📋",name:"Production Pending",desc:"Every run not yet finished — stage, balance and how late",accent:"--c1",fn:repProdPending},
     ];
     const grid=h("div",{class:"grid cols-3"});
     reports.forEach(r=>{
@@ -32,7 +47,47 @@
         ])
       ]));
     });
+    root.appendChild(h("h2",{style:"font-size:15px;font-weight:800;margin:4px 0 12px",text:"Operational reports"}));
     root.appendChild(grid);
+
+    /* ---- EVERY SECTION'S OWN SHEET -----------------------------------------
+       The Excel ▾ button on Customers, Suppliers, CRM, Quotations, Dispatch,
+       Workers and Attendance exports that section's table; the other ten
+       sections in the registry had no button anywhere and could only be
+       exported by importing something first. All of them are listed here,
+       BUILT FROM THE REGISTRY rather than typed out, so a sheet added to
+       csvio.js appears on this page without anyone remembering to add it. */
+    const EX_IC={ items:"📦", workorders:"⚙️", salesorders:"🧾", quotations:"📄",
+      purchaseorders:"🛒", customers:"🤝", suppliers:"🏭", movements:"📒",
+      boms:"🧬", leads:"🎯", labreports:"🧪", labproducts:"⚗️",
+      transporters:"🚚", hrworkers:"👷", hrattendance:"🕓" };
+    const exKeys=Object.keys((window.CSVIO&&CSVIO.ENTITIES)||{});
+    if(exKeys.length){
+      root.appendChild(h("h2",{style:"font-size:15px;font-weight:800;margin:26px 0 4px",text:"Data sheets"}));
+      root.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-bottom:12px",
+        text:"The full table behind each section, exactly as it is stored — the same sheet its own Excel ▾ button produces, and the same shape an import expects back."}));
+      const exGrid=h("div",{class:"grid cols-3"});
+      exKeys.forEach(key=>{
+        const ent=CSVIO.ENTITIES[key];
+        let n=0; try{ n=(CSVIO.entityRecords(key)||[]).length; }catch(e){ n=0; }
+        const open=()=>{
+          const t=CSVIO.entityTable(key);
+          if(!t||!t.rows.length){ toast("Nothing to export in "+(ent.label||key),{type:"warn"}); return; }
+          MW.dataPreview({title:t.label, head:t.header, rows:t.rows,
+            name:"chhaperia_"+key+".xlsx", sheet:t.label});
+        };
+        exGrid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:open},[
+          h("div",{class:"flex aic",style:"gap:10px"},[
+            h("span",{style:"font-size:17px",text:EX_IC[key]||"🗂"}),
+            h("h3",{style:"font-size:14px",text:ent.label||key}),
+            h("span",{class:"chip",style:"margin-left:auto",text:ENG.num(n)+" row"+(n===1?"":"s")}),
+          ]),
+          h("div",{class:"muted",style:"font-size:11.5px;margin-top:6px",
+            text:ent.cols.length+" columns · "+ent.cols.slice(0,3).map(c=>c.label).join(", ")+(ent.cols.length>3?"…":"")}),
+        ]));
+      });
+      root.appendChild(exGrid);
+    }
 
     /* data preview engine — the table shows first; the .xlsx download
        happens from the preview's Download button */
@@ -50,8 +105,6 @@
       const c=show("Reorder / Low-Stock Report",["Code","Name","OnHand","ReorderPt","Safety","Suggested","Status","Supplier"],rows,"reorder_report.csv"); if(dl===true)c(); }
     function repLedger(dl){ const rows=ENG.data.movements.slice(-300).reverse().map(m=>{const it=ENG.item(m.itemId)||{};return [m.date,m.itemId,(it.name||"").slice(0,30),m.type,m.ref||"",m.qty,m.balance!=null?m.balance:""];});
       const c=show("Stock Movement Ledger",["Date","Code","Name","Type","Ref","Qty","Balance"],rows,"stock_ledger.csv"); if(dl===true)c(); }
-    function repPO(dl){ const rows=ENG.data.purchaseorders.filter(p=>p.status!=="Received").map(p=>[p.id,ENG.sup(p.supplierId),p.lines.length,p.value.toFixed(0),p.date,p.eta,p.status]);
-      const c=show("Open Purchase Orders",["PO","Supplier","Lines","Value","Ordered","ETA","Status"],rows,"open_po.csv"); if(dl===true)c(); }
     function repSO(dl){ const rows=ENG.data.salesorders.filter(s=>s.status!=="Dispatched").map(s=>[s.id,ENG.custName(s.customerId),s.lines.length,s.value.toFixed(0),s.priority,s.promised,s.status]);
       const c=show("Sales Order Backlog",["SO","Customer","Lines","Value","Priority","Promised","Status"],rows,"so_backlog.csv"); if(dl===true)c(); }
     function repBOM(dl){ const rows=ENG.data.items.filter(i=>i.cat==="FG").map(fg=>{const bom=ENG.data.boms[fg.id];let mc=0;if(bom)BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg),null,ENG.item).forEach(([rid,per])=>mc+=per*ENG.stock(rid).avgCost/bom.yield);
@@ -61,6 +114,206 @@
       const c=show("ABC Classification",["Code","Name","Class","AnnualValue","OnHandValue","CumulativePct"],rows,"abc_analysis.csv"); if(dl===true)c(); }
     function repProd(dl){ const rows=ENG.data.workorders.slice().reverse().map(w=>{const it=ENG.item(w.itemId)||{};return [w.id,it.name||"",it.thicknessMM!=null?it.thicknessMM:"",w.qty,w.line,w.date,w.due,w.status,w.progress+"%"];});
       const c=show("Production Output Report",["WO","Product","Thickness (mm)","Qty","Line","Start","Due","Status","Progress"],rows,"production_output.csv"); if(dl===true)c(); }
+
+    /* ---- PURCHASE ORDERS ON PAPER -------------------------------------------
+       Printing the orders used to mean one of two sheets, and neither could be
+       read: "Open Purchase Orders" shows only what is still outstanding, so on a
+       day when everything has been received it prints nothing at all; and the
+       Purchase Orders DATA SHEET carries its line items as a raw JSON blob
+       ([{"qty":51136,"rate":65,"itemId":"RM-…"}, …]) because that is the shape an
+       import expects back — honest for a machine, unreadable on paper.
+       So there are two proper sheets now. The REGISTER is one row per order —
+       what was bought, from whom, for how much, and whether it has landed. The
+       LINES sheet is one row per material, which is what a buyer actually chases
+       and what replaces reading that JSON. */
+    const rupee=v=>(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
+    const poLines=p=>(p.lines||[]);
+    const poQty=p=>poLines(p).reduce((s,l)=>s+(+l.qty||0),0);
+    const poRecd=p=>poLines(p).reduce((s,l)=>s+(+l.recd||0),0);
+    /* Days past the promised date. Only meaningful on an order still owed —
+       one fully received is not late whatever its ETA said. */
+    function poOverdue(p){
+      if(!p.eta) return "";
+      if(poRecd(p)+1e-6>=poQty(p)) return "";
+      const days=Math.round((new Date(DB.helpers.iso(DB.helpers.today()))-new Date(p.eta))/86400000);
+      return days>0 ? days+" days late" : (days===0 ? "due today" : Math.abs(days)+" days left");
+    }
+    /* The materials on an order, named. A count ("6 lines") tells a reader
+       nothing they can act on; the first material plus how many others follow
+       fits a column and says what the order is FOR. */
+    function poWhat(p){
+      const ls=poLines(p);
+      if(!ls.length) return "—";
+      const first=(ENG.item(ls[0].itemId)||{}).name||ls[0].itemId||"—";
+      return ls.length===1 ? first : first+"  + "+(ls.length-1)+" more";
+    }
+
+    /* one row per ORDER */
+    function poRegisterRows(list){
+      return list.map(p=>{
+        const q=poQty(p), r=poRecd(p);
+        return [p.id, p.date||"", ENG.sup(p.supplierId), p.supplierId||"",
+          poWhat(p), poLines(p).length,
+          q.toFixed(2), r.toFixed(2), Math.max(0,q-r).toFixed(2),
+          rupee(p.value), p.eta||"", p.status||"", poOverdue(p), p.notes||""];
+      });
+    }
+    const PO_REG_HEAD=["P.O. No.","Ordered On","Supplier","Supplier Code","Material Ordered",
+      "Lines","Qty Ordered","Qty Received","Still Due","Order Value (₹)","ETA","Status","Delivery","Notes"];
+
+    function repPoRegister(){
+      const list=(ENG.data.purchaseorders||[]).slice()
+        .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+      show("Purchase Order Register", PO_REG_HEAD, poRegisterRows(list), "po_register.csv");
+    }
+
+    /* Still outstanding — the chase list. An order counts as open when quantity
+       is still owed on it, not merely because its status string says so: a
+       part-received order is exactly what a buyer needs to see. */
+    function repPO(){
+      const list=(ENG.data.purchaseorders||[])
+        .filter(p=>p.status!=="Received" || poRecd(p)+1e-6 < poQty(p))
+        .sort((a,b)=>String(a.eta||"9999-12-31").localeCompare(String(b.eta||"9999-12-31")));
+      if(!list.length){
+        toast("Every purchase order has been received in full — nothing is outstanding. Print the Purchase Order Register for all orders.",
+          {type:"ok",title:"Nothing on order"});
+        return;
+      }
+      show("Open Purchase Orders", PO_REG_HEAD, poRegisterRows(list), "open_po.csv");
+    }
+
+    /* one row per MATERIAL ordered — the sheet that replaces reading the JSON */
+    function repPoLines(){
+      const rows=[];
+      (ENG.data.purchaseorders||[]).slice()
+        .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")))
+        .forEach(p=>{
+          poLines(p).forEach((l,i)=>{
+            const it=ENG.item(l.itemId)||{};
+            const q=+l.qty||0, r=+l.recd||0;
+            rows.push([p.id, p.date||"", ENG.sup(p.supplierId), i+1,
+              it.name||l.itemId||"—", l.itemId||"", U.catName(it.cat)||"",
+              q.toFixed(2), it.uom||"", rupee(l.rate), rupee(q*(+l.rate||0)),
+              r.toFixed(2), Math.max(0,q-r).toFixed(2),
+              p.eta||"", p.status||"", l.note||""]);
+          });
+        });
+      show("Purchase Order Lines",
+        ["P.O. No.","Ordered On","Supplier","#","Material","Code","Category",
+         "Qty Ordered","Unit","Rate (₹)","Line Value (₹)","Received","Still Due","ETA","Status","Note"],
+        rows,"po_lines.csv");
+    }
+
+    /* ---- the six that had no report anywhere ---- */
+    const whNameOf=id=>((ENG.data.warehouses||[]).find(w=>w.id===id)||{}).name||id||"";
+    const custNameOf=id=>{const c=(ENG.data.customers||[]).find(x=>x.id===id);return c?(c.name||c.id):"";};
+
+    /* One row per item PER STORE — the only place that answers "where is it
+       actually kept", which the valuation report cannot: that one sums every
+       store into a single figure. */
+    function repByWh(){
+      const rows=[];
+      ENG.data.items.forEach(it=>{
+        const by=(ENG.stock(it.id)||{}).byWh||{};
+        Object.keys(by).forEach(wh=>{
+          const q=by[wh]; if(!(Math.abs(q)>0.001)) return;
+          const cost=(ENG.stock(it.id)||{}).avgCost||0;
+          rows.push([whNameOf(wh), it.id, it.name, U.catName(it.cat), it.uom||"",
+            (+q).toFixed(2), ENG.kg(it,q)==null?"":(+ENG.kg(it,q)).toFixed(2),
+            (+cost).toFixed(2), (q*cost).toFixed(0)]);
+        });
+      });
+      rows.sort((a,b)=>a[0].localeCompare(b[0])||a[2].localeCompare(b[2]));
+      show("Stock by Warehouse",["Warehouse","Code","Material","Category","UoM","Quantity","Weight (kg)","AvgCost","Value"],rows,"stock_by_warehouse.csv");
+    }
+    function repLab(){
+      const prods=ENG.data.labProducts||[];
+      const rows=(ENG.data.labReports||[]).slice().reverse().map(r=>{
+        const p=prods.find(x=>x.id===r.productId)||{};
+        return [r.id, r.reportDate||"", p.code||r.productCode||"", p.name||r.productName||"",
+          r.refNo||"", r.woId||"", r.result||"", r.testedBy||r.labBy||"", r.remarks||""];
+      });
+      show("Lab Test Reports",["Report","Date","Product Code","Product","Batch / Lot","Work Order","Result","Tested By","Remarks"],rows,"lab_reports.csv");
+    }
+    function repQuotes(){
+      const rows=(ENG.data.quotations||[]).slice().reverse().map(q=>[
+        q.id, q.date||"", q.company||custNameOf(q.customerId)||q.leadId||"", q.productName||q.itemId||"",
+        (+q.qty||0), (+q.price||0).toFixed(2), q.uom||"", (+q.value||0).toFixed(0),
+        q.status||"", (+q.rounds||0), q.lastUpdated||"", q.lostReason||"", q.lostTo||""]);
+      show("Quotation Pipeline",["Quote","Opened","Customer / Lead","Product","Qty","Price","UoM","Value","Status","Rounds","Last Update","Lost Reason","Lost To"],rows,"quotation_pipeline.csv");
+    }
+    function repLeads(){
+      const rows=(ENG.data.leads||[]).slice().map(l=>[
+        l.id, l.date||l.created||"", l.company||l.name||"", l.contact||"", l.phone||"", l.email||"",
+        l.stage||l.status||"", l.owner||"", (+l.value||0).toFixed(0), l.source||"", l.note||""]);
+      show("CRM Lead Pipeline",["Lead","Opened","Company","Contact","Phone","Email","Stage","Owner","Value","Source","Note"],rows,"crm_leads.csv");
+    }
+    /* Dispatched sales orders, one row per order — the gate register the
+       Dispatch page shows on screen but never let anyone take away. */
+    function repDispatch(){
+      const trans=ENG.data.transporters||[];
+      const rows=(ENG.data.salesorders||[]).filter(so=>so.status==="Dispatched"||so.dispatchDate)
+        .slice().reverse().map(so=>[
+          so.id, so.dispatchDate||so.dispatchedOn||"", custNameOf(so.customerId),
+          (so.lines||[]).length, (+so.value||0).toFixed(0),
+          so.invoiceNo||"", (trans.find(t=>t.id===so.transporterId)||{}).name||"",
+          so.vehicleNo||"", so.lrNo||"", so.ewayBill||"", so.status||""]);
+      show("Dispatch Register",["SO","Dispatched","Customer","Lines","Value","Invoice No.","Transporter","Vehicle","LR / RR","E-Way Bill","Status"],rows,"dispatch_register.csv");
+    }
+    /* Work orders held short, and the material each is waiting on — the list
+       the office works from to chase a purchase order. */
+    function repPending(){
+      const rows=(ENG.data.workorders||[]).filter(w=>(+w.pendingQty||0)>0.001).map(w=>{
+        const it=ENG.item(w.itemId)||{};
+        const short=(w.shortage||[]).map(x=>(x.name||x.id)+" ("+(x.id||"")+")").join("; ");
+        return [w.id, it.name||w.itemId, custNameOf(w.customerId), (+w.qty||0),
+          ((+w.completedQty||0)+(+w.runQty||0)).toFixed(2), (+w.pendingQty||0).toFixed(2),
+          w.line||"", w.date||"", w.due||"", short];
+      });
+      show("Orders Awaiting Material",["WO","Product","Customer","Ordered","Produced","Pending","Line","Start","Due","Waiting On"],rows,"pending_material.csv");
+    }
+
+    /* ---- PRODUCTION PENDING — the shop-floor chase list ---------------------
+       Every run that is NOT finished, in the order it is due, with the stage it
+       is sitting on, what is still to make, and how many days late it is. The
+       Production Output report lists everything ever run; this one is the sheet
+       the office carries into the morning meeting, so it prints only what is
+       still owed and puts the oldest promise at the top.
+       "Not completed" is the SAME test the production board uses: an order that
+       still owes a quantity is not finished even when its route has closed. */
+    const STAGE_LBL={coating:"Coating",rmprod:"Coating",slitting:"Slitting",packing:"Packing",
+      production:"Production",weaving:"Weaving",wbcoat:"WB Coating",fiberglass:"Fiber-Glass"};
+    function repProdPending(){
+      const today=DB.helpers.iso(DB.helpers.today());
+      const custOf=id=>{const c=(ENG.data.customers||[]).find(x=>x.id===id);return c?(c.name||c.id):"";};
+      const open=(ENG.data.workorders||[]).filter(w=>
+        !((w.status==="Completed"||w.status==="Dispatched") && !((+w.pendingQty||0)>1e-6)));
+      const rows=open.map(w=>{
+        const it=ENG.item(w.itemId)||{};
+        const rt=w.route||[];
+        const cur=rt.length?rt[Math.min(Math.max(w.stageIdx||0,0),rt.length-1)]:null;
+        const doneN=rt.filter(x=>x.status==="Completed").length;
+        const made=(+w.completedQty||0)+(+w.runQty||0);
+        const left=Math.max(0,(+w.qty||0)-(+w.completedQty||0));
+        // days late is only meaningful against a due date that exists
+        const late=w.due? Math.round((new Date(today)-new Date(w.due))/86400000) : null;
+        return [w.id, w.date||"", it.name||w.itemId,
+          U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||"",
+          it.thicknessMM!=null?it.thicknessMM:"", w.widthMM!=null?w.widthMM:"",
+          custOf(w.customerId), (+w.qty||0), (+w.completedQty||0).toFixed(2), left.toFixed(2),
+          (+w.pendingQty||0).toFixed(2),
+          cur?(STAGE_LBL[cur.key]||cur.name||""):"", rt.length?(doneN+" / "+rt.length):"",
+          (w.progress||0)+"%", w.line||"", w.priority||"Normal", w.status||"",
+          w.due||"", late==null?"":(late>0?late+" days late":(late===0?"due today":Math.abs(late)+" days left"))];
+      });
+      // oldest promise first; an order with no due date sorts to the end
+      rows.sort((a,b)=>(a[17]||"9999-12-31").localeCompare(b[17]||"9999-12-31"));
+      show("Production Pending",
+        ["WO","Started","Product","Code","Thickness (mm)","Width (mm)","Customer","Ordered",
+         "Completed","Still To Make","Awaiting Material","Stage","Stages Done","Progress",
+         "Line","Priority","Status","Due","Overdue"],
+        rows,"production_pending.csv");
+    }
   }};
 
   /* ============== SETTINGS ============== */

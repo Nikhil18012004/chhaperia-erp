@@ -1500,6 +1500,81 @@ canvas{display:block;width:100%}
   .ded-fields>.ded-f{display:contents}
 }
 
+/* ---- EXPORT PREVIEW: say how much before you take it away ----------------
+   The toolbar above every preview table. It wraps rather than scrolls, because
+   the dialog is already as wide as it goes and a control that scrolls out of
+   sight is a control nobody knows is there. */
+.dp-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;
+  padding-bottom:12px;border-bottom:1px solid var(--line)}
+.dp-bar .search-wrap,.dp-bar .search{min-width:170px}
+.dp-cols{max-height:280px;overflow:auto;min-width:210px;padding:4px}
+.dp-col{display:flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap}
+.dp-col-all{font-weight:700;border-bottom:1px solid var(--line);margin-bottom:2px}
+@media(max-width:640px){
+  /* on a phone the count sits under the controls instead of being pushed off */
+  .dp-bar>div[style*="margin-left:auto"]{margin-left:0 !important;width:100%}
+}
+
+/* ---- WHICH STORE A WORK ORDER DRAWS EACH MATERIAL FROM -------------------
+   The picker sits under the material's name, where the store chip otherwise
+   goes, so it must not stretch the row. The note above the list says whether
+   there is a choice to make at all — without it the control was invisible on
+   the recipes (almost all of them here) whose materials each sit in one store,
+   and its absence read as the feature not being there. */
+.wo-wh-wrap{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px}
+.wo-wh-lbl{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--text-mut)}
+.wo-wh-pick{max-width:300px;font-size:11.5px;padding:3px 8px;height:auto;
+  border-color:var(--accent-line)}
+.wo-store-note{display:flex;align-items:flex-start;gap:10px;margin:14px 0 2px;
+  padding:9px 12px;border-radius:10px;background:var(--panel-2);border:1px solid var(--line)}
+.wo-store-note.pick{border-color:var(--accent-line);background:var(--accent-soft)}
+.wo-store-ic{font-size:15px;line-height:1.2;flex:0 0 auto}
+/* a chosen store that cannot cover the draw says so, and names one that can */
+.wo-wh-short{font-size:11px;line-height:1.5;color:var(--warn);margin-top:3px;max-width:420px}
+.wo-wh-short .wo-wh-alt{color:var(--text-mut)}
+
+/* ---- HR PERKS: one tile per perk ------------------------------------------
+   The two perks were a card each, then plain rows in a shared card, and both
+   read as a wall of prose with unlabelled numbers in it. As tiles: the icon
+   and name identify the perk, the badge on the right says what it is worth
+   right now (or "Off" at zero, which is how both are switched off), each
+   figure carries its own unit beside the box, and the rule sits underneath in
+   the quiet type it deserves. */
+.perk-list{display:flex;flex-direction:column;gap:10px}
+.perk{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;
+  padding:13px 14px;transition:border-color var(--tr),opacity var(--tr)}
+.perk:focus-within{border-color:var(--accent-line)}
+/* switched off: still perfectly readable, just plainly not in play */
+.perk.is-off{opacity:.72}
+.perk-head{display:flex;align-items:center;gap:11px}
+.perk-ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:16px;
+  background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent-line);flex:0 0 34px}
+.perk-id{min-width:0;display:flex;flex-direction:column;gap:2px}
+.perk-name{font-size:13.5px;font-weight:700;letter-spacing:-.01em}
+.perk-sub{font-size:11.5px;color:var(--text-mut);line-height:1.35}
+.perk-state{margin-left:auto;flex:0 0 auto;font-size:11.5px;font-weight:700;white-space:nowrap;
+  padding:4px 10px;border-radius:var(--radius-pill);background:var(--ok-soft);color:var(--ok)}
+.perk-state.off{background:var(--panel-3);color:var(--text-mut)}
+/* the figures: label above, box and its unit on one line */
+.perk-fields{display:flex;flex-wrap:wrap;gap:10px 16px;margin:12px 0 0}
+.perk-f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.perk-f-lbl{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--text-mut)}
+.perk-f-in{display:flex;align-items:center;gap:7px}
+.perk-f-in .input{width:104px;text-align:right;font-variant-numeric:tabular-nums}
+.perk-f-unit{font-size:11.5px;color:var(--text-mut);white-space:nowrap}
+.perk-note{font-size:11.5px;line-height:1.6;color:var(--text-dim);margin:11px 0 0;
+  padding-top:10px;border-top:1px solid var(--line)}
+@media(max-width:640px){
+  /* A grid, so the badge drops to its own line UNDER the name and stays lined
+     up with it, instead of squeezing the name to nothing on the same row. */
+  .perk-head{display:grid;grid-template-columns:34px 1fr;gap:0 11px;align-items:center}
+  .perk-id{grid-column:2}
+  .perk-state{grid-column:2;justify-self:start;margin:8px 0 0}
+  .perk-fields{gap:10px 12px}
+  .perk-f{flex:1 1 132px}
+  .perk-f-in .input{width:100%;min-width:0}
+}
+
 /* ---- a job sheet's material rows on a phone ------------------------------
    The layer row runs name · code · spec · store · quantity, which no phone
    fits on one line. Left to wrap it broke wherever a word ran out of room, so

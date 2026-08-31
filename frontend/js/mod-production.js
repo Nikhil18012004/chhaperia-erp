@@ -167,13 +167,38 @@
      anything half-made leaves WH-WIP, everything else leaves whichever store
      holds the most of it, falling back to the main stores. */
   function whName(id){ return ((ENG.data.warehouses||[]).find(w=>w.id===id)||{}).name || id || ""; }
+  /* Stores an issue may NOT be posted against — quarantine, holding lots that
+     failed their incoming test. Same rule as grnTestService.heldWarehouseIds on
+     the server, so the picker never offers a store the server would refuse. */
+  function heldWhIds(){
+    return (ENG.data.warehouses||[])
+      .filter(w=>/quarantine|qc.?hold|reject/i.test(String(w.type||"")+" "+String(w.name||"")))
+      .map(w=>w.id);
+  }
+  /* Every store that actually holds this material, biggest pile first — the
+     list the office picks from when a material sits in more than one. */
+  function whChoicesFor(rid){
+    if(!rid) return [];
+    const it=ENG.item(rid)||{};
+    if(it.cat==="WIP"||/^WIP-/.test(String(rid))) return [];
+    const held=new Set(heldWhIds());
+    const byWh=(ENG.stock(rid)||{}).byWh||{};
+    return Object.keys(byWh)
+      .filter(wh=>!held.has(wh) && byWh[wh]>0.0001)
+      .sort((a,b)=>byWh[b]-byWh[a])
+      .map(wh=>({wh, qty:byWh[wh]}));
+  }
   function issuingWh(rid){
     if(!rid) return null;
     const it=ENG.item(rid)||{};
     if(it.cat==="WIP"||/^WIP-/.test(String(rid))) return "WH-WIP";
+    // the biggest pile, quarantine excluded — exactly issuingWarehouse's rule,
+    // including that it picks a store even where every figure is negative
+    const held=new Set(heldWhIds());
     const byWh=(ENG.stock(rid)||{}).byWh||{};
     let best=null;
-    Object.keys(byWh).forEach(wh=>{ if(best==null||byWh[wh]>byWh[best]) best=wh; });
+    Object.keys(byWh).forEach(wh=>{ if(held.has(wh)) return;
+      if(best==null||byWh[wh]>byWh[best]) best=wh; });
     return best||"WH-PNY";
   }
   /* Where a RAISED order actually drew each item from. The store written on the
@@ -192,6 +217,17 @@
     });
     return by;
   }
+  /* WHO A WORK ORDER IS FOR — the client the office named when it raised the
+     job, and nothing else. viewService has a fallback for the supervisor's
+     board that guesses from open sales orders; the office side never guesses,
+     because a job made to stock genuinely has no customer and saying it has
+     one is worse than saying nothing. */
+  function woCustomer(wo){
+    const id=wo&&wo.customerId; if(!id) return null;
+    return (ENG.data.customers||[]).find(c=>c.id===id)||null;
+  }
+  function woCustomerName(wo){ const c=woCustomer(wo); return c?(c.name||c.id):null; }
+
   /* the one label for a store, so every place that names one reads alike */
   function whChip(whId){
     if(!whId) return null;
@@ -254,7 +290,10 @@
      `groups` is [{ label, lines:[{ name, code, spec, need, have, uom, agg, wh }] }]
      — `agg` is the need across ALL layers when a material appears in more
      than one, since the store is shared between them, and `wh` is the store
-     the line is issued from, shown only where the caller knows it. */
+     the line is issued from, shown only where the caller knows it.
+     `opts.whPick(line)` may return a node to render IN PLACE of that chip — New
+     Work Order hands over a store picker for a material that sits in several,
+     so the store is chosen where it is read rather than on a separate screen. */
   function materialsList(host, groups, opts){
     opts=opts||{};
     groups=(groups||[]).filter(g=>g&&(g.lines||[]).length);
@@ -285,9 +324,10 @@
               l.code?h("span",{class:"muted mono",style:"font-size:11px",text:l.code}):null
             ]),
             l.spec?h("div",{class:"muted mono",style:"font-size:11px",text:l.spec}):null,
-            // which store this one is issued from — omitted where the caller
-            // has no store to name, so the other forms render as before
-            l.wh?whChip(l.wh):null
+            // which store this one is issued from — a picker where the caller
+            // offers one, otherwise the plain chip, and nothing at all where the
+            // caller has no store to name, so the other forms render as before
+            (opts.whPick && opts.whPick(l)) || (l.wh?whChip(l.wh):null)
           ]),
           h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
             h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:q(l.need,2)+sfx(l.need)})]),
@@ -656,7 +696,7 @@
     ]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search WO no., product, code, stage, line…", v=>{filter.q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search WO no., product, code, customer, stage, line…", v=>{filter.q=v.toLowerCase().trim();draw();}),
       MW.dateRange(filter, draw, {label:"Start Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"prodCount"}))
     ]));
@@ -674,7 +714,9 @@
       // the Stage column reads
       const cur=curStage(w)||{};
       const hay=[w.id, it.name, w.itemId, it.typeCode, U.familyCode(it.typeCode,it.thicknessMM),
-        STAGE_LABEL[cur.key]||cur.name, w.status, w.line, w.date, w.due];
+        STAGE_LABEL[cur.key]||cur.name, w.status, w.line, w.date, w.due,
+        // the floor and the office both look a job up by who it is for
+        woCustomerName(w)];
       return hay.filter(Boolean).join(" ").toLowerCase().includes(filter.q);
     }
 
@@ -686,7 +728,16 @@
       host.innerHTML="";
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
-        {key:"item",label:"Product",render:r=>`<div class="cell-main">${esc((ENG.item(r.itemId)||{}).name||r.itemId)}</div>`,sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
+        /* Who it is for sits UNDER the product name rather than in a column of
+           its own: a Customer column carries .cell-main, which the table gives a
+           150px minimum, and a twelfth column of that width pushed the board
+           into a sideways scroll. A job made to stock says nothing extra — the
+           line is there to name a client, not to label every other row. */
+        {key:"item",label:"Product",render:r=>{
+          const nm=(ENG.item(r.itemId)||{}).name||r.itemId, c=woCustomerName(r);
+          return `<div class="cell-main">${esc(nm)}</div>`
+            +(c?`<div class="cell-sub">for ${esc(c)}</div>`:"");},
+          sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
         {key:"code",label:"Code",render:r=>{const it=ENG.item(r.itemId)||{};return `<span class="mono muted">${esc(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||r.itemId)}</span>`;},sort:r=>r.itemId},
         {key:"thk",label:"Thickness",num:true,render:r=>{const t=(ENG.item(r.itemId)||{}).thicknessMM; return t!=null?`<span class="mono">${ENG.num(t,3)}</span> <span class="muted">mm</span>`:'<span class="muted">—</span>';},sort:r=>(ENG.item(r.itemId)||{}).thicknessMM||0},
         /* On a partial order the ordered quantity alone is misleading — the
@@ -810,6 +861,13 @@
           U.field("Production Line",U.selectHTML("we_line",LINES.map(l=>({v:l,l})),wo.line)),
           U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
           U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
+          /* Who it is for drives labelling, not the route, so it stays editable
+             right up to dispatch — including being cleared back to a stock run. */
+          U.field("Customer",
+            U.searchSelect("we_cust", [{v:"",l:"— no customer · made to stock —"}]
+              .concat((ENG.data.customers||[]).slice()
+                .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
+                .map(c=>({v:c.id,l:c.name}))), wo.customerId||"", "Search customer, or leave blank…"),"full"),
         ])
       ]);
       if(started){ setTimeout(()=>{ const l=UI.$("#we_line"); if(l) l.disabled=true; },0); }
@@ -820,7 +878,9 @@
           saveBtn]});
       async function save(){
         const patch={ id:UI.$("#we_id").value.trim(), due:UI.$("#we_due").value, priority:UI.$("#we_prio").value,
-          widthMM:UI.$("#we_width").value===""?null:+UI.$("#we_width").value };
+          widthMM:UI.$("#we_width").value===""?null:+UI.$("#we_width").value,
+          // sent even when empty — that is how a customer is cleared
+          customerId:(UI.$("#we_cust")||{}).value||"" };
         if(!patch.id){ toast("Enter a work order number",{type:"warn"}); return; }
         if(!started){
           patch.qty=+UI.$("#we_qty").value;
@@ -1030,7 +1090,13 @@
          not been issued yet (a pending balance) falls back to the store the
          planner would draw it from. */
       const drawn = drawnWhFor(wo.id);
-      const whOfId = id => !id ? [] : ((drawn[id] && drawn[id].length) ? drawn[id] : [issuingWh(id)]);
+      /* What was actually drawn wins; for a balance not yet issued, the store
+         the office CHOSE when it raised the order, and only then the standing
+         biggest-pile rule. */
+      const chosenWh = (wo.materialWarehouses)||{};
+      const whOfId = id => !id ? []
+        : (drawn[id] && drawn[id].length) ? drawn[id]
+        : [chosenWh[id] || issuingWh(id)];
       const matHost = bom
         ? (layerPanel(it, bom.lines, { choices: wo.materialChoices || {}, qtyOf: needOf,
             whOf: l => whOfId(l.id),
@@ -1069,6 +1135,7 @@
       // ---- Details pane ----
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
+          ["Customer", woCustomerName(wo)||'<span class="muted">To stock — no customer named</span>'],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
           ...(wo.widthMM?[["Tape Width",wo.widthMM+" mm"]]:[]),
           ...(it.thicknessMM!=null&&wo.widthMM?[["Size",it.thicknessMM+" × "+wo.widthMM+" mm"]]:[]),
@@ -1547,12 +1614,26 @@
          Create; the toast names it. */
       const woNo=(()=>{ let max=0; (ENG.data.workorders||[]).forEach(w=>{ const m=/(\d+)/.exec(w.id||""); if(m) max=Math.max(max,+m[1]); });
         return "WO-"+String(max+1).padStart(4,"0"); })();
+      /* WHO THE RUN IS FOR. Optional — a great many runs are made to stock —
+         but naming it here is what puts the client's name on the slitting
+         floor's job card and on the label, instead of the guess the supervisor
+         view otherwise falls back to (the first open order wanting the same
+         product, which is very often somebody else). */
+      const custs=(ENG.data.customers||[]).slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
       const body=h("div",{class:"form-grid"},[
         fgPicker("w_item", fgs, fgs[0]&&fgs[0].id),
         U.field("Quantity",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
         /* Width is a per-ORDER parameter, not a product one: the same tape is
            slit to whatever width the customer ordered, so it is captured on the
            run and travels with the batch onto the invoice. */
+        /* Full width, and on its own row. fgPicker lays down Product across
+           both columns and Thickness in the first, so a half-width customer box
+           landed beside Thickness — an odd pair, and its hint line made the two
+           different heights. Client names are long; give it the room. */
+        U.field("Customer",
+          U.searchSelect("w_cust", [{v:"",l:"— no customer · made to stock —"}]
+            .concat(custs.map(c=>({v:c.id,l:c.name}))), "", "Search customer, or leave blank…")
+          +`<div class="muted" style="font-size:11px;margin-top:4px">Optional — shown on the job card, the label and the production board</div>`,"full"),
         U.field("Tape Width (mm)",`<input class="input" id="w_width" type="number" min="0" step="0.5" placeholder="e.g. 25"><div class="muted" id="w_wnote" style="font-size:11px;margin-top:3px"></div>`),
         /* The width of the ROLL being fed is not asked for. It is a property of
            the material the store issues, not a decision the office makes when
@@ -1576,6 +1657,7 @@
       const matHost=h("div",{style:"margin-top:4px;grid-column:1/-1"});
       body.appendChild(matHost);
       let matChoices={};        // ranged line index -> chosen stock item id
+      let matWhs={};            // raw item id -> the store to issue it from
       let shortages=[];         // materials short of stock — blocks creation
       /* The run size can be entered in kg or sqm; the engine (and the server)
          work in kg, so a sqm entry is converted through the FG's GSM
@@ -1732,6 +1814,58 @@
       // every rebuild goes through keepCaret, so typing in the stock boxes above
       // survives the re-render it triggers
       const recalc=()=>keepCaret(recalcNow);
+      /* A material held in ONE store needs no decision — it reads as the chip it
+         always did. Held in SEVERAL, the store becomes a choice: the office picks
+         where this run draws from, with what each store holds shown against it,
+         and that choice travels with the order onto the issue. */
+      function whPicker(l){
+        const rid=l.id;
+        if(!rid) return null;
+        const choices=whChoicesFor(rid);
+        if(choices.length<2) return null;
+        const it=ENG.item(rid)||{};
+        if(matWhs[rid]==null){
+          const std=issuingWh(rid);
+          matWhs[rid]=choices.some(c=>c.wh===std)?std:choices[0].wh;
+        }
+        /* What this run draws of it. A material that appears in two layers is
+           drawn once against a shared pile, so the AGGREGATE need is what a
+           store has to cover — the same figure the row's own Short badge uses. */
+        const need=(l.agg!=null?l.agg:l.need)||0;
+        const covers=c=>c.qty+1e-6>=need;
+        const short=h("div",{class:"wo-wh-short"});
+        const paint=()=>{
+          const cur=choices.find(c=>c.wh===matWhs[rid]);
+          short.innerHTML="";
+          if(!cur||covers(cur)||!(need>0)) return;
+          /* A DELIBERATE choice that cannot cover the draw is worth saying out
+             loud. The standing rule is just as lenient — it takes the biggest
+             pile whether or not it is enough — but nobody chose that, so the
+             store going negative is a surprise only here. The order is still
+             allowed: a transfer may well be on its way, and refusing would make
+             this control useless exactly when it matters. */
+          short.appendChild(h("span",{
+            text:"⚠ "+whName(cur.wh)+" holds "+ENG.qtyText(it,cur.qty,2)
+              +", this run draws "+ENG.qtyText(it,need,2)
+              +" — it will go "+ENG.qtyText(it,need-cur.qty,2)+" below zero."}));
+          const better=choices.filter(covers);
+          if(better.length) short.appendChild(h("span",{class:"wo-wh-alt",
+            text:" "+better.map(c=>whName(c.wh)).join(" or ")+" can cover it."}));
+        };
+        const sel=h("select",{class:"select wo-wh-pick",title:"Which store this run draws this material from",
+          onchange:e=>{ matWhs[rid]=e.target.value; paint(); }},
+          choices.map(c=>h("option",{value:c.wh,selected:matWhs[rid]===c.wh,
+            // each store says whether it can actually cover this run, not just what it holds
+            text:"🏬 "+whName(c.wh)+" · "+ENG.qtyText(it,c.qty,1)+ENG.kgSuffix(it,c.qty)
+              +(need>0?(covers(c)?" · covers this run":" · short by "+ENG.qtyText(it,need-c.qty,2)):"")})));
+        paint();
+        return h("div",{},[
+          h("div",{class:"wo-wh-wrap"},[
+            h("span",{class:"wo-wh-lbl",text:"Draw from"}), sel,
+            h("span",{class:"muted",style:"font-size:10.5px",text:"in "+choices.length+" stores"})]),
+          short]);
+      }
+
       const recalcNow=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         // show the stages this product will actually run, and keep the line in
         // the area that starts it (a one-material product never enters coating)
@@ -1811,6 +1945,33 @@
         const needBy={};             // a fabric can sit in two layers — stock is shared
         // only the manufactured remainder draws raw material from the store
         resolved.forEach(l=>{ if(l.id) needBy[l.id]=(needBy[l.id]||0)+perOf(l)*makeQty/bom.yield; });
+        /* WHICH STORE EACH MATERIAL COMES OUT OF — said out loud, above the list.
+           A picker only appears on a material that is actually IN more than one
+           store, and in this plant almost everything sits in one, so the control
+           was there but effectively invisible: the office had no way of knowing
+           the choice existed, or why it was not being offered. This line answers
+           both, every time, from what the recipe in front of it actually uses. */
+        const drawIds=[...new Set(resolved.map(l=>l.id).filter(Boolean))];
+        const choosable=drawIds.filter(rid=>whChoicesFor(rid).length>1);
+        matHost.appendChild(h("div",{class:"wo-store-note"+(choosable.length?" pick":"")},[
+          h("span",{class:"wo-store-ic",text:"🏬"}),
+          h("div",{},[
+            h("div",{style:"font-weight:700;font-size:12px",
+              text: !choosable.length ? "Store to draw from"
+                : "Store to draw from — "+(
+                    choosable.length===drawIds.length
+                      ? (drawIds.length===1 ? "this material sits" : "all "+drawIds.length+" materials sit")
+                      : choosable.length+" of "+drawIds.length+" materials sit"
+                  )+" in more than one store"}),
+            h("div",{class:"muted",style:"font-size:11.5px;margin-top:2px",
+              text: choosable.length
+                ? ("Pick the store below. "+(choosable.length===drawIds.length ? ""
+                    : "The rest are in one store only, named beside them.")).trim()
+                : (drawIds.length
+                    ? "Every material on this recipe is held in a single store, shown beside it below — there is nothing to choose."
+                    : "No material is drawn from the store for this run.")}),
+          ]),
+        ]));
         // the shared renderer — the Add to Finished Stock forms show the very
         // same list, built the same way, so the two can never drift apart
         materialsList(matHost, layerGroups(resolved).map(grp=>({
@@ -1826,7 +1987,7 @@
               wh: rid?issuingWh(rid):null,
               uom: r.uom||l.unit||"" };
           }),
-        })), {outputKg: makeQty});
+        })), {outputKg: makeQty, whPick: whPicker});
         /* A SHORT material does not block the order — what the store covers
            runs, the balance pends, the office confirms. A material at ZERO is
            different (ruled 2026-08-22): nothing can start, so the order cannot
@@ -1882,6 +2043,15 @@ recalc(); },50);
         // which material was picked for each ranged BOM line — travels with the
         // work order so the issue posts the material actually chosen
         if(Object.keys(matChoices).length) payload.materialChoices=matChoices;
+        const cust=(UI.$("#w_cust")||{}).value||"";
+        if(cust) payload.customerId=cust;
+        /* Only the stores that were actually a CHOICE. A material in one store
+           has none, and sending its store anyway would freeze a decision the
+           office never made — the standing rule should keep following the
+           stock if it moves before the job is issued. */
+        const whPicked={};
+        Object.keys(matWhs).forEach(rid=>{ if(whChoicesFor(rid).length>1) whPicked[rid]=matWhs[rid]; });
+        if(Object.keys(whPicked).length) payload.materialWarehouses=whPicked;
         const spec=ORDER_SPEC[itemId], specEl=UI.$("#w_spec");
         if(spec && specEl && specEl.value!=="") payload[spec.key]=+specEl.value;
         createBtn.disabled=true; createBtn.textContent="Creating…";
@@ -2051,6 +2221,14 @@ recalc(); },50);
           sort:fg=>(ENG.data.boms[fg.id]||{}).yield||0},
         {key:"bom",label:"BOM",render:fg=>{const b=ENG.data.boms[fg.id];
           return b?`<span style="color:var(--accent);font-weight:600;font-size:12px">${BOMCALC.normalize(b.lines).length} components ›</span>`:'<span class="muted">No BOM</span>';},noSort:true},
+        /* Copy, on every product that HAS a recipe — the row is where someone
+           is looking when they think "another one like this". The table ignores
+           clicks that land on a button, so this does not also open the row. */
+        {key:"copy",label:"",noSort:true,render:fg=>{
+          if(!ENG.data.boms[fg.id] || !App.canWrite("bom")) return '<span class="muted"></span>';
+          return h("button",{class:"btn sm ghost",title:"Copy this BOM into a new product",
+            onclick:()=>bomForm(null,{copyFrom:fg.id}),text:"⧉"});
+        }},
       ],{empty:"No products in this series",
          onRow:fg=>{ if(ENG.data.boms[fg.id]) bomView(fg.id); else bomForm(fg.id); }});
     }
@@ -2077,6 +2255,13 @@ recalc(); },50);
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"}),
           // prints the recipe that is on screen, alternate variant included
           h("button",{class:"btn",onclick:()=>printBomCosting(fgId,altIdx),html:"🖨 Print Cost of Material"}),
+          /* Copy BOM — this recipe as the starting point for a NEW product.
+             Takes the variant that is on screen, and changes nothing here.
+             Gated on canWrite rather than isAdmin because it CREATES, and
+             creating is what the page's own "＋ Create BOM" already allows;
+             the lab, which may read this page, gets neither. */
+          App.canWrite("bom")?h("button",{class:"btn",title:"Start a new product from this recipe",
+            onclick:()=>{mo.close();bomForm(null,{copyFrom:fgId,altIdx});},html:"⧉ Copy BOM"}):null,
           App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
 
       function draw(){
@@ -2512,11 +2697,24 @@ recalc(); },50);
        and from those two numbers everything else is derived:
          consumption/kg, consumption/sqm, pickup qty, and total production.
        All the arithmetic lives in bomcalc.js, shared with the server. */
-    function bomForm(fgId){
+    /* `opts.copyFrom` — COPY BOM. The form opens on the new-product fields,
+       pre-filled from that product and carrying its recipe, with nothing
+       locked: code, name, spec, yield and every component line are edited
+       before Create BOM writes it as a NEW product. The source is never
+       touched. `opts.altIdx` is whichever approved recipe was on screen when
+       Copy was pressed — that is the one that gets copied. */
+    function bomForm(fgId, opts){
+      opts = opts || {};
+      const copySrcId = opts.copyFrom || null;
+      const copySrc = copySrcId ? ENG.item(copySrcId) : null;
+      const copying = !!(copySrc && ENG.data.boms[copySrcId]);
+      const copyName = copying ? (copySrc.productName||copySrc.name||copySrcId) : "";
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
       // components a person picks by hand — WIP is inserted by the stage engine
       const rms=ENG.data.items.filter(i=>i.cat==="RM"||i.cat==="PKG"||i.cat==="CON");
-      let curFg = fgId || (fgs[0] && fgs[0].id) || "";
+      /* A copy parks on the SOURCE so loadLines() below picks up its recipe.
+         The product being defined is the draft, not this row. */
+      let curFg = fgId || copySrcId || (fgs[0] && fgs[0].id) || "";
       const existing = fgId? ENG.data.boms[fgId] : null;
       const editing = !!existing;
       /* A recipe for a product that does not exist YET used to be impossible
@@ -2535,8 +2733,17 @@ recalc(); },50);
          or Edit BOM) it stays on that product: the operator already said which
          one they meant. */
       let newMode = !editing && !fgId;
-      const draft = { id:"FG-", name:"", group:"", thicknessMM:null, gsm:null,
-                      uom:"KG", cost:0, price:0, hsn:"" };
+      /* A copy opens with the source's own figures already in the fields. The
+         CODE is the exception: it is what makes the new product a different
+         product, so it is left empty to be typed rather than guessed at with
+         a "-COPY" suffix that would end up in the catalogue for good. */
+      const draft = copying
+        ? { id:"FG-", name:copyName, group:copySrc.group||"",
+            thicknessMM:copySrc.thicknessMM!=null?copySrc.thicknessMM:null,
+            gsm:copySrc.gsm!=null?copySrc.gsm:null, uom:copySrc.uom||"KG",
+            cost:copySrc.cost||0, price:copySrc.price||0, hsn:copySrc.hsn||"" }
+        : { id:"FG-", name:"", group:"", thicknessMM:null, gsm:null,
+            uom:"KG", cost:0, price:0, hsn:"" };
       /* the roll-up reads GSM and thickness off the product; in new-product
          mode that product is the half-typed draft, not a catalogue row */
       const fgItem = () => newMode
@@ -2545,7 +2752,8 @@ recalc(); },50);
             thicknessMM:draft.thicknessMM, gsm:draft.gsm,
             cost:draft.cost, price:draft.price, hsn:draft.hsn }
         : (ENG.item(curFg)||{});
-      let altIdx = 0;                 // which alternate approved recipe is open
+      // copying takes the variant that was on screen when Copy was pressed
+      let altIdx = copying ? (+opts.altIdx || 0) : 0;
       let lines = [];
       let seq = 0;                    // stable per-row id for the material picker
 
@@ -2567,7 +2775,11 @@ recalc(); },50);
       /* Opened as "Create BOM" the components start EMPTY — a new product must
          not inherit whichever catalogue product the picker happened to default
          to. Its recipe is parked, so switching over to it costs nothing. */
-      if(newMode){ parkedLines = lines; lines = [blank()]; }
+      /* A copy is the exception: arriving with the source's components already
+         on the table is the whole point, so they are NOT cleared. Parking a
+         duplicate means "↩ Pick an existing product" keeps the recipe too. */
+      if(newMode && copying) parkedLines = lines.map(l=>Object.assign({},l,{_k:++seq}));
+      else if(newMode){ parkedLines = lines; lines = [blank()]; }
 
       const basisHost=h("div",{class:"muted",style:"font-size:12px;margin:2px 0 12px"});
       const altHost=h("div",{style:"margin-bottom:10px"});
@@ -2578,6 +2790,11 @@ recalc(); },50);
       const lockedLabel=(U.familyCode(curItem.typeCode,curItem.thicknessMM)||curItem.typeCode||curFg)
         +" — "+(curItem.productName||curItem.name||curFg)
         +(curItem.thicknessMM!=null?" · "+curItem.thicknessMM+" mm":"");
+      /* The copied recipe brings its yield with it — a recipe without the
+         yield it was costed at is a different recipe. */
+      const srcBom = copying ? ENG.data.boms[copySrcId] : null;
+      const initYieldPct = existing ? Math.round(existing.yield*100)
+        : srcBom ? Math.round((srcBom.yield||1)*100) : 100;
       const prodHost=h("div",{style:"display:contents"});
       /* bound ONCE on the host, not per render — re-rendering the row inside
          it would otherwise stack a fresh listener on every toggle. GSM and
@@ -2586,7 +2803,7 @@ recalc(); },50);
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           prodHost,
-          U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${existing?Math.round(existing.yield*100):100}">`),
+          U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${initYieldPct}">`),
         ]),
         basisHost, altHost,
         h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
@@ -2598,9 +2815,14 @@ recalc(); },50);
       const foot=[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"})];
       if(editing) foot.push(h("button",{class:"btn danger",onclick:()=>delBom(),text:"🗑 Delete BOM"}));
       foot.push(h("button",{class:"btn primary",onclick:save,text:editing?"Save BOM":"Create BOM"}));
-      const mo=modal({title: editing?("Edit BOM · "+curFg):"Create BOM",
+      const mo=modal({
+        title: editing ? ("Edit BOM · "+curFg)
+          : copying ? ("Copy BOM · "+(U.familyCode(copySrc.typeCode,copySrc.thicknessMM)||copySrc.typeCode||copySrcId))
+          : "Create BOM",
         // xwide: the components table needs the room, else it side-scrolls
-        sub:"Material recipe, pickup % and production roll-up", xwide:true, body, foot});
+        sub: copying ? ("Copied from "+copyName+" — change anything, then Create BOM adds it as a new product")
+          : "Material recipe, pickup % and production roll-up",
+        xwide:true, body, foot});
       drawProduct();
 
       /* The product row: a locked label when editing, otherwise either the
@@ -2638,7 +2860,9 @@ recalc(); },50);
           prodHost.appendChild(h("div",{class:"field full"},[
             h("div",{class:"flex aic gap"},[
               h("span",{class:"muted",style:"font-size:12px",
-                text:"The product is created with this recipe when you press Create BOM."}),
+                text: copying
+                  ? ("Give it a code of its own — everything else came from "+copyName+" and is yours to change. Create BOM adds it to the catalogue with this recipe.")
+                  : "The product is created with this recipe when you press Create BOM."}),
               h("button",{class:"btn sm ghost",style:"margin-left:auto",
                 onclick:()=>{ newMode=false;
                   if(parkedLines){ lines=parkedLines; parkedLines=null; } else loadLines();
@@ -2692,7 +2916,11 @@ recalc(); },50);
         const bom=ENG.data.boms[curFg];
         if(bom && bom.alternates && bom.alternates.length>1){
           altHost.appendChild(h("div",{class:"flex aic gap wrap"},[
-            h("span",{class:"muted",style:"font-size:12px;font-weight:700",text:"Approved recipe:"}),
+            /* while copying these are the SOURCE's variants: pick the one to
+               copy. Only that one travels — a new product does not inherit
+               approvals it never went through. */
+            h("span",{class:"muted",style:"font-size:12px;font-weight:700",
+              text: copying?"Copy which recipe:":"Approved recipe:"}),
             ...bom.alternates.map((a,i)=>h("button",{
               class:"btn sm"+(i===altIdx?" primary":" ghost"),
               onclick:()=>{ altIdx=i; loadLines(); draw(); },
@@ -2876,6 +3104,28 @@ recalc(); },50);
       }
       draw();
 
+      const clone = v => v==null ? v : JSON.parse(JSON.stringify(v));
+      /* A copied test spec is RE-CENTRED on the new product's own thickness and
+         GSM: the nominal moves, and min/max move with it wherever the parameter
+         carries a tolerance. Without this a 0.100 mm copy of a 0.125 mm tape
+         would go into the catalogue claiming the source's 0.11–0.14 limits.
+         A parameter with no tolerance to re-derive from loses its limits rather
+         than keeping ones that no longer describe anything. */
+      function respec(spec, thk, gsm){
+        if(!spec || typeof spec!=="object") return spec;
+        const out=clone(spec);
+        const centre=(key,val)=>{
+          const sp=out[key];
+          if(!sp || typeof sp!=="object") return;
+          if(val==null || isNaN(val) || +sp.nominal===+val) return;
+          sp.nominal=+val;
+          if(sp.tol!=null){ sp.min=+(val-sp.tol).toFixed(6); sp.max=+(val+sp.tol).toFixed(6); }
+          else { delete sp.min; delete sp.max; }
+        };
+        centre("thickness",thk); centre("massPerArea",gsm);
+        return out;
+      }
+
       function save(){
         if(newMode) syncDraft();
         const fg2 = newMode ? draft.id : (UI.$("#bm_fg").value || curFg);
@@ -2911,23 +3161,41 @@ recalc(); },50);
            left behind on its own. */
         let newItem=null, openMove=null;
         if(newMode){
-          newItem={ id:fg2, name:draft.name, productName:draft.name, cat:"FG",
+          /* A copy carries the source's PHYSICAL description as well as its
+             recipe — batch size, layer count, tape width, the test spec —
+             because those are what make the roll-up, the job sheet and the
+             label read the same. Identity and provenance never travel: code,
+             name, barcode and the import's own source/row belong to the new
+             product alone. */
+          const carried={};
+          if(copying){
+            const own={ id:1, name:1, productName:1, typeCode:1, group:1, series:1,
+              thicknessMM:1, gsm:1, cost:1, price:1, hsn:1, uom:1, cat:1,
+              barcode:1, source:1, sourceRow:1, supplierId:1 };
+            Object.keys(copySrc).forEach(k=>{ if(!own[k]) carried[k]=clone(copySrc[k]); });
+            carried.spec=respec(carried.spec, draft.thicknessMM, draft.gsm);
+          }
+          newItem=Object.assign(carried,{ id:fg2, name:draft.name, productName:draft.name, cat:"FG",
             uom:draft.uom||"KG", group:draft.group||null,
             typeCode:fg2.replace(/^FG-/,""), thicknessMM:draft.thicknessMM, gsm:draft.gsm,
             cost:draft.cost, price:draft.price, hsn:draft.hsn,
             reorder:0, safety:0, lead:7, abc:"B", moq:0, active:true,
-            barcode:"890"+Math.floor(Math.random()*1e7) };
+            barcode:"890"+Math.floor(Math.random()*1e7) });
+          // the imported catalogue keeps the series under `series` too
+          if(copying) newItem.series=draft.group||null;
           ENG.data.items.push(newItem);
           openMove={ id:U.genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:fg2,
             wh:"WH-FG", type:"OPEN", qty:0, rate:newItem.cost, ref:"NEW",
-            note:"Product created with its BOM" };
+            note: copying ? ("Product created by copying the BOM of "+copySrcId)
+                          : "Product created with its BOM" };
           ENG.data.movements.push(openMove);
         }
         ENG.data.boms[fg2]=next;
         mo.close();
-        toast(editing?("BOM updated for "+fg2)
-          :(newMode?(draft.name+" created with its BOM"):("BOM created for "+fg2)),
-          {type:"ok",title:newMode?"New product":undefined});
+        toast(editing ? ("BOM updated for "+fg2)
+          : newMode ? (draft.name+(copying?(" created — a copy of "+copyName):" created with its BOM"))
+          : ("BOM created for "+fg2),
+          {type:"ok",title:newMode?(copying?"Product copied":"New product"):undefined});
         App.saveDelta(async()=>{
           if(newItem){ await DB.items.put(newItem); await DB.movements.add(openMove); }
           await DB.boms.save(fg2,next);

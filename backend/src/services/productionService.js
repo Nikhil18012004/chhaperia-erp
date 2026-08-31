@@ -566,6 +566,40 @@ function matWidthOf(v) {
   return w;
 }
 
+/* WHO THE RUN IS FOR. Optional — plenty of jobs are made to stock — but once
+   it is named it is a FACT, and every screen reads it instead of viewService's
+   fallback guess ("some open sales order wants this product"), which can name
+   the wrong client on a label. */
+function customerIdOf(v, data) {
+  const id = String(v == null ? "" : v).trim();
+  if (!id) return null;
+  const c = (data.customers || []).find((x) => x.id === id);
+  if (!c) throw err("Unknown customer", 400);
+  return c.id;
+}
+
+/* WHICH STORE EACH MATERIAL COMES OUT OF. A material sitting in more than one
+   store is issued from the biggest pile by default (stageService's standing
+   rule); the office can name a different store per material when it raises the
+   order, and that choice travels with the work order onto the issue.
+   Only stores that exist and may be issued from are accepted — a quarantine
+   store holds lots that failed their incoming test and is never drawable. */
+function materialWarehousesOf(v, data, held) {
+  if (!v || typeof v !== "object") return null;
+  const whById = Object.fromEntries((data.warehouses || []).map((w) => [w.id, w]));
+  const block = new Set(held || []);
+  const itemById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+  const out = {};
+  Object.entries(v).forEach(([rid, wh]) => {
+    if (!rid || !wh) return;
+    if (!itemById[rid]) throw err("Unknown material " + rid, 400);
+    if (!whById[wh]) throw err("Unknown warehouse " + wh, 400);
+    if (block.has(wh)) throw err((whById[wh].name || wh) + " holds quarantined stock and cannot be issued from", 400);
+    out[rid] = wh;
+  });
+  return Object.keys(out).length ? out : null;
+}
+
 /* updateWorkOrder — edit a planned run. Due date, priority and tape width can
    change any time before dispatch; quantity and line only while NOTHING has
    been posted or completed (stage movements are derived from them). */
@@ -606,6 +640,20 @@ async function updateWorkOrder(user, id, body) {
   }
   if (body.due !== undefined) wo.due = body.due || null;
   if (body.priority !== undefined) wo.priority = body.priority || "Normal";
+  // who it is for can be set, changed or cleared right up to dispatch — it
+  // drives labelling, not the route, so nothing has to be replanned
+  if (body.customerId !== undefined) {
+    const cid = customerIdOf(body.customerId, data);
+    if (cid) wo.customerId = cid; else delete wo.customerId;
+  }
+  /* The store each material comes out of, but only while nothing has been
+     posted: once a stage has issued, the movements ARE the record of where the
+     stock came from and re-pointing them would rewrite history. */
+  if (body.materialWarehouses !== undefined) {
+    if (started) throw err("The issuing stores cannot change after production has started", 400);
+    const mw = materialWarehousesOf(body.materialWarehouses, data, await GT.heldWarehouseIds(data));
+    if (mw) wo.materialWarehouses = mw; else delete wo.materialWarehouses;
+  }
   if (body.widthMM !== undefined) {
     const width = widthOf(body.widthMM);
     if (width == null) delete wo.widthMM; else wo.widthMM = width;
@@ -748,6 +796,10 @@ async function createWorkOrder(user, body) {
   };
   if (width != null) wo.widthMM = width;
   if (matWidth != null) wo.matWidthMM = matWidth;
+  const customerId = customerIdOf(body.customerId, data);
+  if (customerId) wo.customerId = customerId;
+  const matWhs = materialWarehousesOf(body.materialWarehouses, data, await GT.heldWarehouseIds(data));
+  if (matWhs) wo.materialWarehouses = matWhs;
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId, data);
   if (spec && body[spec.key] != null && body[spec.key] !== "") wo[spec.key] = body[spec.key];
