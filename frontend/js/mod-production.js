@@ -273,7 +273,7 @@
       box.addEventListener("change",()=>{ if(box.checked) choices[key]=true; else delete choices[key]; redraw(); });
       const nm=(mat&&mat.name)||l.rm||l.id||"?";
       const have=l.id?((ENG.stock(l.id)||{}).onHand||0):0;
-      host.appendChild(h("label",{class:"flex aic",style:"gap:10px;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px"},[
+      host.appendChild(h("label",{class:"flex aic",style:"gap:10px;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px"},[
         box,
         h("span",{style:"font-weight:600",text:nm}),
         l.id?h("span",{class:"muted mono",style:"font-size:11px",text:l.id}):null,
@@ -317,7 +317,7 @@
         const sfx=(n)=>li?ENG.kgSuffix(li,n):"";
         const plain=(n)=>li?ENG.dispQty(li,n):n;
         host.appendChild(h("div",{class:"flex between aic",
-          style:"gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
+          style:"gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)"+(multi?";padding-left:14px;border-left:2px solid var(--line);margin-left:2px":"")},[
           h("div",{style:"min-width:0"},[
             h("div",{class:"flex aic",style:"gap:8px"},[
               h("span",{style:"font-weight:600",text:l.name}),
@@ -468,7 +468,7 @@
     const groups=layerGroups(lines);
     if(groups.length<2 && !opts.always) return null;   // no layer story to tell
     const box=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"});
-    box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
+    box.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
       text: opts.title || ("≡ Layer build-up · "+groups.length+" layer"+(groups.length===1?"":"s"))}));
     if(opts.note) box.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-bottom:2px",text:opts.note}));
     groups.forEach((g,gi)=>{
@@ -481,12 +481,12 @@
         const unit=li?ENG.dispUom(li):(l.unit||"");
         const qShown=li?ENG.dispQty(li,q):q;
         const whs=opts.whOf?whChips(opts.whOf(l)):[];
-        box.appendChild(h("div",{class:"flex aic wrap lp-row"+(whs.length?" lp-row-wh":""),style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:12.5px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
+        box.appendChild(h("div",{class:"flex aic wrap lp-row"+(whs.length?" lp-row-wh":""),style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:13px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
           h("span",{style:"font-weight:600",text:matLineName(l)}),
           matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null,
-          matLineSpec(l)?h("span",{class:"muted mono",style:"font-size:11.5px",text:matLineSpec(l)}):null,
+          matLineSpec(l)?h("span",{class:"muted mono",style:"font-size:12px",text:matLineSpec(l)}):null,
           ...whs,
-          h("span",{class:"mono lp-qty",style:"font-size:11.5px;flex:0 0 auto;font-weight:700",
+          h("span",{class:"mono lp-qty",style:"font-size:12px;flex:0 0 auto;font-weight:700",
             text:ENG.num(qShown,2)+" "+unit})
         ]));
       });
@@ -566,10 +566,10 @@
       const mark=s.status==="Completed"?"✓":s.status==="In Production"?"▶":"•";
       const cur=(i===(wo.stageIdx||0))&&!wo.dispatched;
       row.appendChild(h("span",{title:(s.doneBy?"by "+s.doneBy+(s.doneAt?" · "+s.doneAt.slice(0,10):""):s.status),
-        style:`display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:12.5px;font-weight:600;border:1.5px solid ${c};color:${c};`+(cur?`box-shadow:0 0 0 3px color-mix(in srgb,${c} 20%,transparent)`:``),
+        style:`display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:13px;font-weight:600;border:1.5px solid ${c};color:${c};`+(cur?`box-shadow:0 0 0 3px color-mix(in srgb,${c} 20%,transparent)`:``),
         html:`${mark} ${esc(STAGE_LABEL[s.key]||s.name||s.key)}`}));
     });
-    if(wo.dispatched) row.appendChild(h("span",{style:"font-weight:700;color:var(--ok);font-size:12.5px",text:"🚚 Dispatched"}));
+    if(wo.dispatched) row.appendChild(h("span",{style:"font-weight:700;color:var(--ok);font-size:13px",text:"🚚 Dispatched"}));
     box.appendChild(row);
     return box;
   }
@@ -602,8 +602,8 @@
     // work order creation — the origin of the production timeline
     const createdAt=wo.createdAt||wo.date;
     wrap.appendChild(h("div",{class:"flex between aic",style:"padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:14px"},[
-      h("div",{},[h("div",{style:"font-weight:700;font-size:12.5px",text:"🗓 Work Order Created"}), wo.createdBy?h("div",{class:"muted",style:"font-size:11px",text:"by "+wo.createdBy}):null]),
-      h("div",{class:"mono",style:"font-size:12.5px;font-weight:600",text:fmtDT(createdAt)})
+      h("div",{},[h("div",{style:"font-weight:700;font-size:13px",text:"🗓 Work Order Created"}), wo.createdBy?h("div",{class:"muted",style:"font-size:11px",text:"by "+wo.createdBy}):null]),
+      h("div",{class:"mono",style:"font-size:13px;font-weight:600",text:fmtDT(createdAt)})
     ]));
     if(!rt.length){ wrap.appendChild(h("div",{class:"muted",style:"font-size:12px",text:"No routing — legacy work order (no per-stage timing captured)."})); return wrap; }
     const nowISO=new Date().toISOString();
@@ -668,7 +668,7 @@
   }
 
   M.production = { title:"Production", sub:"Work orders & material consumption", render(root, params){
-    let tab="active";
+    let tab=(params&&params.tab)||"active";
     let filter={from:"", to:"", q:""};
     root.appendChild(pageHead("Production Control","Each stage consumes its materials and hands the job to the next stage; nothing is booked into store on the way",[
       // the floor has this in its own panel — office/admin get it here too
@@ -676,25 +676,46 @@
       h("button",{class:"btn primary",onclick:()=>woForm(),html:"＋ New Work Order"})
     ]));
 
-    const wos=ENG.data.workorders;
     /* "Partial" is deliberately NOT done: an order still owing quantity stays
        in Active / Released, at 100% for the run that WAS made, until the whole
        ordered quantity has been produced. */
     const isDone=w=>(w.status==="Completed"||w.status==="Dispatched") && !((+w.pendingQty||0)>1e-6);
+    const isPending=w=>(+w.pendingQty||0)>1e-6 && !w.dispatched;
+    /* The tab lists are read FRESH on every draw — patchWO swaps the row's
+       object in ENG.data.workorders, so a list captured at render time would
+       keep showing the pre-resume figures. */
+    function listFor(){
+      const all=ENG.data.workorders;
+      if(tab==="active") return all.filter(w=>!isDone(w));
+      if(tab==="done") return all.filter(isDone);
+      if(tab==="pending") return all.filter(isPending);
+      return all;
+    }
+    const wos=ENG.data.workorders;
     const active=wos.filter(w=>!isDone(w));
     const done=wos.filter(isDone);
+    const pendingList=wos.filter(isPending);
+    const pendKg=pendingList.reduce((a,w)=>a+(+w.pendingQty||0),0);
     const out30=ENG.dailySeries(30).prod.reduce((a,b)=>a+b,0);
-    root.appendChild(h("div",{class:"grid kpi-grid",style:"margin-bottom:16px"},[
+    // five tiles on this board — a slightly tighter minimum keeps one row
+    root.appendChild(h("div",{class:"grid kpi-grid",style:"margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(196px,1fr))"},[
       kpi({icon:"⚙️",label:"Active Work Orders",value:ENG.num(active.length)}),
+      kpi({icon:"⏸",label:"Pending Material",value:ENG.num(pendingList.length),
+        delta:pendingList.length?ENG.num(pendKg)+" kg waiting":"nothing waiting",
+        deltaType:pendingList.length?"down":"flat",
+        onClick:()=>setTab("pending")}),
       kpi({icon:"✅",label:"Completed",value:ENG.num(done.length)}),
       kpi({icon:"📦",label:"Output (30d)",value:ENG.num(out30)+" kg"}),
       kpi({icon:"🏭",label:"Production Lines",value:"4",delta:"2 running",deltaType:"up"}),
     ]));
 
-    const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[
-      segBtn("Active / Released","active"), segBtn("Completed","done"), segBtn("All","all")
+    const seg=h("div",{class:"seg",style:"margin-bottom:16px"},[
+      segBtn("Active / Released","active"),
+      segBtn("Pending"+(pendingList.length?" ("+pendingList.length+")":""),"pending"),
+      segBtn("Completed","done"), segBtn("All","all")
     ]);
     root.appendChild(seg);
+    function setTab(key){ tab=key; [...seg.children].forEach(c=>c.classList.toggle("on",c.getAttribute("data-tab")===key)); draw(); }
     root.appendChild(h("div",{class:"toolbar"},[
       MW.searchInput("Search WO no., product, code, customer, stage, line…", v=>{filter.q=v.toLowerCase().trim();draw();}),
       MW.dateRange(filter, draw, {label:"Start Date"}),
@@ -702,7 +723,7 @@
     ]));
     const host=h("div"); root.appendChild(host);
 
-    function segBtn(label,key){ const b=h("button",{class:tab===key?"on":"",text:label,onclick:()=>{tab=key;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
+    function segBtn(label,key){ const b=h("button",{class:tab===key?"on":"","data-tab":key,text:label,onclick:()=>setTab(key)}); return b; }
 
     /* The floor calls a job by its number, the office by the product, and a
        supervisor by the line or the stage it is sitting on — one box takes all
@@ -720,12 +741,20 @@
       return hay.filter(Boolean).join(" ").toLowerCase().includes(filter.q);
     }
 
+    /* how much of the order is actually MADE — the formula every reader of
+       completedQty must use (engine.readyBatches, the dispatch cap): the
+       current run only counts once its route is fully Completed. */
+    function madeOf(w){
+      const routeDone=(w.route||[]).length>0 && (w.route||[]).every(s=>s.status==="Completed");
+      return (+w.completedQty||0) + (routeDone ? (+w.runQty||0) : 0);
+    }
     function draw(){
-      let data = tab==="active"?active : tab==="done"?done : wos;
+      let data = listFor();
       data=data.filter(w=>woMatch(w)&&MW.inDateRange(w.date, filter));
       data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
       const c=UI.$("#prodCount"); if(c) c.textContent=data.length+" work orders";
       host.innerHTML="";
+      if(tab==="pending"){ drawPending(data); return; }
       host.appendChild(table(data,[
         {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
         /* Who it is for sits UNDER the product name rather than in a column of
@@ -787,6 +816,47 @@
             +(short?`<span>needs ${short}</span>`:"")
             +`</div>`;
         }}));
+    }
+
+    /* ---- the Pending tab: every order still owing quantity, with the three
+       figures side by side — ordered, produced, pending — and Resume. ---- */
+    function drawPending(data){
+      host.appendChild(table(data,[
+        {key:"id",label:"WO #",render:r=>`<span class="mono strong">${r.id}</span>`,sort:r=>r.id},
+        {key:"item",label:"Product",render:r=>`<div class="cell-main">${esc((ENG.item(r.itemId)||{}).name||r.itemId)}</div>`,sort:r=>(ENG.item(r.itemId)||{}).name||r.itemId},
+        {key:"code",label:"Code",render:r=>{const it=ENG.item(r.itemId)||{};return `<span class="mono muted">${esc(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||r.itemId)}</span>`;},sort:r=>r.itemId},
+        {key:"qty",label:"Ordered",num:true,sort:r=>+r.qty||0,
+          render:r=>`<span class="strong">${ENG.num(r.qty)}</span> <span class="muted">kg</span>`},
+        {key:"made",label:"Produced",num:true,sort:r=>madeOf(r),render:r=>{
+          const made=madeOf(r), run=+r.runQty||0, onFloor=made<(+r.completedQty||0)+run;
+          return `<span class="strong">${ENG.num(made)}</span> <span class="muted">kg</span>`
+            +(onFloor&&run>0?`<div class="cell-sub">${ENG.num(run)} kg on the floor</div>`:"");
+        }},
+        {key:"pend",label:"Pending",num:true,sort:r=>+r.pendingQty||0,
+          render:r=>`<span class="strong" style="color:var(--danger)">${ENG.num(r.pendingQty)}</span> <span class="muted">kg</span>`},
+        {key:"since",label:"Pending Since",render:r=>`<span style="white-space:nowrap">${r.pendingSince||"—"}</span>`,sort:r=>r.pendingSince||""},
+        {key:"await",label:"Awaiting Material",render:r=>{
+          const s=(r.shortage||[]);
+          if(!s.length) return `<span class="muted">store can cover it — resume when ready</span>`;
+          return s.map(x=>`<div style="line-height:1.4">${esc(x.name)} <span class="mono muted" style="font-size:11px">${esc(x.id||"")}</span>`
+            +` <span class="mono" style="color:var(--danger)">−${ENG.num(ENG.dispQty(ENG.item(x.id),x.short),2)}</span></div>`).join("");
+        },noSort:true},
+        {key:"status",label:"Status",cls:"ctr",render:r=>badge(r.status==="Partial"?"warn":r.status==="In Production"?"info":"warn",r.status),sort:r=>r.status},
+        {key:"act",label:"",noSort:true,render:r=>{
+          const wrap=h("div",{style:"display:flex;flex-direction:column;gap:5px;align-items:stretch;min-width:120px"});
+          const routeDone=(r.route||[]).length>0 && (r.route||[]).every(s=>s.status==="Completed");
+          if(routeDone && canPlan()){
+            wrap.appendChild(h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();resumeWO(r);},
+              text:"▶ Resume "+ENG.num(r.pendingQty)+" kg"}));
+          } else if(!routeDone){
+            wrap.appendChild(h("span",{class:"muted",style:"font-size:11px;line-height:1.4",
+              text:"finish the run on the floor first"}));
+          }
+          wrap.appendChild(h("button",{class:"btn sm ghost",onclick:e=>{e.stopPropagation();woDetail(r);},text:"View"}));
+          return wrap;
+        }},
+      ],{onRow:r=>woDetail(r),
+        empty:filter.q?"No pending order matches that search":"Nothing is pending — every order is fully covered"}));
     }
     draw();
     if(params&&params.openNew){ params.openNew=false; woForm(); }
@@ -930,11 +1000,11 @@
       tbl.appendChild(h("tbody",{},rows));
       const body=h("div",{},[
         h("div",{style:"font-weight:700;margin-bottom:6px",text:"The store cannot cover this order in full."}),
-        h("div",{class:"muted",style:"font-size:12.5px;line-height:1.6"},
+        h("div",{class:"muted",style:"font-size:13px;line-height:1.6"},
           `Of ${ENG.num(qty)} kg, ${ENG.num(e.canMake||0)} kg can be made now and `
           +`${ENG.num(e.pendingQty||0)} kg will be held as pending until the material arrives.`),
         tbl,
-        h("div",{class:"muted",style:"font-size:11.5px;line-height:1.6"},
+        h("div",{class:"muted",style:"font-size:12px;line-height:1.6"},
           "The pending quantity reserves nothing. Material that arrives stays free for any order "
           +"until somebody in the office resumes this one, which issues it there and then."),
       ]);
@@ -946,54 +1016,134 @@
       });
     }
 
-    /* ---- put a pending balance back on the floor -------------------------- */
-    /* How much of the balance to put back on the floor. A big order is usually
-       run in batches — make a part, ship it, run the next — so the office says
-       how much this time rather than always releasing everything. */
-    function askResumeQty(wo, pend){
-      const inp=h("input",{class:"input",id:"rs_qty",type:"number",min:"0",step:"any",
-        value:String(pend),style:"max-width:180px"});
-      const body=h("div",{},[
-        h("div",{class:"muted",style:"font-size:12.5px;line-height:1.6;margin-bottom:10px"},
-          `${ENG.num(pend)} kg of ${wo.id} is still to be made. Release the whole balance, or just the `
-          +`batch you want to run now — the rest stays pending and can be resumed again later.`),
-        h("div",{class:"field"},[h("label",{text:"Release now (kg)"}),h("div",{},inp)]),
-        h("div",{class:"muted",style:"font-size:11.5px;margin-top:8px"},
-          "Its raw material is issued from the store as soon as you release it. If the store cannot "
-          +"cover the amount asked for, whatever it can cover goes and the rest stays pending."),
-      ]);
-      return new Promise(resolve=>{
-        const mo2=modal({title:"▶ Resume "+wo.id, sub:"Put the pending quantity back on the floor", body,
-          foot:[h("button",{class:"btn ghost",onclick:()=>{mo2.close();resolve(null);},text:"Cancel"}),
-            h("button",{class:"btn primary",onclick:()=>{
-              const q=+inp.value;
-              if(!(q>0)){ toast("Enter a quantity to release",{type:"warn"}); return; }
-              if(q>pend+1e-6){ toast(`Only ${ENG.num(pend)} kg is pending`,{type:"warn"}); return; }
-              mo2.close(); resolve(q);
-            },text:"Release to the floor"})]});
-      });
-    }
+    /* ---- put a pending balance back on the floor --------------------------
+       The dialog runs the SAME stock-availability check the New Work Order
+       form runs — the recipe expanded for the release quantity, each material's
+       need against what the store holds, the issuing warehouse named — live,
+       as the quantity is typed. The server re-checks atomically on release
+       (pending material is never reserved, so the truth is decided there). */
     async function resumeWO(wo){
       const pend=+wo.pendingQty||0;
       if(!(pend>0)) return;
-      const want=await askResumeQty(wo,pend);
-      if(want==null) return;
-      try{
-        const fresh=await DB.production.resume(wo.id,want);
-        patchWO(fresh); draw();
-        const left=+fresh.pendingQty||0;
-        toast(left>0
-          ? `${wo.id} — ${ENG.num(fresh.runQty)} kg released, ${ENG.num(left)} kg still pending`
-          : `${wo.id} resumed — ${ENG.num(fresh.runQty)} kg released, nothing left pending`,
-          {type:left>0?"warn":"ok",title:"Back on the floor"});
-      }catch(e){
-        if(e.status===409 && e.shortage){
-          toast(`The store still has nothing this job can be made from — ${ENG.num(pend)} kg stays pending`,
-            {type:"warn",title:"No material yet"});
+      const it=ENG.item(wo.itemId)||{};
+      const made=(+wo.completedQty||0)+(((wo.route||[]).length>0&&(wo.route||[]).every(s=>s.status==="Completed"))?(+wo.runQty||0):0);
+      const sent=+wo.dispatchedQty||0;
+      const bom=ENG.data.boms[wo.itemId];
+
+      const stat=(lab,val,color)=>h("div",{style:"flex:1;min-width:110px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px"},[
+        h("div",{class:"muted",style:"font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em",text:lab}),
+        h("div",{class:"mono",style:"font-size:17px;font-weight:800;margin-top:2px"+(color?";color:"+color:""),text:val}),
+      ]);
+      const inp=h("input",{class:"input",id:"rs_qty",type:"number",min:"0",step:"any",
+        value:String(pend),style:"max-width:180px"});
+      const matHost=h("div");
+      const releaseBtn=h("button",{class:"btn primary",text:"▶ Release to the floor",onclick:doRelease});
+
+      const body=h("div",{},[
+        h("div",{style:"font-weight:700;margin-bottom:2px",text:(it.name||wo.itemId)}),
+        h("div",{class:"muted mono",style:"font-size:11px;margin-bottom:12px",text:U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||""}),
+        h("div",{class:"flex wrap",style:"gap:10px;margin-bottom:14px"},[
+          stat("Ordered",ENG.num(wo.qty)+" kg",null),
+          stat("Produced",ENG.num(made)+" kg","var(--ok)"),
+          sent>0?stat("Dispatched",ENG.num(sent)+" kg",null):null,
+          stat("Pending",ENG.num(pend)+" kg","var(--danger)"),
+        ]),
+        h("div",{class:"field"},[h("label",{text:"Release now (kg)"}),h("div",{},inp)]),
+        h("div",{class:"muted",style:"font-size:12px;margin-top:6px;line-height:1.6"},
+          "Release the whole balance, or just the batch to run now — the rest stays pending and can be "
+          +"resumed again later. Raw material is issued from the store the moment it is released."),
+        matHost,
+      ]);
+
+      function recalcResume(){
+        matHost.innerHTML="";
+        releaseBtn.disabled=true;
+        const q=+inp.value||0;
+        if(!(q>0)) return;
+        if(q>pend+1e-6){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--warn);border-radius:8px;color:var(--warn);font-size:13px;font-weight:600",
+            text:"Only "+ENG.num(pend)+" kg is pending on this order."}));
           return;
         }
-        toast("Resume failed: "+e.message,{type:"danger"});
+        if(!bom){
+          matHost.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:12px",
+            text:"No recipe on file for this product — there is no material list to check."}));
+          releaseBtn.disabled=false;
+          return;
+        }
+        /* the same construction as the New Work Order form: the recipe
+           resolved with THIS order's material choices, expanded per kg of
+           output, aggregated where one material sits in two layers */
+        const resolved=BOMCALC.resolve(bom, wo.materialChoices||{});
+        const cc=BOMCALC.compute({lines:resolved}, BOMCALC.metaFromItem(it));
+        const perOf=l=>cc.fgKgPerBatch? l.qty/cc.fgKgPerBatch : l.qty;
+        const needBy={};
+        resolved.forEach(l=>{ if(l.id) needBy[l.id]=(needBy[l.id]||0)+perOf(l)*q/bom.yield; });
+        materialsList(matHost, layerGroups(resolved).map(grp=>({
+          label: grp.label,
+          lines: grp.lines.map(l=>{
+            const rid=l.id, r=rid?(ENG.item(rid)||{}):{};
+            return { id: rid, name: matLineName(l), code: matLineCode(l), spec: matLineSpec(l),
+              need: perOf(l)*q/bom.yield,
+              have: rid?(ENG.stock(rid).onHand||0):0,
+              agg: rid?needBy[rid]:undefined,
+              wh: rid?issuingWh(rid):null,
+              uom: r.uom||l.unit||"" };
+          }),
+        })), {outputKg:q, title:"Stock availability — the same check as a new work order"});
+        const noneAtAll=Object.entries(needBy)
+          .filter(([rid,n])=>n>1e-9 && (ENG.stock(rid).onHand||0)<=1e-9)
+          .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
+        const short=Object.entries(needBy)
+          .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
+          .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
+        if(noneAtAll.length){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px;font-weight:600"},[
+            h("div",{text:"⛔ The store has NONE of: "+noneAtAll.join(", ")}),
+            h("div",{style:"font-weight:500;margin-top:3px;font-size:12px",
+              text:"Nothing can be released until that material is received — raise a purchase order first."}),
+          ]));
+          return;
+        }
+        if(short.length){
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--warn);border-radius:8px;color:var(--warn);font-size:13px;font-weight:600"},[
+            h("div",{text:"⚠ Short of: "+short.join(", ")}),
+            h("div",{style:"font-weight:500;margin-top:3px;font-size:12px",
+              text:"What the store covers goes to the floor now; the balance stays pending until the material arrives."}),
+          ]));
+        }
+        releaseBtn.disabled=false;
       }
+
+      async function doRelease(){
+        const q=+inp.value;
+        if(!(q>0)){ toast("Enter a quantity to release",{type:"warn"}); return; }
+        if(q>pend+1e-6){ toast(`Only ${ENG.num(pend)} kg is pending`,{type:"warn"}); return; }
+        releaseBtn.disabled=true;
+        try{
+          const fresh=await DB.production.resume(wo.id,q);
+          mo.close();
+          patchWO(fresh); draw();
+          const left=+fresh.pendingQty||0;
+          toast(left>0
+            ? `${wo.id} — ${ENG.num(fresh.runQty)} kg released, ${ENG.num(left)} kg still pending`
+            : `${wo.id} resumed — ${ENG.num(fresh.runQty)} kg released, nothing left pending`,
+            {type:left>0?"warn":"ok",title:"Back on the floor"});
+        }catch(e){
+          releaseBtn.disabled=false;
+          if(e.status===409 && e.shortage){
+            toast(`The store still has nothing this job can be made from — ${ENG.num(pend)} kg stays pending`,
+              {type:"warn",title:"No material yet"});
+            return;
+          }
+          toast("Resume failed: "+e.message,{type:"danger"});
+        }
+      }
+
+      const mo=modal({title:"▶ Resume "+wo.id, sub:"Put the pending quantity back on the floor", wide:true, body,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), releaseBtn]});
+      inp.addEventListener("input",recalcResume);
+      recalcResume();
     }
 
     /* A stage action used to be followed by a full reload of the entire
@@ -1112,12 +1262,12 @@
       const drawRow=(icon,label,dest,qty,sources)=>{
         const list=(sources||[]).filter(s=>(+s.qty||0)>0.001);
         return h("div",{style:"padding:7px 0;border-bottom:1px solid var(--line)"},[
-          h("div",{class:"flex between aic",style:"gap:12px;font-size:12.5px"},[
+          h("div",{class:"flex between aic",style:"gap:12px;font-size:13px"},[
             h("span",{text:icon+" "+label}),
             h("span",{class:"mono",style:"font-weight:700;flex:0 0 auto",text:ENG.num(qty,2)+" "+uomIt}),
           ]),
           h("div",{class:"muted",style:"font-size:11px;margin-top:1px",text:dest}),
-          ...list.map(s=>h("div",{class:"flex aic wrap wo-src",style:"gap:8px;margin-top:3px;font-size:11.5px"},[
+          ...list.map(s=>h("div",{class:"flex aic wrap wo-src",style:"gap:8px;margin-top:3px;font-size:12px"},[
             h("span",{class:"wo-src-nm",text:s.name||s.id}),
             h("span",{class:"mono muted",text:ENG.num(s.qty,2)+" "+uomIt}),
             ...whChips(whOfId(s.id)),
@@ -1126,7 +1276,7 @@
       };
       const stockPanel = (fgQty>0.001 || wipQty>0.001)
         ? h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:10px 14px;margin-bottom:12px"},[
-            h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:2px",
+            h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:2px",
               text:"⇥ Taken from stock for this order"}),
             fgQty>0.001? drawRow("📦","Finished stock","Goes straight to packing — no production",fgQty,net&&net.fgSources):null,
             wipQty>0.001? drawRow("🧵","Half-made stock","Joins the run at slitting — skips coating",wipQty,net&&net.wipSources):null,
@@ -1227,7 +1377,7 @@
         uomField,
         tapeField,
         U.field("Store it in",U.selectHTML("fs_wh",whs.map(w=>({v:w.id,l:w.name+(w.type?" · "+w.type:"")})),fgStore)),
-        U.field("Batch / lot no",`<input class="input" id="fs_batch" placeholder="e.g. 0042"><div class="muted" style="font-size:10.5px;margin-top:3px">The lab report is filed against this number</div>`),
+        U.field("Batch / lot no",`<input class="input" id="fs_batch" placeholder="e.g. 0042"><div class="muted" style="font-size:11px;margin-top:3px">The lab report is filed against this number</div>`),
         convHint,
         labHost,
         srcHost,
@@ -1338,10 +1488,10 @@
         labHost.innerHTML="";
         let sheet=null;
         try{ sheet=await DB.production.finishedLabSheet(itemId); }
-        catch(e){ labHost.appendChild(h("div",{class:"muted",style:"font-size:11.5px",text:"Could not load the test parameters — "+(e.message||e)})); return; }
+        catch(e){ labHost.appendChild(h("div",{class:"muted",style:"font-size:12px",text:"Could not load the test parameters — "+(e.message||e)})); return; }
         if(labFor!==itemId) return;                       // the picker moved on
         if(!sheet || !sheet.required){
-          labHost.appendChild(h("div",{class:"muted",style:"font-size:11.5px;padding:8px 0",
+          labHost.appendChild(h("div",{class:"muted",style:"font-size:12px;padding:8px 0",
             text:"No lab parameters are set for this product — nothing to measure before booking."}));
           return;
         }
@@ -1429,7 +1579,7 @@
         const row=(id,icon,label,typed,drawn,max,onInput)=>{
           const differs=typed!=null && Math.abs((+typed||0)-drawn)>0.005;
           return h("div",{class:"flex between aic",
-              style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+              style:"gap:12px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"},[
             h("div",{style:"min-width:0"},[h("div",{text:icon+" "+label}),
               h("div",{class:"muted",style:"font-size:11px",
                 text:ENG.num(max,2)+" "+(uom||"")+" available"+(differs?"  ·  taking "+ENG.num(drawn,2):"")})]),
@@ -1490,7 +1640,7 @@
               usable.map(c=>h("option",{value:c.id,selected:fsChoices[i]===c.id,
                 text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.qtyText(c.item,c.have,1)+ENG.kgSuffix(c.item,c.have)+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
-              h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
+              h("div",{class:"muted",style:"font-size:12px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
               usable.length? sel : h("div",{class:"muted",style:"font-size:12px;color:var(--danger)",text:"No matching material found in the store"})
             ]));
@@ -1521,7 +1671,7 @@
           .filter(([rid,n])=>((ENG.stock(rid).onHand||0)+1e-6)<n)
           .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
         if(qty>0 && fsShort.length){
-          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600",
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px;font-weight:600",
             text:"⛔ Cannot book this production — short of: "+fsShort.join(", ")+". Add the stock first."}));
         }
         if(saveBtn) saveBtn.disabled=(qty>0 && fsShort.length>0);
@@ -1778,7 +1928,7 @@
              place even while the quantity is still zero */
           const stores=[...new Set((rows||[]).map(r=>issuingWh(r.id)).filter(Boolean))];
           return h("div",{class:"flex between aic",
-              style:"gap:12px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+              style:"gap:12px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"},[
             h("div",{style:"min-width:0"},[
               h("div",{text:icon+" "+label}),
               h("div",{class:"muted",style:"font-size:11px",
@@ -1877,11 +2027,11 @@
           h("span",{class:"wo-route-lbl",text:"Route"}),
           h("span",{class:"wo-route-path",text:rt.stages.join("  \u2192  ")}),
           rt.bought
-            ? h("span",{class:"chip",style:"font-size:10.5px",text:"bought in \u2014 slit & pack"})
+            ? h("span",{class:"chip",style:"font-size:11px",text:"bought in \u2014 slit & pack"})
             : rt.stocked
-              ? h("span",{class:"chip",style:"font-size:10.5px",
+              ? h("span",{class:"chip",style:"font-size:11px",
                   text:rt.owner.person+" produces it \u2014 material in store"})
-              : h("span",{class:"chip",style:"font-size:10.5px;border-color:var(--warn);color:var(--warn)",
+              : h("span",{class:"chip",style:"font-size:11px;border-color:var(--warn);color:var(--warn)",
                   text:"material short \u2014 only part of the run can start"}),
         ]));
         // per-order production spec (e.g. copper-wire count) for products that need it
@@ -1926,7 +2076,7 @@
               usable.map(c=>h("option",{value:c.id,selected:matChoices[i]===c.id,
                 text:(c.item.id?U.matDisplay(c.item):c.id)+" · "+ENG.qtyText(c.item,c.have,1)+ENG.kgSuffix(c.item,c.have)+" in store"})));
             matHost.appendChild(h("div",{style:"margin-bottom:8px"},[
-              h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:3px",
+              h("div",{class:"muted",style:"font-size:12px;margin-bottom:3px",
                 text:(l.rm||"")+(l.rmType?" — "+l.rmType:"")+(l.rmThk?" · "+l.rmThk+" mm":"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")}),
               usable.length? sel : h("div",{class:"muted",style:"font-size:12px;color:var(--danger)",text:"No matching material found in the store"})
             ]));
@@ -2000,15 +2150,15 @@
           .filter(([rid,n])=>n>1e-9 && (ENG.stock(rid).onHand||0)<=1e-9)
           .map(([rid])=>{const r=ENG.item(rid)||{};return r.id?U.matDisplay(r):rid;});
         if(makeQty>0 && noneAtAll.length){
-          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12.5px;font-weight:600"},[
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px;font-weight:600"},[
             h("div",{text:"⛔ The store has NONE of: "+noneAtAll.join(", ")}),
-            h("div",{style:"font-weight:500;margin-top:3px;font-size:11.5px",
+            h("div",{style:"font-weight:500;margin-top:3px;font-size:12px",
               text:"This order cannot be raised until the material is received — raise a purchase order first."}),
           ]));
         } else if(makeQty>0 && shortages.length){
-          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--warn);border-radius:8px;color:var(--warn);font-size:12.5px;font-weight:600"},[
+          matHost.appendChild(h("div",{style:"margin-top:10px;padding:9px 12px;border:1.5px solid var(--warn);border-radius:8px;color:var(--warn);font-size:13px;font-weight:600"},[
             h("div",{text:"⚠ Short of: "+shortages.join(", ")}),
-            h("div",{style:"font-weight:500;margin-top:3px;font-size:11.5px",
+            h("div",{style:"font-weight:500;margin-top:3px;font-size:12px",
               text:"The order can still be raised — what the store covers goes to the floor and the balance is held as pending until the material arrives."}),
           ]));
         }
@@ -2134,7 +2284,7 @@ recalc(); },50);
         if(!list.length) return;
         groupHost.appendChild(h("div",{class:"flex aic gap",style:"margin:20px 0 12px"},[
           h("h2",{style:"font-size:17px;font-weight:800",text:g.label}),
-          h("span",{class:"muted",style:"font-size:12.5px",text:"· "+g.sub}),
+          h("span",{class:"muted",style:"font-size:13px",text:"· "+g.sub}),
           h("span",{class:"chip",style:"margin-left:auto",text:list.length+" products"})
         ]));
         groupHost.appendChild(productTable(list));
@@ -2305,7 +2455,7 @@ recalc(); },50);
         (ordered.length?ordered:c.lines).forEach(cl=>{
           if(cl && cl._head!=null){
             tb.appendChild(h("tr",{},[h("td",{colspan:"8",
-              style:"font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
+              style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
               text:cl._head})]));
             return;
           }
@@ -2334,10 +2484,10 @@ recalc(); },50);
 
         totHost.innerHTML="";
         const row=(label,val,strong)=>h("div",{class:"flex between",
-          style:"padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px"+(strong?";font-weight:800":"")},[
+          style:"padding:5px 0;border-bottom:1px solid var(--line);font-size:13px"+(strong?";font-weight:800":"")},[
           h("span",{class:strong?"":"muted",text:label}), h("span",{class:"mono",text:val})]);
         const box=h("div",{class:"card",style:"background:var(--panel-2);box-shadow:none;padding:12px"});
-        box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"Batch totals"}));
+        box.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"Batch totals"}));
         box.appendChild(row("Total qty used (batch, mass basis)", n(c.totalQtyKg,2)+" kg"));
         box.appendChild(row("Total pickup qty", c.totalPickupQty==null?"— set pickup %":n(c.totalPickupQty,2)+" kg"));
         box.appendChild(row("Total pickup — per kg of FG", c.totalPickupPerKg==null?"—":n(c.totalPickupPerKg,4)));
@@ -2588,7 +2738,7 @@ recalc(); },50);
            look stuck on. The charcoal and orange stay, as the rule under it. */
         +".mast{display:flex;align-items:center;justify-content:space-between;gap:26px;padding:2px 0 11px}"
         +".mast .lg img{height:92px;width:auto;max-width:350px;object-fit:contain;display:block}"
-        +".mast .who{text-align:right;color:#3a3f44;font-size:10.5px;line-height:1.55;max-width:330px}"
+        +".mast .who{text-align:right;color:#3a3f44;font-size:11px;line-height:1.55;max-width:330px}"
         +".conm{font-size:13px;font-weight:800;color:#26282b;letter-spacing:.2px}"
         +".co-ids{margin-top:4px;color:#26282b;font-weight:700}"
         +".co-ids span{color:#F06820;font-weight:800}"
@@ -2598,28 +2748,28 @@ recalc(); },50);
         +".titlebar .t{font-size:19px;font-weight:800;letter-spacing:3.5px;text-transform:uppercase;color:#000}"
         +".info{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:8px}"
         +".ip{display:flex;justify-content:space-between;gap:8px;font-size:11px}"
-        +".ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}"
+        +".ip span{color:#767c82;text-transform:uppercase;font-size:10px;font-weight:700;letter-spacing:.3px;padding-top:1px}"
         // full-width product band — the loudest thing on the page after the title
         +".prod{border:1px solid #e0c4ac;border-left:5px solid #F06820;background:#fff8f3;"
         +"border-radius:0 8px 8px 0;padding:9px 14px;margin-bottom:8px}"
-        +".pnm{font-weight:800;font-size:15.5px;line-height:1.25;color:#26282b}"
-        +".pmeta{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px 8px;font-size:10.5px;color:#6d5544}"
+        +".pnm{font-weight:800;font-size:15px;line-height:1.25;color:#26282b}"
+        +".pmeta{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px 8px;font-size:11px;color:#6d5544}"
         +".pmeta span{background:#fff;border:1px solid #ecd6c4;border-radius:3px;padding:1px 8px}"
         +".pmeta .pc{background:#F06820;border-color:#F06820;color:#fff;font-weight:800;letter-spacing:.5px}"
-        +".warn{margin:0 0 8px;font-size:9.5px;line-height:1.5;color:#8a6d3b}"
+        +".warn{margin:0 0 8px;font-size:10px;line-height:1.5;color:#8a6d3b}"
         +"table.items{width:100%;border-collapse:collapse;margin-bottom:8px}"
         +"table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;"
         +"padding:5.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}"
-        +"table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:11.5px;vertical-align:top}"
+        +"table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:12px;vertical-align:top}"
         +"table.items tbody tr:nth-child(even) td{background:#f6f7f8}"
         +"td.r,th.r{text-align:right} td.c,th.c{text-align:center}"
-        +"td .sub{font-size:9.5px;color:#777}"
-        +".rng{font-size:8.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#8a6d3b;"
+        +"td .sub{font-size:10px;color:#777}"
+        +".rng{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#8a6d3b;"
         +"background:#fcf3dc;border:1px solid #e6d4a8;border-radius:3px;padding:0 4px;margin-left:5px}"
         +".shw{display:inline-block;width:46px;height:5px;background:#e9ecef;border-radius:3px;vertical-align:middle;overflow:hidden}"
         +".shb{display:block;height:5px;background:#F06820;border-radius:3px}"
         +".per{font-size:9px;color:#8a9096;font-weight:600;letter-spacing:.2px}"
-        +".fab{display:inline-block;margin-left:5px;font-size:8.5px;font-weight:700;letter-spacing:.4px;"
+        +".fab{display:inline-block;margin-left:5px;font-size:9px;font-weight:700;letter-spacing:.4px;"
         +"text-transform:uppercase;color:#1f6f8b;background:#e8f3f7;border:1px solid #b9d9e5;border-radius:3px;padding:0 4px}"
         +".bottom{display:flex;justify-content:flex-end;margin-bottom:6px}"
         +".br{width:340px}"
@@ -2628,11 +2778,11 @@ recalc(); },50);
         +"table.tot td:first-child{color:#555}"
         +"table.tot td:last-child{text-align:right;font-weight:700}"
         +"table.tot tr:nth-child(even) td{background:#f6f7f8}"
-        +"table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}"
-        +".sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:10.5px;color:#777}"
+        +"table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:15px;border-color:#F06820}"
+        +".sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:11px;color:#777}"
         +".sig{text-align:center;color:#1a1c1e}"
         +".sig .ln{border-top:1.5px solid #555;margin-top:24px;padding-top:5px;min-width:210px;font-weight:700}"
-        +".strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;"
+        +".strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:11px;"
         +"padding:6px 14px;border-radius:6px;margin-top:14px}.strip b{color:#F58024}"
         +"</style></head><body>"
         +'<div class="mast"><div class="lg"><img src="'+logo+'" alt=""></div>'
@@ -2946,20 +3096,20 @@ recalc(); },50);
         c.lines.forEach((cl,i)=>{
           const l=lines[i];
           if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"9",
-            style:"font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
+            style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
             text:heads[i]})]));
           const nameCell=h("td",{class:"nm bom-nm"});
           if(l.ranged){
             // A ranged line has no single material yet — the real one is chosen
             // against live store stock when the work order is issued.
             nameCell.appendChild(h("div",{},[
-              h("div",{style:"font-weight:700;font-size:12.5px",text:(l.rm||"—")+(l.rmType?" — "+l.rmType:"")}),
+              h("div",{style:"font-weight:700;font-size:13px",text:(l.rm||"—")+(l.rmType?" — "+l.rmType:"")}),
               h("span",{class:"chip",style:"font-size:10px",title:"Resolved against live store stock at work-order issue",text:"⟡ ranged — picked at issue"})
             ]));
           } else {
             nameCell.appendChild(h("div",{html:U.searchSelect("bl_rid_"+l._k,
               matOptions(l.id), l.id, "Search material…")}));
-            if(l.rm) nameCell.appendChild(h("div",{class:"muted",style:"font-size:10.5px;margin-top:2px",
+            if(l.rm) nameCell.appendChild(h("div",{class:"muted",style:"font-size:11px;margin-top:2px",
               text:l.rm+(l.rmType?" — "+l.rmType:"")+(l.rmGsm?" · "+l.rmGsm+" g/m²":"")+(l.rmThk?" · "+l.rmThk+" mm":"")}));
           }
           const qtyIn=h("input",{class:"input bom-num",type:"number",step:"0.001",value:l.qty,
@@ -3077,11 +3227,11 @@ recalc(); },50);
 
         totHost.innerHTML="";
         const row=(label,val,strong)=>h("div",{class:"flex between",
-          style:"padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px"+(strong?";font-weight:800":"")},[
+          style:"padding:5px 0;border-bottom:1px solid var(--line);font-size:13px"+(strong?";font-weight:800":"")},[
           h("span",{class:strong?"":"muted",text:label}), h("span",{class:"mono",text:val})]);
 
         const box=h("div",{class:"card",style:"background:var(--panel-2);box-shadow:none;padding:12px"});
-        box.appendChild(h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"Batch totals"}));
+        box.appendChild(h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"Batch totals"}));
         box.appendChild(row("Total qty used (batch, mass basis)", n(c.totalQtyKg,2)+" kg"));
         box.appendChild(row("Total pickup qty", c.totalPickupQty==null?"— set pickup %":n(c.totalPickupQty,2)+" kg"));
         box.appendChild(row("Total pickup — per kg of FG", c.totalPickupPerKg==null?"—":n(c.totalPickupPerKg,4)));
@@ -3098,7 +3248,7 @@ recalc(); },50);
             : !c.fabricCount ? "no fabric line carries a GSM, so pickup GSM cannot be derived"
             : (c.pickupGsm!=null && c.pickupGsm<=0) ? `fabric GSM (${n(c.fabricGsm,1)}) is not below FG GSM (${n(c.fgGsm,1)}) — this reads as a conversion/slitting product, not a coated one`
             : "no pickup % has been set on any component";
-          totHost.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin-top:6px",
+          totHost.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:6px",
             text:"Total production unavailable: "+why+"."}));
         }
       }

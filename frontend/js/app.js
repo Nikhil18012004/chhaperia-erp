@@ -259,6 +259,8 @@
         if(n.pillKey){ const v=k[n.pillKey];
           if(v) item.appendChild(h("span",{class:"pill",text:v})); }
         if(n.id==="inventory"){ const low=k.lowStock; if(low) item.appendChild(h("span",{class:"pill danger",text:low})); }
+        // orders with quantity waiting on material — amber, it needs the office
+        if(n.id==="production"){ const p=k.pendingWO; if(p) item.appendChild(h("span",{class:"pill warn",text:p})); }
         nav.appendChild(item);
       });
     },
@@ -522,7 +524,8 @@
     setAutoAccent(v){ this.autoAccent=v; this.persistSettings(); },
 
     renderAccentMenu(){
-      const accents=[["orange","#F06820"],["red","#E84820"],["blue","#2f7fe0"],["teal","#0fb5ae"],["violet","#7c5cff"],["green","#16a34a"],["pink","#ec4899"],["amber","#e0a000"]];
+      // hexes must match theme.css [data-accent] — the swatch shows what you get
+      const accents=[["orange","#F06820"],["red","#E84820"],["blue","#3b82f6"],["teal","#0fb5ae"],["violet","#8b5cf6"],["green","#18b364"],["pink","#ec4899"],["amber","#eab308"]];
       const box=$("#swatches"); if(!box) return; box.innerHTML="";
       accents.forEach(([a,hex])=>{ const sw=h("div",{class:"swatch"+(this.accent===a&&!this.autoAccent?" sel":""),style:`background:${hex}`,title:a,onclick:()=>this.setAccent(a)}); box.appendChild(sw); });
       const auto=$("#autoAccent"); if(auto) auto.checked=this.autoAccent;
