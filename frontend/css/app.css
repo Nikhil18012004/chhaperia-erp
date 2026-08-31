@@ -1404,7 +1404,11 @@ canvas{display:block;width:100%}
    radius, the --c1..--c8 accents — so a new grid does not read as a
    bolted-on widget. Each entry carries its source colour in --sc.
    ============================================================ */
-.cal-nav{display:flex;align-items:center;gap:8px}
+/* ‹ August 2026 › is ONE line. The arrows never shrink and the row never
+   wraps: inside a shared toolbar a flex item can be squeezed, and a squeezed
+   38px button that has given up its width leaves the label nowhere to sit. */
+.cal-nav{display:flex;flex-wrap:nowrap;align-items:center;gap:8px;flex:0 0 auto}
+.cal-nav>.icon-btn{flex:0 0 38px}
 /* THE ONE CONTROL ROW. View switch, month arrows, search and the source chips
    are all the same decision — what the grid shows — so they share a line and
    wrap together. Three stacked bands used to sit between the heading and the

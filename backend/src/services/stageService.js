@@ -531,7 +531,12 @@ function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (
    books but is not available to production, so it must never be picked as the
    store to draw from: without this the biggest pile of a material could be the
    quarantined one, and the job would be issued straight out of it. */
-function issuingWarehouse(rid, itemsById, movements, held) {
+/* `need` (optional): the quantity this issue is about to draw. Given one, a
+   store that can COVER the draw is preferred over a merely bigger one, so an
+   issue does not take a store below zero while another store on the same site
+   held enough all along. With no store able to cover it, the biggest pile is
+   still named and the caller's own floor check decides what happens. */
+function issuingWarehouse(rid, itemsById, movements, held, need) {
   if (!rid) return null;
   const it = (itemsById || {})[rid] || {};
   if (it.cat === "WIP" || /^WIP-/.test(String(rid))) return "WH-WIP";
@@ -541,8 +546,17 @@ function issuingWarehouse(rid, itemsById, movements, held) {
     if (m.itemId !== rid || !m.wh || block.has(m.wh)) return;
     byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0);
   });
+  const whs = Object.keys(byWh);
+  if (need > 0) {
+    let covers = null;
+    whs.forEach((wh) => {
+      if (byWh[wh] + 1e-9 < need) return;
+      if (covers == null || byWh[wh] < byWh[covers]) covers = wh;   // the tightest fit that still covers
+    });
+    if (covers) return covers;
+  }
   let best = null;
-  Object.keys(byWh).forEach((wh) => { if (best == null || byWh[wh] > byWh[best]) best = wh; });
+  whs.forEach((wh) => { if (best == null || byWh[wh] > byWh[best]) best = wh; });
   return best || "WH-PNY";
 }
 
@@ -564,15 +578,16 @@ function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements
      rather than posting an issue against a store that cannot cover it. */
   const chosen = (wo && wo.materialWarehouses) || {};
   const block = held instanceof Set ? held : new Set(held || []);
-  const whFor = (rid) => {
+  const whFor = (rid, need) => {
     const want = chosen[rid];
-    if (want && !block.has(want) && onHandIn(rid, want, movements) > 0) return want;
-    return issuingWarehouse(rid, itemsById, movements, held);
+    // the office's choice stands as long as it can actually cover the draw
+    if (want && !block.has(want) && onHandIn(rid, want, movements) + 1e-9 >= need) return want;
+    return issuingWarehouse(rid, itemsById, movements, held, need);
   };
   const moves = [];
   st.consume.forEach(([rid, q]) => {
     if (!q) return;
-    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: whFor(rid), type: "ISSUE",
+    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: whFor(rid, Math.abs(q)), type: "ISSUE",
       qty: -Math.abs(q), rate: (itemsById[rid] || {}).cost || 0, ref: wo.id,
       note: "Stage " + stageKey + " → " + wo.itemId, by: byWho });
   });

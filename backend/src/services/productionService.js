@@ -32,6 +32,62 @@ const RAW_STORE = "WH-PNY";
 
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
 
+/* ---- STOCK HAS A FLOOR ON THE FLOOR TOO ---------------------------------
+   Manual movements have been unable to take an item below zero for a while
+   (erpService.addMovement); a STAGE ISSUE went straight to repo.addMovements
+   and was never held to the same rule. So a run whose material had been used
+   up since the order was raised posted its issue anyway and the ledger read a
+   negative shelf — a figure no physical count can produce, and one that then
+   travels on into valuation, reorder and ABC.
+   Checked per ITEM against everything on hand, and per STORE as well, because
+   a store going negative is just as impossible as the item doing so. Refused
+   with 409, the code a shortage already uses, and naming the material and the
+   figures so the office knows what to receive before trying again. */
+function assertNoNegativeStock(moves, data, itemsById) {
+  const wantItem = {}, wantWh = {};
+  (moves || []).forEach((m) => {
+    const q = +m.qty || 0;
+    if (q >= 0) return;
+    wantItem[m.itemId] = (wantItem[m.itemId] || 0) + (-q);
+    if (m.wh) {
+      const per = wantWh[m.itemId] || (wantWh[m.itemId] = {});
+      per[m.wh] = (per[m.wh] || 0) + (-q);
+    }
+  });
+  const ids = Object.keys(wantItem);
+  if (!ids.length) return;
+  const onHand = {}, onHandWh = {};
+  (data.movements || []).forEach((m) => {
+    if (wantItem[m.itemId] === undefined) return;
+    const q = +m.qty || 0;
+    onHand[m.itemId] = (onHand[m.itemId] || 0) + q;
+    if (m.wh) {
+      const per = onHandWh[m.itemId] || (onHandWh[m.itemId] = {});
+      per[m.wh] = (per[m.wh] || 0) + q;
+    }
+  });
+  const r3 = (v) => +(+v).toFixed(3);
+  const nameOf = (id) => { const it = (itemsById || {})[id] || {}; return it.name || id; };
+  const uomOf = (id) => { const it = (itemsById || {})[id] || {}; return it.uom || ""; };
+  for (const id of ids) {
+    const have = onHand[id] || 0;
+    if (wantItem[id] > have + 1e-6)
+      throw err("Cannot issue " + r3(wantItem[id]) + " " + uomOf(id) + " of " + nameOf(id)
+        + " — only " + r3(have) + " is in the store. Stock cannot go below zero.", 409);
+  }
+  for (const id of Object.keys(wantWh)) {
+    for (const wh of Object.keys(wantWh[id])) {
+      const have = (onHandWh[id] || {})[wh] || 0;
+      if (wantWh[id][wh] > have + 1e-6) {
+        const w = (data.warehouses || []).find((x) => x.id === wh) || {};
+        throw err("Cannot issue " + r3(wantWh[id][wh]) + " " + uomOf(id) + " of " + nameOf(id)
+          + " from " + (w.name || wh) + " — it holds " + r3(have)
+          + ". Stock cannot go below zero in a store.", 409);
+      }
+    }
+  }
+}
+
 let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
 const r2 = (n) => Math.round((+n || 0) * 100) / 100;
@@ -137,7 +193,7 @@ async function advance(user, woId, action, opts) {
       const plan = S.computeStagePlan(wo.itemId, runQ, data, wo.materialChoices, wo.plan);
       if (plan && plan[stage.key]) {
         const moves = S.stageMovements(plan, stage.key, wo, itemsById, by, todayISO(), data.movements, await GT.heldWarehouseIds(data));
-        if (moves.length) await repo.addMovements(moves);
+        if (moves.length) { assertNoNegativeStock(moves, data, itemsById); await repo.addMovements(moves); }
       }
       stage.posted = true;
     }
@@ -265,7 +321,7 @@ async function resumeWorkOrder(user, id, body) {
         todayISO(), data.movements, held)) moves.push(m);
     }
   }
-  if (moves.length) await repo.addMovements(moves);
+  if (moves.length) { assertNoNegativeStock(moves, data, itemsById); await repo.addMovements(moves); }
 
   wo.completedQty = Math.round(((+wo.completedQty || 0) + (+wo.runQty || 0)) * 1000) / 1000;
   wo.runQty = take;
@@ -845,7 +901,7 @@ async function createWorkOrder(user, body) {
         todayISO(), data.movements, held)) moves.push(m);
     }
   }
-  if (moves.length) await repo.addMovements(moves);
+  if (moves.length) { assertNoNegativeStock(moves, data, itemsById); await repo.addMovements(moves); }
   (wo.route || []).forEach((r) => { r.posted = true; });
   wo.stockPosted = true;
   wo.stockPostedAt = new Date().toISOString();
@@ -1330,5 +1386,8 @@ module.exports = { advance, advanceAll, createWorkOrder, updateWorkOrder, produc
   // exported so the quarantine rule can be asserted directly: stock sitting in
   // a held store must not appear in what a job may be made from
   onHandMap,
+  // the stock floor, exported for the same reason: a rule this important is
+  // worth asserting on its own rather than only through a whole advance()
+  assertNoNegativeStock,
   labSheet, recordLabReading, finishedStockLabSheet,
   updateWorkOrderStatus, returnStock, createAdhocProduction, setWipStore, ACTIONS };
