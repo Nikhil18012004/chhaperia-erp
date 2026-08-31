@@ -76,26 +76,22 @@
           html: "◎ Today" }),
         h("button", { class: "btn primary", onclick: () => apptForm(null, todayISO()), html: "＋ New Appointment" }) ]));
 
-    /* ---- headline numbers: what is late, what is now ---- */
-    const kpiHost = h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" });
+    /* ---- headline numbers: what is late, what is now ----
+       Compact, and four across: at full size these four tiles were a band as
+       deep as the first week of the month, and the grid this page exists to
+       show started below the fold. */
+    const kpiHost = h("div", { class: "grid kpi-grid compact cal-kpi", style: "margin-bottom:14px" });
     root.appendChild(kpiHost);
 
-    /* ---- view switch + navigation ---- */
-    const seg = h("div", { class: "seg", style: "margin-bottom:14px" },
+    /* ---- ONE control row ----
+       The view switch, the month arrows, the search and the source chips used
+       to be three stacked bands between the heading and the grid. They are all
+       one decision — WHAT the grid shows — so they sit on one line and wrap
+       together when the screen is narrow. */
+    const seg = h("div", { class: "seg" },
       [segBtn("Month", "month"), segBtn("Week", "week"), segBtn("Day", "day"), segBtn("Agenda", "agenda")]);
-    root.appendChild(seg);
 
     const label = h("div", { class: "cal-label" });
-    const navBar = h("div", { class: "toolbar" }, [
-      h("div", { class: "cal-nav" }, [
-        h("button", { class: "icon-btn", "aria-label": "Previous", onclick: () => { step(-1); }, html: "&lsaquo;" }),
-        label,
-        h("button", { class: "icon-btn", "aria-label": "Next", onclick: () => { step(1); }, html: "&rsaquo;" }),
-      ]),
-      MW.searchInput("Search company, contact, product…", (v) => { q = v.toLowerCase().trim(); draw(); }),
-      h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "calCount" })),
-    ]);
-    root.appendChild(navBar);
 
     /* ---- source filter chips ---- */
     const chips = h("div", { class: "cal-chips" }, SOURCES.map((s) => {
@@ -108,7 +104,19 @@
       ]);
       return b;
     }));
-    root.appendChild(chips);
+
+    const navBar = h("div", { class: "toolbar cal-bar" }, [
+      seg,
+      h("div", { class: "cal-nav" }, [
+        h("button", { class: "icon-btn", "aria-label": "Previous", onclick: () => { step(-1); }, html: "&lsaquo;" }),
+        label,
+        h("button", { class: "icon-btn", "aria-label": "Next", onclick: () => { step(1); }, html: "&rsaquo;" }),
+      ]),
+      MW.searchInput("Search company, contact, product…", (v) => { q = v.toLowerCase().trim(); draw(); }),
+      chips,
+      h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "calCount" })),
+    ]);
+    root.appendChild(navBar);
 
     const host = h("div"); root.appendChild(host);
 

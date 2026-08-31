@@ -187,6 +187,9 @@
 .kpi-grid.compact .kpi-label{font-size:10.5px;letter-spacing:.04em}
 .kpi-grid.compact .kpi-delta{font-size:10.5px;margin-top:7px;padding:2px 7px}
 .kpi-grid.compact .chart-box{display:none}                 /* drop sparkline so 6 fit cleanly */
+/* the Calendar shows four, not the dashboard's six — spread them evenly */
+.kpi-grid.compact.cal-kpi{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:900px){ .kpi-grid.compact.cal-kpi{grid-template-columns:repeat(2,minmax(0,1fr))} }
 @media(max-width:1240px){ .kpi-grid.compact{grid-template-columns:repeat(3,minmax(0,1fr))} }
 @media(max-width:640px){ .kpi-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))} }
 
@@ -1402,7 +1405,17 @@ canvas{display:block;width:100%}
    bolted-on widget. Each entry carries its source colour in --sc.
    ============================================================ */
 .cal-nav{display:flex;align-items:center;gap:8px}
-.cal-label{font-weight:800;font-size:15px;min-width:190px;text-align:center;letter-spacing:-.01em}
+/* THE ONE CONTROL ROW. View switch, month arrows, search and the source chips
+   are all the same decision — what the grid shows — so they share a line and
+   wrap together. Three stacked bands used to sit between the heading and the
+   grid; on a laptop that put the first week of the month below the fold. */
+.cal-bar{row-gap:8px}
+.cal-bar .cal-chips{margin:0}
+.cal-bar .input.search{flex:1 1 190px;min-width:150px;max-width:320px}
+/* the month label keeps a fixed width so the arrows do not shuffle sideways
+   between a short month and a long one — narrower here than it was on a row
+   of its own, because it is no longer the only thing on the line */
+.cal-label{font-weight:800;font-size:14.5px;min-width:150px;text-align:center;letter-spacing:-.01em}
 
 /* ---- source filter chips: click to hide a whole stream ---- */
 .cal-chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
