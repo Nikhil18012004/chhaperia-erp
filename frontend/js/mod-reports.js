@@ -64,8 +64,29 @@
     function repReorder(dl){ const rows=ENG.data.items.map(it=>({it,st:ENG.status(it.id)})).filter(x=>x.st.suggest>0||["warn","danger"].includes(x.st.state))
         .map(x=>[x.it.id,x.it.name,x.st.onHand.toFixed(1),x.it.reorder,x.it.safety,x.st.suggest,x.st.label,ENG.sup(x.it.supplierId)]);
       const c=show("Reorder / Low-Stock Report",["Code","Name","OnHand","ReorderPt","Safety","Suggested","Status","Supplier"],rows,"reorder_report.csv"); if(dl===true)c(); }
-    function repLedger(dl){ const rows=ENG.data.movements.slice(-300).reverse().map(m=>{const it=ENG.item(m.itemId)||{};return [m.date,m.itemId,(it.name||"").slice(0,30),m.type,m.ref||"",m.qty,m.balance!=null?m.balance:""];});
-      const c=show("Stock Movement Ledger",["Date","Code","Name","Type","Ref","Qty","Balance"],rows,"stock_ledger.csv"); if(dl===true)c(); }
+    /* The Balance column was reading m.balance off the raw movement, which
+       never carries one — so every row printed blank. The running balance is
+       per MATERIAL and the engine keeps it (ENG.ledger); look it up by movement
+       id so each row shows what ITS material stood at after ITS movement.
+       The name is no longer cut at 30 characters either: three materials whose
+       names differ only past that point read as the same one. */
+    function repLedger(){
+      const rows=ENG.data.movements.slice(-300).reverse();
+      const balOf={};
+      [...new Set(rows.map(m=>m.itemId))].forEach(id=>{
+        (ENG.ledger(id)||[]).forEach(m=>{ balOf[m.id]=m.balance; });
+      });
+      const out=rows.map(m=>{
+        const it=ENG.item(m.itemId)||{};
+        const b=balOf[m.id];
+        return [m.date, m.itemId, it.name||"", U.catName(it.cat)||"", m.type, whName(m.wh)||"",
+          m.ref||"", (+m.qty||0).toFixed(2), it.uom||"",
+          b==null?"":(+b).toFixed(2)];
+      });
+      show("Stock Movement Ledger",
+        ["Date","Code","Material","Category","Type","Warehouse","Ref","Qty","Unit","Balance"],
+        out,"stock_ledger.csv");
+    }
     function repSO(dl){ const rows=ENG.data.salesorders.filter(s=>s.status!=="Dispatched").map(s=>[s.id,ENG.custName(s.customerId),s.lines.length,s.value.toFixed(0),s.priority,s.promised,s.status]);
       const c=show("Sales Order Backlog",["SO","Customer","Lines","Value","Priority","Promised","Status"],rows,"so_backlog.csv"); if(dl===true)c(); }
     function repBOM(dl){ const rows=ENG.data.items.filter(i=>i.cat==="FG").map(fg=>{const bom=ENG.data.boms[fg.id];let mc=0;if(bom)BOMCALC.toLegacy(bom,BOMCALC.metaFromItem(fg),null,ENG.item).forEach(([rid,per])=>mc+=per*ENG.stock(rid).avgCost/bom.yield);
@@ -87,6 +108,7 @@
        what was bought, from whom, for how much, and whether it has landed. The
        LINES sheet is one row per material, which is what a buyer actually chases
        and what replaces reading that JSON. */
+    const whName=id=>((ENG.data.warehouses||[]).find(w=>w.id===id)||{}).name||id||"";
     const rupee=v=>(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
     const poLines=p=>(p.lines||[]);
     const poQty=p=>poLines(p).reduce((s,l)=>s+(+l.qty||0),0);

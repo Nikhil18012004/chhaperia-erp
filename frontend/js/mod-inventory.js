@@ -896,6 +896,17 @@
         return true;
       }).slice(0,400);
       UI.$("#ledCount").textContent=data.length+" entries";
+      /* THE RUNNING BALANCE, for every material on screen — not just the one
+         the ledger happens to be pinned to. The page has always promised an
+         "auto running balance" and never shown a column of it; the engine has
+         carried one per material all along (ENG.ledger), so it only had to be
+         looked up. Keyed by movement id, which is the primary key, so a row
+         reads the balance of ITS OWN material after ITS OWN movement — a single
+         running total down a list of mixed materials would be meaningless. */
+      const balOf={};
+      [...new Set(data.map(m=>m.itemId))].forEach(id=>{
+        (ENG.ledger(id)||[]).forEach(m=>{ balOf[m.id]=m.balance; });
+      });
       tableHost.innerHTML="";
       tableHost.appendChild(table(data,[
         {key:"date",label:"Date",width:"88px",render:r=>`<span class="mono" style="font-size:11px">${esc(r.date||"—")}</span>`,sort:r=>r.date},
@@ -921,6 +932,13 @@
           const sfx=ENG.kgSuffix(it,r.qty).replace(/^s*·s*/,"");
           return `<span style="color:${r.qty<0?'var(--danger)':'var(--ok)'};font-weight:700">${r.qty>0?"+":""}${ENG.num(ENG.dispQty(it,r.qty),2)}</span> <span class="muted">${esc(ENG.dispUom(it))}</span>`
             +(sfx?`<div class="cell-sub">${esc(sfx)}</div>`:"");},sort:r=>r.qty},
+        /* what the material stood at once this movement had been applied */
+        {key:"balance",label:"Balance",num:true,width:"106px",render:r=>{
+          const it=ENG.item(r.itemId)||{}, b=balOf[r.id];
+          if(b==null) return '<span class="muted">—</span>';
+          return `<span class="strong mono">${ENG.num(ENG.dispQty(it,b),2)}</span> <span class="muted">${esc(ENG.dispUom(it)||it.uom||"")}</span>`
+            +ENG.kgSuffix(it,b).replace(/^\s*·\s*/,'<div class="cell-sub">')+(ENG.kgSuffix(it,b)?"</div>":"");},
+          sort:r=>balOf[r.id]||0},
         {key:"rate",label:"Rate",num:true,width:"86px",render:r=>r.rate?"₹"+ENG.num(ENG.dispRate(ENG.item(r.itemId),r.rate),2):"—",sort:r=>r.rate||0},
         {key:"value",label:"Value",num:true,width:"86px",render:r=>r.rate?ENG.money(Math.abs(r.qty*r.rate)):"—",sort:r=>Math.abs(r.qty*(r.rate||0))},
       ],{onRow:openMove,empty:"No movements match"}));

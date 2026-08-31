@@ -1399,6 +1399,7 @@ canvas{display:block;width:100%}
 .tbl td .cell-sub + .cell-sub{ margin-top:2px; }
 .tbl td .cell-sub{ display:block; }
 
+/* ============================================================
    CALENDAR
    Built from the same parts as the rest of the app — panel, line,
    radius, the --c1..--c8 accents — so a new grid does not read as a
