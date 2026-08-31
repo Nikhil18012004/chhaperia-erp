@@ -107,12 +107,12 @@
           h("div", { class: "flex between", style: "font-size:11px;margin-bottom:4px" }, [h("span", { class: "muted", text: "On-time delivery" }), h("span", { class: "muted", text: ot + "%" })]),
           h("div", { html: meter(ot, ot > 92 ? "ok" : ot > 82 ? "warn" : "danger") }),
         ]),
-        t.routes ? h("div", { class: "muted", style: "font-size:11.5px;margin-bottom:6px", html: "🛣 " + esc(t.routes) }) : null,
-        h("div", { class: "flex between", style: "font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)" }, [
+        t.routes ? h("div", { class: "muted", style: "font-size:12px;margin-bottom:6px", html: "🛣 " + esc(t.routes) }) : null,
+        h("div", { class: "flex between", style: "font-size:13px;padding-top:10px;border-top:1px solid var(--line)" }, [
           h("span", { class: "muted", html: "👤 " + esc(t.contact || "—") }),
           h("span", { class: t.active === false ? "muted" : "strong", html: t.active === false ? badge("mut", "Inactive") : (t.phone ? esc(t.phone) : "") }),
         ]),
-        h("div", { class: "muted", style: "font-size:11.5px;margin-top:6px", html: (t.email ? "✉ " + esc(t.email) : "") + (t.owner ? " · owner " + esc(t.owner) : "") }),
+        h("div", { class: "muted", style: "font-size:12px;margin-top:6px", html: (t.email ? "✉ " + esc(t.email) : "") + (t.owner ? " · owner " + esc(t.owner) : "") }),
       ]);
     }
 
@@ -197,7 +197,7 @@
     if (params && params.openNew) { params.openNew = false; transporterForm(); }
   }};
 
-  function stat(label, val) { return h("div", {}, [h("div", { class: "muted", style: "font-size:10.5px;font-weight:700;text-transform:uppercase", text: label }), h("div", { style: "font-weight:700;font-size:15px;margin-top:2px", text: val })]); }
+  function stat(label, val) { return h("div", {}, [h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: label }), h("div", { style: "font-weight:700;font-size:15px;margin-top:2px", text: val })]); }
 
   // ⌘K quick action
   window.ERPActions = Object.assign(window.ERPActions || {}, {

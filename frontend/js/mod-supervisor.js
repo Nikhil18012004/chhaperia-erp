@@ -256,11 +256,11 @@
             stat("Access", "👁 View only"),
           ]),
           H("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px", text: "Top items" }),
-          H("div", {}, top.length ? top.map((r) => H("div", { class: "flex between", style: "font-size:12.5px;padding:4px 0" }, [
+          H("div", {}, top.length ? top.map((r) => H("div", { class: "flex between", style: "font-size:13px;padding:4px 0" }, [
             H("span", { text: trim(r.name, 30) }),
             H("span", { class: "mono muted", text: supQty(r, r.qty, r.uom) }),
           ])) : [H("div", { class: "muted", text: "No stock" })]),
-          H("div", { class: "muted", style: "font-size:11.5px;margin-top:10px;text-align:right", text: "View all materials →" }),
+          H("div", { class: "muted", style: "font-size:12px;margin-top:10px;text-align:right", text: "View all materials →" }),
         ]));
       });
       view.appendChild(grid);
@@ -901,7 +901,7 @@
         const c = calc();
         readout.innerHTML = "";
         readout.appendChild(H("div", { text: fmtQty(c.sqm) + " sqm" + (c.gsm ? "  ·  " + fmtQty(c.kg) + " kg" : "") }));
-        if (!c.gsm) readout.appendChild(H("div", { class: "muted", style: "font-weight:400;font-size:11.5px;margin-top:4px", text: "Enter the GSM to get the weight." }));
+        if (!c.gsm) readout.appendChild(H("div", { class: "muted", style: "font-weight:400;font-size:12px;margin-top:4px", text: "Enter the GSM to get the weight." }));
       }
 
       const body = H("div", {}, [
@@ -1075,7 +1075,7 @@
           if (U.materialsList) U.materialsList(preview, [{ label: null, lines: rows }],
             { title: "Raw materials to be deducted from store" });
         }
-        preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13.5px;padding:10px 0 0;font-weight:700;color:var(--ok)" }, [
+        preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:10px 0 0;font-weight:700;color:var(--ok)" }, [
           H("span", { text: catNow() === "FG" ? "→ Added to finished stock" : "→ Added to work in process" }),
           H("b", { text: fmtQty(qty) + " " + (p.uom || "") }),
         ]));
@@ -1100,10 +1100,10 @@
         labHost.innerHTML = "";
         let sheet = null;
         try { sheet = await DB.production.finishedLabSheet(itemId); }
-        catch (e) { labHost.appendChild(H("div", { class: "muted", style: "font-size:11.5px", text: "Could not load the test parameters — " + (e.message || e) })); return; }
+        catch (e) { labHost.appendChild(H("div", { class: "muted", style: "font-size:12px", text: "Could not load the test parameters — " + (e.message || e) })); return; }
         if (labFor !== itemId) return;                 // the picker moved on
         if (!sheet || !sheet.required) {
-          labHost.appendChild(H("div", { class: "muted", style: "font-size:11.5px;padding:8px 0",
+          labHost.appendChild(H("div", { class: "muted", style: "font-size:12px;padding:8px 0",
             text: "No lab parameters are set for this product — nothing to measure before booking." }));
           return;
         }

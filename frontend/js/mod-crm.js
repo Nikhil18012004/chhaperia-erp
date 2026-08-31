@@ -935,7 +935,7 @@
       const c = UI.$("#sqCount"); if (c) c.textContent = rows.length + (rows.length === 1 ? " sample" : " samples");
       const oldest = waiting.length ? waiting[0].age : 0;
       host.innerHTML = "";
-      host.appendChild(h("div", { class: "muted", style: "font-size:12.5px;margin-bottom:10px",
+      host.appendChild(h("div", { class: "muted", style: "font-size:13px;margin-bottom:10px",
         text: waiting.length + " awaiting a verdict" + (waiting.length ? " · oldest " + oldest + (oldest === 1 ? " day" : " days") : "")
           + (toQuote.length ? " · " + toQuote.length + " approved and not yet quoted" : "") }));
       if (!rows.length) {
@@ -945,10 +945,10 @@
       }
       host.appendChild(table(rows, [
         { key: "customer", label: "Customer", sort: (r) => r.lead.company,
-          render: (r) => `<b>${esc(r.lead.company)}</b><div class="muted" style="font-size:11.5px">${esc(r.lead.contact || "—")} · ${esc(r.lead.id)}</div>` },
+          render: (r) => `<b>${esc(r.lead.company)}</b><div class="muted" style="font-size:12px">${esc(r.lead.contact || "—")} · ${esc(r.lead.id)}</div>` },
         { key: "product", label: "Product · batch", sort: (r) => r.s.productName || "",
           render: (r) => esc((r.s.productName || r.s.product || "—") + (r.s.batch ? " · " + r.s.batch : ""))
-            + (r.s.awb ? `<div class="muted" style="font-size:11.5px">${esc((r.s.courier ? r.s.courier + " · " : "") + "AWB " + r.s.awb)}</div>` : "") },
+            + (r.s.awb ? `<div class="muted" style="font-size:12px">${esc((r.s.courier ? r.s.courier + " · " : "") + "AWB " + r.s.awb)}</div>` : "") },
         { key: "qty", label: "Qty", num: true, sort: (r) => +r.s.qty || 0, render: (r) => (r.s.qty ? ENG.num(r.s.qty) + " " + esc(r.s.uom || "") : "—") },
         { key: "sent", label: "Sent", sort: (r) => r.s.sentDate, render: (r) => esc(r.s.sentDate) },
         // the tone only means something while the verdict is still owed
@@ -968,7 +968,7 @@
       const won = decided.filter((x) => x.status === "Won");
       const rounds = decided.length ? decided.reduce((s, x) => s + (+x.rounds || 1), 0) / decided.length : 0;
       host.innerHTML = "";
-      host.appendChild(h("div", { class: "muted", style: "font-size:12.5px;margin-bottom:10px",
+      host.appendChild(h("div", { class: "muted", style: "font-size:13px;margin-bottom:10px",
         text: open.length + " open" + (decided.length ? " · won " + Math.round(won.length / decided.length * 100) + "% of " + decided.length + " decided · " + rounds.toFixed(1) + " rounds to close" : "") }));
       if (!rows.length) {
         host.appendChild(h("div", { class: "empty" }, [h("div", { class: "big", text: "📄" }),
@@ -976,9 +976,9 @@
         return;
       }
       host.appendChild(table(rows, [
-        { key: "id", label: "Quote", sort: (r) => r.id, render: (r) => `<b class="mono">${esc(r.id)}</b><div class="muted" style="font-size:11.5px">${esc(r.date || "")}</div>` },
+        { key: "id", label: "Quote", sort: (r) => r.id, render: (r) => `<b class="mono">${esc(r.id)}</b><div class="muted" style="font-size:12px">${esc(r.date || "")}</div>` },
         { key: "company", label: "Customer", sort: (r) => r.company || "",
-          render: (r) => `<b>${esc(r.company || ENG.custName(r.customerId))}</b>` + (r.leadId ? `<div class="muted" style="font-size:11.5px">${esc(r.leadId)}</div>` : "") },
+          render: (r) => `<b>${esc(r.company || ENG.custName(r.customerId))}</b>` + (r.leadId ? `<div class="muted" style="font-size:12px">${esc(r.leadId)}</div>` : "") },
         { key: "product", label: "Product", sort: (r) => r.productName || "", render: (r) => esc(r.productName || r.itemId || "—") },
         { key: "uom", label: "Unit", sort: (r) => r.uom || "", render: (r) => esc(uomOfQuote(r)) },
         { key: "price", label: "Price", num: true, sort: (r) => +r.price || 0,
@@ -1126,15 +1126,15 @@
       h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
         h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px", text: "Price history — " + hist.length + (hist.length === 1 ? " entry" : " entries") }),
         h("div", {}, hist.map((x) => h("div", { class: "flex aic wrap gap", style: "padding:6px 0;border-top:1px solid var(--line);font-size:13px" }, [
-          h("span", { class: "muted mono", style: "font-size:11.5px", text: String(x.at || "").slice(0, 10) }),
+          h("span", { class: "muted mono", style: "font-size:12px", text: String(x.at || "").slice(0, 10) }),
           h("span", { class: "muted", text: kindLabel[x.kind] || x.kind }),
           h("b", { text: x.price > 0 ? priceText(q, x.price) : "—" }),
           x.qty > 0 ? h("span", { class: "muted", text: "× " + ENG.num(x.qty) + " " + uomOfQuote(q) }) : null,
           x.note ? h("span", { text: "— " + x.note }) : null,
-          x.by ? h("span", { class: "muted", style: "margin-left:auto;font-size:11.5px", text: x.by }) : null,
+          x.by ? h("span", { class: "muted", style: "margin-left:auto;font-size:12px", text: x.by }) : null,
         ].filter(Boolean)))),
       ]),
-      lead && lead.sample ? h("div", { class: "flex aic wrap gap", style: "margin-top:12px;font-size:12.5px" }, [
+      lead && lead.sample ? h("div", { class: "flex aic wrap gap", style: "margin-top:12px;font-size:13px" }, [
         h("span", { text: "📦 Sample " + (lead.sample.productName || "") + " · sent " + (lead.sample.sentDate || "—") }),
         h("span", { html: badge(vTone(lead.sample.verdict), lead.sample.verdict || "Awaiting feedback") }),
         h("button", { class: "btn sm ghost", text: "Open sample", onclick: () => { UI.$("#modalHost").hidden = true; sampleDetail(lead); } }),
@@ -1591,14 +1591,14 @@
   .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:8px}
   .co{font-size:19px;font-weight:800;letter-spacing:.2px}
   .tag{font-size:11px;color:#555;margin-top:1px}
-  .meta{font-size:10.5px;color:#444;margin-top:5px;line-height:1.5}
+  .meta{font-size:11px;color:#444;margin-top:5px;line-height:1.5}
   .tt{text-align:right}
   .tt h1{font-size:17px;margin:0 0 4px;letter-spacing:2px;text-transform:uppercase}
   .tt .kv{font-size:11px;color:#333}
   .tt .kv b{display:inline-block;min-width:64px;color:#666;font-weight:600}
   .to{margin:14px 0 10px;padding:9px 11px;background:#f5f6f8;border-left:3px solid #111}
-  .to .lab{font-size:9.5px;text-transform:uppercase;letter-spacing:.8px;color:#666;font-weight:700}
-  .to .nm{font-size:13.5px;font-weight:700;margin-top:2px}
+  .to .lab{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#666;font-weight:700}
+  .to .nm{font-size:13px;font-weight:700;margin-top:2px}
   .to .ln{font-size:11px;color:#444}
   table{width:100%;border-collapse:collapse;margin-top:6px}
   th,td{border:1px solid #ccc;padding:6px 7px;vertical-align:top}
@@ -1608,15 +1608,15 @@
   .sum{margin-top:8px;margin-left:auto;width:56%}
   .sum tr td{border:none;padding:3px 7px;font-size:12px}
   .sum tr td:last-child{text-align:right}
-  .sum tr.g td{border-top:1.5px solid #111;font-weight:800;font-size:13.5px;padding-top:6px}
+  .sum tr.g td{border-top:1.5px solid #111;font-weight:800;font-size:13px;padding-top:6px}
   .words{margin-top:6px;font-size:11px;font-style:italic;color:#333}
   .terms{margin-top:14px}
-  .terms h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;margin:0 0 4px;color:#444}
-  .terms ol{margin:0;padding-left:16px;font-size:10.5px;color:#333;line-height:1.6}
+  .terms h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin:0 0 4px;color:#444}
+  .terms ol{margin:0;padding-left:16px;font-size:11px;color:#333;line-height:1.6}
   .sign{margin-top:26px;display:flex;justify-content:space-between;align-items:flex-end}
-  .sign .for{font-size:11.5px;font-weight:700}
+  .sign .for{font-size:12px;font-weight:700}
   .sign .rule{margin-top:34px;border-top:1px solid #888;width:190px;font-size:10px;color:#666;padding-top:3px;text-align:center}
-  .foot{margin-top:14px;border-top:1px solid #ddd;padding-top:6px;font-size:9.5px;color:#777;text-align:center}
+  .foot{margin-top:14px;border-top:1px solid #ddd;padding-top:6px;font-size:10px;color:#777;text-align:center}
   @media print{ .noprint{display:none} }
   .noprint{margin:10px auto;max-width:186mm;text-align:right}
   .noprint button{font:600 12px/1 "Segoe UI",Arial;padding:8px 16px;border:1px solid #111;background:#111;color:#fff;border-radius:5px;cursor:pointer}
@@ -1678,7 +1678,7 @@
   </div>
 
   <div class="sign">
-    <div style="font-size:10.5px;color:#666;max-width:52%">
+    <div style="font-size:11px;color:#666;max-width:52%">
       We look forward to your valued order and remain at your disposal for any clarification.
     </div>
     <div style="text-align:center">

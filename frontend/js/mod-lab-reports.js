@@ -182,10 +182,10 @@
   function pendingRows(list) {
     return table(list, [
       { key: "wo", label: "W.O. / Batch", width: "132px",
-        render: (r) => `<div style="font-weight:700">${esc(r.batchNo)}</div><div class="muted" style="font-size:10.5px">${esc(r.woId)}</div>`,
+        render: (r) => `<div style="font-weight:700">${esc(r.batchNo)}</div><div class="muted" style="font-size:11px">${esc(r.woId)}</div>`,
         sort: (r) => r.woId },
       { key: "product", label: "Product", cls: "nm",
-        render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:11.5px">${esc(U.trim(r.productName || "", 40))}</div>`,
+        render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:12px">${esc(U.trim(r.productName || "", 40))}</div>`,
         sort: (r) => r.productCode || "" },
       { key: "qty", label: "Qty", width: "84px", render: (r) => (r.qty == null ? "—" : ENG.num(r.qty)), sort: (r) => r.qty || 0 },
       { key: "floor", label: "Production", width: "116px", noSort: true,
@@ -195,8 +195,8 @@
         render: (r) => r.labComplete ? badge("ok", "entered") : badge("mut", "awaiting") },
       { key: "need", label: "Still to measure", noSort: true,
         render: (r) => { const m = r.stage === "production" ? r.missingProd : r.missingLab;
-          return m && m.length ? `<span class="muted" style="font-size:11.5px">${esc(m.join(", "))}</span>`
-            : `<span class="muted" style="font-size:11.5px">—</span>`; } },
+          return m && m.length ? `<span class="muted" style="font-size:12px">${esc(m.join(", "))}</span>`
+            : `<span class="muted" style="font-size:12px">—</span>`; } },
       { key: "act", label: "", noSort: true, width: "116px",
         render: (r) => actionCell([[r.reportId ? "Update" : "Enter", () => openPending(r)]]) },
     ], { onRow: openPending, sort: "wo", dir: -1,
@@ -306,13 +306,13 @@
       searchInput("Search material, code, PO, GRN, supplier…", (v) => { filter.q = v.toLowerCase(); draw(); }),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "grnCount" })),
     ]));
-    root.appendChild(h("div", { class: "muted", style: "font-size:11.5px;margin:-4px 0 10px;line-height:1.6",
+    root.appendChild(h("div", { class: "muted", style: "font-size:12px;margin:-4px 0 10px;line-height:1.6",
       text: "Every line arrived on a purchase order. A raw material is tested only against its goods receipt — to test a delivery that is not listed, receive its PO first." }));
     const host = h("div"); root.appendChild(host);
 
     const hay = (r) => [r.itemName, r.itemId, r.poId, r.grnId, r.invNo, supplierName(r.supplierId)].join(" ").toLowerCase();
     const matches = (r) => !filter.q || hay(r).includes(filter.q);
-    const poCell = (r) => `<div style="font-weight:700">${esc(r.poId || "—")}</div><div class="muted" style="font-size:10.5px">${esc(r.grnId)}${r.invNo ? " · inv " + esc(r.invNo) : ""}</div>`;
+    const poCell = (r) => `<div style="font-weight:700">${esc(r.poId || "—")}</div><div class="muted" style="font-size:11px">${esc(r.grnId)}${r.invNo ? " · inv " + esc(r.invNo) : ""}</div>`;
     const matCell = (r) => `<div style="font-weight:600">${esc(U.trim(r.itemName || r.itemId, 44))}</div><div class="muted" style="font-size:11px">${esc(r.itemId)} · ${esc(itemCat(r.itemId))}</div>`;
 
     function draw() {
@@ -436,7 +436,7 @@
         const data = pendRows();
         if (c) c.textContent = data.length + " batch" + (data.length === 1 ? "" : "es");
         const mineCount = data.filter((p) => p.stage === "lab").length;
-        host.appendChild(h("div", { class: "muted", style: "font-size:11.5px;margin-bottom:10px",
+        host.appendChild(h("div", { class: "muted", style: "font-size:12px;margin-bottom:10px",
           text: data.length
             ? mineCount + " past slitting · " + (data.length - mineCount) + " the coating floor has not measured yet"
             : "" }));
@@ -447,8 +447,8 @@
       if (c) c.textContent = data.length + " report" + (data.length === 1 ? "" : "s");
       host.appendChild(table(data, [
         { key: "reportDate", label: "Date", width: "104px" },
-        { key: "product", label: "Product", cls: "nm", render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:11.5px">${esc(U.trim(r.productName, 40))}</div>`, sort: (r) => r.productCode || "" },
-        { key: "ref", label: "Batch / Lot", render: (r) => `<div>${esc(r.refNo || "—")}</div><div class="muted" style="font-size:10.5px">${refLabel(r.refMode)}</div>`, sort: (r) => r.refNo || "" },
+        { key: "product", label: "Product", cls: "nm", render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:12px">${esc(U.trim(r.productName, 40))}</div>`, sort: (r) => r.productCode || "" },
+        { key: "ref", label: "Batch / Lot", render: (r) => `<div>${esc(r.refNo || "—")}</div><div class="muted" style="font-size:11px">${refLabel(r.refMode)}</div>`, sort: (r) => r.refNo || "" },
         { key: "type", label: "Type", noSort: true, render: (r) => `<div class="flex gap wrap">${typeChips(r.flags)}</div>` },
         // the verdict is not the tester's business — see stateForLab
         { key: "result", label: "Result", width: "92px", hide: labOnly, render: (r) => resultBadge(r.result), sort: (r) => r.result },
@@ -501,9 +501,9 @@
     const v = (vals || {})[key];
     if (v == null || v === "") return `<span class="muted">—</span>`;
     const res = (results || {})[key];
-    if (bare) return `<span style="font-weight:700">${esc(String(v))}</span> <span class="muted" style="font-size:10.5px">${unit}</span>`;
+    if (bare) return `<span style="font-weight:700">${esc(String(v))}</span> <span class="muted" style="font-size:11px">${unit}</span>`;
     const tint = res === "fail" ? "color:var(--danger);font-weight:700" : res === "pass" ? "font-weight:700" : "";
-    return `<span style="${tint}">${esc(String(v))}</span> <span class="muted" style="font-size:10.5px">${unit}</span> ${verdictOf(res)}`;
+    return `<span style="${tint}">${esc(String(v))}</span> <span class="muted" style="font-size:11px">${unit}</span> ${verdictOf(res)}`;
   }
 
   function reportDetail(r) {
@@ -595,7 +595,7 @@
       h("div", { class: "form-grid" }, [
         U.field("Product", U.searchSelect("lr_prod", prodOpts, prod.id, "Search product…"), "full"),
         U.field("Reference No.",
-          `<input class="input" id="lr_ref" value="${esc(refSeed)}"${lockRef ? " readonly" : ""} placeholder="e.g. B-2026-0142"><div class="muted" id="lr_refmode" style="font-size:10.5px;margin-top:3px">${refLabel(prod.refMode)}</div>`),
+          `<input class="input" id="lr_ref" value="${esc(refSeed)}"${lockRef ? " readonly" : ""} placeholder="e.g. B-2026-0142"><div class="muted" id="lr_refmode" style="font-size:11px;margin-top:3px">${refLabel(prod.refMode)}</div>`),
         U.field("Report Date", `<input class="input" id="lr_date" type="date" value="${edit ? esc(existing.reportDate) : DB.helpers.iso(DB.helpers.today())}">`),
       ]),
       h("div", { style: "margin:6px 0 4px" }, [
@@ -751,7 +751,7 @@
 
     // Admin-only spec editor (hidden from the report entry form entirely).
     function specSection() {
-      if (!admin) return h("div", { class: "muted", style: "font-size:11.5px;margin-top:14px", text: "🔒 Lab spec (min/max limits) is managed by admin and used to grade reports Pass/Fail." });
+      if (!admin) return h("div", { class: "muted", style: "font-size:12px;margin-top:14px", text: "🔒 Lab spec (min/max limits) is managed by admin and used to grade reports Pass/Fail." });
       return h("div", { style: "margin-top:16px" }, [
         h("h3", { style: "margin:6px 0 4px;font-size:13px", text: "Lab Spec (backend only — hidden from data entry)" }),
         h("div", { class: "muted", style: "font-size:11px;margin-bottom:8px", text: "Min/Max limits per parameter. Leave blank to skip a bound. Reports grade Pass/Fail against these." }),
@@ -766,7 +766,7 @@
       applicable(fl).forEach((par) => {
         const sp = spec[par.key] || {};
         host.insertAdjacentHTML("beforeend",
-          `<div class="flex gap aic" style="margin-bottom:6px"><div style="flex:1;font-size:12.5px">${esc(par.label)} <span class="muted">(${par.unit})</span></div>` +
+          `<div class="flex gap aic" style="margin-bottom:6px"><div style="flex:1;font-size:13px">${esc(par.label)} <span class="muted">(${par.unit})</span></div>` +
           `<input class="input" id="sp_min_${par.key}" type="number" step="any" placeholder="min" style="width:110px" value="${sp.min != null ? esc(sn(sp.min)) : ""}">` +
           `<input class="input" id="sp_max_${par.key}" type="number" step="any" placeholder="max" style="width:110px" value="${sp.max != null ? esc(sn(sp.max)) : ""}"></div>`);
       });

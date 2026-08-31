@@ -144,7 +144,7 @@
       h("div", {}, Object.keys(byDept).length ? Object.entries(byDept).map(([d, v]) => {
         const pct = v.total ? Math.round(v.present / v.total * 100) : 0;
         return h("div", { style: "margin-bottom:10px" }, [
-          h("div", { class: "flex between", style: "font-size:12.5px;margin-bottom:4px" }, [
+          h("div", { class: "flex between", style: "font-size:13px;margin-bottom:4px" }, [
             h("span", { html: "<b>" + esc(cap(d)) + "</b>" }), h("span", { class: "muted", text: v.present + "/" + v.total })]),
           h("div", { html: UI.meter(pct, pct >= 80 ? "ok" : pct >= 50 ? "warn" : "danger") })]);
       }) : [h("div", { class: "muted", text: "No attendance punched yet today — use the Attendance tab." })]),
@@ -154,7 +154,7 @@
     grid.appendChild(h("div", { class: "card" }, [
       h("div", { class: "card-head" }, [h("h3", { html: "🔔 Pending Leave (" + pending + ")" }), h("div", { class: "sub", text: "Approve or reject in the Leave tab" })]),
       h("div", {}, pend.length ? pend.map((l) => h("div", { class: "flex between aic", style: "padding:7px 0;border-bottom:1px solid var(--line);cursor:pointer", onclick: () => App.go("hr-leave") }, [
-        h("div", {}, [h("div", { style: "font-weight:600;font-size:13px", text: wById(l.workerId).name }), h("div", { class: "muted", style: "font-size:11.5px", text: (ltName(l.type)) + " · " + l.fromDate + " → " + l.toDate })]),
+        h("div", {}, [h("div", { style: "font-weight:600;font-size:13px", text: wById(l.workerId).name }), h("div", { class: "muted", style: "font-size:12px", text: (ltName(l.type)) + " · " + l.fromDate + " → " + l.toDate })]),
         h("span", { html: badge("warn", l.days + "d") })])) : [h("div", { class: "muted", text: "No pending requests." })]),
     ]));
     host.appendChild(grid);
@@ -343,7 +343,7 @@
   .hd-logo img{height:32px;display:block}
   .hd-co{position:relative;flex:1;min-width:0;padding-right:34mm}
   .hd-conm{font-size:15px;font-weight:800;color:#fff;letter-spacing:-.2px;line-height:1.2}
-  .hd-coad{font-size:8.5px;color:#9aa3b2;margin-top:3px;line-height:1.45;max-width:110mm}
+  .hd-coad{font-size:9px;color:#9aa3b2;margin-top:3px;line-height:1.45;max-width:110mm}
   .hd-id{position:relative;flex:0 0 auto;text-align:right;color:#fff}
   .hd-id-l{font-size:8px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase}
   .hd-id-m{font-size:22px;font-weight:800;letter-spacing:-.4px;margin-top:1px;font-variant-numeric:tabular-nums}
@@ -365,7 +365,7 @@
     border-radius:999px;padding:2.5px 10px;border:1.6px solid}
   .pill.on{color:#1c7a3d;border-color:#35a15c;background:#f2faf4}
   .pill.off{color:#a32a20;border-color:#c4453a;background:#fdf2f1}
-  .role{font-size:11.5px;font-weight:700;color:#2b2f33;margin-top:2.5px}
+  .role{font-size:12px;font-weight:700;color:#2b2f33;margin-top:2.5px}
   .role i{font-style:normal;color:#9aa1a8;margin:0 4px}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .chip{font-size:8px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#4b5158;
@@ -373,7 +373,7 @@
   .rate{flex:0 0 auto;background:#e9eef6;border-radius:11px;padding:5mm 7mm;text-align:center;min-width:44mm}
   .rate b{display:block;font-size:19px;font-weight:800;color:#12151a;letter-spacing:-.4px;
     font-variant-numeric:tabular-nums}
-  .rate span{display:block;font-size:7.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
+  .rate span{display:block;font-size:8px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
     color:#6b7280;margin-top:2.5px}
 
   /* ---- the main card, with its orange spine ---- */
@@ -387,7 +387,7 @@
     padding-bottom:2.4mm;margin-bottom:1mm}
   .sec i{font-style:normal;font-size:9px;font-weight:800;background:#1b2433;color:#fff;width:16px;height:16px;
     border-radius:4px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
-  .sec b{font-size:11.5px;font-weight:800;letter-spacing:.5px;color:#12151a;text-transform:uppercase}
+  .sec b{font-size:12px;font-weight:800;letter-spacing:.5px;color:#12151a;text-transform:uppercase}
 
   .cols{display:flex;gap:11mm}
   .cols>div{flex:1;min-width:0}
@@ -403,7 +403,7 @@
   .sign{display:flex;justify-content:space-between;align-items:flex-start;gap:12mm;margin-top:6mm}
   .sign-note{font-size:8.6px;color:#6b7177;max-width:95mm;line-height:1.55;padding-top:1mm}
   .sign-box{flex:0 0 auto;text-align:right;min-width:62mm}
-  .sign-for{font-size:10.5px;font-weight:800;color:#12151a}
+  .sign-for{font-size:11px;font-weight:800;color:#12151a}
   .sign-line{height:13mm;border-bottom:1.4px solid #3a414d;margin-bottom:2.2mm}
   .sign-lbl{font-size:10px;font-weight:800;color:#12151a}
 
@@ -412,7 +412,7 @@
   .docctl{background:#fff;border-radius:10px;padding:3.4mm 5mm;display:flex;justify-content:space-between;
     align-items:center;gap:8mm;box-shadow:0 2px 10px rgba(18,24,32,.07)}
   .docctl b{font-size:8px;font-weight:800;letter-spacing:1.2px;color:#3f4650;text-transform:uppercase}
-  .docctl span{font-size:8.5px;color:#6b7177}
+  .docctl span{font-size:9px;color:#6b7177}
   .tail{height:4mm;background:#1b2433;margin-top:5mm}
 
   @media screen{
@@ -537,7 +537,7 @@
       h("button", { class: "btn primary", onclick: () => simulate(), html: "🔌 Simulate Biometric Punches" }),
     ]);
     host.appendChild(bar);
-    host.appendChild(h("div", { class: "flex gap wrap", style: "margin:4px 0 12px;font-size:11.5px" },
+    host.appendChild(h("div", { class: "flex gap wrap", style: "margin:4px 0 12px;font-size:12px" },
       Object.entries(STATUS_META).map(([k, m]) => h("span", { class: "chip" }, h("span", { html: `<span class="badge-s s-${m[0]}">${k}</span> ${m[1]}` })))));
     const grid = h("div"); host.appendChild(grid);
     function draw() {
@@ -1129,7 +1129,7 @@
   .ps-top{display:flex;justify-content:space-between;align-items:center;gap:16px;padding-bottom:4px}
   .ps-org{display:flex;align-items:center;gap:10px;min-width:0}
   .ps-logo{height:40px;width:auto;max-width:150px;object-fit:contain;object-position:left center}
-  .ps-conm{font-size:13.5px;font-weight:800;color:#12151a;line-height:1.2;letter-spacing:-.15px}
+  .ps-conm{font-size:13px;font-weight:800;color:#12151a;line-height:1.2;letter-spacing:-.15px}
   .ps-coad{font-size:9px;color:#6b7177;margin-top:1px;line-height:1.3}
   .ps-for{text-align:right;flex:0 0 auto}
   .ps-for-l{font-size:8px;font-weight:700;letter-spacing:.75px;text-transform:uppercase;color:#9aa1a8}
@@ -1143,11 +1143,11 @@
   .ps-sec{font-size:8px;font-weight:800;letter-spacing:.9px;color:#9aa1a8;margin-bottom:5px;
     text-transform:uppercase}
   table.ps-kv{border-collapse:collapse;width:100%}
-  table.ps-kv td{padding:1.4px 0;font-size:9.5px;vertical-align:top;line-height:1.3}
+  table.ps-kv td{padding:1.4px 0;font-size:10px;vertical-align:top;line-height:1.3}
   table.ps-kv td:first-child{color:#6b7177;width:44%}
   table.ps-kv td.c{width:11px;color:#9aa1a8;text-align:center}
   table.ps-kv td.v{color:#1a1c1e;font-weight:600}
-  table.ps-kv td.v.nm{font-weight:800;font-size:10.5px}
+  table.ps-kv td.v.nm{font-weight:800;font-size:11px}
   .ps-netcard{flex:1;border:1px solid #d7ede0;border-radius:9px;overflow:hidden;align-self:stretch;
     display:flex;flex-direction:column}
   .ps-netcard-top{display:flex;align-items:center;gap:10px;background:#f2faf5;padding:9px 12px}
@@ -1156,13 +1156,13 @@
   .ps-netlbl{font-size:8px;color:#38a169;font-weight:800;margin-top:2px;
     letter-spacing:.7px;text-transform:uppercase}
   .ps-netcard-foot{padding:5px 12px 6px;border-top:1px dashed #d7ede0;margin-top:auto}
-  .ps-netcard-foot div{display:flex;font-size:9.5px;padding:1px 0}
+  .ps-netcard-foot div{display:flex;font-size:10px;padding:1px 0}
   .ps-netcard-foot span{color:#6b7177;flex:0 0 52%}
   .ps-netcard-foot i{font-style:normal;color:#9aa1a8;flex:0 0 11px;text-align:center}
   .ps-netcard-foot b{color:#12151a;font-weight:700}
 
   /* PF / UAN / leave strip */
-  .ps-ids{display:flex;flex-wrap:wrap;gap:5px 24px;padding:6px 11px;font-size:9.5px;
+  .ps-ids{display:flex;flex-wrap:wrap;gap:5px 24px;padding:6px 11px;font-size:10px;
     background:#f7f8f9;border:1px solid #eceff1;border-radius:8px}
   .ps-ids>div{display:flex;align-items:baseline;min-width:0}
   .ps-ids span{color:#6b7177}
@@ -1171,7 +1171,7 @@
   /* the leave balance takes the rest of the row so its breakdown has room */
   .ps-ids .ps-leave{margin-left:auto}
   .ps-ids .ps-leave b{color:#0f766e}
-  .ps-ids .ps-leave em{font-style:normal;color:#8b9096;font-size:8.5px;padding-left:7px}
+  .ps-ids .ps-leave em{font-style:normal;color:#8b9096;font-size:9px;padding-left:7px}
 
   /* earnings + deductions */
   .ps-money{display:flex;border:1px solid #dfe3e6;border-radius:9px;overflow:hidden;margin-top:6px}
@@ -1179,7 +1179,7 @@
   table.ps-half+table.ps-half{border-left:1px solid #e3e6e9}
   table.ps-half th{font-size:8px;font-weight:800;letter-spacing:.8px;color:#4b5158;
     padding:6px 10px 5px;text-align:left;background:#f7f8f9;border-bottom:1px solid #e3e6e9}
-  table.ps-half td{padding:3.6px 10px;font-size:9.5px;vertical-align:top}
+  table.ps-half td{padding:3.6px 10px;font-size:10px;vertical-align:top}
   /* zebra rows make a long list readable across the fold */
   table.ps-half tbody tr:nth-child(even) td{background:#fafbfc}
   table.ps-half th.amt,table.ps-half td.amt{text-align:right;white-space:nowrap}
@@ -1189,36 +1189,36 @@
   table.ps-half td.lbl{color:#2b2f33}
   table.ps-half tr.pad td{padding:3.6px 10px}
   td .n{font-size:8px;color:#8b9096;margin-top:1px;line-height:1.25}
-  table.ps-half tfoot td{background:#f1f3f5;font-weight:800;color:#12151a;font-size:9.5px;
+  table.ps-half tfoot td{background:#f1f3f5;font-weight:800;color:#12151a;font-size:10px;
     padding:5px 10px;border-top:1px solid #e3e6e9}
 
   /* total net payable — the anchor of the sheet */
   .ps-payable{display:flex;justify-content:space-between;align-items:stretch;
     border-radius:9px;margin-top:6px;overflow:hidden;background:#1f2937}
   .ps-payable>div:first-child{padding:6px 13px}
-  .ps-payable-t{font-size:9.5px;font-weight:800;color:#fff;letter-spacing:.6px}
-  .ps-payable-s{font-size:8.5px;color:#9aa5b1;margin-top:1px}
+  .ps-payable-t{font-size:10px;font-weight:800;color:#fff;letter-spacing:.6px}
+  .ps-payable-s{font-size:9px;color:#9aa5b1;margin-top:1px}
   .ps-payable-v{background:#38a169;display:flex;align-items:center;padding:6px 18px;
     font-size:14px;font-weight:800;color:#fff;white-space:nowrap;letter-spacing:-.2px}
 
-  .ps-words{text-align:right;font-size:9.5px;color:#12151a;margin-top:5px}
+  .ps-words{text-align:right;font-size:10px;color:#12151a;margin-top:5px}
   .ps-words span{color:#6b7177}
 
   /* signature + seal — space is LEFT for a real signature and stamp */
   .ps-sign{margin-top:auto;padding-top:6px;border-top:1px solid #e3e6e9;
     display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
-  .ps-sign-l{font-size:8.5px;color:#8b9096;min-width:0}
+  .ps-sign-l{font-size:9px;color:#8b9096;min-width:0}
   .ps-sign-emp{color:#4b5158}
   .ps-sign-note{margin-top:2px}
   .ps-sign-r{display:flex;align-items:flex-end;gap:12px;flex:0 0 auto}
   .ps-seal{width:54px;height:54px;border:1px dashed #c7ced4;border-radius:50%;
     display:flex;align-items:center;justify-content:center;
-    font-size:7.5px;letter-spacing:1px;text-transform:uppercase;color:#c0c7cd}
+    font-size:8px;letter-spacing:1px;text-transform:uppercase;color:#c0c7cd}
   .ps-sign-box{text-align:center;min-width:150px}
   .ps-sign-for{font-size:9px;color:#4b5158}
   .ps-sign-for b{color:#12151a;font-weight:700}
   .ps-sign-space{height:24px}                       /* room to actually sign */
-  .ps-sign-lbl{font-size:8.5px;font-weight:700;color:#12151a;
+  .ps-sign-lbl{font-size:9px;font-weight:700;color:#12151a;
     border-top:1px solid #9aa1a8;padding-top:3px}
   @media print{
     body{background:#fff}
@@ -1285,7 +1285,7 @@
         ].filter(Boolean), "Total deductions", dedTotal),
       ]),
       h("div", { class: "pay-net" }, [h("span", { text: "NET PAY" }), h("b", { text: money2(s.net) })]),
-      h("div", { class: "muted", style: "font-size:11.5px;margin-top:8px" },
+      h("div", { class: "muted", style: "font-size:12px;margin-top:8px" },
         "Employer contribution — PF " + money(emp.pf || 0) + " · ESI " + money(emp.esi || 0)
         // a worker asking "why no bonus this month?" gets the answer here
         + (s.attendanceBonusNote && !s.attendanceBonus ? " · Attendance bonus not earned: " + s.attendanceBonusNote : "")),
@@ -1331,7 +1331,7 @@
     // what those two numbers actually mean, restated as they are typed
     const plan = h("div", { class: "muted", style: "font-size:12px;margin-top:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px" });
     body.appendChild(plan);
-    if (a) body.appendChild(h("div", { class: "muted", style: "font-size:11.5px;margin-top:8px" },
+    if (a) body.appendChild(h("div", { class: "muted", style: "font-size:12px;margin-top:8px" },
       "Recovered so far " + money(a.recovered) + " of " + money(a.amount) + " · outstanding " + money(a.outstanding)
       + (a.startedOn ? " · taken " + a.startedOn : "")));
 

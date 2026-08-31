@@ -40,7 +40,7 @@
     reports.forEach(r=>{
       grid.appendChild(h("div",{class:"card hover",style:"cursor:pointer",onclick:r.fn},[
         h("div",{class:"kpi-ic",style:`background:color-mix(in srgb, var(${r.accent}) 16%, transparent);color:var(${r.accent})`,text:r.ic}),
-        h("h3",{style:"font-size:14.5px;margin-top:12px",text:r.name}),
+        h("h3",{style:"font-size:15px;margin-top:12px",text:r.name}),
         h("div",{class:"muted",style:"font-size:12px;margin-top:4px;line-height:1.5",text:r.desc}),
         h("div",{class:"flex gap",style:"margin-top:14px",onclick:e=>e.stopPropagation()},[
           h("button",{class:"btn sm primary",onclick:e=>{e.stopPropagation();r.fn();},html:"⬇ Export"})
@@ -329,15 +329,15 @@
     /* invoice companies (billing entities used by PO/SO + printed invoices) */
     const invCard=h("div",{class:"card"},[
       h("div",{class:"card-head"},h("h3",{text:"🧾 Invoice Companies"})),
-      h("p",{class:"dim",style:"font-size:12.5px;margin-bottom:12px;line-height:1.5",
+      h("p",{class:"dim",style:"font-size:13px;margin-bottom:12px;line-height:1.5",
         text:"Every PO / SO is billed under one of these entities. Its GSTIN, address, bank details and terms flow straight onto the printed invoice."}),
       ...(org.companies||[]).map((c,i)=>h("div",{style:"border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px"},[
         h("div",{class:"flex between aic"},[
-          h("div",{},[h("b",{style:"font-size:13.5px",text:c.name}),
-            h("div",{class:"muted",style:"font-size:11.5px;margin-top:2px",
+          h("div",{},[h("b",{style:"font-size:13px",text:c.name}),
+            h("div",{class:"muted",style:"font-size:12px;margin-top:2px",
               html:(c.gstin?("GSTIN <b>"+esc(c.gstin)+"</b>"):'<span style="color:var(--warn)">GSTIN pending — add it before invoicing</span>')
                 +(c.pan?" · PAN "+esc(c.pan):"")+(c.cin?" · CIN "+esc(c.cin):"")}),
-            h("div",{class:"muted",style:"font-size:11.5px;margin-top:2px",
+            h("div",{class:"muted",style:"font-size:12px;margin-top:2px",
               text:(c.bank&&c.bank.name)?("Bank: "+c.bank.name+(c.bank.acNo?" · A/c "+c.bank.acNo:"")):"Bank details not set"})]),
           h("button",{class:"btn sm ghost",onclick:()=>companyEditForm(i),text:"✎ Edit"})
         ])
@@ -441,7 +441,8 @@
     /* Excel import / export lives on each section's own DATA button, not here. */
 
     function refreshSeg(e){ [...e.target.parentElement.children].forEach(c=>c.classList.remove("on")); e.target.classList.add("on"); }
-    function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#2f7fe0",teal:"#0fb5ae",violet:"#7c5cff",green:"#16a34a",pink:"#ec4899",amber:"#e0a000"}; return map[a]; }
+    // hexes must match theme.css [data-accent] — the swatch shows what you get
+    function accentHex(a){ const map={orange:"#F06820",red:"#E84820",blue:"#3b82f6",teal:"#0fb5ae",violet:"#8b5cf6",green:"#18b364",pink:"#ec4899",amber:"#eab308"}; return map[a]; }
     function backup(){ const blob=new Blob([JSON.stringify(ENG.data,null,2)],{type:"application/json"});
       const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="chhaperia_erp_backup_"+DB.helpers.iso(DB.helpers.today())+".json"; a.click();
       toast("Backup exported",{type:"ok"}); }
@@ -513,7 +514,7 @@
         host.innerHTML="";
         if(shSel) host.appendChild(h("div",{class:"flex gap aic wrap",style:"margin-bottom:10px"},[
           h("span",{class:"muted",style:"font-size:12px",text:"Sheet:"}), shSel,
-          h("span",{class:"muted",style:"font-size:11.5px",text:sheets.length+" importable sheets in this file — one section at a time"}) ]));
+          h("span",{class:"muted",style:"font-size:12px",text:sheets.length+" importable sheets in this file — one section at a time"}) ]));
         host.appendChild(h("div",{class:"flex gap aic",style:"margin-bottom:12px"},[
           h("span",{class:"muted",style:"font-size:12px",text:"Import this sheet as:"}), sel ]));
         let diff;
@@ -528,7 +529,7 @@
             : "Cannot map this file to "+CSVIO.ENTITIES[curKey].label+"."}));
           if(!headerIssue){
             console.error("Import preview failed:",err);
-            host.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin-top:6px",
+            host.appendChild(h("div",{class:"muted",style:"font-size:12px;margin-top:6px",
               text:"The file was read, but the preview failed: "+(err&&err.message||err)+". This is a fault in the app, not your sheet — please report it."}));
           }
           return;
@@ -575,7 +576,7 @@
               return '<span style="color:'+(r.delta<0?'var(--danger)':'var(--ok)')+';font-weight:700">'
                 +(r.delta>0?"+":"")+ENG.num(shown,2)+'</span> <span class="muted">'+esc(r.uom)+"</span>";}},
           ],{empty:""}));
-          host.appendChild(h("div",{class:"muted",style:"font-size:11.5px;margin:6px 0 12px",
+          host.appendChild(h("div",{class:"muted",style:"font-size:12px;margin:6px 0 12px",
             text:"Each row posts one ADJ movement bringing the store to the sheet's figure — the audit trail keeps both numbers."}));
         }
 

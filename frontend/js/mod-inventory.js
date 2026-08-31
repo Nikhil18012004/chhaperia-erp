@@ -250,14 +250,14 @@
           h("span",{class:"qc-plbl",text:p.label+(p.unit?" ("+p.unit+")":"")}),
         ]),
         h("div",{class:"qc-plim",id:"qlim_"+p.key,style:"opacity:"+(on?"1":".4")},
-          !numeric?[h("span",{class:"muted",style:"font-size:11.5px",text:"recorded, not graded"})]
+          !numeric?[h("span",{class:"muted",style:"font-size:12px",text:"recorded, not graded"})]
           :mayLimits?[
             h("input",{class:"input",id:"qmin_"+p.key,type:"number",step:"any",placeholder:"min",
               value:sp.min!=null?String(sp.min):""}),
             h("span",{class:"qc-pdash",text:"–"}),
             h("input",{class:"input",id:"qmax_"+p.key,type:"number",step:"any",placeholder:"max",
               value:sp.max!=null?String(sp.max):""}),
-          ]:[h("span",{class:"muted",style:"font-size:11.5px",
+          ]:[h("span",{class:"muted",style:"font-size:12px",
               text:limited?"graded against a set limit":"limits set by admin"})]),
       ]);
     });
@@ -440,7 +440,7 @@
     function renderLines(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const host=UI.$("#r_lines"); host.innerHTML="";
-      host.appendChild(h("div",{class:"flex gap muted",style:"align-items:center;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px"},[
+      host.appendChild(h("div",{class:"flex gap muted",style:"align-items:center;font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px"},[
         h("div",{style:"flex:2",text:"Item"}),
         h("div",{style:"flex:1",text:"Receive"}),
         h("div",{style:"flex:1",text:"Rejected"}),
@@ -1043,10 +1043,10 @@
           stat("Stock Value",ENG.money(val)), stat("Active Items",ENG.num(items)), stat("Type",w.type)
         ]),
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px",text:"Top items"}),
-        h("div",{class:"barlist"}, top.length?top.map(x=>h("div",{class:"flex between",style:"font-size:12.5px;padding:4px 0"},[
+        h("div",{class:"barlist"}, top.length?top.map(x=>h("div",{class:"flex between",style:"font-size:13px;padding:4px 0"},[
           h("span",{text:x.it.name}), h("span",{class:"mono muted",style:"white-space:nowrap",text:ENG.qtyText(x.it,x.q,1)+ENG.kgSuffix(x.it,x.q)})
         ])):[h("div",{class:"muted",text:"Empty"})]),
-        h("div",{class:"muted",style:"font-size:11.5px;margin-top:10px;text-align:right",text:"View all materials →"})
+        h("div",{class:"muted",style:"font-size:12px;margin-top:10px;text-align:right",text:"View all materials →"})
       ]));
     });
     root.appendChild(grid);

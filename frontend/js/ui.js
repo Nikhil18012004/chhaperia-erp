@@ -89,7 +89,7 @@
         body:h("p",{class:"dim",style:"line-height:1.6",text:msg}),
         foot:[
           h("button",{class:"btn ghost",onclick:()=>{res(false);mo.close();},text:"Cancel"}),
-          h("button",{class:"btn "+(danger?"primary":"primary"),style:danger?"background:linear-gradient(135deg,var(--danger),#b02418)":"",onclick:()=>{res(true);mo.close();},text:"Confirm"})
+          h("button",{class:"btn "+(danger?"danger-solid":"primary"),onclick:()=>{res(true);mo.close();},text:"Confirm"})
         ]});
     });
   }
@@ -316,7 +316,7 @@
   /* ---------- NAV MANIFEST ---------- */
   const NAV = [
     {sec:"Overview", adminOnly:true},
-    {id:"dashboard", icon:"▦", label:"Dashboard", accent:"orange", adminOnly:true},
+    {id:"dashboard", icon:"🏠", label:"Dashboard", accent:"orange", adminOnly:true},
     {id:"analytics", icon:"📈", label:"Analytics", accent:"violet", adminOnly:true},
     {sec:"Inventory", labOk:true},
     {id:"inventory", icon:"📦", label:"Stock Items", accent:"blue", labOk:true},
@@ -357,16 +357,16 @@
     {id:"customers", icon:"🤝", label:"Customers", accent:"pink"},
     {id:"dispatch", icon:"🚚", label:"Dispatch", accent:"amber"},
     {sec:"HR & Payroll"},
-    {id:"hr", icon:"▦", label:"Overview", accent:"teal"},
+    {id:"hr", icon:"📋", label:"Overview", accent:"teal"},
     {id:"hr-workers", icon:"👷", label:"Workers", accent:"teal"},
     {id:"hr-attendance", icon:"🕒", label:"Attendance", accent:"teal"},
     {id:"hr-leave", icon:"🌴", label:"Leave", accent:"teal", pillKey:"hrPendingLeaves"},
     {id:"hr-payroll", icon:"💰", label:"Payroll", accent:"teal"},
-    {id:"hr-settings", icon:"⚙", label:"Settings", accent:"teal"},
+    {id:"hr-settings", icon:"⚙️", label:"Settings", accent:"teal"},
     {sec:"System", adminOnly:true},
     {id:"reports", icon:"📊", label:"Reports", accent:"green", adminOnly:true},
     {id:"users", icon:"👥", label:"Users & Access", accent:"red", adminOnly:true},
-    {id:"settings", icon:"⚙", label:"Settings", accent:"orange", adminOnly:true},
+    {id:"settings", icon:"⚙️", label:"Settings", accent:"orange", adminOnly:true},
   ];
 
   global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV };

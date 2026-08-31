@@ -25,7 +25,7 @@
     return h("div",{class:"page-head"},[
       h("div",{},[
         h("div",{class:"page-title"},[ h("span",{class:"dot"}), title,
-          ro?h("span",{class:"chip",style:"margin-left:10px;font-size:10.5px;font-weight:700",text:"VIEW ONLY"}):null ]),
+          ro?h("span",{class:"chip",style:"margin-left:10px;font-size:11px;font-weight:700",text:"VIEW ONLY"}):null ]),
         sub?h("div",{class:"page-sub",text:sub}):null
       ]),
       (actions && !ro)?h("div",{class:"actions"}, actions):null
@@ -46,7 +46,7 @@
     return h("div",{class:"empty",style:"padding:40px 20px"},[
       h("div",{class:"big",text: offline ? "🔌" : expired ? "🔒" : "⚠"}),
       h("div",{style:"font-weight:700",text:"Could not load " + what}),
-      h("div",{class:"muted",style:"margin-top:6px;font-size:12.5px",
+      h("div",{class:"muted",style:"margin-top:6px;font-size:13px",
         text: offline ? "The server is not responding — it may have stopped. Start it again, then retry."
             : expired ? "Your session has expired. Sign in again."
             : msg}),

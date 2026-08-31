@@ -89,12 +89,12 @@
       .filter(x=>x.st.pIn>0 || x.st.pOut>0).sort((a,b)=>b.st.pOut-a.st.pOut).slice(0,7);
     const pendCard=h("div",{class:"card span-4"},[
       h("div",{class:"card-head"},[h("div",{},[h("h3",{text:"Pending Movements"}),h("div",{class:"sub",text:"Inbound (PO) vs Outbound (demand)"})])]),
-      h("div",{class:"barlist"}, watch.map(x=>h("div",{style:"display:grid;grid-template-columns:1fr auto;gap:6px;font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+      h("div",{class:"barlist"}, watch.map(x=>h("div",{style:"display:grid;grid-template-columns:1fr auto;gap:6px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"},[
         h("div",{},[ h("div",{class:"strong",style:"font-weight:700",text:trim(x.it.name,26)}),
           h("div",{class:"muted",style:"font-size:11px",text:x.it.id}) ]),
         h("div",{class:"right"},[
           h("div",{html:`<span class="badge-s s-ok">▲ ${ENG.num(x.st.pIn)}</span> <span class="badge-s s-warn">▼ ${ENG.num(x.st.pOut)}</span>`}),
-          h("div",{class:"muted",style:"font-size:10.5px;margin-top:3px",text:"ATP "+ENG.qtyText(x.it,x.st.atp,0)})
+          h("div",{class:"muted",style:"font-size:11px;margin-top:3px",text:"ATP "+ENG.qtyText(x.it,x.st.atp,0)})
         ])
       ])))
     ]);

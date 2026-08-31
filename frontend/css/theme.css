@@ -18,7 +18,8 @@
   --accent-300:#ff8c4d;
   --accent-soft:rgba(240,104,32,.14);
   --accent-line:rgba(240,104,32,.34);
-  --accent-grad:linear-gradient(135deg,var(--accent-300),var(--accent) 55%,var(--accent-600));
+  /* flat by ruling 2026-08-31 — gradient fills read as noise; keep the var so 30+ usages stay valid */
+  --accent-grad:linear-gradient(0deg,var(--accent),var(--accent));
 
   /* status palette */
   --ok:#18b364; --ok-soft:rgba(24,179,100,.15);
@@ -31,8 +32,8 @@
   --c1:var(--accent); --c2:#3b82f6; --c3:#18b364; --c4:#eab308;
   --c5:#8b5cf6; --c6:#f04438; --c7:#0fb5ae; --c8:#ec4899;
 
-  /* geometry — data-dense, precision radii */
-  --radius:13px; --radius-sm:9px; --radius-lg:20px; --radius-pill:999px;
+  /* geometry — one radius family: 6 / 10 / 14 */
+  --radius:10px; --radius-sm:6px; --radius-lg:14px; --radius-pill:999px;
 
   /* spacing scale (4/8 rhythm) */
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
@@ -42,6 +43,13 @@
   --font:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 
+  /* type scale — golden-ratio ladder on a 13px base:
+     13 → 21 → 34 (×φ), half-steps 17/26 (×√φ), data steps 10/11/12/15 */
+  --fs-2xs:10px; --fs-xs:11px; --fs-sm:12px; --fs-md:13px;
+  --fs-lg:15px; --fs-xl:17px; --fs-2xl:21px; --fs-3xl:26px;
+  --fs-4xl:34px; --fs-5xl:42px;
+  --lh:1.45;
+
   /* motion */
   --tr:.17s cubic-bezier(.4,0,.2,1);
   --tr-slow:.28s cubic-bezier(.4,0,.2,1);
@@ -50,21 +58,14 @@
 
 /* ---------- DARK (default) — Graphite Industrial ---------- */
 [data-theme="dark"]{
-  --bg:#090b11;
-  --bg-grid:rgba(255,255,255,.022);
-  --bg-grad:
-    radial-gradient(1100px 560px at 82% -10%, rgba(240,104,32,.12), transparent 58%),
-    radial-gradient(880px 520px at -8% 108%, rgba(59,130,246,.09), transparent 55%),
-    linear-gradient(var(--bg-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
-  --bg-grid-size:34px;
+  --bg:#0b0d13;
   --panel:#12151d;
   --panel-2:#171b25;
   --panel-3:#1f2431;
   --elev:#1b202c;
   --line:rgba(255,255,255,.075);
   --line-strong:rgba(255,255,255,.15);
-  --sheen:rgba(255,255,255,.055);            /* inset top highlight on surfaces */
+  --sheen:rgba(255,255,255,.055);            /* legacy; inset sheens are off (see --inset-top) */
   --sheen-strong:rgba(255,255,255,.09);
   --text:#eef1f7;
   --text-dim:#a9b2c2;
@@ -73,28 +74,21 @@
   --sidebar-2:#0b0e16;
   --sidebar-line:rgba(255,255,255,.06);
   --sidebar-text:#aeb8cc;
-  --table-stripe:rgba(255,255,255,.018);
-  --table-hover:rgba(240,104,32,.075);
+  --table-stripe:transparent;                 /* zebra off — hover + hairlines carry the rows */
+  --table-hover:rgba(255,255,255,.05);
   --glass:rgba(14,17,25,.72);
   --scrim:rgba(3,5,9,.62);
 
-  --shadow-1:0 1px 2px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.28);
-  --shadow-2:0 8px 24px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.3);
-  --shadow-pop:0 24px 60px rgba(0,0,0,.55), 0 6px 18px rgba(0,0,0,.4);
+  --shadow-1:0 1px 2px rgba(0,0,0,.35);
+  --shadow-2:0 6px 16px rgba(0,0,0,.32), 0 2px 6px rgba(0,0,0,.25);
+  --shadow-pop:0 16px 40px rgba(0,0,0,.45), 0 4px 12px rgba(0,0,0,.32);
   --ring:0 0 0 3px var(--accent-soft);
-  --inset-top:inset 0 1px 0 var(--sheen);
+  --inset-top:inset 0 0 0 0 transparent;      /* sheen highlights off */
 }
 
 /* ---------- LIGHT — Precision Daylight ---------- */
 [data-theme="light"]{
   --bg:#eef1f6;
-  --bg-grid:rgba(15,23,42,.028);
-  --bg-grad:
-    radial-gradient(1000px 520px at 84% -12%, rgba(240,104,32,.10), transparent 56%),
-    radial-gradient(760px 460px at -6% 106%, rgba(59,130,246,.07), transparent 52%),
-    linear-gradient(var(--bg-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
-  --bg-grid-size:34px;
   --panel:#ffffff;
   --panel-2:#f5f7fb;
   --panel-3:#e9edf4;
@@ -110,16 +104,16 @@
   --sidebar-2:#0e121c;
   --sidebar-line:rgba(255,255,255,.06);
   --sidebar-text:#aeb8cc;
-  --table-stripe:rgba(15,23,42,.02);
-  --table-hover:rgba(240,104,32,.07);
+  --table-stripe:transparent;
+  --table-hover:rgba(15,23,42,.045);
   --glass:rgba(255,255,255,.8);
   --scrim:rgba(15,23,42,.42);
 
-  --shadow-1:0 1px 2px rgba(15,23,42,.08), 0 1px 3px rgba(15,23,42,.06);
-  --shadow-2:0 10px 28px rgba(15,23,42,.12), 0 2px 8px rgba(15,23,42,.08);
-  --shadow-pop:0 24px 60px rgba(15,23,42,.22), 0 6px 18px rgba(15,23,42,.12);
+  --shadow-1:0 1px 2px rgba(15,23,42,.07);
+  --shadow-2:0 6px 16px rgba(15,23,42,.10), 0 2px 6px rgba(15,23,42,.06);
+  --shadow-pop:0 16px 40px rgba(15,23,42,.18), 0 4px 12px rgba(15,23,42,.10);
   --ring:0 0 0 3px var(--accent-soft);
-  --inset-top:inset 0 1px 0 var(--sheen);
+  --inset-top:inset 0 0 0 0 transparent;
 }
 
 /* ============ DYNAMIC ACCENTS ============ */
@@ -138,10 +132,9 @@
 html,body{height:100%}
 body{
   font-family:var(--font);
+  font-size:var(--fs-md);
+  line-height:var(--lh);
   background:var(--bg);
-  background-image:var(--bg-grad);
-  background-size:auto,auto,var(--bg-grid-size) var(--bg-grid-size),var(--bg-grid-size) var(--bg-grid-size);
-  background-attachment:fixed;
   color:var(--text);
   font-feature-settings:" cv11","ss01";
   -webkit-font-smoothing:antialiased;

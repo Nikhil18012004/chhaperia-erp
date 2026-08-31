@@ -220,14 +220,14 @@
            the receipt was posted, so the office has to see this without opening
            anything: it is their decision to raise a debit note or send it back
            through the rejection path the receipt form already has. */
-        poQc&&poQc.awaiting?h("div",{class:"qc-note bad",style:"margin:14px 0 0;font-size:12.5px"},[
+        poQc&&poQc.awaiting?h("div",{class:"qc-note bad",style:"margin:14px 0 0;font-size:13px"},[
           h("div",{text:"A material on this order FAILED its incoming test and is waiting on an admin's ruling. The stock was booked in when the receipt was posted, so production can still draw it until the rejection is approved."}),
           (App.isAdmin&&App.isAdmin())?h("button",{class:"btn sm danger",style:"margin-top:9px",
             onclick:()=>{UI.$("#modalHost").hidden=true;qcDecisionQueue();},text:"Rule on it now"}):null,
-        ]):poQc&&poQc.quarantined?h("div",{class:"qc-note bad",style:"margin:14px 0 0;font-size:12.5px",
+        ]):poQc&&poQc.quarantined?h("div",{class:"qc-note bad",style:"margin:14px 0 0;font-size:13px",
           text:poQc.quarantined+(poQc.quarantined===1?" material":" materials")+" from this order failed and "
             +(poQc.quarantined===1?"is":"are")+" quarantined — held in the QC store, out of reach of production. Returning it to the supplier is a separate debit note."}):
-        poQc&&poQc.fail?h("div",{class:"qc-note",style:"margin:14px 0 0;font-size:12.5px",
+        poQc&&poQc.fail?h("div",{class:"qc-note",style:"margin:14px 0 0;font-size:13px",
           text:"A material on this order failed its incoming test, and an admin declined the rejection — the lot stands as good stock."}):null,
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Order Lines"}),
         table(po.lines,[
@@ -282,7 +282,7 @@
                   html:PRINT_IC+" Print GRN Test Report"});
           },noSort:true},
         ].filter(Boolean),{empty:"No goods receipt notes"}):
-        h("div",{class:"muted",style:"font-size:12.5px",
+        h("div",{class:"muted",style:"font-size:13px",
           text:qcOnly?"No goods receipt notes yet — nothing to test on this order."
                      :"No goods receipt notes yet — press Receive Goods to post one."}),
       ]);
@@ -1576,12 +1576,12 @@
         const uomEl=h("select",{class:"select",id:"pl_uom_"+idx},
           UOMS.map(u=>h("option",{value:u,text:u,selected:(seedUom||stockUom)===u?"selected":null})));
         const uomWarn=h("div",{class:"muted",id:"pl_uomw_"+idx,
-          style:"font-size:10.5px;margin-top:3px;display:none"});
+          style:"font-size:11px;margin-top:3px;display:none"});
         const qtyEl=h("input",{class:"input",id:"pl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal});
         /* Suppliers quote tape either way round, so whichever unit is typed the
            other is shown beside it — with the width and GSM it was worked out
            from, so the figure can be checked rather than trusted. */
-        const convEl=h("div",{class:"muted",id:"pl_conv_"+idx,style:"font-size:10.5px;margin-top:3px"});
+        const convEl=h("div",{class:"muted",id:"pl_conv_"+idx,style:"font-size:11px;margin-top:3px"});
         const syncConv=(x)=>{
           const kpm=kgPerMetre(x), q=+qtyEl.value||0;
           const u=String(uomEl.value||"").toUpperCase();
@@ -1749,7 +1749,7 @@
       const S=GST.ccySign(opts.exportCcy), f2=v=>S+(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
       const sub=calc.taxable, tot=+(sub+(+frVal||0)+(+insVal||0)).toFixed(2);
       box.innerHTML=`<div style="min-width:300px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
-        <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px">Export supply — commercial invoice, GST not added</div>
+        <div class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px">Export supply — commercial invoice, GST not added</div>
         ${calc.discount?row("Discount","− "+f2(calc.discount)):""}
         ${row("Sub Total",f2(sub))}
         ${inpRow("Freight ("+opts.exportCcy+")",opts.freightId,frVal)}
@@ -1759,7 +1759,7 @@
       return;
     }
     box.innerHTML=`<div style="min-width:300px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
-      <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;margin-bottom:6px">
+      <div class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px">
         ${interState?("Inter-state supply → IGST"):("Intra-state ("+(GST.stateName(co.stateCode)||"")+") → CGST + SGST")}
       </div>
       ${calc.discount?row("Discount","− "+ENG.money(calc.discount)):""}
@@ -2197,7 +2197,7 @@
            purely so the desk can talk to a customer who orders the other way.
            The equivalent is a working aid only and never reaches the invoice. */
         const sQtyEl=h("input",{class:"input",id:"sl_qty_"+idx,type:"number",placeholder:"0",value:qtyVal});
-        const sConvEl=h("div",{class:"muted",id:"sl_conv_"+idx,style:"font-size:10.5px;margin-top:3px"});
+        const sConvEl=h("div",{class:"muted",id:"sl_conv_"+idx,style:"font-size:11px;margin-top:3px"});
         const sSyncConv=(x)=>{
           const kpm=kgPerMetre(x), q=+sQtyEl.value||0;
           const u=BOMCALC.normUnit((x&&x.uom)||"KG");
@@ -2312,13 +2312,13 @@
           h("div",{class:"grid cols-3 statgrid-3",style:"margin:14px 0;gap:8px"},[
             stat("Rating","★ "+s.rating), stat("On-Time",s.onTime+"%"), stat("Terms",s.terms),
           ]),
-          s.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+s.gst+(partyStateCode(s)?" · "+GST.stateName(partyStateCode(s)):"")}):null,
+          s.gst?h("div",{class:"muted",style:"font-size:12px;margin-bottom:8px",text:"GSTIN "+s.gst+(partyStateCode(s)?" · "+GST.stateName(partyStateCode(s)):"")}):null,
           h("div",{style:"margin-bottom:10px"},[ h("div",{class:"flex between",style:"font-size:11px;margin-bottom:4px"},[h("span",{class:"muted",text:"On-time delivery"}),h("span",{class:"muted",text:s.onTime+"%"})]), h("div",{html:meter(s.onTime,s.onTime>92?"ok":s.onTime>85?"warn":"danger")}) ]),
-          h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
+          h("div",{class:"flex between",style:"font-size:13px;padding-top:10px;border-top:1px solid var(--line)"},[
             h("span",{class:"muted",text:items.length+" items supplied"}),
             h("span",{class:"strong",text:ENG.money(spendMap[s.id]||0)+" / yr"})
           ]),
-          h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
+          h("div",{class:"contact-line",style:"font-size:12px;margin-top:8px"},[
             "👤 "+(s.contact||"—")+" · ", MW.phoneCell(s.phone),
             ...(s.email ? [" · ", MW.emailLink(s.email,{mode:"compose"})] : []),
           ]),
@@ -2388,7 +2388,7 @@
       const cnt=UI.$("#custCount"); if(cnt) cnt.textContent=rows.length+(rows.length===1?" complaint":" complaints");
       host.innerHTML="";
       host.appendChild(h("div",{class:"flex between aic wrap gap",style:"margin-bottom:10px"},[
-        h("div",{class:"muted",style:"font-size:12.5px",
+        h("div",{class:"muted",style:"font-size:13px",
           text:"A complaint is tied to the batch it came from, so the lab reading settles it and every other customer holding that batch is one click away."}),
         h("button",{class:"btn primary sm",onclick:()=>complaintForm(),html:"＋ Raise complaint"})
       ]));
@@ -2399,7 +2399,7 @@
       }
       const tone=s=>s==="Open"?"danger":s==="Investigating"?"warn":s==="Resolved"?"ok":"mut";
       host.appendChild(table(rows,[
-        {key:"id",label:"Complaint",render:r=>`<b>${esc(r.id)}</b><div class="muted" style="font-size:11.5px">${esc(r.raised||"")}${r.via?" · via "+esc(r.via):""}</div>`,sort:r=>r.id},
+        {key:"id",label:"Complaint",render:r=>`<b>${esc(r.id)}</b><div class="muted" style="font-size:12px">${esc(r.raised||"")}${r.via?" · via "+esc(r.via):""}</div>`,sort:r=>r.id},
         {key:"customer",label:"Customer",render:r=>esc(ENG.custName(r.customerId)),sort:r=>ENG.custName(r.customerId)},
         {key:"batch",label:"Batch",render:r=>r.batch?`<span class="mono">${esc(r.batch)}</span>`:'<span class="muted">—</span>',sort:r=>r.batch||""},
         {key:"claim",label:"Claim",render:r=>esc(String(r.claim||"").slice(0,90))+(String(r.claim||"").length>90?"…":""),noSort:true},
@@ -2424,7 +2424,7 @@
       if(!rows.length){
         host.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"✓"}),
           h("div",{text:quiet.length?"No match in the quiet list":"Everybody who buys regularly has ordered recently"}),
-          h("div",{class:"muted",style:"font-size:12.5px;margin-top:6px",
+          h("div",{class:"muted",style:"font-size:13px;margin-top:6px",
             text:"A customer needs three past orders before a rhythm can be read from them."})]));
         return;
       }
@@ -2439,7 +2439,7 @@
       };
       const chase=rows.filter(r=>r.level==="chase"&&MW.phoneDigits(custOf(r).phone));
       host.appendChild(h("div",{class:"flex between aic wrap gap",style:"margin-bottom:10px"},[
-        h("div",{class:"muted",style:"font-size:12.5px;flex:1 1 360px",
+        h("div",{class:"muted",style:"font-size:13px;flex:1 1 360px",
           text:"Worked out from each client's own order history — how often they normally buy, against how long it has been. Nothing here is typed in."}),
         chase.length?h("button",{class:"btn primary sm",html:"💬 Message "+chase.length+" on WhatsApp",
           onclick:()=>waListModal({title:"Message "+chase.length+" quiet account"+(chase.length===1?"":"s"),
@@ -2450,7 +2450,7 @@
       const wrap=h("div",{style:"display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start"});
       const tblHost=h("div",{style:"flex:1 1 520px;min-width:0"});
       tblHost.appendChild(table(rows,[
-        {key:"name",label:"Customer",render:r=>`<b>${esc(r.name)}</b><div class="muted" style="font-size:11.5px">${r.orders} orders · last ${esc(r.lastSO||"—")}, ${esc(r.lastDate)}</div>`,sort:r=>r.name},
+        {key:"name",label:"Customer",render:r=>`<b>${esc(r.name)}</b><div class="muted" style="font-size:12px">${r.orders} orders · last ${esc(r.lastSO||"—")}, ${esc(r.lastDate)}</div>`,sort:r=>r.name},
         {key:"usual",label:"Usual gap",num:true,render:r=>ENG.num(r.usual)+" d",sort:r=>r.usual},
         {key:"silent",label:"Silent",num:true,render:r=>`<span style="color:var(--${r.level==="chase"?"danger":"warn"});font-weight:700">${ENG.num(r.silent)} d</span>`,sort:r=>r.silent},
         {key:"atRisk",label:"At risk",num:true,render:r=>ENG.money(r.atRisk),sort:r=>r.atRisk},
@@ -2493,10 +2493,10 @@
       const rl=Object.entries(rivals).sort((a,b)=>b[1]-a[1]).slice(0,3);
       return h("div",{class:"card",style:"flex:0 1 300px;min-width:250px"},[
         h("h3",{style:"font-size:14px",text:"Why we lost · last 12 months"}),
-        h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",
+        h("div",{class:"muted",style:"font-size:12px;margin-bottom:8px",
           text:pool.length?pool.length+" lost lead"+(pool.length===1?"":"s")+(recent.length?"":" — none dated, so all time"):"No lost leads on record"}),
         items.length?MW.barList(items):null,
-        rl.length?h("div",{style:"font-size:12.5px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"},
+        rl.length?h("div",{style:"font-size:13px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"},
           rl.map(([n,c])=>h("div",{text:"Lost to "+n+" "+c+" time"+(c===1?"":"s")}))):null,
       ]);
     }
@@ -2534,7 +2534,7 @@
               h("div",{class:"muted",style:"font-size:12px",
                 text:[c.city, ctry==="India"?null:ctry, c.segment].filter(Boolean).join(" · ")})]),
             h("div",{class:"flex gap aic",style:"gap:6px"},[
-              h("span",{class:"chip",style:"font-size:10.5px;font-weight:700",
+              h("span",{class:"chip",style:"font-size:11px;font-weight:700",
                 title:"Invoices for this client are raised in "+CCY.name(ccy),text:CCY.short(ccy)}),
               h("span",{html:badge(c.rating==="A"?"ok":c.rating==="B"?"warn":"mut","Grade "+c.rating)})
             ])
@@ -2543,11 +2543,11 @@
           h("div",{class:"grid cols-3 statgrid-3",style:"margin:14px 0;gap:8px"},[
             stat("Orders",orders.length), stat("Open",open), stat("Since",c.since),
           ]),
-          c.gst?h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:8px",text:"GSTIN "+c.gst+(partyStateCode(c)?" · "+GST.stateName(partyStateCode(c)):"")}):null,
-          h("div",{class:"flex between",style:"font-size:12.5px;padding-top:10px;border-top:1px solid var(--line)"},[
+          c.gst?h("div",{class:"muted",style:"font-size:12px;margin-bottom:8px",text:"GSTIN "+c.gst+(partyStateCode(c)?" · "+GST.stateName(partyStateCode(c)):"")}):null,
+          h("div",{class:"flex between",style:"font-size:13px;padding-top:10px;border-top:1px solid var(--line)"},[
             h("span",{class:"muted",text:"Lifetime value"}), h("span",{class:"strong",text:ENG.money(total)})
           ]),
-          h("div",{class:"contact-line",style:"font-size:11.5px;margin-top:8px"},[
+          h("div",{class:"contact-line",style:"font-size:12px;margin-top:8px"},[
             "👤 "+(c.contact||"—")+" · ", MW.phoneCell(c.phone),
             ...(c.email ? [" · ", MW.emailLink(c.email,{mode:"compose"})] : []),
             " · "+c.terms,
@@ -2563,7 +2563,7 @@
     draw();
   }};
 
-  function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
+  function stat(label,val){ return h("div",{},[h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase",text:label}),h("div",{style:"font-weight:700;font-size:15px;margin-top:2px",text:val})]); }
 
   /* ----- Supplier / Customer delete -----
      Reached from the Edit dialog (there is no delete on the card), so the user
@@ -2701,7 +2701,7 @@
     const list=(rows||[]).filter(r=>r.digits);
     const body=h("div",{},[
       list.length?h("div",{},list.map(r=>h("div",{class:"flex between aic gap",style:"padding:8px 0;border-bottom:1px solid var(--line)"},[
-        h("div",{style:"min-width:0"},[h("div",{style:"font-weight:700",text:r.name}), h("div",{class:"muted",style:"font-size:11.5px",text:r.meta||""})]),
+        h("div",{style:"min-width:0"},[h("div",{style:"font-weight:700",text:r.name}), h("div",{class:"muted",style:"font-size:12px",text:r.meta||""})]),
         h("a",{class:"btn sm primary",href:"https://wa.me/"+r.digits+"?text="+encodeURIComponent(r.text||""),target:"_blank",rel:"noopener noreferrer",text:"Open WhatsApp"}),
       ]))):h("div",{class:"muted",text:"Nobody here has a phone number on record."}),
       h("div",{class:"muted",style:"font-size:12px;margin-top:10px",text:"Each button opens one WhatsApp chat with the message ready; nothing is sent until you press send there."}),
@@ -2796,10 +2796,10 @@
       ].filter(Boolean)),
       h("div",{class:"card",style:"margin-top:14px;box-shadow:none;background:var(--panel-2)"},[
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",text:"What they said"}),
-        h("div",{style:"font-size:13.5px;line-height:1.5;white-space:pre-wrap",text:c.claim||"—"})]),
+        h("div",{style:"font-size:13px;line-height:1.5;white-space:pre-wrap",text:c.claim||"—"})]),
       c.resolution?h("div",{class:"card",style:"margin-top:10px;box-shadow:none;background:var(--panel-2)"},[
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",text:"Resolution"}),
-        h("div",{style:"font-size:13.5px;line-height:1.5;white-space:pre-wrap",text:c.resolution})]):null,
+        h("div",{style:"font-size:13px;line-height:1.5;white-space:pre-wrap",text:c.resolution})]):null,
 
       c.batch?h("div",{class:"card",style:"margin-top:14px"},[
         h("div",{class:"flex between aic wrap gap",style:"margin-bottom:8px"},[
@@ -2834,13 +2834,13 @@
               `${canWa?` <button class="btn sm ghost" data-warn="${esc(o.soId)}" title="Message on WhatsApp">💬 Warn</button>`:""}</td></tr>`;
           }).join("")+`</tbody>`}))
           :h("div",{class:"muted",style:"font-size:13px",text:"No dispatched order carries this batch number."}),
-        others.length?h("div",{class:"muted",style:"font-size:12.5px;margin-top:8px",
+        others.length?h("div",{class:"muted",style:"font-size:13px;margin-top:8px",
           text:others.length+" other customer"+(others.length===1?" holds":"s hold")+" this batch and "+(others.length===1?"has":"have")+" not called. Calling them first is the difference between a recall and a reputation."}):null,
       ]):null,
 
       (c.history||[]).length?h("div",{style:"margin-top:14px"},[
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px",text:"History"}),
-        h("div",{},(c.history||[]).slice().reverse().map(x=>h("div",{class:"muted",style:"font-size:12.5px;padding:3px 0",
+        h("div",{},(c.history||[]).slice().reverse().map(x=>h("div",{class:"muted",style:"font-size:13px;padding:3px 0",
           text:String(x.at||"").slice(0,10)+" · "+(x.status||"")+(x.by?" · "+x.by:"")+(x.note&&x.note!=="Raised"?" — "+x.note:"")})))
       ]):null,
     ]);
@@ -2902,7 +2902,7 @@
       U.field("Country",U.searchSelect("cu_country",CCY.countryOptions(),ctry0.name,"Search country…")),
       U.field("Currency (invoiced in)",
         U.searchSelect("cu_ccy",CCY.options(),ccy0,"Search currency…")
-        +`<div class="muted" id="cu_rate" style="font-size:11.5px;margin-top:5px;line-height:1.4"></div>`,"full"),
+        +`<div class="muted" id="cu_rate" style="font-size:12px;margin-top:5px;line-height:1.4"></div>`,"full"),
       U.field("Grade",U.selectHTML("cu_rating",[{v:"A",l:"A — key account"},{v:"B",l:"B — regular"},{v:"C",l:"C — occasional"}],edit?(edit.rating||"B"):"B")),
       U.field("Contact Person",`<input class="input" id="cu_contact" value="${v("contact")}">`),
       U.field("Phone",`<input class="input" id="cu_phone" value="${v("phone")}" placeholder="+91…">`),
@@ -3654,7 +3654,7 @@
     const wh=(ENG.data.warehouses||[]).find(w=>w.id===q.wh);
     const hold=(ENG.data.warehouses||[]).find(w=>/quarantine|qc.?hold|reject/i.test(String(w.type||"")+" "+String(w.name||"")));
     const body=h("div",{},[
-      h("div",{class:"qc-note bad",style:"font-size:12.5px;margin-bottom:16px",
+      h("div",{class:"qc-note bad",style:"font-size:13px;margin-bottom:16px",
         text:q.itemName+" failed its incoming test on "+((q.failed||[]).join(", ")||"a measured parameter")
           +". The lot is in "+((wh&&wh.name)||q.wh||"the store")+" now and production can still draw it until you decide."}),
       MW.dl([["Material",q.itemName],["Code",q.itemId],
@@ -3668,7 +3668,7 @@
         h("textarea",{class:"input",id:"qcdNote",rows:"2",maxlength:"500",
           placeholder:"why you are approving or declining the rejection"}),
       ]),
-      h("div",{class:"qc-note",style:"font-size:11.5px;margin-top:14px",
+      h("div",{class:"qc-note",style:"font-size:12px;margin-top:14px",
         text:"Approve → the lot moves to "+((hold&&hold.name)||"the quarantine store")
           +" and no work order can draw it. Decline → the lot stays where it is and counts as good stock. "
           +"Neither writes the material off; returning it to the supplier is a separate debit note."}),
@@ -3706,7 +3706,7 @@
     if(!list.length){ toast("No failed lots are waiting on a decision.",{type:"ok"}); return; }
     const admin=App.isAdmin&&App.isAdmin();
     const body=h("div",{},[
-      h("div",{class:"qc-note bad",style:"font-size:12.5px;margin-bottom:14px",
+      h("div",{class:"qc-note bad",style:"font-size:13px;margin-bottom:14px",
         text:list.length+(list.length===1?" lot has":" lots have")+" failed an incoming test and "
           +(admin?"needs your ruling":"is waiting on an admin's ruling")
           +". Until then the material stays in the store and production can draw it."}),
@@ -3797,7 +3797,7 @@
         h("label",{text:"Remarks"}),
         h("textarea",{class:"input",id:"qc_remarks",rows:"2",maxlength:"500",text:f.remarks||""}),
       ]),
-      f.testedAt?h("div",{class:"muted",style:"font-size:11.5px;margin-top:10px",
+      f.testedAt?h("div",{class:"muted",style:"font-size:12px;margin-top:10px",
         text:"Last filed by "+(f.testedBy||"—")+" on "+String(f.testedAt).slice(0,10)+" — saving again replaces that reading."}):null,
     ]);
     const mo=modal({title:"🧪 GRN Testing — "+f.item.name, sub:f.grn.id+(f.grn.poId?" · "+f.grn.poId:""),
@@ -3922,7 +3922,7 @@
     if(!gs.length){ toast("Nothing has been received against "+po.id+" yet.",{type:"warn"}); return; }
     if(gs.length===1){ grnTestPanel(gs[0]); return; }
     const body=h("div",{},[
-      h("div",{class:"muted",style:"font-size:12.5px;margin-bottom:12px",
+      h("div",{class:"muted",style:"font-size:13px;margin-bottom:12px",
         text:"This order was delivered in "+gs.length+" parts. Each receipt is tested separately."}),
       table(gs,[
         {key:"id",label:"GRN No",render:g=>`<b>${esc(g.id)}</b>`,noSort:true},
@@ -4185,9 +4185,9 @@
   .logo-side{flex:1.05;display:flex;align-items:center;padding:5px 0 5px 16px}
   .logo-side img{width:100%;max-height:92px;object-fit:contain;object-position:left center}
   .co-block{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
-    padding:12px 20px 10px 58px;text-align:right;font-size:10.5px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
-  .conm{font-size:14.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
-  .co-ids{margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600;font-size:10.5px}
+    padding:12px 20px 10px 58px;text-align:right;font-size:11px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
+  .conm{font-size:15px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
+  .co-ids{margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600;font-size:11px}
   .co-ids span{color:#F58024;font-weight:800}
   .rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -20px 12px}
   .title-row{display:flex;justify-content:space-between;align-items:center;margin:0 0 10px}
@@ -4195,18 +4195,18 @@
   .copy{font-size:9px;font-weight:700;letter-spacing:1px;color:#888;border:1px solid #ccc;border-radius:4px;padding:3px 9px;text-transform:uppercase}
   .info{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:8px}
   .ip{display:flex;justify-content:space-between;gap:8px;font-size:11px;min-height:15px}
-  .ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}
+  .ip span{color:#767c82;text-transform:uppercase;font-size:10px;font-weight:700;letter-spacing:.3px;padding-top:1px}
   .parties{display:flex;gap:12px;margin:18px 0 8px}
-  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:7px 12px;font-size:11.5px;line-height:1.45}
+  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:7px 12px;font-size:12px;line-height:1.45}
   .plbl{display:inline-block;background:#F06820;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:2.5px 10px;border-radius:3px;margin:-18px 0 5px;box-shadow:0 1px 0 rgba(0,0,0,.15)}
   .pnm{font-weight:800;font-size:13px}.paddr{color:#333;white-space:pre-line}
   table.items{width:100%;border-collapse:collapse;margin-bottom:8px}
   table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:5.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}
-  table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:11.5px;vertical-align:top}
+  table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:12px;vertical-align:top}
   table.items tbody tr:nth-child(even) td{background:#f6f7f8}
   tr.fill td{height:15px;background:#fff !important}
   td.r,th.r{text-align:right} td.c,th.c{text-align:center}
-  td .sub{font-size:9.5px;color:#777}
+  td .sub{font-size:10px;color:#777}
   .rej{color:#b02a2a;font-weight:700}
   /* "GOODS RECEIPT NOTE CUM TEST REPORT" is nearly twice as long as the plain
      title — at 20px/4px it runs into the copy chip, so the combined form gets
@@ -4219,16 +4219,16 @@
   table.tot{width:100%;border-collapse:collapse}
   table.tot td{border:1px solid #d8dbde;padding:5px 12px;font-size:12px}
   table.tot td:first-child{color:#555}
-  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}
+  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:15px;border-color:#F06820}
   .words{border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:5px 12px;font-size:11px;line-height:1.45}
-  .words b{display:block;margin-top:2px;font-size:11.5px}
+  .words b{display:block;margin-top:2px;font-size:12px}
   .sign{display:flex;gap:12px;margin-top:26px}
   .sig{flex:1;border-top:1.5px solid #555;padding-top:5px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.5px;color:#333;text-transform:uppercase}
   /* who actually did it, under the role — the receipt records real people */
-  .sig-nm{font-size:9.5px;font-weight:600;letter-spacing:0;color:#767c82;text-transform:none;margin-top:2px}
-  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
+  .sig-nm{font-size:10px;font-weight:600;letter-spacing:0;color:#767c82;text-transform:none;margin-top:2px}
+  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:11px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
-  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
+  .note{margin-top:8px;font-size:10px;color:#999;text-align:center}
   .cancel{position:fixed;top:40%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);
     font-size:64px;font-weight:900;letter-spacing:8px;color:rgba(176,42,42,.18);
     border:6px solid rgba(176,42,42,.18);border-radius:12px;padding:6px 30px;pointer-events:none}
@@ -4238,8 +4238,8 @@
      what was decided, who signed — instead of a stack of unlabelled tables. */
   .sec{display:flex;align-items:center;gap:9px;margin:13px 0 7px}
   .sec-n{flex:0 0 auto;width:16px;height:16px;border-radius:50%;background:#F06820;color:#fff;
-    font-size:9.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
-  .sec-t{font-size:10.5px;font-weight:800;letter-spacing:1.5px;color:#26282b;text-transform:uppercase}
+    font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .sec-t{font-size:11px;font-weight:800;letter-spacing:1.5px;color:#26282b;text-transform:uppercase}
   .sec::after{content:"";flex:1;height:1px;background:#dfe2e5}
   .sec .tr-stamp{flex:0 0 auto;order:3}
   .tr-wrap{break-inside:avoid}
@@ -4249,25 +4249,25 @@
     border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:9px}
   .tr-pend{font-size:10px;font-weight:700;color:#b02a2a;border:1px solid #e3b7b7;
     background:#fdf3f3;border-radius:4px;padding:4px 10px;margin-bottom:8px}
-  .tr-note{font-size:9.5px;color:#767c82;font-style:italic;margin-top:4px}
-  .tr-sub{font-size:9.5px;color:#767c82;margin:-2px 0 5px}
+  .tr-note{font-size:10px;color:#767c82;font-style:italic;margin-top:4px}
+  .tr-sub{font-size:10px;color:#767c82;margin:-2px 0 5px}
   .tr-sub b{color:#333}
   /* ONE table for the whole delivery: each material is a full-width grouping
      row rather than its own bordered card. Half the vertical space, and a
      multi-material receipt still fits one page — the same idiom the BOM
      components table already uses for layer headings. */
-  .tr-nm{font-size:11.5px;font-weight:800;color:#26282b}
-  .tr-cd{font-size:9.5px;font-weight:600;color:#777;margin-left:7px}
+  .tr-nm{font-size:12px;font-weight:800;color:#26282b}
+  .tr-cd{font-size:10px;font-weight:600;color:#777;margin-left:7px}
   .tr-res{font-size:9px;font-weight:800;letter-spacing:1px;border:1.5px solid;border-radius:3px;
     padding:1px 8px;white-space:nowrap;float:right}
-  .tr-samp{font-size:9.5px;color:#767c82;font-weight:500;margin-top:2px;clear:both}
+  .tr-samp{font-size:10px;color:#767c82;font-weight:500;margin-top:2px;clear:both}
   .tr-samp b{color:#333}
   table.tr-tbl{width:100%;border-collapse:collapse}
   table.tr-tbl th{background:#26282b;color:#fff;font-size:9px;text-transform:uppercase;letter-spacing:.4px;
     padding:4px 7px;border:1px solid #26282b;font-weight:800}
   table.tr-tbl td{border:1px solid #e3e6e8;padding:3.5px 7px;font-size:11px}
   tr.tr-grp > td{background:#eef0f2;border-top:1.5px solid #b9bec3;padding:5px 8px 4px}
-  tr.tr-ftr > td{font-size:9.5px;color:#767c82;background:#fafbfc;padding:3px 8px}
+  tr.tr-ftr > td{font-size:10px;color:#767c82;background:#fafbfc;padding:3px 8px}
   tr.tr-ftr b{color:#333}
   tr.tr-decr > td{padding:0;border:0}
   .tr-dec{font-size:10px;line-height:1.5;padding:4px 8px;background:#f6f7f8;
@@ -4276,7 +4276,7 @@
   /* the disposition: the one line an auditor reads first */
   .tr-disp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:7px 12px;
     border:1px solid #d8dbde;border-left:4px solid #26282b;border-radius:0 8px 8px 0;background:#fafbfc}
-  .tr-disp-v{font-size:11.5px;font-weight:900;letter-spacing:1.4px;border:2px solid;border-radius:4px;padding:2px 11px}
+  .tr-disp-v{font-size:12px;font-weight:900;letter-spacing:1.4px;border:2px solid;border-radius:4px;padding:2px 11px}
   .tr-disp-n{font-size:10px;color:#4a5057;flex:1;min-width:180px;line-height:1.5}
   @media print{body{padding:0 6mm 0}.band{margin:0 -6mm}.rule{margin:0 -6mm 12px}.note{display:none}}
 </style></head><body>
@@ -4475,27 +4475,27 @@
   .logo-side{flex:1.05;display:flex;align-items:center;padding:5px 0 5px 16px}
   .logo-side img{width:100%;max-height:92px;object-fit:contain;object-position:left center}
   .co-block{flex:1;background:#26282b;color:#cfd4d8;clip-path:polygon(9% 0,100% 0,100% 100%,0 100%);
-    padding:12px 20px 10px 58px;text-align:right;font-size:10.5px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
-  .conm{font-size:14.5px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
-  .co-ids{margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600;font-size:10.5px}
+    padding:12px 20px 10px 58px;text-align:right;font-size:11px;line-height:1.6;display:flex;flex-direction:column;justify-content:center}
+  .conm{font-size:15px;font-weight:800;color:#F58024;text-transform:uppercase;letter-spacing:.4px}
+  .co-ids{margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,.22);color:#fff;font-weight:600;font-size:11px}
   .co-ids span{color:#F58024;font-weight:800}
   .rule{height:3px;background:linear-gradient(90deg,#F06820 0 62%,#26282b 62% 100%);margin:0 -20px 12px}
   .title-row{display:flex;justify-content:space-between;align-items:center;margin:0 0 10px}
   .title{font-size:20px;font-weight:800;letter-spacing:4px;color:#26282b;border-left:6px solid #F06820;padding-left:12px}
   .copy{font-size:9px;font-weight:700;letter-spacing:1px;color:#888;border:1px solid #ccc;border-radius:4px;padding:3px 9px;text-transform:uppercase}
   .info{display:grid;grid-template-columns:repeat(3,1fr);gap:2px 24px;border:1px solid #d8dbde;border-radius:9px;background:#fafbfc;padding:7px 14px;margin-bottom:8px}
-  .ip{display:flex;justify-content:space-between;gap:8px;font-size:11px}.ip span{color:#767c82;text-transform:uppercase;font-size:9.5px;font-weight:700;letter-spacing:.3px;padding-top:1px}
+  .ip{display:flex;justify-content:space-between;gap:8px;font-size:11px}.ip span{color:#767c82;text-transform:uppercase;font-size:10px;font-weight:700;letter-spacing:.3px;padding-top:1px}
   .parties{display:flex;gap:12px;margin-bottom:8px}
-  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:7px 12px;font-size:11.5px;line-height:1.45}
+  .party{flex:1;border:1px solid #d8dbde;border-top:3px solid #F06820;border-radius:0 0 9px 9px;padding:7px 12px;font-size:12px;line-height:1.45}
   .plbl{display:inline-block;background:#F06820;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:2.5px 10px;border-radius:3px;margin:-18px 0 5px;box-shadow:0 1px 0 rgba(0,0,0,.15)}
   .pnm{font-weight:800;font-size:13px}.paddr{color:#333;white-space:pre-line}
   table.items{width:100%;border-collapse:collapse;margin-bottom:8px}
   table.items th{background:#26282b;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:5.5px 7px;border:1px solid #26282b;border-top:3px solid #F06820}
-  table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:11.5px;vertical-align:top}
+  table.items td{border:1px solid #d8dbde;padding:4px 7px;font-size:12px;vertical-align:top}
   table.items tbody tr:nth-child(even) td{background:#f6f7f8}
   tr.fill td{height:15px;background:#fff !important}
   td.r,th.r{text-align:right} td.c,th.c{text-align:center}
-  td .sub{font-size:9.5px;color:#777}
+  td .sub{font-size:10px;color:#777}
   /* The totals column used to leave a tall blank beside the stacked notes.
      The amount in words now sits directly under the grand total it restates,
      which reads better AND balances the two columns onto one page. */
@@ -4503,19 +4503,19 @@
   .bl{flex:1.4;display:flex;flex-direction:column;gap:6px}
   .br{flex:1;display:flex;flex-direction:column;gap:6px}
   .words,.bank,.notes{border:1px solid #d8dbde;border-left:3px solid #F06820;border-radius:0 9px 9px 0;padding:5px 12px;font-size:11px;line-height:1.45}
-  .words b{display:block;margin-top:2px;font-size:11.5px}
+  .words b{display:block;margin-top:2px;font-size:12px}
   .lbl{font-size:9px;font-weight:800;letter-spacing:1px;color:#F06820;text-transform:uppercase}
   table.tot{width:100%;border-collapse:collapse;height:fit-content}
   table.tot td{border:1px solid #d8dbde;padding:5px 12px;font-size:12px}
   table.tot td:first-child{color:#555}
   table.tot tr:nth-child(even) td{background:#f6f7f8}
-  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:14.5px;border-color:#F06820}
-  .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:10.5px;color:#777}
+  table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:15px;border-color:#F06820}
+  .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:11px;color:#777}
   .sig{text-align:center;color:#1a1c1e}.sig .ln{border-top:1.5px solid #555;margin-top:24px;padding-top:5px;min-width:210px;font-weight:700}
-  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:10.5px;padding:6px 14px;border-radius:6px;margin-top:14px}
+  .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:11px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
-  .greet{font-size:11.5px;margin:-4px 0 9px;color:#444}
-  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
+  .greet{font-size:12px;margin:-4px 0 9px;color:#444}
+  .note{margin-top:8px;font-size:10px;color:#999;text-align:center}
   /* ---- running footer: the company tab and the thank-you line must sit at the
      foot of EVERY printed page, not only the last one. The whole document is
      laid out in one table so its <tfoot> spacer reserves the same strip of room
@@ -4637,26 +4637,26 @@
   *{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{font:11.5px/1.5 "Segoe UI",Arial,sans-serif;color:#111;max-width:860px;margin:0 auto;padding:16px 22px}
   .title{text-align:center;font-size:14px;font-weight:800;letter-spacing:.5px;margin-bottom:4px}
-  .iec{font-weight:800;font-size:11.5px;margin-bottom:2px}
+  .iec{font-weight:800;font-size:12px;margin-bottom:2px}
   table.g{width:100%;border-collapse:collapse}
   table.g td{border:1.2px solid #222;padding:5px 9px;vertical-align:top;font-size:11px;line-height:1.55}
-  .conm{font-weight:800;font-size:12.5px}
+  .conm{font-weight:800;font-size:13px}
   .k{font-weight:700}
   table.items{width:100%;border-collapse:collapse}
-  table.items th{border:1.2px solid #222;padding:5px 8px;font-size:10.5px;line-height:1.3}
-  table.items td{border-left:1.2px solid #222;border-right:1.2px solid #222;padding:4px 8px;font-size:11.5px;vertical-align:top}
+  table.items th{border:1.2px solid #222;padding:5px 8px;font-size:11px;line-height:1.3}
+  table.items td{border-left:1.2px solid #222;border-right:1.2px solid #222;padding:4px 8px;font-size:12px;vertical-align:top}
   td.r,th.r{text-align:right} .c{text-align:center}
   td .sub{font-size:9.8px;color:#444;font-weight:400}
   td.marks{font-size:11px;width:17%}
   tr.meta td{font-weight:700;padding-top:8px}
-  tr.tot td{border:1.2px solid #222;font-weight:800;font-size:12.5px;padding:6px 8px}
+  tr.tot td{border:1.2px solid #222;font-weight:800;font-size:13px;padding:6px 8px}
   .words{border:1.2px solid #222;border-top:0;padding:6px 10px;font-size:11px}
-  .words b{display:block;font-size:11.5px}
+  .words b{display:block;font-size:12px}
   .signrow{display:flex;justify-content:flex-end;margin-top:6px}
-  .sig{border:1.2px solid #222;padding:8px 14px 6px;min-width:300px;font-size:11.5px}
+  .sig{border:1.2px solid #222;padding:8px 14px 6px;min-width:300px;font-size:12px}
   .sig .ln{margin-top:44px;font-weight:700}
-  .cert{font-size:10.5px;margin-top:8px}
-  .note{margin-top:8px;font-size:9.5px;color:#999;text-align:center}
+  .cert{font-size:11px;margin-top:8px}
+  .note{margin-top:8px;font-size:10px;color:#999;text-align:center}
   @media print{ body{padding:6mm} .note{display:none} }
 </style></head><body>
   <div class="title">${esc(docTitle)}${isQuote&&o.rev>1?" · REV "+esc(String(o.rev)):""}</div>
