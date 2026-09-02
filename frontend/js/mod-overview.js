@@ -60,7 +60,7 @@
       ]);
       const mo=UI.modal({title:"Movements", sub:"Production · Sales · Receipts — last 30 days (kg)", body, wide:true,
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
-      requestAnimationFrame(()=>Charts.line(cv,{labels:ser.labels, series:flowSeries()}));
+      Charts.soon(()=>Charts.line(cv,{labels:ser.labels, series:flowSeries()}));
     }
 
     const fx=fxCard();
@@ -72,7 +72,7 @@
     dn.classList.add("span-4");
     row1.appendChild(dn);
     root.appendChild(row1);
-    requestAnimationFrame(()=>Charts.line(flow._canvas,{labels:ser.labels, series:flowSeries()}));
+    Charts.soon(()=>Charts.line(flow._canvas,{labels:ser.labels, series:flowSeries()}));
 
     /* row 2: top products + alerts + pending */
     const row2=h("div",{class:"grid cols-12"});
@@ -149,7 +149,7 @@
       legendDot("var(--c1)","Produced"), legendDot("var(--c3)","Sold"), legendDot("var(--c2)","Received")
     ],280);
     root.appendChild(trend);
-    requestAnimationFrame(()=>Charts.line(trend._canvas,{labels:ser90.labels,series:[
+    Charts.soon(()=>Charts.line(trend._canvas,{labels:ser90.labels,series:[
       {name:"Produced",data:ser90.prod,color:cssv("--c1")},
       {name:"Sold",data:ser90.sold,color:cssv("--c3")},
       {name:"Received",data:ser90.recv,color:cssv("--c2")},
@@ -255,7 +255,7 @@
       const fcCard=chartCard(`Demand Forecast — ${trim(it.name,28)}`,`Projected next 30 days · avg ${ENG.qtyText(it,fc.avg,1)}/day · total ${ENG.qtyText(it,fc.projTotal,0)}`,null,240);
       fcCard.style.marginTop="16px";
       root.appendChild(fcCard);
-      requestAnimationFrame(()=>Charts.line(fcCard._canvas,{labels:fcLabels,series:[
+      Charts.soon(()=>Charts.line(fcCard._canvas,{labels:fcLabels,series:[
         {name:"Forecast",data:fc.projected,color:cssv("--violet")}],fmt:v=>ENG.num(v,1)}));
     }
   }};

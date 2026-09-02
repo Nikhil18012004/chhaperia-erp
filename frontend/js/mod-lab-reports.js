@@ -150,6 +150,15 @@
       if (r) reportDetail(r); else toast("Lab report " + id + " is not on file", { type: "warn" });
       return;
     }
+    /* An incoming test asked for by id — the lab's failed-lot alert lands
+       here, on the receipt's own test report (the lab cannot rule; the admin's
+       alert goes to Procurement instead). One-shot, like `open`. */
+    if (params && params.openGrnTest) {
+      const id = params.openGrnTest; params.openGrnTest = null;
+      const t = (ENG.data.grnTests || []).find((x) => x.id === id);
+      if (t) openGrnPanel(t); else toast("Incoming test " + id + " is not on file", { type: "warn" });
+      return;
+    }
     // the incharge is told what is waiting the first time they land here
     maybeAnnouncePending();
   }};
@@ -543,6 +552,7 @@
           : h("div", { html: resultBadge(r.result) }),
       ]),
       h("div", { class: "flex gap wrap", style: "margin-bottom:12px", html: typeChips(r.flags) }),
+      rulingBanner(r),
       h("div", { class: "table-wrap" }, h("div", { html: `<table class="tbl"><thead>${headHtml}</thead><tbody>${rowsHtml}</tbody></table>` })),
       merged ? h("div", { class: "flex gap wrap", style: "margin-top:10px;font-size:12px" }, [
         h("span", { class: "muted", text: "Stage result:" }),
@@ -559,7 +569,71 @@
          decision either way. The server enforces the same split. */
       foot: [bare ? null : h("button", { class: "btn danger", onclick: () => delReport(r, mo), text: "🗑 Delete" }),
         bare ? null : h("button", { class: "btn ghost", onclick: () => { mo.close(); reportForm(r); }, text: "✎ Edit" }),
+        /* THE ADMIN'S RULING on a failed batch — accept it (a concession, on
+           the record) or reject it. Neither moves stock; that stays the
+           office's decision on the ledger. Admin only, as the server enforces. */
+        (App.isAdmin() && attentionOf(r)) ? h("button", { class: "btn danger", onclick: () => decideForm(r, false, mo), text: "✗ Reject batch" }) : null,
+        (App.isAdmin() && attentionOf(r)) ? h("button", { class: "btn primary", onclick: () => decideForm(r, true, mo), text: "✓ Accept batch" }) : null,
         h("button", { class: "btn primary", onclick: () => mo.close(), text: "Close" })].filter(Boolean) });
+  }
+
+  /* Which reading is flagging this certificate — "floor" or "lab" — or null
+     once it passed or an admin has ruled. The lab's payload says so outright
+     (`attention`, the one batch-level fact it is given); everyone else has the
+     grades and works it out the way the server does. */
+  function attentionOf(r) {
+    if (!r) return null;
+    if (r.attention !== undefined) return r.attention || null;
+    if (r.decision) return null;
+    if (r.labComplete) return r.labResult === "Fail" ? "lab" : null;
+    return r.prodResult === "Fail" ? "floor" : null;
+  }
+  function rulingBanner(r) {
+    if (r.decision) {
+      const ok = r.decision === "accepted";
+      return h("div", { class: "qc-note" + (ok ? "" : " bad"), style: "font-size:13px;margin-bottom:12px" }, [
+        h("div", { style: "font-weight:700", text: (ok ? "✓ Batch accepted" : "✗ Batch rejected") + " by " + (r.decidedBy || "admin")
+          + (r.decidedAt ? " on " + String(r.decidedAt).slice(0, 10) : "") }),
+        r.decisionNote ? h("div", { class: "muted", style: "font-size:12px;margin-top:2px", text: r.decisionNote }) : null,
+      ]);
+    }
+    const att = attentionOf(r);
+    if (!att) return null;
+    return h("div", { class: "qc-note bad", style: "font-size:13px;margin-bottom:12px" }, [
+      h("div", { style: "font-weight:700", text: "⛔ Lab data FAILED — " + (att === "lab" ? "the lab's reading" : "the floor's reading") + " is outside the limits" }),
+      h("div", { class: "muted", style: "font-size:12px;margin-top:2px", text: App.isAdmin()
+        ? "The batch is not held anywhere. Accept it (a concession, kept on the certificate) or reject it — neither moves stock."
+        : "The admin has been alerted and will rule on this batch." }),
+    ]);
+  }
+  function decideForm(r, accept, parent) {
+    const note = h("textarea", { class: "input", rows: "2", maxlength: "500",
+      placeholder: accept ? "why the batch is accepted despite the reading" : "why the batch is rejected" });
+    const go = h("button", { class: "btn " + (accept ? "primary" : "danger"), text: accept ? "Accept batch" : "Reject batch",
+      onclick: async () => {
+        go.disabled = true; go.textContent = "Saving…";
+        try {
+          await DB.labReports.decide(r.id, accept, note.value);
+          m2.close();
+          toast((accept ? "Batch accepted" : "Batch rejected") + " — " + r.id, { type: accept ? "ok" : "warn", title: "Ruling recorded" });
+          await App.reloadState();
+          const fresh = reports().find((x) => x.id === r.id);
+          if (fresh) reportDetail(fresh);
+        } catch (e) {
+          toast(e.message || "Could not record the ruling", { type: "danger" });
+          go.disabled = false; go.textContent = accept ? "Accept batch" : "Reject batch";
+        }
+      } });
+    if (parent) parent.close();
+    const m2 = modal({ title: (accept ? "✓ Accept batch" : "✗ Reject batch") + " — " + r.id,
+      sub: r.productCode + " · " + refLabel(r.refMode) + " " + (r.refNo || "—"),
+      body: h("div", {}, [
+        h("div", { class: "qc-note" + (accept ? "" : " bad"), style: "font-size:13px;margin-bottom:14px",
+          text: accept ? "The batch stands despite the reading. The concession is kept on the certificate with your note."
+            : "The batch is marked rejected on its certificate. Nothing is moved or written off here — that is a separate stock decision." }),
+        h("div", { class: "field full" }, [h("label", { text: "Note (kept on the certificate)" }), note]),
+      ]),
+      foot: [h("button", { class: "btn ghost", onclick: () => { m2.close(); reportDetail(r); }, text: "Cancel" }), go] });
   }
 
   async function delReport(r, mo) {

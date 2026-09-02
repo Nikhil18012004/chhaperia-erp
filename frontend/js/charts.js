@@ -23,7 +23,19 @@
   }
 
   function ease(t){ return 1-Math.pow(1-t,3); }
+  /* QUIET REDRAWS. A chart drawn as part of a background refresh must not
+     grow in from nothing again — that replay was the most visible part of
+     the "blink" every 15 seconds. While quietUntil is in the future, animate()
+     draws the finished frame at once, and soon() runs a deferred draw as a
+     microtask — after the module has attached its DOM, but before the browser
+     paints — so the canvas is painted in the same frame as the page it sits
+     in rather than one frame later, empty. App.refreshView() opens the window. */
+  let quietUntil = 0;
+  function quiet(){ return performance.now() < quietUntil; }
+  function quietFor(ms){ quietUntil = performance.now() + (ms || 600); }
+  function soon(fn){ if(quiet()) queueMicrotask(fn); else requestAnimationFrame(fn); }
   function animate(draw, dur=600){
+    if(quiet()){ draw(1); return; }
     const start = performance.now();
     function frame(now){ let p=Math.min(1,(now-start)/dur); draw(ease(p)); if(p<1) requestAnimationFrame(frame); }
     requestAnimationFrame(frame);
@@ -211,5 +223,5 @@
   function hexA(hex,a){ hex=hex.replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
     const n=parseInt(hex,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
 
-  global.Charts = { line, bars, donut, spark, gauge };
+  global.Charts = { line, bars, donut, spark, gauge, soon, quietFor };
 })(window);

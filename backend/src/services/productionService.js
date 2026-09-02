@@ -144,6 +144,7 @@ async function advance(user, woId, action, opts) {
 
   const now = new Date().toISOString();
   const by = user.username;
+  let labWarning = null;
 
   if (action === "start") {
     if (stage.status === "Completed") throw err("This stage is already completed", 400);
@@ -163,6 +164,16 @@ async function advance(user, woId, action, opts) {
     if (stage.area === "coating") {
       const gate = await LAB.coatingGate(wo, data);
       if (!gate.ok) { const e = err(gate.message, 409); e.labGate = gate; throw e; }
+      /* A batch that MEASURED outside its limits still leaves the floor
+         (ruled 2026-09-02, the same rule Add to Finished Stock got on 08-27):
+         the stage closes, and the verdict travels back so the panel can say
+         the office and the lab have been told. What still stops the stage is
+         a batch nobody has measured. */
+      if (gate.reason === "failed") {
+        labWarning = { result: "Fail", failed: gate.failed || [],
+          reportId: (gate.status || {}).reportId || null, batchNo: (gate.status || {}).batchNo || null,
+          message: gate.message };
+      }
     }
     /* WHERE THE COATED ROLL IS PUT DOWN.
        The jumbo coming off coating is not booked into stock — no stage books
@@ -212,7 +223,9 @@ async function advance(user, woId, action, opts) {
   wo.updatedBy = by; wo.updatedAt = now;
   await repo.putWorkOrder(wo);
 
-  return summarize(wo, data);
+  const out = summarize(wo, data);
+  if (labWarning) out.labWarning = labWarning;
+  return out;
 }
 
 /* ============================================================
@@ -584,9 +597,12 @@ async function previewWorkOrder(user, body) {
   if (!item) throw err("Unknown product", 400);
   const qty = +body.qty;
   if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
+  const startLine = startLineOf(body.line);
+  const width = body.widthMM ? +body.widthMM : null;
   const plan = S.planForRequirement(body.itemId, qty, data, {
-    widthMM: body.widthMM ? +body.widthMM : null, materialChoices: body.materialChoices,
+    widthMM: width, materialChoices: body.materialChoices,
     fgQty: body.fgQty, wipQty: body.wipQty,
+    fgDraws: fgDrawsOf(body.fgDraws, data, await GT.heldWarehouseIds(data)), line: startLine,
   });
   const makeQty = plan.makeQty || 0;
   const cap = await maxMakeable(data, item, body.materialChoices);
@@ -596,6 +612,10 @@ async function previewWorkOrder(user, body) {
     qty, makeQty, fromStock: Math.round((qty - makeQty) * 1000) / 1000,
     canMake, pendingQty: pending > 1e-6 ? pending : 0,
     shortage: pending > 1e-6 ? await shortageFor(data, item, makeQty, body.materialChoices) : [],
+    // every store the finished product sits in, with what each holds — the
+    // office draws store by store from this list
+    fgStores: S.finishedStockByStore(body.itemId, data, width)
+      .map((r) => ({ id: r.id, name: r.name, wh: r.wh, whName: r.whName, qty: r.have })),
   };
 }
 
@@ -654,6 +674,42 @@ function materialWarehousesOf(v, data, held) {
     out[rid] = wh;
   });
   return Object.keys(out).length ? out : null;
+}
+
+/* WHICH LINE THE JOB STARTS ON, when the office named one. Blank means the
+   family rules decide (stageService.routeStagesFor); anything else has to be
+   a line the factory actually runs. */
+function startLineOf(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return null;
+  if (!S.isKnownLine(s)) {
+    const all = Object.keys(S.LINES_BY_AREA).map((a) => S.LINES_BY_AREA[a].join(", ")).join(", ");
+    throw err("Unknown production line '" + s + "' — choose one of: " + all, 400);
+  }
+  return s;
+}
+
+/* HOW MUCH FINISHED STOCK COMES OUT OF WHICH STORE. Absent → the planner's
+   standing rule (fgQty, or take what is there). A list → exactly those draws,
+   each against a store that exists and may be issued from; an empty list
+   draws nothing at all. */
+function fgDrawsOf(v, data, held) {
+  if (!Array.isArray(v)) return null;
+  const whById = Object.fromEntries((data.warehouses || []).map((w) => [w.id, w]));
+  const itemById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
+  const block = new Set(held || []);
+  const out = [];
+  v.forEach((d) => {
+    if (!d || typeof d !== "object") return;
+    const id = String(d.id || d.itemId || "").trim(), wh = String(d.wh || "").trim();
+    const qty = +d.qty || 0;
+    if (!id || !wh) return;
+    if (!itemById[id]) throw err("Unknown finished stock " + id, 400);
+    if (!whById[wh]) throw err("Unknown warehouse " + wh, 400);
+    if (block.has(wh)) throw err((whById[wh].name || wh) + " holds quarantined stock and cannot be drawn from", 400);
+    if (qty > 0) out.push({ id, wh, qty });
+  });
+  return out;
 }
 
 /* updateWorkOrder — edit a planned run. Due date, priority and tape width can
@@ -728,13 +784,25 @@ async function updateWorkOrder(user, id, body) {
       wo.qty = q;
     }
   }
-  if (body.line !== undefined && body.line && body.line !== wo.line) {
-    if (started) throw err("Line cannot change after production has started", 400);
+  if (body.line !== undefined) {
+    /* A named line moves the START of the route (stageService.routeStagesFor);
+       a blank hands the choice back to the family rules. Either way the route
+       is rebuilt, which is only honest while nothing has run on the old one. */
+    const startLine = startLineOf(body.line);
     const item2 = (data.items || []).find((i) => i.id === wo.itemId);
-    wo.line = item2 ? lineForItem(item2, data, body.line, { qty: wo.qty }) : body.line;
-    wo.route = S.freshRoute({ line: wo.line, itemId: wo.itemId, qty: wo.qty,
-      materialChoices: wo.materialChoices }, data);
-    wo.stageIdx = 0;
+    const nextLine = item2 ? lineForItem(item2, data, startLine, { qty: wo.qty }) : (startLine || wo.line);
+    let changed = nextLine !== wo.line || (startLine || null) !== (wo.startLine || null);
+    // naming the line the job already sits on is not a change
+    if (startLine && !wo.startLine && startLine === wo.line) changed = false;
+    if (changed) {
+      if (started) throw err("Line cannot change after production has started", 400);
+      wo.line = nextLine;
+      if (startLine) wo.startLine = startLine; else delete wo.startLine;
+      if (wo.plan && typeof wo.plan === "object") wo.plan.line = startLine;
+      wo.route = S.freshRoute({ line: wo.line, startLine, itemId: wo.itemId, qty: wo.qty,
+        materialChoices: wo.materialChoices, plan: wo.plan }, data);
+      wo.stageIdx = 0;
+    }
   }
   wo.progress = calcProgress(wo.route || []);
   wo.status = S.rollupStatus(wo);
@@ -764,20 +832,29 @@ async function createWorkOrder(user, body) {
   /* Net the requirement against stock that already exists: finished goods go
      straight to packing, half-made rolls skip coating and start at slitting,
      and only the remainder is manufactured. */
+  // where the job starts, if the office said — validated before anything is planned
+  const startLine = startLineOf(body.line);
+  const heldIds = await GT.heldWarehouseIds(data);
   const plan = S.planForRequirement(body.itemId, qty, data, {
     widthMM: width, materialChoices: body.materialChoices,
     // the planner takes as much from stock as it can unless the office named
-    // an amount — a blank means "use whatever is there", 0 means "use none"
+    // an amount — a blank means "use whatever is there", 0 means "use none";
+    // named store by store (fgDraws), exactly those draws and nothing else
     fgQty: body.fgQty, wipQty: body.wipQty,
+    fgDraws: fgDrawsOf(body.fgDraws, data, heldIds),
+    line: startLine,
   });
 
   /* How much of the MANUFACTURED part the store can actually cover today.
      Anything beyond that is carried as pending instead of the order being
      refused — see the PARTIAL WORK ORDERS note above. A product we make
      ourselves is exempt: its shortages are solved by routing the job through
-     its own RM production, not by waiting for a delivery. */
+     its own RM production, not by waiting for a delivery. "Make ourselves" is
+     read off the ROUTE, so a job the office sent straight to slitting (the
+     material was bought in this time) is held to the store like any other. */
   const makeQty = plan.makeQty || 0;
-  const inHouse = !!S.productOwner(item.id, data);
+  const inHouse = S.routeStagesFor(item.id, data, { qty, materialChoices: body.materialChoices, line: startLine })
+    .some((s) => s.area === "coating" || s.area === "fiberglass");
   let runQty = makeQty, pendingQty = 0, shortage = [];
   /* A material the store has NONE of is a hard stop, not a shortage to
      confirm (ruled 2026-08-22, widened the same day). A shortage means part
@@ -835,7 +912,7 @@ async function createWorkOrder(user, body) {
 
   // the line follows the route: a job that must be produced starts on its
   // owner's RM line, otherwise it lands on a slitting line
-  const line = lineForItem(item, data, body.line, { qty: plan.makeQty || qty, materialChoices: body.materialChoices });
+  const line = lineForItem(item, data, startLine, { qty: plan.makeQty || qty, materialChoices: body.materialChoices });
   const wo = {
     id, date: todayISO(), itemId: body.itemId, qty,
     status: "Released", due: body.due || null, line,
@@ -845,16 +922,18 @@ async function createWorkOrder(user, body) {
     runQty: Math.round((qty - pendingQty) * 1000) / 1000,
     completedQty: 0,
     pendingQty,
-    route: S.freshRoute({ line, itemId: body.itemId, qty, widthMM: width, plan,
+    route: S.freshRoute({ line, startLine, itemId: body.itemId, qty, widthMM: width, plan,
       materialChoices: body.materialChoices }, data),
     stageIdx: 0, legacy: false,
     createdBy: user.username, createdAt: new Date().toISOString(),
   };
+  // the line the office asked for, as asked — `line` above is what it resolved to
+  if (startLine) wo.startLine = startLine;
   if (width != null) wo.widthMM = width;
   if (matWidth != null) wo.matWidthMM = matWidth;
   const customerId = customerIdOf(body.customerId, data);
   if (customerId) wo.customerId = customerId;
-  const matWhs = materialWarehousesOf(body.materialWarehouses, data, await GT.heldWarehouseIds(data));
+  const matWhs = materialWarehousesOf(body.materialWarehouses, data, heldIds);
   if (matWhs) wo.materialWarehouses = matWhs;
   // capture any per-order production spec (e.g. copper-wire count) for this product
   const spec = S.specForProduct(body.itemId, data);
@@ -1223,12 +1302,14 @@ async function updateWorkOrderStatus(user, woId, status, opts) {
    a single-material product skips coating, so it must not land on a coating
    line whatever the caller asked for. Pools live in stageService. */
 function lineForItem(item, data, wanted, opts) {
-  const pool = S.LINES_BY_AREA[S.startArea(item.id, data, opts)] || S.LINES_BY_AREA.slitting;
+  // an explicit request decides the start area itself; the rules only fill a blank
+  const o = Object.assign({}, opts || {}, { line: wanted || null });
+  const pool = S.LINES_BY_AREA[S.startArea(item.id, data, o)] || S.LINES_BY_AREA.slitting;
   if (!wanted) {
     const fromRouting = getLineForItem(item);          // legacy group-based hint
     if (pool.indexOf(fromRouting) >= 0) return fromRouting;
   }
-  return S.lineForProduct(item.id, data, wanted, opts);
+  return S.lineForProduct(item.id, data, wanted, o);
 }
 
 /* trim a WO to what the UI needs (no money) */

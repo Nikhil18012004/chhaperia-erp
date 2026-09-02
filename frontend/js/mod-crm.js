@@ -146,7 +146,7 @@
         foot: [h("span", { text: "open value " + money(stats.openValue) })],
         onClick: () => weightedDrill(byStage, stats),
         vis: (box) => { const cv = h("canvas", { "data-h": 38 }); box.appendChild(cv);
-          requestAnimationFrame(() => Charts.spark(cv, monthlyValue(allLeads, 8).values, cssv("--accent"))); } }),
+          Charts.soon(() => Charts.spark(cv, monthlyValue(allLeads, 8).values, cssv("--accent"))); } }),
 
       kpiCard({ cls: "crm-s3", ic: "🎯", label: "Open Leads", value: ENG.num(stats.open),
         foot: [h("span", { text: stats.total + " total enquiries" })],
@@ -169,14 +169,14 @@
         foot: [h("span", { text: (stats.won + stats.lost) + " decided" })],
         onClick: () => winDrill(allLeads, stats),
         vis: (box) => { const cv = h("canvas", { "data-h": 38 }); box.appendChild(cv);
-          requestAnimationFrame(() => Charts.spark(cv, winTrend(allLeads, 8), cssv(winPct >= 50 ? "--ok" : "--warn"))); } }),
+          Charts.soon(() => Charts.spark(cv, winTrend(allLeads, 8), cssv(winPct >= 50 ? "--ok" : "--warn"))); } }),
 
       kpiCard({ cls: "crm-s3", ic: "💰", label: "Won Value", value: money(stats.wonValue),
         delta: { type: "up", text: stats.won + " closed" },
         foot: [h("span", { text: "converted business" })],
         onClick: () => stageDrill(byStage.Won || { stage: "Won", items: [], count: 0, value: 0 }),
         vis: (box) => { const cv = h("canvas", { "data-h": 38 }); box.appendChild(cv);
-          requestAnimationFrame(() => Charts.spark(cv, monthlyValue(allLeads.filter((l) => l.stage === "Won"), 8).values, cssv("--ok"))); } }),
+          Charts.soon(() => Charts.spark(cv, monthlyValue(allLeads.filter((l) => l.stage === "Won"), 8).values, cssv("--ok"))); } }),
     ]));
 
     /* ============ PRIORITY 3 — the working surface: the board ============ */
@@ -2138,7 +2138,7 @@
         (l) => l.stage + " · " + (l.source || "source not set")),
     ]);
     modal({ title: "Open leads · " + stats.open, sub: "Every live enquiry and the channel it came from", wide: true, body });
-    if (data.length) requestAnimationFrame(() => Charts.donut(cv, {
+    if (data.length) Charts.soon(() => Charts.donut(cv, {
       data: data.map((d) => ({ name: d.name, value: d.value })), center: String(stats.total), centerSub: "leads" }));
   }
 

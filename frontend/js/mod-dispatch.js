@@ -17,7 +17,7 @@
   const trs = () => ENG.data.transporters || [];
 
   M.dispatch = { title: "Dispatch", sub: "Transport providers & carriers", render(root, params) {
-    let filter = { q: "", rating: "all", vehicle: "all", status: "active" };
+    let filter = App.viewState("filter", () => ({ q: "", qRaw: "", rating: "all", vehicle: "all", status: "active" }));
     root.appendChild(pageHead("Dispatch — Transport Providers",
       "Your transport agencies / carriers for outbound goods: contacts, vehicles, routes, rates and on-time performance.",
       [MW.excelMenu("transporters"),
@@ -34,7 +34,7 @@
     ]));
 
     // toolbar — kept as named handles so "Show all providers" can put them back
-    const qInput = MW.searchInput("Search name, city, contact, route…", (v) => { filter.q = v.toLowerCase(); draw(); });
+    const qInput = MW.searchInput("Search name, city, contact, route…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw);
     const statusSel = MW.select([{ value: "active", label: "Active" }, { value: "all", label: "All Statuses" }, { value: "inactive", label: "Inactive" }], (v) => { filter.status = v; draw(); });
     const ratingSel = MW.select([{ value: "all", label: "All Ratings" }, ...RATINGS.map((r) => ({ value: r, label: "Grade " + r }))], (v) => { filter.rating = v; draw(); });
     const vehicleSel = MW.select([{ value: "all", label: "All Vehicles" }, ...VEHICLE_TYPES.map((v) => ({ value: v, label: v }))], (v) => { filter.vehicle = v; draw(); });

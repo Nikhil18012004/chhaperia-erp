@@ -8,7 +8,7 @@
 
   /* ============== STOCK ITEMS ============== */
   M.inventory = { title:"Stock Items", sub:"Auto-calculated inventory", render(root){
-    let filter={q:"", cat:"all", state:"all"};
+    let filter=App.viewState("filter",()=>({q:"", qRaw:"", cat:"all", state:"all"}));
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       MW.csvMenu(exportCSV),
       newItemMenu()
@@ -27,7 +27,7 @@
     /* toolbar */
     const tableHost=h("div");
     const bar=h("div",{class:"toolbar"},[
-      MW.searchInput("Search items, codes, HSN…", v=>{filter.q=v.toLowerCase();draw();}),
+      MW.searchInput("Search items, codes, HSN…", v=>{filter.qRaw=v;filter.q=v.toLowerCase();draw();}, filter.qRaw),
       MW.select([{value:"all",label:"All Categories"},...ENG.data.categories.map(c=>({value:c.id,label:c.name}))], v=>{filter.cat=v;draw();}),
       MW.select([{value:"all",label:"All Status"},{value:"instock",label:"In Stock"},{value:"low",label:"Low Stock"},{value:"out",label:"Out of Stock"}], v=>{filter.state=v;draw();}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"invCount"}))
@@ -186,7 +186,7 @@
       h("div",{class:"card",style:"margin-top:16px;box-shadow:none;background:var(--panel-2)"},[
         h("div",{class:"card-head"},h("h3",{text:"30-Day Movement"})),
         (()=>{ const cv=h("canvas",{"data-h":140}); const box=h("div",{class:"chart-box"},cv);
-          requestAnimationFrame(()=>Charts.line(cv,{labels:ser.labels,series:[{name:"Balance",data:ser.bal.map(v=>ENG.dispQty(it,v)),color:cssv("--accent")}],fmt:v=>ENG.num(v)})); return box; })()
+          Charts.soon(()=>Charts.line(cv,{labels:ser.labels,series:[{name:"Balance",data:ser.bal.map(v=>ENG.dispQty(it,v)),color:cssv("--accent")}],fmt:v=>ENG.num(v)})); return box; })()
       ]),
       h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Recent Ledger"}),
       table(led,[
@@ -858,7 +858,7 @@
        issue whose note named it: 5 of the 63 rows shown were the material
        asked for (measured 2026-08-27). The chip clears params.item too, since
        the 15s refresh re-renders with the same params. */
-    let filter={q:"", item:params&&params.item&&ENG.item(params.item)?String(params.item):"", type:"all", wh:"all", from:"", to:""};
+    let filter=App.viewState("filter",()=>({q:"", qRaw:"", item:params&&params.item&&ENG.item(params.item)?String(params.item):"", type:"all", wh:"all", from:"", to:""}));
     root.appendChild(pageHead("Stock Ledger","Complete audit trail — receipts, issues, production, sales & adjustments with auto running balance"));
     const tableHost=h("div");
     const itemChip=h("span",{class:"chip",style:"gap:8px",title:"Only this material's movements are listed"});
@@ -875,7 +875,7 @@
       itemChip.hidden=false;
     }
     const bar=h("div",{class:"toolbar"},[
-      MW.searchInput("Search item, reference…", v=>{filter.q=v.toLowerCase();draw();}),
+      MW.searchInput("Search item, reference…", v=>{filter.qRaw=v;filter.q=v.toLowerCase();draw();}, filter.qRaw),
       itemChip,
       MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP","XFER"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;draw();}),
       MW.select([{value:"all",label:"All Warehouses"},...ENG.data.warehouses.map(w=>({value:w.id,label:w.name}))], v=>{filter.wh=v;draw();}),

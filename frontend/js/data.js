@@ -255,6 +255,15 @@
     create(r) { return http("POST", "/lab/reports", r); },
     update(id, patch) { return http("PATCH", "/lab/reports/" + enc(id), patch); },
     remove(id) { return http("DELETE", "/lab/reports/" + enc(id)); },
+    // the admin's ruling on a failed certificate: accept the batch or reject it
+    decide(id, accept, note) { return http("POST", "/lab/reports/" + enc(id) + "/decision", { accept, note }); },
+  };
+
+  /* ---- the TDS booklet: what is on the server, and admin's replacement ---- */
+  const tds = {
+    info: () => http("GET", "/tds"),
+    put: (name, data) => http("PUT", "/tds", { name, data }),
+    reset: () => http("DELETE", "/tds"),
   };
 
   /* ---- Incoming-material testing: the lab incharge checks what a goods
@@ -331,7 +340,7 @@
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
     items, movements, purchase, sales, boms, leads, appointments, complaints, quotations, customers, suppliers, org, transporters, warehouses, hr,
-    labProducts, labReports, grnTests, bartender,
+    labProducts, labReports, grnTests, bartender, tds,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);

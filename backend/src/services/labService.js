@@ -295,7 +295,71 @@ async function buildReport(body, existing, user) {
     testedBy: body.testedBy != null ? String(body.testedBy).trim() : (base.testedBy || ""),
     remarks: body.remarks != null ? String(body.remarks).trim() : (base.remarks || ""),
     createdAt: base.createdAt || new Date().toISOString(),
+    /* THE ADMIN'S RULING on a failed batch (decideReport, never a client
+       write). Kept across later writes while the headline verdict stands; a
+       re-measurement that changes the verdict clears it, exactly as an
+       incoming re-test does. */
+    decision: base.decision && base.result === graded.result ? base.decision : null,
+    decidedBy: base.decision && base.result === graded.result ? (base.decidedBy || "") : "",
+    decidedAt: base.decision && base.result === graded.result ? (base.decidedAt || null) : null,
+    decisionNote: base.decision && base.result === graded.result ? (base.decisionNote || "") : "",
   };
+}
+
+/* ============================================================
+   A FAILED CERTIFICATE GOES TO THE ADMIN
+   The batch is not held anywhere — it has left the floor, or it is
+   on the shelf — so failing it raises a RULING rather than a stop:
+   the admin accepts the batch (a concession, recorded) or rejects
+   it. Nothing moves either way; that stays the office's decision.
+   ============================================================ */
+/** Which reading is flagging this certificate: "lab" once the lab has
+    measured the batch and failed it, "floor" when only the floor's reading
+    exists and that failed; null when it passed or an admin has ruled. */
+function attentionOf(r) {
+  if (!r || r.decision) return null;
+  if (r.labComplete) return r.labResult === "Fail" ? "lab" : null;
+  return r.prodResult === "Fail" ? "floor" : null;
+}
+/** Every failed certificate still waiting on the admin — the alert list. */
+async function pendingLabDecisions(data) {
+  data = data || {};
+  const reports = data.labReports || await listReports();
+  const products = data.labProducts || await listProducts();
+  return reports.filter((r) => attentionOf(r)).map((r) => {
+    const stage = attentionOf(r);
+    const product = products.find((p) => p.id === r.productId) || {};
+    const params = paramsForProduct(product);
+    const results = stage === "lab" ? r.labResults : r.prodResults;
+    return {
+      id: r.id, woId: r.woId || "", refNo: r.refNo || "",
+      batchNo: r.refNo || batchNoOf(r.woId),
+      productId: r.productId, productCode: r.productCode, productName: r.productName,
+      itemId: r.itemId || "",
+      stage, by: stage === "lab" ? (r.labBy || "") : (r.prodBy || ""),
+      reportDate: r.reportDate || null, createdAt: r.createdAt || null,
+      failed: failedLabels(results, params),
+      stockRefs: r.stockRefs || [],
+    };
+  }).sort((a, b) => String(b.id).localeCompare(String(a.id)));
+}
+async function decideReport(id, body, user) {
+  body = body || {};
+  const r = await repo.getLabReport(id);
+  if (!r) throw err("Report not found", 404);
+  if (r.decision) throw err("This batch was already " + r.decision + " by " + (r.decidedBy || "an admin") + ".", 409);
+  if (!attentionOf(r)) throw err("Only a failed certificate needs a ruling — this one reads " + (r.result || "Pending") + ".", 400);
+  // the ruling has to be SAID — an absent answer is not a rejection
+  if (![true, false, "true", "false"].includes(body.accept)) throw err("Say whether the batch is accepted (accept: true) or rejected (accept: false).", 400);
+  const accept = body.accept === true || body.accept === "true";
+  const out = Object.assign({}, r, {
+    decision: accept ? "accepted" : "rejected",
+    decidedBy: (user && user.username) || "admin",
+    decidedAt: new Date().toISOString(),
+    decisionNote: String(body.note == null ? "" : body.note).trim().slice(0, 500),
+  });
+  await repo.putLabReport(out);
+  return { ok: true, report: out };
 }
 
 /** Find an existing report for the same batch/lot so the two stages merge. */
@@ -459,11 +523,15 @@ async function coatingGate(wo, data) {
        here and needs a deliberate ruling from an admin, the same way a failed
        goods receipt does. */
     if (failedVerdict(st)) {
+      /* MEASURED AND FAILED. Since 2026-09-02 this no longer holds the batch
+         on the floor: the stage closes, the certificate keeps its Fail, and
+         the office and the lab are told (pendingLabDecisions) so an admin can
+         rule on it. Only an UNMEASURED batch is still refused, below. */
       return {
-        ok: false, reason: "failed", status: st,
+        ok: true, reason: "failed", status: st, result: "Fail", failed: failedParams(st),
         message: "Batch " + st.batchNo + " (" + (st.product.code || st.product.name)
-          + ") FAILED its test: " + failedParams(st).join(", ")
-          + ". Coating cannot be closed on a failed batch — an administrator must rule on it.",
+          + ") measured outside its limits: " + failedParams(st).join(", ")
+          + ". The admin and the lab have been alerted.",
       };
     }
     return { ok: true, reason: "measured", status: st };
@@ -718,5 +786,6 @@ module.exports = {
   listReports, createReport, updateReport, deleteReport,
   batchNoOf, productForItem, reportForWO, hasCoatingStage, findByRef,
   labStatusForWO, coatingGate, finishedStockGate, pendingLabWork,
+  attentionOf, pendingLabDecisions, decideReport,
   ensureLab,
 };

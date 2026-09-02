@@ -233,8 +233,22 @@
       out.push({sev:"danger", ic:"⛔",
         title:`${q.itemName} failed incoming test`,
         desc:`${q.grnId}${q.poId?" · "+q.poId:""} — ${q.failed&&q.failed.length?q.failed.join(", ")+" out of limit":"out of limit"}`
-          +` · ${num(q.acceptedQty)} ${q.uom||""} awaiting your approval to quarantine`,
+          +` · ${num(q.acceptedQty)} ${q.uom||""} — awaiting the admin's ruling`,
         kind:"qcDecision", id:q.id, ts:-1});
+    });
+    /* A FINISHED-GOODS BATCH THAT MEASURED OUTSIDE ITS LIMITS. The batch is
+       not held anywhere any more (ruled 2026-09-02): it left the coating floor
+       or it is on the shelf, so what the office gets is this alert and the
+       ruling on the certificate. The lab incharge sees the same alert without
+       the parameters (the server leaves them out of its payload). Clicking it
+       opens the certificate itself. */
+    (D.labQcDecisions||[]).forEach(q=>{
+      const who=q.stage==="lab"?"lab reading":"floor reading";
+      out.push({sev:"danger", ic:"🧪",
+        title:`Lab data FAILED — ${q.productCode||q.productName||""}${q.batchNo?" · batch "+q.batchNo:""}`,
+        desc:(q.failed&&q.failed.length? q.failed.join(", ")+" outside limits · ":"")
+          +who+(q.by?" by "+q.by:"")+(q.woId?" · "+q.woId:"")+" — awaiting the admin's ruling",
+        kind:"labFail", id:q.id, ts:-1});
     });
     return out.sort((a,b)=> ({danger:0,warn:1,info:2})[a.sev]-({danger:0,warn:1,info:2})[b.sev]);
   }
@@ -595,7 +609,9 @@
          the same list the office sees. */
       // the Lab Reports badge: batches awaiting a certificate PLUS received
       // PO lines awaiting an incoming test — both worklists live on that page
-      labPending:(D.labPending||[]).length+(D.grnTestPending||[]).length,
+      // …PLUS failed certificates awaiting the admin's ruling (2026-09-02)
+      labPending:(D.labPending||[]).length+(D.grnTestPending||[]).length+(D.labQcDecisions||[]).length,
+      labQcDecisions:(D.labQcDecisions||[]).length,
       /* Two separate counts on the Procurement pill's behalf: materials the
          lab still has to measure, and failed lots waiting on an admin ruling.
          A ruling is the more urgent of the two — the stock is live meanwhile. */

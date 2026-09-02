@@ -58,8 +58,17 @@
       foot?h("div",{class:"modal-foot"},foot):null
     ]);
     host.appendChild(m);
-    // move focus into the dialog for keyboard/screen-reader users
-    requestAnimationFrame(()=>{ const f=m.querySelector('input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button.primary,button'); if(f) try{f.focus();}catch{} });
+    /* Move focus into the dialog for keyboard/screen-reader users: the first
+       field, or — in a dialog with none, a confirm — its primary button, so
+       Enter answers it. Never the ✕ in the head: it came first in document
+       order, so Enter on a fresh confirm used to CLOSE it. A dangerous confirm
+       has no primary, so it lands on Cancel, which is the safe default. */
+    requestAnimationFrame(()=>{
+      const f=m.querySelector('.modal-body input:not([disabled]):not([type="hidden"]),.modal-body select:not([disabled]),.modal-body textarea:not([disabled])')
+        || m.querySelector('.modal-foot button.primary:not([disabled])')
+        || m.querySelector('.modal-foot button:not([disabled])')
+        || m.querySelector('button');
+      if(f) try{f.focus();}catch{} });
     function focusables(){ return [...m.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(el=>el.offsetParent!==null); }
     function onKey(e){
       if(e.key==="Escape"){ close(); return; }
@@ -309,7 +318,7 @@
   function sparkEl(data, color, w=90, hgt=30){
     const box=h("div",{class:"chart-box",style:`width:${w}px`});
     const cv=h("canvas",{"data-h":hgt}); box.appendChild(cv);
-    requestAnimationFrame(()=>Charts.spark(cv,data,color));
+    Charts.soon(()=>Charts.spark(cv,data,color));
     return box;
   }
 
@@ -337,6 +346,9 @@
     {id:"production", icon:"⚙️", label:"Production", accent:"amber", labOk:true},
     {id:"bom", icon:"🧬", label:"Products & BOM", accent:"green", labOk:true},
     {id:"lab-reports", icon:"🧪", label:"Lab Reports", accent:"teal", labOk:true, labWrite:true, pillKey:"labPending"},
+    /* The TDS booklet is deliberately NOT here (re-ruled 2026-09-02): it is
+       reached only by searching (⌘K), the same way in every login — see
+       M.tds.searchOnly in mod-tds.js and the floor panel's own search. */
     {sec:"Sales & CRM"},
     {id:"crm", icon:"🎯", label:"CRM Pipeline", accent:"pink", pillKey:"openLeads"},
     // the road from a reel to an order: every sample sent and every price
@@ -368,6 +380,44 @@
     {id:"users", icon:"👥", label:"Users & Access", accent:"red", adminOnly:true},
     {id:"settings", icon:"⚙️", label:"Settings", accent:"orange", adminOnly:true},
   ];
+
+  /* ---------- ENTER SAVES ----------
+     One handler for every dialog: Enter inside a dialog presses its primary
+     button — Save, Update, Next, Create — so a form can be worked from the
+     keyboard without reaching for the mouse each time. Registered ONCE, on
+     the document, and scoped to the dialog actually on screen: dialogs are
+     chained by clearing the host, so a listener per dialog would fire once
+     for every dialog ever opened. Registered after the modules have loaded,
+     so a handler that already consumed the key (a scan field, an inline
+     edit) has had its say.
+     Left alone on purpose: a textarea (Enter is a new line there — Ctrl or
+     Cmd + Enter presses the button instead), a button, link or select (their
+     own behaviour), a searchable select with its list open (Enter picks the
+     option), anything marked data-enter="ignore", the command palette, and a
+     key another handler already handled. The LAST enabled primary button in
+     the foot is pressed — that is the convention every dialog follows. */
+  function enterSaves(e){
+    if(e.key!=="Enter" || e.defaultPrevented || e.altKey || e.shiftKey || e.isComposing) return;
+    const host=$("#modalHost"); if(!host || host.hidden) return;
+    const m=host.querySelector(".modal"); if(!m) return;
+    const ck=$("#cmdk"); if(ck && !ck.hidden) return;
+    const t=e.target;
+    if(!(t instanceof Element) || !m.contains(t)) return;
+    const tag=t.tagName;
+    if(tag==="TEXTAREA" && !(e.ctrlKey||e.metaKey)) return;
+    if(t.isContentEditable) return;
+    if(tag==="BUTTON" || tag==="A" || tag==="SELECT") return;
+    if(t.closest('[data-enter="ignore"]')) return;
+    const ss=t.closest(".ss");
+    if(ss){ const pop=ss.querySelector(".ss-pop"); if(pop && !pop.hidden && pop.offsetParent!==null) return; }
+    const foot=m.querySelector(".modal-foot"); if(!foot) return;
+    const btns=[...foot.querySelectorAll("button.primary:not([disabled]),button.danger-solid:not([disabled])")]
+      .filter(b=>b.offsetParent!==null);
+    const btn=btns[btns.length-1]; if(!btn) return;
+    e.preventDefault();
+    btn.click();
+  }
+  document.addEventListener("DOMContentLoaded",()=>document.addEventListener("keydown",enterSaves));
 
   global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV };
 })(window);

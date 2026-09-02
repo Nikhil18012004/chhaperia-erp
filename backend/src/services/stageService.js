@@ -215,12 +215,48 @@ function materialCheck(fgId, qty, data, choices) {
 function routeStagesFor(fgId, data, opts) {
   opts = opts || {};
   const owner = productOwner(fgId, data);
+  /* THE OFFICE MAY NAME WHERE A JOB STARTS. Left blank, the standing rules
+     above decide; named, the route starts on that line whatever the family
+     table says — the material was bought in this time (a slitting line), or
+     the other floor has the capacity (the other RM line). */
+  const asked = lineRequested(opts.line);
+  if (asked) return stagesFromLine(asked, owner);
   if (!owner) return [STAGE.slit(true), STAGE.pack()];   // bought in ready-made
   const stages = [];
   if (needsFibreFirst(fgId, data)) stages.push(STAGE.weave());
   stages.push(STAGE.rm(owner));
   stages.push(STAGE.slit(false), STAGE.pack());
   return stages;
+}
+/* a line name as the office typed it, or null when the choice was left to the rules */
+function lineRequested(line) {
+  const s = String(line == null ? "" : line).trim();
+  return s || null;
+}
+/** Is this the name of a line the factory actually runs? */
+function isKnownLine(line) {
+  const s = lineRequested(line);
+  return !!s && Object.keys(LINES_BY_AREA).some((a) => LINES_BY_AREA[a].indexOf(s) >= 0);
+}
+/* the person whose line this is — null for the shared slitting lines */
+function ownerOfLine(line) {
+  return Object.keys(OWNERS).map((k) => OWNERS[k]).find((o) => o.line === line) || null;
+}
+/* The route that STARTS on a named line. An RM line: that person's production
+   stage, then slitting and packing. The fibre-glass line: weaving first, then
+   the product's own coating floor if it has one. A slitting line: the goods
+   arrive ready to cut, so slit and pack only. */
+function stagesFromLine(line, owner) {
+  const o = ownerOfLine(line);
+  if (o && o.area === "coating") return [STAGE.rm(o), STAGE.slit(false), STAGE.pack()];
+  if (o && o.area === "fiberglass") {
+    const coats = !!(owner && owner.area === "coating");
+    const stages = [STAGE.weave()];
+    if (coats) stages.push(STAGE.rm(owner));
+    stages.push(STAGE.slit(!coats), STAGE.pack());
+    return stages;
+  }
+  return [STAGE.slit(true), STAGE.pack()];
 }
 
 /* ============================================================
@@ -241,12 +277,37 @@ function routeStagesFor(fgId, data, opts) {
    Only what is left after both is actually manufactured, and only that
    remainder draws raw materials from the store.
    ============================================================ */
+/* Stores an issue may never draw on — quarantine, holding lots that failed
+   their incoming test. The same test grnTestService.heldWarehouseIds makes,
+   done here from the data already in hand so the netting below can use it
+   without a second read. */
+function heldStoreIds(data) {
+  return (((data || {}).warehouses) || [])
+    .filter((w) => /quarantine|qc.?hold|reject/i.test(String(w.type || "") + " " + String(w.name || "")))
+    .map((w) => w.id);
+}
+/* On-hand per item with the held stores LEFT OUT — a quarantined roll is on
+   the books but not on the shelf, and netting an order against it used to
+   plan a packing issue the store could not honour. */
 function onHandByItem(data) {
+  const block = new Set(heldStoreIds(data));
   const onHand = {};
   ((data || {}).movements || []).forEach((m) => {
+    if (m.wh && block.has(m.wh)) return;
     onHand[m.itemId] = (onHand[m.itemId] || 0) + (+m.qty || 0);
   });
   return onHand;
+}
+/* the same, store by store: itemId -> { wh: qty } */
+function onHandByItemAndStore(data) {
+  const block = new Set(heldStoreIds(data));
+  const out = {};
+  ((data || {}).movements || []).forEach((m) => {
+    if (!m.wh || block.has(m.wh)) return;
+    const per = out[m.itemId] || (out[m.itemId] = {});
+    per[m.wh] = (per[m.wh] || 0) + (+m.qty || 0);
+  });
+  return out;
 }
 const nameKey = (i) => String((i && (i.productName || i.name)) || "").trim().toUpperCase();
 const sameThickness = (a, b) => {
@@ -271,6 +332,24 @@ function finishedStockFor(fgId, data, widthMM) {
     .filter((i) => (want == null ? true : sameThickness(i.tapeWidthMM, want)))
     .map((i) => ({ id: i.id, name: i.name || i.id, have: r2(onHand[i.id] || 0) }))
     .filter((r) => r.have > 0);
+}
+/** The same finished stock, store by store — what the office picks from when
+    the product sits in more than one place. Biggest pile first. */
+function finishedStockByStore(fgId, data, widthMM) {
+  const rows = finishedStockFor(fgId, data, widthMM);
+  const byStore = onHandByItemAndStore(data);
+  const whs = (data || {}).warehouses || [];
+  const out = [];
+  rows.forEach((r) => {
+    const per = byStore[r.id] || {};
+    Object.keys(per).forEach((wh) => {
+      const have = r2(per[wh]);
+      if (have <= 1e-9) return;
+      const w = whs.find((x) => x.id === wh) || {};
+      out.push({ id: r.id, name: r.name, wh, whName: w.name || wh, have });
+    });
+  });
+  return out.sort((a, b) => b.have - a.have);
 }
 
 /* Half-made stock is the COATED JUMBO — past coating, not yet slit. That is
@@ -330,20 +409,42 @@ function planForRequirement(fgId, qty, data, opts) {
 
   const fgRows = finishedStockFor(fgId, data, opts.widthMM);
   plan.fgAvailable = r2(fgRows.reduce((n, r) => n + r.have, 0));
+  // where the job starts, when the office named it — carried on the plan so
+  // every later reading of the route (issues, the floor's board) agrees
+  plan.line = lineRequested(opts.line);
 
   // 1) finished goods already on the shelf — straight to packing.
-  //    The planner takes as much as it can unless a quantity was named.
-  const wantFg = opts.fgQty == null || opts.fgQty === ""
-    ? plan.fgAvailable
-    : capped(opts.fgQty, plan.fgAvailable, total);
-  const fgDraw = drawFrom(fgRows, Math.min(wantFg, total));
-  plan.fgQty = fgDraw.taken;
-  plan.fgSources = fgDraw.used;
+  if (Array.isArray(opts.fgDraws)) {
+    /* STORE BY STORE. The office named how much comes out of each store the
+       product sits in; each draw is capped at what that store holds and at
+       what the order still needs. An empty list draws nothing. */
+    const rows = finishedStockByStore(fgId, data, opts.widthMM);
+    const used = [];
+    let left = total;
+    opts.fgDraws.forEach((d) => {
+      if (!d || left <= 1e-9) return;
+      const row = rows.find((r) => r.id === d.id && r.wh === d.wh);
+      if (!row) return;
+      const already = used.filter((u) => u.id === row.id && u.wh === row.wh).reduce((n, u) => n + u.qty, 0);
+      const take = capped(d.qty, row.have - already, left);
+      if (take > 1e-9) { used.push({ id: row.id, name: row.name, wh: row.wh, qty: take }); left = r2(left - take); }
+    });
+    plan.fgQty = r2(total - left);
+    plan.fgSources = used;
+  } else {
+    //    The planner takes as much as it can unless a quantity was named.
+    const wantFg = opts.fgQty == null || opts.fgQty === ""
+      ? plan.fgAvailable
+      : capped(opts.fgQty, plan.fgAvailable, total);
+    const fgDraw = drawFrom(fgRows, Math.min(wantFg, total));
+    plan.fgQty = fgDraw.taken;
+    plan.fgSources = fgDraw.used;
+  }
   const afterFg = r2(total - plan.fgQty);
 
   // 2) does what is left involve coating at all?
   const baseStages = afterFg > 0
-    ? routeStagesFor(fgId, data, { qty: afterFg, materialChoices: opts.materialChoices })
+    ? routeStagesFor(fgId, data, { qty: afterFg, materialChoices: opts.materialChoices, line: plan.line })
     : [];
   plan.hasCoating = baseStages.some((s) => s.key === "rmprod");
 
@@ -370,10 +471,12 @@ function planForRequirement(fgId, qty, data, opts) {
 function plannedStages(fgId, data, opts) {
   opts = opts || {};
   const plan = opts.plan || planForRequirement(fgId, opts.qty, data, opts);
-  // the manufacturing route is sized by what is actually manufactured
+  // the manufacturing route is sized by what is actually manufactured, and
+  // starts where the office said it should (the plan remembers that)
   const base = routeStagesFor(fgId, data, {
     qty: plan.makeQty > 0 ? plan.makeQty : plan.qty,
     materialChoices: opts.materialChoices,
+    line: lineRequested(opts.line) || (plan && plan.line) || null,
   });
   const slitQty = r2(plan.makeQty + plan.wipQty);
   const out = [];
@@ -493,7 +596,8 @@ function computeStagePlan(fgId, qty, data, choices, netting) {
       (net.wipSources || []).forEach((w) => { if (w.qty > 0) consume.push([w.id, r2(w.qty)]); });
     }
     if (s.key === "packing") {
-      (net.fgSources || []).forEach((f) => { if (f.qty > 0) consume.push([f.id, r2(f.qty)]); });
+      // a draw the office pinned to a store carries that store (third slot)
+      (net.fgSources || []).forEach((f) => { if (f.qty > 0) consume.push([f.id, r2(f.qty), f.wh || null]); });
     }
     if (s.packDefaults) {
       PACK_DEFAULTS.forEach((p) => {
@@ -584,10 +688,17 @@ function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements
     if (want && !block.has(want) && onHandIn(rid, want, movements) + 1e-9 >= need) return want;
     return issuingWarehouse(rid, itemsById, movements, held, need);
   };
+  /* A finished roll drawn from a NAMED store (the office chose it store by
+     store when it raised the order) leaves that store — again only while the
+     store still holds enough for the draw. */
+  const whOf = (rid, need, named) => {
+    if (named && !block.has(named) && onHandIn(rid, named, movements) + 1e-9 >= need) return named;
+    return whFor(rid, need);
+  };
   const moves = [];
-  st.consume.forEach(([rid, q]) => {
+  st.consume.forEach(([rid, q, named]) => {
     if (!q) return;
-    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: whFor(rid, Math.abs(q)), type: "ISSUE",
+    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: whOf(rid, Math.abs(q), named), type: "ISSUE",
       qty: -Math.abs(q), rate: (itemsById[rid] || {}).cost || 0, ref: wo.id,
       note: "Stage " + stageKey + " → " + wo.itemId, by: byWho });
   });
@@ -603,6 +714,8 @@ function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements
 function freshRoute(wo, data) {
   const stages = plannedStages(wo.itemId, data, {
     qty: wo.qty, materialChoices: wo.materialChoices, widthMM: wo.widthMM, plan: wo.plan,
+    // where the office said the job starts — on the order itself, or on its plan
+    line: wo.startLine || (wo.plan && wo.plan.line) || null,
   });
   return stages.map((s, i) => ({
     key: s.key,
@@ -762,8 +875,9 @@ module.exports = {
   OWNERS_BY_KEY: OWNERS, Y_SLIT, Y_PACK,
   templateKeyFor, templateFor, specForProduct, specForWO, bomMaterialCount,
   LINES_BY_AREA, startArea, lineForProduct, OWNERS, productOwner, materialCheck, routeStagesFor,
+  isKnownLine, lineRequested, heldStoreIds,
   materialRole, areaCovers,
-  planForRequirement, plannedStages, finishedStockFor, wipStockFor, drawFrom,
+  planForRequirement, plannedStages, finishedStockFor, finishedStockByStore, wipStockFor, drawFrom,
   computeStagePlan, stageMovements, issuingWarehouse, onHandIn,
   freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,
   stageForArea, currentStage, ensureStageModel,

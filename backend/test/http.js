@@ -19,6 +19,7 @@ process.env.CHHAPERIA_DB_NAME = SCRATCH;
 process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
 process.env.PORT = "0"; // ask the OS for a free port
 process.env.CHHAPERIA_BARTENDER_NOLAUNCH = "1"; // never pop the label app open mid-test
+process.env.CHHAPERIA_TDS_NOCONVERT = "1";      // nor Word, for a TDS upload
 
 const { server, ready } = require("../src/server");
 const { closeDb } = require("../src/db/connection");
@@ -1515,12 +1516,18 @@ async function run() {
       { values: { thickness: 0.9, tensile: 5 } });
     ok("an out-of-spec reading is still recorded", bad.status === 201, String(bad.status));
     ok("…and graded Fail", bad.d.report.prodResult === "Fail", String(bad.d.report.prodResult));
+    /* MEASURED AND FAILED no longer holds the batch on the floor (ruled
+       2026-09-02, the rule Add to Finished Stock already had): the grade is
+       reported, the office and the lab are told, and an admin rules on it —
+       see "A failed batch still leaves the floor" further down. So the next
+       thing to stop this close is the store question, not the verdict. */
     const failClose = await call("POST", "/production/wo/" + woLid + "/advance", C, { action: "complete" });
-    ok("a FAILED batch cannot close coating (409)", failClose.status === 409, String(failClose.status));
-    ok("…and is told which parameters failed",
-      /FAILED its test/.test(failClose.d.error || "") && /Thickness/.test(failClose.d.error || ""),
-      JSON.stringify(failClose.d).slice(0, 170));
-    ok("the failed stage really did not move",
+    ok("a FAILED batch is no longer stopped by its grade — the store question comes next (409 needsWipWh)",
+      failClose.status === 409 && failClose.d.needsWipWh === true, failClose.status + " " + JSON.stringify(failClose.d).slice(0, 120));
+    ok("…and the refusal says nothing about the verdict", !/FAILED/.test(failClose.d.error || ""), failClose.d.error);
+    ok("the failed batch is on the admin's ruling list meanwhile",
+      ((await call("GET", "/state", A)).d.labQcDecisions || []).some((q) => q.id === bad.d.report.id && q.stage === "floor"));
+    ok("the stage is still where it was",
       (await call("GET", "/state", A)).d.workorders.find((w) => w.id === woLid).route[0].status === "In Production");
 
     const rec = await call("POST", "/production/wo/" + woLid + "/lab", C, { values: { thickness: 0.25, tensile: 44 } });
@@ -2990,6 +2997,248 @@ async function run() {
       (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -60, wh })).status === 201);
     ok("…and the ledger rests at zero, not below",
       Math.abs(await stockOf("RM-XMOD-4")) < 1e-6, "total " + (await stockOf("RM-XMOD-4")));
+  }
+
+  /* ============================================================
+     2026-09-02: the office names the line, draws finished stock store by
+     store, a failed batch leaves the floor and raises a ruling, and the
+     TDS booklet has an endpoint. Helpers scoped to these sections only. */
+  {
+    const C2 = (await login("coating2", "coating2@123")).token;
+    const S1 = (await login("slitting1", "slitting1@123")).token;
+    const REPO = path.join(__dirname, "..", "..");
+    const state = async (tok) => (await call("GET", "/state", tok || A)).d;
+    const woOf = async (id, tok) => ((await state(tok)).workorders || []).find((w) => w.id === id);
+    const stockIn = async (itemId, wh) => (await state()).movements.filter((m) => m.itemId === itemId && m.wh === wh).reduce((n, m) => n + (+m.qty || 0), 0);
+    const grn = (itemId, qty, wh) => call("POST", "/movements", A, { itemId, type: "GRN", qty, rate: 20, wh: wh || "WH-PNY", date: "2026-01-01", manual: true });
+  /* ================================================================ */
+  section("The office may name the production line a job starts on");
+  {
+    const rmL = { id: "RM-LINE-BASE", name: "Line test fabric", cat: "RM", uom: "KG", cost: 20 };
+    const rmP = { id: "RM-LINE-PASTE", name: "Line test paste", cat: "RM", uom: "KG", cost: 30 };
+    await call("POST", "/items", A, rmL); await call("POST", "/items", A, rmP);
+    await grn(rmL.id, 500); await grn(rmP.id, 500);
+    const fgG = { id: "FG-LINE-CP25GE", name: "Line test inorganic mica tape", cat: "FG", uom: "KG", typeCode: "CP25GE-13", group: "MICA SERIES", cost: 100, price: 200 };
+    await call("POST", "/items", A, fgG);
+    await call("PUT", "/boms/" + fgG.id, A, { yield: 100, lines: [[rmL.id, 0.8], [rmP.id, 0.3]] });
+    const fgB = { id: "FG-LINE-BOUGHT", name: "Line test bought-in tape", cat: "FG", uom: "KG", typeCode: "CH-PTFE-99", group: "OTHER", cost: 100, price: 200 };
+    await call("POST", "/items", A, fgB);
+    await call("PUT", "/boms/" + fgB.id, A, { yield: 100, lines: [[rmL.id, 1.0]] });
+
+    const auto = await call("POST", "/production/wo", A, { itemId: fgG.id, qty: 50 });
+    ok("no line named -> the standing rule: Ganesh's RM line", auto.status === 201 && auto.d.route[0].key === "rmprod" && auto.d.route[0].owner === "coating2", JSON.stringify(auto.d).slice(0, 160));
+    ok("...and the order sits on RM Production 2", (await woOf(auto.d.id)).line === "RM Production 2", (await woOf(auto.d.id)).line);
+    const blank = await call("POST", "/production/wo", A, { itemId: fgG.id, qty: 50, line: "" });
+    ok("an empty line means the same as none", blank.status === 201 && blank.d.route[0].owner === "coating2");
+
+    const g1 = await call("POST", "/production/wo", A, { itemId: fgG.id, qty: 50, line: "RM Production 1" });
+    ok("RM Production 1 named -> the job starts on Gautam's floor", g1.status === 201 && g1.d.route[0].key === "rmprod" && g1.d.route[0].owner === "coating1" && /Gautam/.test(g1.d.route[0].name), JSON.stringify(g1.d.route || g1.d).slice(0, 200));
+    ok("...then slitting and packing as usual", g1.status === 201 && g1.d.route.map((r) => r.key).join(">") === "rmprod>slitting>packing");
+    const g1Full = await woOf(g1.d.id);
+    ok("...and the order carries that line", !!(g1Full && g1Full.line === "RM Production 1" && g1Full.startLine === "RM Production 1"), JSON.stringify(g1Full && { line: g1Full.line, startLine: g1Full.startLine }));
+    const c1 = await woOf(g1.d.id, C), c2 = await woOf(g1.d.id, C2);
+    ok("Gautam's board shows it as his", !!(c1 && c1.mine === true), JSON.stringify(c1 && c1.mine));
+    ok("Ganesh's board does not", !c2 || c2.mine !== true, JSON.stringify(c2 && c2.mine));
+    ok("and Gautam can start it", (await call("POST", "/production/wo/" + g1.d.id + "/advance", C, { action: "start" })).status === 200);
+
+    const fb = await call("POST", "/production/wo", A, { itemId: fgG.id, qty: 50, line: "Fibre-Glass Line 1" });
+    const fbRoute = fb.status === 201 ? fb.d.route.map((r) => r.key + "/" + (r.owner || "-")).join(">") : String(fb.status);
+    ok("Fibre-Glass named -> weaving first, then the product's own RM line", fbRoute === "weaving/fiberglass>rmprod/coating2>slitting/->packing/-", fbRoute);
+    ok("...and the order sits on the fibre-glass line", fb.status === 201 && (await woOf(fb.d.id)).line === "Fibre-Glass Line 1");
+
+    const sl = await call("POST", "/production/wo", A, { itemId: fgG.id, qty: 50, line: "Slitting A" });
+    ok("a slitting line named -> no production stage at all", sl.status === 201 && sl.d.route.map((r) => r.key).join(">") === "slitting>packing", sl.status === 201 ? sl.d.route.map((r) => r.key).join(">") : JSON.stringify(sl.d));
+    ok("...on Slitting A", sl.status === 201 && (await woOf(sl.d.id)).line === "Slitting A");
+    ok("a slitting login can start it", sl.status === 201 && (await call("POST", "/production/wo/" + sl.d.id + "/advance", S1, { action: "start" })).status === 200);
+
+    const bo = await call("POST", "/production/wo", A, { itemId: fgB.id, qty: 50, line: "RM Production 2" });
+    ok("a bought-in product can still be sent to a production line on purpose", bo.status === 201 && bo.d.route[0].key === "rmprod" && bo.d.route[0].owner === "coating2", JSON.stringify(bo.d.route || bo.d).slice(0, 160));
+    const bad = await call("POST", "/production/wo", A, { itemId: fgG.id, qty: 50, line: "Coating Line 9" });
+    ok("a line that does not exist is refused (400)", bad.status === 400 && /line/i.test(bad.d.error || ""), bad.status + " " + JSON.stringify(bad.d).slice(0, 100));
+    const pv = await call("POST", "/production/wo/preview", A, { itemId: fgG.id, qty: 50, line: "Slitting A" });
+    ok("preview accepts the line", pv.status === 200, JSON.stringify(pv.d).slice(0, 100));
+    /* the store is drawn down the moment an order is released, so a line —
+       which decides which stage draws what — is fixed at creation; the edit
+       dialog says so rather than quietly re-routing a posted job */
+    const ed = await call("PATCH", "/production/wo/" + auto.d.id, A, { line: "Slitting B" });
+    ok("a released order keeps its line (400)", ed.status === 400 && /started/.test(ed.d.error || ""), ed.status + " " + JSON.stringify(ed.d).slice(0, 100));
+    ok("...and its route", (await woOf(auto.d.id)).route[0].owner === "coating2");
+  }
+
+  /* ================================================================ */
+  section("Finished stock is drawn store by store");
+  {
+    const rmS = { id: "RM-STORE-BASE", name: "Store test fabric", cat: "RM", uom: "KG", cost: 20 };
+    await call("POST", "/items", A, rmS); await grn(rmS.id, 1000);
+    const fgS = { id: "FG-STORE-TAPE", name: "Store test tape", cat: "FG", uom: "KG", typeCode: "CH-PTFE-98", group: "OTHER", cost: 100, price: 200, tapeWidthMM: 25 };
+    await call("POST", "/items", A, fgS);
+    await call("PUT", "/boms/" + fgS.id, A, { yield: 100, lines: [[rmS.id, 1.0]] });
+    const put = (wh, qty) => call("POST", "/movements", A, { itemId: fgS.id, type: "ADJ", qty, rate: 100, wh, date: "2026-01-02", manual: true, note: "store test" });
+    ok("finished rolls booked into two stores (and one in quarantine)", (await put("WH-FG", 30)).status === 201 && (await put("WH-PNY", 20)).status === 201 && (await put("WH-QC", 7)).status === 201);
+
+    const pv = await call("POST", "/production/wo/preview", A, { itemId: fgS.id, qty: 100, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-PNY", qty: 15 }] });
+    ok("preview: 15 kg named from the main store comes off the shelf", pv.status === 200 && Math.abs(pv.d.fromStock - 15) < 1e-6 && Math.abs(pv.d.makeQty - 85) < 1e-6, JSON.stringify(pv.d).slice(0, 160));
+    const stores = (pv.d && pv.d.fgStores) || [];
+    ok("preview lists every store the product sits in, with what each holds", stores.some((s) => s.wh === "WH-FG" && Math.abs(s.qty - 30) < 1e-6) && stores.some((s) => s.wh === "WH-PNY" && Math.abs(s.qty - 20) < 1e-6), JSON.stringify(stores));
+    ok("...and never the quarantine store", stores.length > 0 && !stores.some((s) => s.wh === "WH-QC"));
+
+    const wo = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 100, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-PNY", qty: 15 }] });
+    ok("the order takes exactly the named 15 kg from stock", wo.status === 201 && Math.abs(wo.d.plan.fgQty - 15) < 1e-6 && Math.abs(wo.d.plan.makeQty - 85) < 1e-6, JSON.stringify(wo.d.plan || wo.d).slice(0, 160));
+    ok("...and remembers which store it comes from", wo.status === 201 && wo.d.plan.fgSources.length === 1 && wo.d.plan.fgSources[0].wh === "WH-PNY", JSON.stringify(wo.d.plan && wo.d.plan.fgSources));
+    for (const a of ["start", "complete", "start", "complete"]) await call("POST", "/production/wo/" + wo.d.id + "/advance", A, { action: a });
+    const mv = (await state()).movements.filter((m) => m.ref === wo.d.id && m.itemId === fgS.id);
+    ok("packing issued the finished rolls from the store the office named", mv.length === 1 && mv[0].wh === "WH-PNY" && Math.abs(mv[0].qty + 15) < 1e-6, JSON.stringify(mv));
+    ok("the finished-goods bay was left alone", Math.abs((await stockIn(fgS.id, "WH-FG")) - 30) < 1e-6, String(await stockIn(fgS.id, "WH-FG")));
+    ok("the main store went down by 15", Math.abs((await stockIn(fgS.id, "WH-PNY")) - 5) < 1e-6, String(await stockIn(fgS.id, "WH-PNY")));
+
+    const wo2 = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 100, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-FG", qty: 10 }, { id: fgS.id, wh: "WH-PNY", qty: 5 }] });
+    ok("a draw can be split across two stores", wo2.status === 201 && Math.abs(wo2.d.plan.fgQty - 15) < 1e-6 && wo2.d.plan.fgSources.length === 2, JSON.stringify(wo2.d.plan && wo2.d.plan.fgSources));
+    for (const a of ["start", "complete", "start", "complete"]) await call("POST", "/production/wo/" + wo2.d.id + "/advance", A, { action: a });
+    const mv2 = (await state()).movements.filter((m) => m.ref === wo2.d.id && m.itemId === fgS.id).sort((a, b) => a.wh.localeCompare(b.wh));
+    ok("...and packing posts one issue per store", mv2.length === 2 && mv2[0].wh === "WH-FG" && Math.abs(mv2[0].qty + 10) < 1e-6 && mv2[1].wh === "WH-PNY" && Math.abs(mv2[1].qty + 5) < 1e-6, JSON.stringify(mv2.map((m) => m.wh + ":" + m.qty)));
+
+    const wo3 = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 100, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-FG", qty: 500 }] });
+    ok("asking for more than a store holds takes what is there", wo3.status === 201 && Math.abs(wo3.d.plan.fgQty - 20) < 1e-6, JSON.stringify(wo3.d.plan && wo3.d.plan.fgQty));
+    const wo4 = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 50, widthMM: 25, fgDraws: [] });
+    ok("naming no store draws nothing - the whole order is made", wo4.status === 201 && wo4.d.plan.fgQty === 0 && Math.abs(wo4.d.plan.makeQty - 50) < 1e-6, JSON.stringify(wo4.d.plan || wo4.d).slice(0, 120));
+    const bad = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 50, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-QC", qty: 5 }] });
+    ok("quarantined finished stock cannot be drawn (400)", bad.status === 400, bad.status + " " + JSON.stringify(bad.d).slice(0, 100));
+    const bad2 = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 50, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-NOPE", qty: 5 }] });
+    ok("an unknown store is refused (400)", bad2.status === 400);
+    /* both stores are empty by now — every order above drew its rolls the
+       moment it was released — so put some back before the last two checks */
+    ok("stores empty after the draws above", Math.abs(await stockIn(fgS.id, "WH-FG")) < 1e-6 && Math.abs(await stockIn(fgS.id, "WH-PNY")) < 1e-6, (await stockIn(fgS.id, "WH-FG")) + " / " + (await stockIn(fgS.id, "WH-PNY")));
+    await put("WH-FG", 10);
+    const wo5 = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 50, widthMM: 25, fgQty: 3 });
+    ok("an unnamed total is still honoured", wo5.status === 201 && Math.abs(wo5.d.plan.fgQty - 3) < 1e-6, JSON.stringify(wo5.d.plan && wo5.d.plan.fgQty));
+    const wo6 = await call("POST", "/production/wo", A, { itemId: fgS.id, qty: 50, widthMM: 25 });
+    ok("nothing named at all takes what the drawable stores hold, never the quarantine", wo6.status === 201 && Math.abs(wo6.d.plan.fgQty - 7) < 1e-6, JSON.stringify(wo6.d.plan && wo6.d.plan.fgQty));
+  }
+
+  /* ================================================================ */
+  section("A failed batch still leaves the floor - and the office is told");
+  {
+    const rmC = { id: "RM-LABALERT", name: "Lab alert fabric", cat: "RM", uom: "KG", cost: 20 };
+    const fgC = { id: "FG-LABALERT", name: "Lab alert water blocking tape", cat: "FG", uom: "KG", typeCode: "CHDNW-97", group: "WATER BLOCKING SERIES", cost: 100, price: 200 };
+    await call("POST", "/items", A, rmC); await call("POST", "/items", A, fgC);
+    await call("PUT", "/boms/" + fgC.id, A, { yield: 100, lines: [[rmC.id, 1.2]] });
+    await grn(rmC.id, 500);
+    const lp = await call("POST", "/lab/products", A, { id: "LP-LABALERT", name: "Lab alert water blocking tape", code: "CHDNW-97", thickness: "0.25", series: "Water Blocking", itemId: fgC.id,
+      flags: { waterBlocking: true, semiConductive: false, mica: false }, spec: { thickness: { min: 0.2, max: 0.3 }, tensile: { min: 30 } } });
+    ok("fixture: lab product", lp.status === 201);
+    const newWO = async () => (await call("POST", "/production/wo", A, { itemId: fgC.id, qty: 40 })).d;
+    const wo = await newWO();
+    await call("POST", "/production/wo/" + wo.id + "/advance", C, { action: "start" });
+    const bad = await call("POST", "/production/wo/" + wo.id + "/lab", C, { values: { thickness: 0.9, tensile: 5 } });
+    ok("the floor's out-of-spec reading is recorded", bad.status === 201 && bad.d.report.prodResult === "Fail", JSON.stringify(bad.d).slice(0, 120));
+    const done = await call("POST", "/production/wo/" + wo.id + "/advance", C, { action: "complete", wipWh: "WH-WIP" });
+    ok("a FAILED batch now closes coating (200)", done.status === 200, done.status + " " + JSON.stringify(done.d).slice(0, 140));
+    ok("...and the reply says the reading failed", !!(done.d.labWarning && done.d.labWarning.result === "Fail" && /Thickness/.test((done.d.labWarning.failed || []).join(","))), JSON.stringify(done.d.labWarning));
+    const after = await woOf(wo.id);
+    ok("the stage moved on", !!(after && after.route[0].status === "Completed" && after.stageIdx === 1), JSON.stringify(after && { st: after.route[0].status, idx: after.stageIdx }));
+    const adm = await state();
+    const q = (adm.labQcDecisions || []).find((x) => x.woId === wo.id);
+    ok("the admin's alert list names the batch", !!(q && q.stage === "floor" && q.productCode === "CHDNW-97" && q.batchNo === wo.id.replace(/^WO-/, "")), JSON.stringify(q));
+    ok("...and which readings failed", !!(q && (q.failed || []).includes("Thickness")));
+    ok("...and the certificate to open", !!(q && q.id === bad.d.report.id));
+    const labSt = await state(LB);
+    const ql = (labSt.labQcDecisions || []).find((x) => q && x.id === q.id);
+    ok("the lab incharge is told too", !!ql, JSON.stringify(labSt.labQcDecisions || null).slice(0, 120));
+    ok("...without the failed parameters or any limit", !!ql && ql.failed === undefined && !/"min"|"max"/.test(JSON.stringify(ql)), JSON.stringify(ql));
+    const labCopy = (labSt.labReports || []).find((r) => q && r.id === q.id);
+    ok("the lab's certificate copy still carries no per-parameter verdict", !!labCopy && labCopy.prodResults === undefined && labCopy.prodResult === undefined);
+    ok("the lab's certificate copy says it is flagged for a ruling", !!labCopy && labCopy.attention === "floor", JSON.stringify(labCopy && labCopy.attention));
+
+    const wo2 = await newWO();
+    await call("POST", "/production/wo/" + wo2.id + "/advance", C, { action: "start" });
+    const noRead = await call("POST", "/production/wo/" + wo2.id + "/advance", C, { action: "complete", wipWh: "WH-WIP" });
+    ok("an UNMEASURED batch is still refused (409)", noRead.status === 409 && /Lab report required/.test(noRead.d.error || ""), noRead.status + " " + JSON.stringify(noRead.d).slice(0, 100));
+    const half = await call("POST", "/production/wo/" + wo2.id + "/lab", C, { values: { thickness: 0.9 } });
+    ok("a half-filled sheet is still refused (400)", half.status === 400);
+
+    const qid = q ? q.id : "LR-0000";
+    ok("the lab cannot rule on it (403)", (await call("POST", "/lab/reports/" + qid + "/decision", LB, { accept: true })).status === 403);
+    ok("nor office (403)", (await call("POST", "/lab/reports/" + qid + "/decision", O, { accept: true })).status === 403);
+    const acc = await call("POST", "/lab/reports/" + qid + "/decision", A, { accept: true, note: "Customer accepts the thicker tape" });
+    ok("the admin accepts the batch", acc.status === 200 && acc.d.report && acc.d.report.decision === "accepted" && acc.d.report.decidedBy === "admin", JSON.stringify(acc.d).slice(0, 160));
+    ok("...and it leaves both alert lists", !((await state()).labQcDecisions || []).some((x) => x.id === qid) && !((await state(LB)).labQcDecisions || []).some((x) => x.id === qid));
+    const labCopy2 = ((await state(LB)).labReports || []).find((r) => r.id === qid);
+    ok("the ruling is on the certificate for the lab to see", !!labCopy2 && labCopy2.decision === "accepted" && labCopy2.decisionNote === "Customer accepts the thicker tape", JSON.stringify(labCopy2 && { d: labCopy2.decision, n: labCopy2.decisionNote }));
+    ok("a second ruling is refused (409)", (await call("POST", "/lab/reports/" + qid + "/decision", A, { accept: false })).status === 409);
+
+    const lr = await call("POST", "/lab/reports", LB, { productId: "LP-LABALERT", refNo: "B-LAB-1", values: { thickness: 0.95, tensile: 2 } });
+    ok("the lab's own failing reading is filed (201)", lr.status === 201, lr.status + " " + JSON.stringify(lr.d).slice(0, 100));
+    const q2 = ((await state()).labQcDecisions || []).find((x) => x.id === lr.d.id);
+    ok("...and raises an alert for the admin, marked as the lab's reading", !!(q2 && q2.stage === "lab" && q2.refNo === "B-LAB-1"), JSON.stringify(q2));
+    ok("...visible to the lab as well", ((await state(LB)).labQcDecisions || []).some((x) => x.id === lr.d.id));
+    const rej = await call("POST", "/lab/reports/" + lr.d.id + "/decision", A, { accept: false, note: "Scrap the batch" });
+    ok("the admin can reject it", rej.status === 200 && rej.d.report.decision === "rejected", JSON.stringify(rej.d).slice(0, 120));
+    const good = await call("POST", "/lab/reports", A, { productId: "LP-LABALERT", refNo: "B-OK-1", values: { thickness: 0.25, tensile: 40 } });
+    ok("a passing certificate has nothing to rule on (400)", good.status === 201 && (await call("POST", "/lab/reports/" + good.d.id + "/decision", A, { accept: true })).status === 400);
+
+    const bad2 = await call("POST", "/production/wo/" + wo2.id + "/lab", C, { values: { thickness: 0.9, tensile: 5 } });
+    ok("second floor fail on file", bad2.status === 201 && ((await state()).labQcDecisions || []).some((x) => x.id === bad2.d.report.id));
+    const labPass = await call("POST", "/lab/reports", LB, { productId: "LP-LABALERT", refNo: wo2.id.replace(/^WO-/, ""), values: { thickness: 0.25, tensile: 40 } });
+    ok("the lab measures the same batch and it passes", labPass.status === 201 && labPass.d.id === bad2.d.report.id, JSON.stringify(labPass.d).slice(0, 100));
+    ok("...so the floor's alert is withdrawn", !((await state()).labQcDecisions || []).some((x) => x.id === bad2.d.report.id));
+
+    const rmG = { id: "RM-GRNALERT", name: "GRN alert paper", cat: "RM", uom: "KG", cost: 30 };
+    await call("POST", "/items", A, rmG);
+    await call("PUT", "/items/" + rmG.id + "/qc", A, { params: ["thickness", "visual"], spec: { thickness: { min: 0.07, max: 0.09 } } });
+    const sup = (await state()).suppliers[0].id;
+    const poF = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-22", lines: [{ itemId: rmG.id, qty: 40, rate: 30 }] })).d;
+    const gF = (await call("POST", "/purchase-orders/" + poF.id + "/receive", A, { wh: "WH-PNY", lines: [{ i: 0, qty: 40 }] })).d.grn;
+    const failed = await call("POST", "/grns/" + encodeURIComponent(gF.id) + "/tests", LB, { itemId: rmG.id, values: { thickness: 0.02, visual: "very thin" } });
+    ok("a failing incoming reading is filed", failed.status === 201);
+    const gq = ((await state(LB)).grnQcDecisions || []).find((x) => x.grnId === gF.id);
+    ok("the lab is told the lot failed and awaits the admin", !!gq, JSON.stringify((await state(LB)).grnQcDecisions || null).slice(0, 120));
+    ok("...without the parameter that failed", !!gq && gq.failed === undefined, JSON.stringify(gq));
+    const gqA = ((await state()).grnQcDecisions || []).find((x) => x.grnId === gF.id);
+    ok("the admin still sees which parameter failed", !!gqA && (gqA.failed || []).join() === "Thickness");
+  }
+
+  /* ================================================================ */
+  section("The TDS booklet: one copy for every login, replaced by admin");
+  {
+    ok("restoring the bundled booklet is admin's (403 for office)", (await call("DELETE", "/tds", O)).status === 403);
+    const reset = await call("DELETE", "/tds", A);
+    ok("admin can restore the bundled booklet", reset.status === 200, reset.status + " " + JSON.stringify(reset.d).slice(0, 100));
+    const meta = await call("GET", "/tds", A);
+    ok("the booklet is described", meta.status === 200 && meta.d.present === true && meta.d.kind === "pdf" && meta.d.source === "bundled" && meta.d.viewable === true, JSON.stringify(meta.d));
+    ok("every login may read it - lab", (await call("GET", "/tds", LB)).status === 200);
+    ok("...office", (await call("GET", "/tds", O)).status === 200);
+    ok("...the floor", (await call("GET", "/tds", C)).status === 200);
+    ok("nobody anonymous (401)", (await call("GET", "/tds/file")).status === 401 && (await call("GET", "/tds")).status === 401);
+    const bundled = fs.readFileSync(path.join(REPO, "frontend/assets/docs/tds-brochure.pdf"));
+    const r = await fetch(base + "/tds/file", { headers: { Authorization: "Bearer " + A } });
+    const buf = Buffer.from(await r.arrayBuffer());
+    ok("the file itself is served, byte for byte", r.status === 200 && /application\/pdf/.test(r.headers.get("content-type") || "") && buf.length === bundled.length && buf.equals(bundled), r.status + " " + r.headers.get("content-type") + " " + buf.length);
+    ok("...inline, so the viewer can show it", /inline/.test(r.headers.get("content-disposition") || ""), r.headers.get("content-disposition"));
+
+    const pdfBytes = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+    const b64 = pdfBytes.toString("base64");
+    ok("office cannot replace it (403)", (await call("PUT", "/tds", O, { name: "tds.pdf", data: b64 })).status === 403);
+    ok("nor the lab (403)", (await call("PUT", "/tds", LB, { name: "tds.pdf", data: b64 })).status === 403);
+    ok("nor the floor (403)", (await call("PUT", "/tds", C, { name: "tds.pdf", data: b64 })).status === 403);
+    ok("a .txt is refused (400)", (await call("PUT", "/tds", A, { name: "notes.txt", data: b64 })).status === 400);
+    ok("an empty file is refused (400)", (await call("PUT", "/tds", A, { name: "tds.pdf", data: "" })).status === 400);
+    ok("a file that is not a PDF inside is refused (400)", (await call("PUT", "/tds", A, { name: "tds.pdf", data: Buffer.from("hello").toString("base64") })).status === 400);
+    const up = await call("PUT", "/tds", A, { name: "../TDS 2026 (rev 3).pdf", data: b64 });
+    ok("admin replaces the booklet", up.status === 200 && up.d.source === "uploaded" && up.d.kind === "pdf" && up.d.updatedBy === "admin" && up.d.name === "TDS 2026 (rev 3).pdf" && up.d.viewable === true, up.status + " " + JSON.stringify(up.d));
+    const r2 = await fetch(base + "/tds/file", { headers: { Authorization: "Bearer " + LB } });
+    const buf2 = Buffer.from(await r2.arrayBuffer());
+    ok("everyone now gets the new file", r2.status === 200 && buf2.equals(pdfBytes) && (await call("GET", "/tds", LB)).d.source === "uploaded", buf2.length + "");
+    const r3 = await fetch(base + "/tds/file?dl=1", { headers: { Authorization: "Bearer " + O } });
+    ok("a download asks the browser to save it", /attachment/.test(r3.headers.get("content-disposition") || "") && /\.pdf/.test(r3.headers.get("content-disposition") || ""), r3.headers.get("content-disposition"));
+    const docx = Buffer.from("PK\u0003\u0004 not really a document but zipped like one");
+    const upW = await call("PUT", "/tds", A, { name: "TDS.docx", data: docx.toString("base64") });
+    ok("a Word document is accepted", upW.status === 200 && upW.d.kind === "docx" && upW.d.source === "uploaded", upW.status + " " + JSON.stringify(upW.d));
+    ok("...but cannot be shown inline until it is converted", upW.status === 200 && upW.d.viewable === false);
+    const r4 = await fetch(base + "/tds/file", { headers: { Authorization: "Bearer " + C } });
+    ok("the Word file is served as a download", r4.status === 200 && /wordprocessingml/.test(r4.headers.get("content-type") || "") && /attachment/.test(r4.headers.get("content-disposition") || ""), r4.headers.get("content-type") + " " + r4.headers.get("content-disposition"));
+    ok("a Word file with the wrong bytes inside is refused (400)", (await call("PUT", "/tds", A, { name: "x.docx", data: Buffer.from("hello").toString("base64") })).status === 400);
+    ok("restoring puts the bundled PDF back", (await call("DELETE", "/tds", A)).status === 200 && (await call("GET", "/tds", C)).d.source === "bundled");
+  }
   }
 
   // restore the BOM change we made so a re-run against a persisted DB stays clean

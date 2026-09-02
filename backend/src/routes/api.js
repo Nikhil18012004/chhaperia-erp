@@ -16,6 +16,7 @@ const production = require("../services/productionService");
 const lab = require("../services/labService");
 const grnTest = require("../services/grnTestService");
 const bartender = require("../services/bartenderService");
+const tds = require("../services/tdsService");
 const { requireAuth, requireRole } = require("./auth");
 
 const router = express.Router();
@@ -321,6 +322,41 @@ router.patch("/lab/reports/:id", requireAuth, rwLab, async (req, res, next) => {
 // Deleting a certificate is a records decision — kept with admin/office.
 router.delete("/lab/reports/:id", requireAuth, rw, async (req, res, next) => {
   try { res.json(await lab.deleteReport(req.params.id)); } catch (e) { next(e); }
+});
+/* A FAILED CERTIFICATE GOES TO THE ADMIN. The batch is not stopped anywhere
+   (a failed floor reading no longer holds coating; a failed lab reading
+   describes stock already on the shelf), so the failure raises a ruling:
+   accept the batch — a concession, on the record — or reject it. Admin's
+   alone, as for a failed incoming lot. */
+router.post("/lab/reports/:id/decision", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.json(await lab.decideReport(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+
+/* ---- THE TDS BOOKLET ----
+   One copy for every login — the floor, the lab, the office — and admin
+   replaces it from the browser (a PDF, or a Word document that is converted
+   where the server can). The bytes live under the data directory, never in
+   the repo; the bundled booklet is what is served until one is uploaded. */
+router.get("/tds", requireAuth, (req, res, next) => {
+  try { res.json(tds.describe()); } catch (e) { next(e); }
+});
+router.get("/tds/file", requireAuth, (req, res, next) => {
+  try {
+    const f = tds.fileFor({ original: req.query.original === "1" });
+    if (!f) return res.status(404).json({ error: "No TDS booklet is on the server" });
+    const download = req.query.dl === "1" || !f.viewable;
+    res.set("Cache-Control", "private, no-cache");
+    res.type(f.mime);
+    res.set("Content-Disposition", (download ? "attachment" : "inline")
+      + "; filename*=UTF-8''" + encodeURIComponent(f.name));
+    res.sendFile(f.path);
+  } catch (e) { next(e); }
+});
+router.put("/tds", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.json(await tds.put(req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.delete("/tds", requireAuth, requireRole("admin"), (req, res, next) => {
+  try { res.json(tds.reset()); } catch (e) { next(e); }
 });
 
 /* ---- INCOMING-MATERIAL TESTING (after a PO is received) ----

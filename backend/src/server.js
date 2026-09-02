@@ -59,6 +59,8 @@ app.use("/api/bartender/template", bigBody("14mb"));
    1 MB the rest of the API gets. The per-picture and per-document caps are
    enforced in erpService — this only decides what the parser will accept. */
 app.use("/api/settings", bigBody("12mb"));
+// the TDS booklet arrives base64-encoded (a 40 MB cap on the file itself)
+app.use("/api/tds", bigBody("60mb"));
 app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)

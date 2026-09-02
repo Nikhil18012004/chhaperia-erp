@@ -116,14 +116,16 @@
       h("div",{class:"card-head"},h("h3",{text:title})),
       h("div",{class:"flex aic",style:"gap:18px;flex-wrap:wrap"},[ box, legend ])
     ]);
-    requestAnimationFrame(()=>Charts.donut(cv,{data, center:centerVal, centerSub}));
+    Charts.soon(()=>Charts.donut(cv,{data, center:centerVal, centerSub}));
     return card;
   }
 
   /* ----- toolbar with search ----- */
-  function searchInput(ph, onInput){
+  /* `value` — what the box already held before a quiet refresh rebuilt the
+     page, so the search the user typed does not vanish under them */
+  function searchInput(ph, onInput, value){
     let t; // debounce so filtering doesn't recompute on every keystroke
-    const inp=h("input",{class:"input search",placeholder:ph||"Search…",oninput:e=>{
+    const inp=h("input",{class:"input search",placeholder:ph||"Search…",value:value||"",oninput:e=>{
       const v=e.target.value; clearTimeout(t); t=setTimeout(()=>onInput(v),150);
     }});
     return inp;
@@ -151,10 +153,14 @@
       {value:"90",label:"Last 90d",from:DB.helpers.daysAgo(90),to:today},
       {value:"custom",label:"Custom",from:range.from||"",to:range.to||""},
     ];
+    /* the preset that matches the range already chosen (a rebuilt page hands
+       its range back), else "custom" for hand-typed dates, else the default */
+    const already=presets.find(p=>p.value!=="custom" && p.from===(range.from||"") && p.to===(range.to||""));
+    const initial=(range.from||range.to) ? (already?already.value:"custom") : (opts.defaultPreset||"all");
     const preset=select(presets, v=>{
       const p=presets.find(x=>x.value===v)||presets[0];
       if(v!=="custom"){ range.from=p.from; range.to=p.to; from.value=range.from; to.value=range.to; onChange(range); }
-    }, opts.defaultPreset||"all");
+    }, initial);
     const from=h("input",{class:"input date-input",type:"date",value:range.from||"",onchange:e=>{range.from=e.target.value; preset.value="custom"; onChange(range);}});
     const to=h("input",{class:"input date-input",type:"date",value:range.to||"",onchange:e=>{range.to=e.target.value; preset.value="custom"; onChange(range);}});
     return h("div",{class:"date-range"},[

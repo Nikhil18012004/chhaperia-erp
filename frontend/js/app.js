@@ -252,7 +252,12 @@
     },
 
     buildNav(){
-      const nav=$("#nav"); nav.innerHTML="";
+      /* Built OFF-SCREEN and swapped in only when something changed. The bar
+         is rebuilt on every save and every poll, and wiping it each time cost
+         focus (a menu item reached by keyboard) and a flicker of the pills;
+         when the new bar reads the same as the old, the old one stays. */
+      const live=$("#nav");
+      const nav=h("nav",{class:live.className});
       const isAdmin = this.user && this.user.role === "admin";
       const isLab = this.isLab();
       /* ONE set of figures for the whole bar. The pills used to ask for them
@@ -308,13 +313,15 @@
       });
       // a role can pass a section head yet fail every item in it — no empty folds
       $$(".nav-group",nav).forEach(g=>{ if(!g.querySelector(".nav-item")) g.remove(); });
-      this.decorateNavHeads();
+      this.decorateNavHeads(nav);
+      if(live.innerHTML===nav.innerHTML) return;      // nothing changed — keep the bar (and its focus)
+      live.replaceChildren(...nav.childNodes);
     },
 
     /* A closed section must not bury its alerts: the head carries the sum of
        its hidden items' pills, coloured by the most urgent one inside. */
-    decorateNavHeads(){
-      $$("#nav .nav-group").forEach(g=>{
+    decorateNavHeads(root){
+      $$(".nav-group", root||$("#nav")).forEach(g=>{
         const badge=g.querySelector(".nav-sec-badge"); if(!badge) return;
         if(g.classList.contains("open")){ badge.hidden=true; return; }
         let sum=0, cls="";
@@ -338,6 +345,9 @@
     isLab(){ return !!(this.user && this.user.role === "lab"); },
     canAccess(id){
       const meta = UI.NAV.find(n => n.id === id);
+      /* a page that is not in the menu at all and is reached only by searching
+         (the TDS booklet) is open to every login — the same way for each */
+      if(!meta && M[id] && M[id].searchOnly) return true;
       if(this.isLab()) return !!(meta && meta.labOk);
       return meta ? !(meta.adminOnly && !this.isAdmin()) : true;
     },
@@ -345,6 +355,8 @@
     canWrite(id){
       if(!this.isLab()) return true;
       const meta = UI.NAV.find(n => n.id === (id || this.current));
+      // a search-only page has no menu entry to carry the flag; it gates its own writes
+      if(!meta && M[id || this.current] && M[id || this.current].searchOnly) return true;
       return !!(meta && meta.labWrite);
     },
     homeId(){
@@ -353,6 +365,23 @@
       const first = UI.NAV.find(n => n.id && !(n.adminOnly && !this.isAdmin()));
       return first ? first.id : "dashboard";
     },
+
+    /* WHAT A PAGE WAS SHOWING. A background refresh rebuilds the page from
+       scratch; without this the tab, the search text and the date range went
+       back to their defaults every 15 seconds — which is exactly how a user
+       KNEW the screen had been refreshed. A module keeps the tab or filter it
+       is showing here; a quiet refresh hands it straight back, and a
+       deliberate navigation to the page starts it clean (go() empties the
+       store). Objects come back by reference, so a filter that is mutated in
+       place needs no second call; a scalar (the tab) is re-set with
+       setViewState. Keys are per module, so two pages never share a tab. */
+    viewState(key, init){
+      const vs=this._vs||(this._vs={});
+      const k=this.current+"."+key;
+      if(!(k in vs)) vs[k]=typeof init==="function"?init():init;
+      return vs[k];
+    },
+    setViewState(key, v){ (this._vs||(this._vs={}))[this.current+"."+key]=v; return v; },
 
     /* A module with unsaved work registers a guard when it renders; the next
        navigation away asks before it throws that work out. Label Studio is the
@@ -431,7 +460,7 @@
         if(this.params){
           bp={...this.params};
           delete bp.openNew; delete bp.create; delete bp.openPending;
-          delete bp.highlight; delete bp.open;
+          delete bp.highlight; delete bp.open; delete bp.openGrnTest;
           if(!Object.keys(bp).length) bp=null;
         }
         /* the TRAIL: every page on the way here, so back retraces the whole
@@ -476,7 +505,12 @@
       cr.appendChild(h("span",{class:"sep",text:"/"}));
       cr.appendChild(h("span",{class:"cur",text:mod.title}));
       // render
-      const view=$("#view"); view.innerHTML=""; view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in");
+      const view=$("#view"); view.innerHTML="";
+      /* The entrance is for a NEW page. A quiet refresh of the page already on
+         screen replays nothing — that replay (opacity 0 → 1 with a slide) was
+         the "blink" users saw every 15 seconds — and keeps what the page was
+         showing (viewState); a deliberate navigation starts the page clean. */
+      if(!this._quiet){ view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in"); this._vs={}; }
       try{ mod.render(view, params); }
       catch(err){ console.error("Module error:",err); view.appendChild(h("div",{class:"empty"},[h("div",{class:"big",text:"⚠"}),h("div",{text:"Module failed to render: "+err.message})])); }
       view.scrollTop=0;
@@ -581,11 +615,21 @@
       /* Never rebuild an editor — a refresh is housekeeping, and it does not get
          to throw the operator's design away. Live again the moment they leave. */
       if(this._leaveGuard) return;
+      /* A page with no live figures on it — the TDS booklet in its frame — is
+         not rebuilt by a refresh at all: rebuilding it would reload the
+         document and lose the reader's page. */
+      if(M[this.current].static) return;
       const view=$("#view");
       const top=view?view.scrollTop:0;
       const prev=view?view.style.scrollBehavior:"";
       if(view) view.style.scrollBehavior="auto";   // smooth scrolling would animate the restore
-      this.go(this.current, this.params);
+      /* QUIET: no entrance animation, charts drawn finished rather than grown
+         in, tabs and filters kept — the screen is updated in place, not
+         re-entered, so nobody can tell a refresh happened. */
+      this._quiet=true;
+      if(global.Charts && Charts.quietFor) Charts.quietFor(600);
+      try{ this.go(this.current, this.params); }
+      finally{ this._quiet=false; }
       if(!view) return;
       const put=()=>{ if(view.scrollTop!==top) view.scrollTop=top; };
       put();
@@ -664,11 +708,18 @@
             else if(a.kind==="po") this.go("purchase");
             else if(a.kind==="so") this.go("sales");
             else if(a.kind==="lead") this.go("crm");
+            /* A failed finished-goods certificate opens ITSELF — the admin rules
+               on it there, the lab reads the flag there. */
+            else if(a.kind==="labFail") this.go("lab-reports",{view:"reports", open:a.id});
             /* A failed lot needs a decision, not a page: land on Procurement and
-               open the queue itself, so the ruling is one click from the alert. */
-            else if(a.kind==="qcDecision"){ this.go("purchase");
-              const q=(window._erpUtil||{}).qcDecisionQueue;
-              if(q) setTimeout(q,60); } }},[
+               open THAT lot's ruling, so the ruling is one click from the alert.
+               The lab cannot rule, so its click opens the test report instead. */
+            else if(a.kind==="qcDecision"){
+              if(this.isLab()){ this.go("lab-reports",{view:"incoming", openGrnTest:a.id}); return; }
+              this.go("purchase");
+              const q=(ENG.data.grnQcDecisions||[]).find(x=>x.id===a.id);
+              const form=(window._erpUtil||{}).qcDecisionForm, queue=(window._erpUtil||{}).qcDecisionQueue;
+              if(q&&form) setTimeout(()=>form(q,queue),60); else if(queue) setTimeout(queue,60); } }},[
             h("div",{class:"alert-ic",style:st,text:a.ic}),
             h("div",{style:"flex:1;min-width:0"},[ h("div",{class:"t",text:a.title}), h("div",{class:"d",text:a.desc}) ])
           ]));
@@ -744,6 +795,8 @@
       input.oninput=()=>{ this.cmdkSel=0; this.cmdkRender(input.value); };
       $("#cmdk").onclick=(e)=>{ if(e.target.id==="cmdk") this.closeCmdk(); };
       document.addEventListener("keydown",(e)=>{
+        // the floor panel runs its own palette (mod-supervisor) on the same keys
+        if($("#app").classList.contains("sup-mode")) return;
         if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){ e.preventDefault(); $("#cmdk").hidden?this.openCmdk():this.closeCmdk(); return; }
         if($("#cmdk").hidden) return;
         if(e.key==="Escape") this.closeCmdk();

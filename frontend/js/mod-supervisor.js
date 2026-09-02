@@ -73,6 +73,54 @@
       const on = UI.$("#orgName"), os = UI.$("#orgSub");
       if (on) on.textContent = (this.data && this.data.org ? this.data.org.short : "Chhaperia");
       if (os) os.textContent = "Production Floor";
+      /* the same search box every other login has (⌘K / Ctrl K) — the floor's
+         own pages, and what is reachable ONLY by searching: the TDS booklet */
+      const st = UI.$("#searchTrigger"); if (st) st.onclick = () => this.openCmdk();
+      const input = UI.$("#cmdkInput");
+      if (input && !this._cmdkBound) {
+        this._cmdkBound = true;
+        input.addEventListener("input", () => { if (!this.supMode()) return; this.cmdkSel = 0; this.cmdkRender(input.value); });
+        UI.$("#cmdk").addEventListener("click", (e) => { if (this.supMode() && e.target.id === "cmdk") this.closeCmdk(); });
+        document.addEventListener("keydown", (e) => {
+          if (!this.supMode()) return;   // the office shell has its own palette on these keys
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); UI.$("#cmdk").hidden ? this.openCmdk() : this.closeCmdk(); return; }
+          if (UI.$("#cmdk").hidden) return;
+          if (e.key === "Escape") this.closeCmdk();
+          else if (e.key === "ArrowDown") { e.preventDefault(); this.cmdkSel = Math.min((this.cmdkList || []).length - 1, this.cmdkSel + 1); this.cmdkRender(input.value); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); this.cmdkSel = Math.max(0, this.cmdkSel - 1); this.cmdkRender(input.value); }
+          else if (e.key === "Enter") { const it = (this.cmdkList || [])[this.cmdkSel]; if (it) { e.preventDefault(); it.act(); this.closeCmdk(); } }
+        });
+      }
+    },
+
+    /* ---- search (⌘K) ---- */
+    supMode() { const a = UI.$("#app"); return !!(a && a.classList.contains("sup-mode")); },
+    show(filter) { this.filter = filter; this.buildNav(); this.render(); },
+    cmdkItems(q) {
+      q = String(q || "").toLowerCase();
+      const items = [
+        { ic: "⚙️", label: "My Jobs", tag: "Page", act: () => this.show("active") },
+        { ic: "⏳", label: "Coming Up", tag: "Page", act: () => this.show("incoming") },
+        { ic: "✅", label: "Completed", tag: "Page", act: () => this.show("done") },
+        { ic: "📋", label: "All Jobs", tag: "Page", act: () => this.show("all") },
+        { ic: "🏬", label: "Warehouses", tag: "Page", act: () => this.show("warehouses") },
+        { ic: "📘", label: "TDS — Technical Data Sheets (product brochure)", tag: "Action", act: () => this.show("tds") },
+      ];
+      return items.filter((it) => !q || it.label.toLowerCase().includes(q));
+    },
+    openCmdk() {
+      const box = UI.$("#cmdk"); if (!box) return;
+      box.hidden = false; const input = UI.$("#cmdkInput"); input.value = ""; this.cmdkSel = 0;
+      this.cmdkRender(""); input.focus();
+    },
+    closeCmdk() { const box = UI.$("#cmdk"); if (box) box.hidden = true; },
+    cmdkRender(q) {
+      const items = this.cmdkItems(q); this.cmdkList = items;
+      const box = UI.$("#cmdkResults"); box.innerHTML = "";
+      if (!items.length) { box.appendChild(H("div", { class: "empty", style: "padding:30px" }, "No matches")); return; }
+      items.forEach((it, i) => box.appendChild(H("div", { class: "cmdk-row" + (i === this.cmdkSel ? " sel" : ""), onclick: () => { it.act(); this.closeCmdk(); } }, [
+        H("span", { class: "ic", text: it.ic }), H("span", { text: it.label }), H("span", { class: "tag", text: it.tag }),
+      ])));
     },
 
     setUserChip() {
@@ -145,6 +193,8 @@
       items.push({ id: "all", ic: "📋", label: "All Jobs" });
       items.push({ sec: "Store" });
       items.push({ id: "warehouses", ic: "🏬", label: "Warehouses" });
+      // the TDS booklet is NOT listed — like every other login, the floor
+      // reaches it by searching (the ⌘K box above)
 
       const nav = UI.$("#nav"); nav.innerHTML = "";
       items.forEach((n) => {
@@ -160,10 +210,18 @@
 
     render() {
       const view = UI.$("#view");
+      /* A redraw of the page already on screen — after a tap, or a refresh —
+         keeps its place and does not re-enter: no fade replay, scroll kept.
+         Only a change of page gets the entrance. Same rule as App.refreshView. */
+      const same = this._drawn === this.filter;
+      const top = same ? view.scrollTop : 0;
       view.innerHTML = "";
-      view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in");
+      if (!same) { view.classList.remove("fade-in"); void view.offsetWidth; view.classList.add("fade-in"); }
+      this._drawn = this.filter;
+      const settle = () => { view.scrollTop = top; };
 
-      if (this.filter === "warehouses") { this.renderWarehouses(view); view.scrollTop = 0; return; }
+      if (this.filter === "tds") { this.renderTds(view); settle(); return; }
+      if (this.filter === "warehouses") { this.renderWarehouses(view); settle(); return; }
 
       const g = this.buckets();
       const hasIncoming = g.incoming.length > 0;
@@ -176,7 +234,7 @@
         "Tap a job to move it to the next stage. Once you complete a stage it hands off to the next team automatically.",
         [
           H("button", { class: "btn primary", onclick: () => this.openProduce(), html: "➕ Add to Finished Stock" }),
-          H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" }),
+          H("button", { class: "btn", onclick: () => this.refresh({ quiet: true }), html: "↻ Refresh" }),
         ]
       ));
 
@@ -207,7 +265,30 @@
         show.forEach((w) => list.appendChild(this.card(w)));
       }
       view.appendChild(list);
-      view.scrollTop = 0;
+      settle();
+    },
+
+    /* ============================================================
+       The TDS booklet — read-only for the floor, straight off the
+       same endpoint every other login uses (a PDF shown in the
+       page; a Word document offered as a download).
+       ============================================================ */
+    renderTds(view) {
+      UI.$("#crumbs").innerHTML = '<span>Chhaperia</span><span class="sep">/</span><span class="cur">Technical Data Sheets</span>';
+      const FILE = "/api/tds/file";
+      view.appendChild(pageHead("📘 Technical Data Sheets",
+        "The compiled technical data sheets for the products we manufacture and supply.",
+        [H("a", { class: "btn", href: FILE, target: "_blank", rel: "noopener", text: "Open in new tab" }),
+          H("a", { class: "btn primary", href: FILE + "?dl=1", text: "Download" })]));
+      const shell = H("div", { class: "doc-shell" });
+      view.appendChild(shell);
+      DB.tds.info().then((info) => {
+        if (!info.present) { shell.appendChild(H("div", { class: "sup-empty" }, [H("div", { class: "big", text: "📄" }), H("div", { text: "The TDS booklet is not on the server yet." })])); return; }
+        if (info.viewable) shell.appendChild(H("iframe", { class: "doc-frame", src: FILE + "?v=" + encodeURIComponent(info.updatedAt || "") + "#view=FitH", title: "Technical Data Sheets" }));
+        else shell.appendChild(H("div", { class: "sup-empty" }, [H("div", { class: "big", text: "📄" }),
+          H("div", { text: "The TDS is a Word document — download it to read it." }),
+          H("a", { class: "btn primary", style: "margin-top:12px", href: FILE + "?dl=1", text: "Download " + (info.name || "TDS") })]));
+      }).catch((err) => { shell.appendChild(H("div", { class: "sup-empty" }, [H("div", { class: "big", text: "⚠" }), H("div", { text: err.message })])); });
     },
 
     /* ============================================================
@@ -227,7 +308,7 @@
       view.appendChild(pageHead(
         "🏬 Warehouses",
         "What each store holds right now — view only. Tap a warehouse to see every material inside.",
-        [H("button", { class: "btn", onclick: () => this.refresh(), html: "↻ Refresh" })]
+        [H("button", { class: "btn", onclick: () => this.refresh({ quiet: true }), html: "↻ Refresh" })]
       ));
 
       if (!whs.length) {
@@ -634,12 +715,14 @@
       go.onclick = async () => {
         go.disabled = true; go.textContent = "…";
         try {
+          let res = null;
           if (backfill) await DB.production.setWipStore(w.id, sel.value);
-          else await DB.production.advance(w.id, "complete", { wipWh: sel.value });
+          else res = await DB.production.advance(w.id, "complete", { wipWh: sel.value });
           mo.close();
           const nm = (whs.find((x) => x.id === sel.value) || {}).name || sel.value;
           toast(backfill ? "Recorded — slitting is sent to " + nm : "Coating completed — roll left at " + nm,
             { type: "ok", title: backfill ? "Store recorded" : "Handed to slitting" });
+          self.labWarn(res);
           await self.refresh({ quiet: true, slim: true });
         } catch (err) {
           toast(err.message, { type: "danger" });
@@ -695,12 +778,25 @@
       });
     },
 
+    /* The floor is told when the batch it just closed measured outside its
+       limits. The stage still closed (ruled 2026-09-02); the admin and the lab
+       have the alert, and the ruling is theirs. Named parameters only — never
+       a limit — exactly what the old refusal used to say. */
+    labWarn(res) {
+      const lw = res && res.labWarning;
+      if (!lw) return;
+      toast("Batch " + (lw.batchNo || "") + " measured outside its limits"
+        + (lw.failed && lw.failed.length ? " (" + lw.failed.join(", ") + ")" : "")
+        + " — the admin and the lab have been alerted.", { type: "warn", title: "Lab data failed", dur: 9000 });
+    },
+
     async act(w, action, btn) {
       if (btn) { btn.disabled = true; btn.textContent = "…"; }
       try {
-        await DB.production.advance(w.id, action);
+        const res = await DB.production.advance(w.id, action);
         const verb = { start: "started", complete: "completed", pause: "paused" }[action] || action;
         toast((w.product ? w.product.name : w.id) + " — stage " + verb, { type: "ok" });
+        this.labWarn(res);
         await this.refresh({ quiet: true, slim: true });
       } catch (err) {
         toast(err.message, { type: "danger" });

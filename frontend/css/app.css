@@ -1145,8 +1145,9 @@ canvas{display:block;width:100%}
    topbar, dynamic accent colours and dark/light theme for free.
    These styles are theme-aware (use var() tokens) + touch-sized.
    ============================================================ */
-/* hide office/admin-only chrome when the shell is in supervisor mode */
-.app-shell.sup-mode #searchTrigger,
+/* hide office/admin-only chrome when the shell is in supervisor mode — the
+   search box stays: the floor reaches the TDS booklet by searching, the same
+   way every other login does (mod-supervisor binds it) */
 .app-shell.sup-mode .accent-pop,
 .app-shell.sup-mode #bellBtn{ display:none }
 

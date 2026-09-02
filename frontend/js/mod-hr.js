@@ -179,9 +179,9 @@
      WORKERS
      ============================================================ */
   function tabWorkers(host) {
-    let filter = { q: "", dept: "all" };
+    let filter = App.viewState("filter", () => ({ q: "", qRaw: "", dept: "all" }));
     const bar = h("div", { class: "toolbar" }, [
-      MW.searchInput("Search name, code, device…", (v) => { filter.q = v.toLowerCase(); draw(); }),
+      MW.searchInput("Search name, code, device…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
       MW.select([{ value: "all", label: "All Departments" }, ...DEPTS.map((d) => ({ value: d, label: cap(d) }))], (v) => { filter.dept = v; draw(); }),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "wkCount" })),
     ]);

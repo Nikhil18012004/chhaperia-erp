@@ -85,8 +85,20 @@ async function stateForOfficer(user) {
      list too (it is their delivery and their debit note), but only admin may
      rule; the route enforces that. */
   try { d.grnQcDecisions = await GT.pendingDecisions(d); } catch { d.grnQcDecisions = []; }
+  /* …and failed finished-goods certificates awaiting the same kind of ruling
+     (a floor reading or the lab's own). Nothing is held by these; the batch
+     has left the floor and the admin is told. */
+  d.labQcDecisions = await labDecisionsFor(d);
   return d;
 }
+async function labDecisionsFor(d) {
+  try { return await LAB.pendingLabDecisions(d); } catch { return []; }
+}
+async function grnDecisionsFor(d) {
+  try { return await GT.pendingDecisions(d); } catch { return []; }
+}
+/* the lab is told WHICH batch failed, never which parameter or by how much */
+const withoutFailed = (q) => { const o = Object.assign({}, q); delete o.failed; return o; };
 
 /* ============================================================
    SUPERVISOR VIEW — money-free, area-scoped.
@@ -436,12 +448,22 @@ async function stateForLab() {
        only say whether a stage has finished measuring — so they stay. */
     labReports: (d.labReports || []).map((r) => {
       const out = Object.assign({}, r);
+      /* The one batch-level fact that DOES reach the incharge (since
+         2026-09-02): that a certificate is flagged for the admin's ruling. It
+         names no parameter and no limit — enough to open the certificate and
+         to know the office has been told, not enough to nudge a reading. */
+      out.attention = LAB.attentionOf(r);
       ["result", "results", "prodResult", "prodResults", "labResult", "labResults"]
         .forEach((k) => { delete out[k]; });
       return out;
     }),
     // the incharge's own worklist: every job still owing a reading
     labPending: await labPendingFor(d),
+    /* Failed batches and failed incoming lots waiting on the admin — the lab
+       is told WHICH, never which parameter or by how much. Ruling stays
+       admin's alone; the routes enforce that. */
+    labQcDecisions: (await labDecisionsFor(d)).map(withoutFailed),
+    grnQcDecisions: (await grnDecisionsFor(d)).map(withoutFailed),
     generatedAt: new Date().toISOString(),
   };
 }

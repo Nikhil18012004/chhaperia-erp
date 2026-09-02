@@ -72,18 +72,36 @@
      a half-made coated jumbo skips coating, and that is the netting panel's
      job. `stocked` is still reported so the form can say whether the run can
      start immediately or is waiting on material. */
-  function routeFor(itemId, qty){
+  function routeFor(itemId, qty, line){
     const owner=productOwner(itemId);
     const stocked=materialInStore(itemId,qty);
+    /* THE OFFICE NAMED THE LINE — the route starts there (mirrors
+       stageService.stagesFromLine): an RM line is that person's floor, the
+       fibre-glass line weaves first and then the product's own coating floor
+       if it has one, a slitting line is slit-and-pack only. `coats` says
+       whether a coating stage runs at all, which decides whether half-made
+       stock can join at slitting. */
+    const asked=String(line||"").trim();
+    if(asked){
+      const o=Object.keys(OWNERS).map(k=>OWNERS[k]).find(x=>x.line===asked)||null;
+      if(o&&o.area==="coating")
+        return { stages:[o.label,"Slitting","Packing"], area:"coating", line:o.line, owner:o, ready:false, bought:false, stocked, chosen:true, coats:true };
+      if(o&&o.area==="fiberglass"){
+        const coats=!!(owner&&owner.area==="coating");
+        const stages=[OWNERS.fibre.label]; if(coats) stages.push(owner.label); stages.push("Slitting","Packing");
+        return { stages, area:"fiberglass", line:o.line, owner:o, ready:false, bought:false, stocked, chosen:true, coats };
+      }
+      return { stages:["Slitting","Packing"], area:"slitting", line:asked, owner:null, ready:true, bought:!owner, stocked, chosen:true, coats:false };
+    }
     if(!owner)
-      return { stages:["Slitting","Packing"], area:"slitting", ready:true, bought:true, stocked, owner:null };
+      return { stages:["Slitting","Packing"], area:"slitting", ready:true, bought:true, stocked, owner:null, coats:false };
     const stages=[];
     const fibreFirst=FIBRE_FIRST.some(p=>famMatches(famOf(itemId),p));
     if(fibreFirst) stages.push(OWNERS.fibre.label);
     stages.push(owner.label);
     stages.push("Slitting","Packing");
     const first=fibreFirst?OWNERS.fibre:owner;
-    return { stages, area:first.area, line:first.line, owner:first, ready:false, bought:false, stocked };
+    return { stages, area:first.area, line:first.line, owner:first, ready:false, bought:false, stocked, coats:true };
   }
   const LINES_BY_AREA={ coating:["RM Production 1","RM Production 2"],
     slitting:["Slitting A","Slitting B"],
@@ -668,8 +686,8 @@
   }
 
   M.production = { title:"Production", sub:"Work orders & material consumption", render(root, params){
-    let tab=(params&&params.tab)||"active";
-    let filter={from:"", to:"", q:""};
+    let tab=App.viewState("tab",()=>(params&&params.tab)||"active");
+    let filter=App.viewState("filter",()=>({from:"", to:"", q:"", qRaw:""}));
     root.appendChild(pageHead("Production Control","Each stage consumes its materials and hands the job to the next stage; nothing is booked into store on the way",[
       // the floor has this in its own panel — office/admin get it here too
       h("button",{class:"btn",onclick:()=>finishedStockForm(),html:"➕ Add to Finished Stock"}),
@@ -715,9 +733,9 @@
       segBtn("Completed","done"), segBtn("All","all")
     ]);
     root.appendChild(seg);
-    function setTab(key){ tab=key; [...seg.children].forEach(c=>c.classList.toggle("on",c.getAttribute("data-tab")===key)); draw(); }
+    function setTab(key){ tab=App.setViewState("tab",key); [...seg.children].forEach(c=>c.classList.toggle("on",c.getAttribute("data-tab")===key)); draw(); }
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search WO no., product, code, customer, stage, line…", v=>{filter.q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search WO no., product, code, customer, stage, line…", v=>{filter.qRaw=v;filter.q=v.toLowerCase().trim();draw();}, filter.qRaw),
       MW.dateRange(filter, draw, {label:"Start Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"prodCount"}))
     ]));
@@ -913,7 +931,8 @@
       const it=ENG.item(wo.itemId)||{};
       const started=(wo.route||[]).some(s=>s.posted||s.status!=="Pending");
       const fgs=ENG.data.items.filter(i=>i.cat==="FG");
-      const LINES=["Coating Line 1","Coating Line 2","Fibre-Glass Line 1","Slitting A","Slitting B"];
+      // the lines the factory runs, as the New Work Order form offers them
+      const LINES=[{v:"",l:"Auto — as per the product's rules"},{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}];
       const lockedLabel=(U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId)
         +" — "+(it.productName||it.name||wo.itemId)
         +(it.thicknessMM!=null?" · "+it.thicknessMM+" mm":"");
@@ -928,7 +947,11 @@
           // width is a slitting parameter, not a material one — it can still be
           // corrected after the run has started, right up to dispatch
           U.field("Tape Width (mm)",`<input class="input" id="we_width" type="number" min="0" step="0.5" placeholder="e.g. 25" value="${wo.widthMM!=null?wo.widthMM:""}">`),
-          U.field("Production Line",U.selectHTML("we_line",LINES.map(l=>({v:l,l})),wo.line)),
+          /* the line fixes where the job started and what each stage drew, so
+             a released order (its stock is issued on release) keeps it */
+          started
+            ? U.field("Production Line",`<input class="input is-locked" readonly value="${esc(wo.line||"")}">`)
+            : U.field("Production Line",U.selectHTML("we_line",LINES,wo.startLine||"")),
           U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
           U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
           /* Who it is for drives labelling, not the route, so it stays editable
@@ -1790,7 +1813,13 @@
            the order is raised, and the two widths sitting side by side were
            read as one another. Only the TAPE width — what the customer ordered
            — is captured here. */
-        U.field("Production Line",U.selectHTML("w_line",[{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"Slitting A")),
+        /* WHERE THE JOB STARTS. Left on Auto, the product's standing rules
+           decide (who makes that family); picked by hand, the route starts on
+           that line — the other RM floor, the fibre-glass line, or straight to
+           slitting when the material was bought in this time. The pick is the
+           office's and is never overwritten by a recalculation. */
+        U.field("Production Line",U.selectHTML("w_line",[{v:"",l:"Auto — as per the product's rules"},{v:"RM Production 1",l:"RM Production 1 — Gautam Saw"},{v:"RM Production 2",l:"RM Production 2 — Ganesh"},{v:"Fibre-Glass Line 1",l:"Fibre-Glass Line 1"},{v:"Slitting A",l:"Slitting A"},{v:"Slitting B",l:"Slitting B"}],"")
+          +`<div class="muted" id="w_lnote" style="font-size:11px;margin-top:3px"></div>`),
         /* A large order is often run in batches. Blank means release the lot;
            a smaller figure puts that much on the machines now and carries the
            rest as pending, to be resumed batch by batch. */
@@ -1850,22 +1879,31 @@
         const fg=ENG.item(id)||{};
         const want=(widthMM==null||widthMM==="")?null:+widthMM;
         const plan={qty, fgQty:0, wipQty:0, makeQty:qty, fgSources:[], wipSources:[],
-          hasCoating:!!hasCoating, fgAvailable:0, wipAvailable:0};
+          hasCoating:!!hasCoating, fgAvailable:0, wipAvailable:0, fgRows:[], wipRows:[]};
         if(!(qty>0)) { plan.makeQty=0; return plan; }
+        /* FINISHED STOCK, STORE BY STORE. The same product may sit in the
+           finished bay and in the main store at once; each store is listed
+           with what it holds (never the quarantine store) and the office says
+           how much comes out of each. Mirrors stageService.finishedStockByStore. */
         const fgRows=ENG.data.items.filter(i=>i.cat==="FG")
           .filter(i=>nameKey(i)===nameKey(fg))
           .filter(i=>sameThk(i.thicknessMM,fg.thicknessMM))
           .filter(i=>want==null?true:sameThk(i.tapeWidthMM,want))
-          .map(i=>({id:i.id,name:i.name||i.id,have:onHandOf(i.id)}))
+          .map(i=>{ const stores=whChoicesFor(i.id); return {id:i.id,name:i.name||i.id,stores,have:stores.reduce((n,s)=>n+s.qty,0)}; })
           .filter(r=>r.have>0);
         plan.fgAvailable=fgRows.reduce((n,r)=>n+r.have,0);
-        // every roll that COULD be drawn, kept so the panel can name the stores
-        // the offer sits in even before the planner has taken any of it
         plan.fgRows=fgRows;
-        // a typed amount wins; otherwise take as much as the shelf allows
-        const fgDraw=drawFrom(fgRows, fgWanted==null? Math.min(plan.fgAvailable,qty)
-          : cap(fgWanted, plan.fgAvailable, qty));
-        plan.fgQty=fgDraw.taken; plan.fgSources=fgDraw.used;
+        /* what was typed against each store — capped at what that store holds
+           and at what the order still needs; an empty box takes nothing */
+        let left=qty; const used=[];
+        fgRows.forEach(r=>r.stores.forEach(s=>{
+          if(left<=1e-9) return;
+          const typed=fgTyped[r.id+"|"+s.wh];
+          const wantQ=(typed==null||typed==="")?0:(+typed||0);
+          const take=Math.max(0,Math.min(wantQ,s.qty,left));
+          if(take>1e-9){ used.push({id:r.id,name:r.name,wh:s.wh,qty:take}); left-=take; }
+        }));
+        plan.fgQty=qty-left; plan.fgSources=used;
         const afterFg=qty-plan.fgQty;
         // only the COATED JUMBO can join at slitting — anything already slit
         // would be cut twice. No slit-roll item exists now; the guard mirrors
@@ -1878,87 +1916,79 @@
         plan.wipAvailable=wipRows.reduce((n,r)=>n+r.have,0);
         plan.wipRows=wipRows;
         if(hasCoating && afterFg>0){
-          const wipDraw=drawFrom(wipRows, wipWanted==null? Math.min(plan.wipAvailable,afterFg)
-            : cap(wipWanted, plan.wipAvailable, afterFg));
+          // an empty box takes nothing — the half-made pile is used only when asked for
+          const wipDraw=drawFrom(wipRows, cap(wipWanted==null?0:wipWanted, plan.wipAvailable, afterFg));
           plan.wipQty=wipDraw.taken; plan.wipSources=wipDraw.used;
         }
         plan.makeQty=afterFg-plan.wipQty;
         return plan;
       }
-      /* How much comes off the shelf is the PLANNER'S choice, not a fixed
-         calculation: each source gets an editable quantity, capped at what is
-         actually there, and whatever is left over is manufactured.
-
-         TYPING IN THESE BOXES USED TO BE IMPOSSIBLE, for three reasons, all
-         fixed here:
-           • every keystroke re-ran recalc(), which rebuilt this panel and
-             destroyed the very input being typed into — so focus was lost
-             after one character. The caret is now put back afterwards.
-           • the value shown was the CAPPED result, so typing "5" then "0"
-             against 47 available rewrote the box to "47" mid-keystroke and
-             the next character landed on the end of that. While the box has
-             focus it now shows exactly what was typed; the effective figure
-             is stated beside it instead.
-           • `type=number` silently rejects the thousands separator that
-             ENG.num puts in ("1,234.00"), so a large figure blanked the box.
-             These are text inputs with a decimal keypad hint.
-
-         AN EMPTY BOX IS A ZERO, NOT "HELP YOURSELF". Clearing the figure used
-         to hand the box back to the automatic answer, which immediately drew
-         the whole shelf again — so an order that was meant to be MADE could
-         not be told to take nothing from stock. Untouched still means "take
-         whatever is available"; cleared by hand means draw none of it.
-         `*Typed` is exactly what is in the box (null until it is touched);
-         `*Wanted` is the figure that plan and payload use. */
-      let fgWanted=null, wipWanted=null;   // null = untouched → take what is available
-      let fgTyped=null,  wipTyped=null;    // what the box literally holds
+      /* How much comes off the shelf is the PLANNER'S choice, entered STORE BY
+         STORE: every store the product sits in is listed with what it holds
+         and an EMPTY box beside it. Nothing is taken until a figure is typed
+         (ruled 2026-09-02 — the box used to be pre-filled with the whole
+         shelf, and with the product in two stores the office could not say
+         which one). Typing survives the re-render each keystroke triggers
+         (keepCaret, keyed on the box id), the box shows exactly what was
+         typed, and the effective figure — capped at the store and at the
+         order — is stated beside it. Text inputs with a decimal keypad hint:
+         type=number rejects the thousands separator ENG.num puts in. */
+      const fgTyped={};                    // "itemId|wh" -> what the box holds
+      let wipWanted=null, wipTyped=null;   // the one half-made pile (always WH-WIP)
+      let lastPlan=null;                   // the plan the form last showed — what Create sends
+      const fgDrawsNow=()=>((lastPlan&&lastPlan.fgSources)||[]).map(u=>({id:u.id, wh:u.wh, qty:u.qty}));
       function netPanel(plan, uom){
         const avFg=plan.fgAvailable||0, avWip=plan.wipAvailable||0;
-        if(!(avFg>0 || avWip>0)) return null;
-        const row=(id,icon,label,typed,drawn,max,dest,src,rows,onInput)=>{
-          // what is actually drawn can differ from what was typed (capped at
-          // the shelf, or at what is still outstanding) — say so rather than
-          // overwriting the box
-          const differs=typed!=null && Math.abs((+typed||0)-drawn)>0.005;
-          // an emptied box draws nothing — said out loud, because the row still
-          // reports what the shelf holds and that read as "it will be taken"
-          const none=typed!=null && (+typed||0)===0;
-          /* the store this offer sits in — read off everything that COULD be
-             drawn, not only what has been taken so far, so the line names a
-             place even while the quantity is still zero */
-          const stores=[...new Set((rows||[]).map(r=>issuingWh(r.id)).filter(Boolean))];
-          return h("div",{class:"flex between aic",
-              style:"gap:12px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"},[
-            h("div",{style:"min-width:0"},[
-              h("div",{text:icon+" "+label}),
-              h("div",{class:"muted",style:"font-size:11px",
-                text:(src&&src.length? src.map(s=>s.name+" · "+ENG.num(s.qty,2)).join(" · ")+"  ·  " : "")
-                  +ENG.num(max,2)+" "+(uom||"")+" available"
-                  +(none? "  ·  taking none — made from raw material"
-                    : differs? "  ·  taking "+ENG.num(drawn,2) : "")}),
-              stores.length? h("div",{class:"flex aic wrap",style:"gap:6px;margin-top:2px"},
-                stores.map(whChip)) : null,
-            ]),
-            h("div",{class:"flex aic",style:"gap:8px;flex:0 0 auto"},[
-              h("input",{class:"input",id:id,type:"text",inputmode:"decimal",autocomplete:"off",
-                value: typed!=null? typed : String(Math.round(drawn*100)/100),
-                style:"width:110px;text-align:right",oninput:e=>onInput(e.target.value)}),
-              h("div",{class:"muted",style:"font-size:11px;white-space:nowrap;min-width:96px",text:dest}),
-            ]),
-          ]);
-        };
-        return h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},[
-          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
-            text:"Take from stock — the rest is made from raw materials"}),
-          avFg>0? row("net_fg","📦","Finished stock",fgTyped,plan.fgQty,avFg,"→ packing",plan.fgSources,plan.fgRows,
-            v=>{ const c=numish(v); fgTyped=c; fgWanted=c===""?0:(+c||0); recalc(); }):null,
-          (avWip>0&&plan.hasCoating)? row("net_wip","🧵","Half-made stock",wipTyped,plan.wipQty,avWip,"→ slitting",plan.wipSources,plan.wipRows,
-            v=>{ const c=numish(v); wipTyped=c; wipWanted=c===""?0:(+c||0); recalc(); }):null,
-          h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
-            h("span",{text:"To manufacture from raw materials"}),
-            h("span",{text:ENG.num(plan.makeQty,2)+" "+(uom||"")}),
+        if(!(avFg>0 || (avWip>0&&plan.hasCoating))) return null;
+        const line=(key,icon,label,sub,typed,dest,onInput)=>h("div",{class:"flex between aic",
+            style:"gap:12px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)"},[
+          h("div",{style:"min-width:0"},[
+            h("div",{text:icon+" "+label}),
+            h("div",{class:"muted",style:"font-size:11px",text:sub}),
+          ]),
+          h("div",{class:"flex aic",style:"gap:8px;flex:0 0 auto"},[
+            h("input",{class:"input",id:key,type:"text",inputmode:"decimal",autocomplete:"off",placeholder:"0",
+              value: typed==null? "" : typed, style:"width:110px;text-align:right",oninput:e=>onInput(e.target.value)}),
+            h("div",{class:"muted",style:"font-size:11px;white-space:nowrap;min-width:96px",text:dest}),
           ]),
         ]);
+        const kids=[
+          h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px",
+            text:"Take from stock — the rest is made from raw materials"}),
+          h("div",{class:"muted",style:"font-size:11.5px;margin-bottom:6px",
+            text:"Every store this product sits in is listed with what it holds. Enter how much to take from each; an empty box takes nothing from that store."}),
+        ];
+        if(avFg>0){
+          plan.fgRows.forEach(r=>r.stores.forEach(s=>{
+            const key=r.id+"|"+s.wh, typed=fgTyped[key];
+            const drawn=(plan.fgSources.find(u=>u.id===r.id&&u.wh===s.wh)||{}).qty||0;
+            const it=ENG.item(r.id)||{};
+            const asked=(typed==null||typed==="")?0:(+typed||0);
+            // what is actually drawn can differ from what was typed (capped at
+            // the store, or at what is still outstanding) — say so rather than
+            // overwriting the box
+            const differs=asked>0 && Math.abs(asked-drawn)>0.005;
+            kids.push(line("net_fg_"+key.replace(/[^A-Za-z0-9_-]/g,"_"), "📦", r.name,
+              "🏬 "+whName(s.wh)+" · "+ENG.qtyText(it,s.qty,2)+" available"
+                +(differs? "  ·  taking "+ENG.qtyText(it,drawn,2) : ""),
+              typed, "→ packing", v=>{ fgTyped[key]=numish(v); recalc(); }));
+          }));
+        }
+        if(avWip>0 && plan.hasCoating){
+          const src=plan.wipRows||[];
+          const asked=wipWanted==null?0:wipWanted;
+          const differs=asked>0 && Math.abs(asked-plan.wipQty)>0.005;
+          kids.push(line("net_wip","🧵","Half-made stock",
+            "🏬 "+whName("WH-WIP")+" · "+src.map(s=>s.name+" · "+ENG.num(s.have,2)).join(" · ")
+              +"  ·  "+ENG.num(avWip,2)+" "+(uom||"")+" available"
+              +(differs? "  ·  taking "+ENG.num(plan.wipQty,2) : ""),
+            wipTyped, "→ slitting", v=>{ const c=numish(v); wipTyped=c; wipWanted=c===""?0:(+c||0); recalc(); }));
+        }
+        kids.push(h("div",{class:"flex between aic",style:"gap:12px;font-size:13px;padding:8px 0 0;font-weight:800"},[
+          h("span",{text:"To manufacture from raw materials"}),
+          h("span",{text:ENG.num(plan.makeQty,2)+" "+(uom||"")}),
+        ]));
+        return h("div",{style:"margin:12px 0;padding:10px 12px;border:1.5px solid var(--ok);border-radius:10px"},kids);
       }
 
       // every rebuild goes through keepCaret, so typing in the stock boxes above
@@ -2017,16 +2047,23 @@
       }
 
       const recalcNow=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
-        // show the stages this product will actually run, and keep the line in
-        // the area that starts it (a one-material product never enters coating)
-        const rt=routeFor(id,qty), lineSel=UI.$("#w_line"), pool=LINES_BY_AREA[rt.area]||[];
-        if(lineSel && pool.length) lineSel.value=rt.line||pool[0];
-        const own=productOwner(id);
+        /* the stages this product will actually run. The line is the OFFICE'S
+           choice: left on Auto the family rules decide and the note says which
+           line that is; picked by hand the route starts there \u2014 and the pick
+           is never overwritten here (it used to be, on every keystroke). */
+        const lineSel=UI.$("#w_line"), asked=lineSel?String(lineSel.value||""):"";
+        const rt=routeFor(id,qty,asked);
+        const lnote=UI.$("#w_lnote");
+        if(lnote) lnote.textContent = asked
+          ? "Starts on "+asked+" \u2014 your choice. Auto would be "+(routeFor(id,qty).line||"a slitting line")+"."
+          : "Auto: "+(rt.line||(LINES_BY_AREA[rt.area]||[])[0]||"a slitting line")+" \u2014 as per the product's rules";
         routeHost.innerHTML="";
         routeHost.appendChild(h("div",{class:"wo-route"},[
           h("span",{class:"wo-route-lbl",text:"Route"}),
           h("span",{class:"wo-route-path",text:rt.stages.join("  \u2192  ")}),
-          rt.bought
+          rt.chosen
+            ? h("span",{class:"chip",style:"font-size:11px;border-color:var(--accent);color:var(--accent)",text:"line chosen by you"})
+            : rt.bought
             ? h("span",{class:"chip",style:"font-size:11px",text:"bought in \u2014 slit & pack"})
             : rt.stocked
               ? h("span",{class:"chip",style:"font-size:11px",
@@ -2043,9 +2080,10 @@
         /* net the requirement before anything else is worked out — the
            materials list below sizes itself to what is actually MADE */
         const widthNow=(UI.$("#w_width")||{}).value;
-        // every product we make passes through coating, so a half-made jumbo
-        // is drawable for any of them — the store's raw stock is irrelevant here
-        const plan=netPlan(id, qty, widthNow, !!own);
+        // a half-made jumbo can join at slitting only when the route COATS —
+        // which the chosen line decides as much as the product does
+        const plan=netPlan(id, qty, widthNow, !!rt.coats);
+        lastPlan=plan;
         const uomNow=(ENG.item(id)||{}).uom||"";
         const panel=netPanel(plan, uomNow);
         if(panel) matHost.appendChild(panel);
@@ -2170,13 +2208,17 @@
       setTimeout(()=>{ UI.$("#w_item").addEventListener("change",recalc); UI.$("#w_qty").addEventListener("input",recalc); UI.$("#w_unit").addEventListener("change",recalc); /* the width decides WHICH finished stock can be used, so it re-nets the
    whole plan rather than just refreshing its own hint */
 UI.$("#w_width").addEventListener("input",recalc);
+// the line decides the route (and whether half-made stock can join it)
+UI.$("#w_line").addEventListener("change",recalc);
 recalc(); },50);
       async function save(){
         const itemId=UI.$("#w_item").value, qty=qtyKg();
         if(qty==null){ toast("This product has no GSM — enter the quantity in kg",{type:"warn"}); return; }
         if(!qty||qty<=0){ toast("Enter a valid quantity",{type:"warn"}); return; }
         // a shortage is not a stop — the server prices it and the office confirms
-        const payload={itemId, qty, line:UI.$("#w_line").value, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
+        const payload={itemId, qty, due:UI.$("#w_due").value, priority:UI.$("#w_prio").value};
+        // the line only when the office chose one — blank leaves it to the rules
+        const lineV=String((UI.$("#w_line")||{}).value||"").trim(); if(lineV) payload.line=lineV;
         const relEl=UI.$("#w_release");
         if(relEl && relEl.value!==""){
           const rel=+relEl.value;
@@ -2185,11 +2227,11 @@ recalc(); },50);
           if(rel<qty-1e-6) payload.releaseQty=rel;
         }
         const wmm=+UI.$("#w_width").value; if(wmm>0) payload.widthMM=wmm;
-        /* how much to take off the shelf — sent explicitly (0 included, which
-           is why this is not a truthiness check) so the server draws exactly
-           what the planner chose rather than as much as it can */
-        if(fgWanted!=null) payload.fgQty=fgWanted;
-        if(wipWanted!=null) payload.wipQty=wipWanted;
+        /* how much comes off the shelf, STORE BY STORE, exactly as typed — an
+           empty list included, so the server draws nothing the office did not
+           ask for. The half-made pile likewise: blank means none. */
+        payload.fgDraws=fgDrawsNow();
+        payload.wipQty=wipWanted==null?0:wipWanted;
         // which material was picked for each ranged BOM line — travels with the
         // work order so the issue posts the material actually chosen
         if(Object.keys(matChoices).length) payload.materialChoices=matChoices;
@@ -2215,7 +2257,7 @@ recalc(); },50);
         };
         try{
           land(await DB.production.create(payload));
-          await reloadState(); tab="active"; draw();
+          await reloadState(); tab=App.setViewState("tab","active"); draw();
         }catch(e){
           /* The store cannot cover the whole order. Rather than refuse it — the
              floor runs what it can and waits for the rest — say exactly what is
@@ -2227,7 +2269,7 @@ recalc(); },50);
             try{
               payload.allowShortage=true;
               land(await DB.production.create(payload));
-              await reloadState(); tab="active"; draw();
+              await reloadState(); tab=App.setViewState("tab","active"); draw();
             }catch(e2){ toast("Create failed: "+e2.message,{type:"danger"});
               createBtn.disabled=false; createBtn.textContent="Create Work Order"; }
             return;

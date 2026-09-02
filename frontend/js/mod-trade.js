@@ -90,8 +90,8 @@
        delivery brought in — so it opens on RECEIVED orders rather than on the
        buyer's open-order list, which holds nothing for them. */
     const qcOnly=App.isLab();
-    let tab=qcOnly?"done":"open";
-    let filter={from:"", to:"", q:""};
+    let tab=App.viewState("tab",()=>qcOnly?"done":"open");
+    let filter=App.viewState("filter",()=>({from:"", to:"", q:"", qRaw:""}));
     root.appendChild(pageHead("Procurement",
       qcOnly?"Goods receipts awaiting an incoming-material test"
             :"Auto-suggested reorders, open POs and goods receipts that post straight to stock",[
@@ -140,12 +140,12 @@
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open / Partial","open"),segBtn("Received","done"),segBtn("All","all")]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search PO no., supplier, item, status…", v=>{filter.q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search PO no., supplier, item, status…", v=>{filter.qRaw=v;filter.q=v.toLowerCase().trim();draw();}, filter.qRaw),
       MW.dateRange(filter, draw, {label:"Order Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"poCount"}))
     ]));
     const host=h("div"); root.appendChild(host);
-    function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=k;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
+    function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=App.setViewState("tab",k);[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
     /* One box across everything a buyer looks a PO up by: the number, the
        supplier, the status, the dates, and the items sitting on the order —
        so "mica" finds the POs carrying mica without knowing their numbers. */
@@ -1774,8 +1774,8 @@
 
   /* ============== SALES ============== */
   M.sales = { title:"Sales Orders", sub:"Demand & dispatch", render(root, params){
-    let tab="open";
-    let filter={from:"", to:"", q:""};
+    let tab=App.viewState("tab",()=>"open");
+    let filter=App.viewState("filter",()=>({from:"", to:"", q:"", qRaw:""}));
     root.appendChild(pageHead("Sales Orders","Customer demand, ATP checks and dispatches that deduct finished goods automatically",[
       h("button",{class:"btn primary",onclick:()=>soForm(),html:"＋ New Sales Order"})
     ]));
@@ -1792,12 +1792,12 @@
     const seg=h("div",{class:"seg",style:"margin-bottom:14px"},[segBtn("Open","open"),segBtn("Dispatched","done"),segBtn("All","all")]);
     root.appendChild(seg);
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search SO no., customer, item, batch, invoice…", v=>{filter.q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search SO no., customer, item, batch, invoice…", v=>{filter.qRaw=v;filter.q=v.toLowerCase().trim();draw();}, filter.qRaw),
       MW.dateRange(filter, draw, {label:"Order Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"soCount"}))
     ]));
     const host=h("div"); root.appendChild(host);
-    function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=k;[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
+    function segBtn(l,k){ const b=h("button",{class:tab===k?"on":"",text:l,onclick:()=>{tab=App.setViewState("tab",k);[...seg.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");draw();}}); return b; }
     /* Sales looks an order up by whatever the caller quotes on the phone: the
        SO number, the customer, their own PO number, the invoice, or the batch
        running against it — so all of them feed the one box. */
