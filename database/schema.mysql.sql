@@ -446,3 +446,12 @@ CREATE TABLE IF NOT EXISTS `grn_tests` (
   KEY `idx_grn_tests_grn` (`grn_id`),
   KEY `idx_grn_tests_item` (`item_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;
+
+-- The approval queue: what the lab incharge proposed for the catalogue (a new
+-- item with its test parameters and recipe, or a recipe on its own) and what
+-- the admin ruled. Applied through the same code path as a direct entry.
+CREATE TABLE IF NOT EXISTS `approvals` (
+  `id`  VARCHAR(100) NOT NULL,           -- AP-0001
+  `doc` JSON         NOT NULL,           -- kind,payload{},summary,status,by,at,decidedBy,decidedAt,note,result
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;

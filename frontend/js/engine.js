@@ -236,6 +236,13 @@
           +` · ${num(q.acceptedQty)} ${q.uom||""} — awaiting the admin's ruling`,
         kind:"qcDecision", id:q.id, ts:-1});
     });
+    /* WHAT THE LAB PROPOSED FOR THE CATALOGUE — a new item with its test
+       parameters and recipe, or a recipe on its own — waiting on the admin.
+       Only the admin may rule, so only the admin's bell carries it. */
+    if(global.App && App.isAdmin && App.isAdmin()) (D.approvals||[]).filter(a=>a.status==="Pending").forEach(a=>{
+      out.push({sev:"warn", ic:"🗂", title:"Approval due — "+(a.kind==="bom"?"recipe":"new item"),
+        desc:(a.summary||a.id)+" · proposed by "+(a.by||"the lab"), kind:"approval", id:a.id, ts:-1});
+    });
     /* A FINISHED-GOODS BATCH THAT MEASURED OUTSIDE ITS LIMITS. The batch is
        not held anywhere any more (ruled 2026-09-02): it left the coating floor
        or it is on the shelf, so what the office gets is this alert and the

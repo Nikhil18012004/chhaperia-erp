@@ -259,6 +259,21 @@
     decide(id, accept, note) { return http("POST", "/lab/reports/" + enc(id) + "/decision", { accept, note }); },
   };
 
+  /* ---- the catalogue, one shot, and the approval queue (2026-09-02) ----
+     A new item with its test parameters and recipe in one request. Admin and
+     office get it applied (201); the lab's becomes a proposal (202) that only
+     an admin may approve — and every role reads the queue off /state. */
+  const catalogue = {
+    // { item:{…}, tests:{ params:[keys], custom:[{key,label,unit}], spec:{key:{min,max,nominal}} }, bom:{ mode:"none"|"create"|"append", … } }
+    newItem(payload) { return http("POST", "/catalogue/new-item", payload); },
+  };
+  const approvals = {
+    list() { return http("GET", "/approvals"); },
+    propose(kind, payload) { return http("POST", "/approvals", { kind, payload }); },
+    decide(id, approve, note) { return http("POST", "/approvals/" + enc(id) + "/decide", { approve, note }); },
+    remove(id) { return http("DELETE", "/approvals/" + enc(id)); },
+  };
+
   /* ---- the TDS booklet: what is on the server, and admin's replacement ---- */
   const tds = {
     info: () => http("GET", "/tds"),
@@ -280,7 +295,8 @@
        `spec` (the pass/fail limits) is admin's alone — the server ignores it
        from anyone else rather than refusing the save, so a lab edit of the
        parameter list still goes through. */
-    setItemQc(itemId, params, spec) { return http("PUT", "/items/" + enc(itemId) + "/qc", { params, spec }); },
+    // `custom` — the material's own parameters [{key,label,unit}]; left out, the server keeps what it has
+    setItemQc(itemId, params, spec, custom) { return http("PUT", "/items/" + enc(itemId) + "/qc", { params, spec, custom }); },
     // failed lots awaiting the admin's ruling, and that ruling
     decisions() { return http("GET", "/grn-tests/decisions"); },
     decide(id, approve, note) { return http("POST", "/grn-tests/" + enc(id) + "/decision", { approve, note }); },
@@ -340,7 +356,7 @@
   global.DB = {
     loadAsync, save, saveSettings, reset, auth, users, production,
     items, movements, purchase, sales, boms, leads, appointments, complaints, quotations, customers, suppliers, org, transporters, warehouses, hr,
-    labProducts, labReports, grnTests, bartender, tds,
+    labProducts, labReports, grnTests, bartender, tds, catalogue, approvals,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },
   };
 })(window);

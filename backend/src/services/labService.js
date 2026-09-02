@@ -89,14 +89,51 @@ function specKeys(product) {
   const spec = (product || {}).spec || {};
   return Object.keys(spec).filter((k) => hasLimit(spec[k]));
 }
-/** The parameter rows a report for this product carries, in catalog order. */
+/* A PRODUCT'S OWN PARAMETERS (since 2026-09-02). Beyond the catalogue, a
+   product may carry parameters added one by one with a unit when it was
+   created — `params` on the lab product. They are asked for on every
+   certificate of that product; a limit in the spec grades one like any
+   catalogue row, and without a limit it is recorded. Keys come from the
+   label and never collide with a catalogue key. */
+const CUSTOM_KEY_RE = /^[a-z][a-zA-Z0-9_]{0,39}$/;
+function slugKey(label) {
+  const s = String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return s ? ("c_" + s).slice(0, 40) : "";
+}
+function normalizeParams(list) {
+  const out = [], seen = new Set(PARAMS.map((p) => p.key));
+  (Array.isArray(list) ? list : []).slice(0, 40).forEach((p) => {
+    if (!p) return;
+    const label = String(p.label || p.name || "").trim().slice(0, 60);
+    if (!label) return;
+    let key = String(p.key || "").trim().slice(0, 40);
+    if (!CUSTOM_KEY_RE.test(key) || PARAMS.some((q) => q.key === key)) key = slugKey(label);
+    if (!key) return;
+    let k = key, n = 2;
+    while (seen.has(k)) k = (key + "_" + n++).slice(0, 40);
+    seen.add(k);
+    out.push({ key: k, label, unit: String(p.unit || "").trim().slice(0, 20), group: "custom" });
+  });
+  return out;
+}
+function customParamsOf(product) {
+  const own = (product || {}).params;
+  if (!Array.isArray(own)) return [];
+  return own.filter((p) => p && p.key && p.label)
+    .map((p) => ({ key: String(p.key), label: String(p.label), unit: String(p.unit || ""), group: "custom" }));
+}
+/** The parameter rows a report for this product carries, in catalog order —
+    the catalogue rows its spec names, then the product's own. */
 function paramsForProduct(product, flags) {
   product = product || {};
+  const custom = customParamsOf(product);
   const keys = Array.isArray(product.specKeys) ? product.specKeys : specKeys(product);
   const picked = PARAMS.filter((p) => keys.indexOf(p.key) >= 0);
-  // no spec loaded yet — fall back to the material-type catalogue so the
-  // product is still measurable rather than having no parameters at all
-  return picked.length ? picked : applicableParams(flags || product.flags);
+  /* no spec loaded yet — fall back to the material-type catalogue so the
+     product is still measurable rather than having no parameters at all;
+     a product that DEFINED its own parameters is measured on those */
+  const base = picked.length ? picked : (custom.length ? [] : applicableParams(flags || product.flags));
+  return base.concat(custom);
 }
 /** True when every parameter of `params` carries a value. */
 function setComplete(values, params) {
@@ -163,6 +200,7 @@ function normalizeProduct(p) {
     flags: { mica: !!flags.mica, waterBlocking: !!flags.waterBlocking, semiConductive: !!flags.semiConductive },
     refMode: p.refMode === "lot" ? "lot" : "batch",
     spec,
+    params: normalizeParams(p.params),   // the product's own parameters, beyond the catalogue
     notes: p.notes || "",
     active: p.active !== false,
   };
@@ -781,7 +819,7 @@ async function ensureLab() {
 
 module.exports = {
   PARAMS, deriveFlags, applicableParams, evaluate,
-  specKeys, paramsForProduct, setComplete, missingParams,
+  specKeys, paramsForProduct, setComplete, missingParams, normalizeParams, customParamsOf,
   listProducts, createProduct, updateProduct, deleteProduct, setProductSpec,
   listReports, createReport, updateReport, deleteReport,
   batchNoOf, productForItem, reportForWO, hasCoatingStage, findByRef,

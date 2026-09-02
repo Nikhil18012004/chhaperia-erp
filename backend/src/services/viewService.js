@@ -455,6 +455,10 @@ async function stateForLab() {
       return out;
     }),
     grnTestPending: await grnTestPendingFor(d),
+    /* what they proposed for the catalogue and what the admin ruled — their
+       own submissions are the only ones there are, since only the lab
+       proposes; the payload is what they typed, nothing more */
+    approvals: d.approvals || [],
     labProducts: (d.labProducts || []).map(redactSpec),
     /* The person taking the measurements is never shown the VERDICT either —
        the same reason the spec limits are withheld from them. A reading whose

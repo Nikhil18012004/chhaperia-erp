@@ -32,6 +32,8 @@
     { key: "volumeResistance",  label: "Volume resistance",        unit: "kΩ·cm",     group: "semiConductive" },
     { key: "bdv",               label: "Breakdown voltage (BDV)",  unit: "kV/layer",  group: "mica" },
   ];
+  // the catalogue is what the New Item form searches when a parameter is picked
+  window._erpUtil = Object.assign(window._erpUtil || {}, { labParams: PARAMS });
   const TYPE_TOGGLES = [
     { key: "waterBlocking",  label: "Water-blocking" },
     { key: "semiConductive", label: "Semi-conductive" },
@@ -55,18 +57,26 @@
     if (Array.isArray(p.specKeys)) return p.specKeys;
     return Object.keys(p.spec || {}).filter((k) => hasLimit(p.spec[k]));
   }
+  /* a product's OWN parameters (defined with it, since 2026-09-02) are always
+     on its certificate — mirrors labService.customParamsOf */
+  const customOf = (p) => (p && Array.isArray(p.params)
+    ? p.params.filter((q) => q && q.key && q.label).map((q) => ({ key: q.key, label: q.label, unit: q.unit || "", group: "custom" }))
+    : []);
   function paramsFor(product, flags) {
     const keys = specKeysOf(product);
+    const custom = customOf(product);
     const picked = PARAMS.filter((p) => keys.indexOf(p.key) >= 0);
-    return picked.length ? picked : applicable(flags || (product || {}).flags);
+    const base = picked.length ? picked : (custom.length ? [] : applicable(flags || (product || {}).flags));
+    return base.concat(custom);
   }
   /* the rows a SAVED report shows: the parameters it was written against,
      falling back to the product's current list for reports made before the
      parameter set was recorded on the certificate */
   function paramsForReport(r) {
     const keys = Array.isArray(r && r.paramKeys) ? r.paramKeys : null;
-    if (keys && keys.length) return PARAMS.filter((p) => keys.indexOf(p.key) >= 0);
-    return paramsFor(prodById(r && r.productId), r && r.flags);
+    const prod = prodById(r && r.productId);
+    if (keys && keys.length) return PARAMS.concat(customOf(prod)).filter((p) => keys.indexOf(p.key) >= 0);
+    return paramsFor(prod, r && r.flags);
   }
   const refLabel = (mode) => (mode === "lot" ? "Lot / W.O. No." : "Batch No.");
   const typeChips = (flags) => TYPE_TOGGLES.filter((t) => (flags || {})[t.key]).map((t) => `<span class="chip">${t.label}</span>`).join("") || `<span class="muted" style="font-size:11px">General</span>`;

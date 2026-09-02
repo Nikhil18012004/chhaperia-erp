@@ -15,6 +15,7 @@ const view = require("../services/viewService");
 const production = require("../services/productionService");
 const lab = require("../services/labService");
 const grnTest = require("../services/grnTestService");
+const catalogue = require("../services/catalogueService");
 const bartender = require("../services/bartenderService");
 const tds = require("../services/tdsService");
 const { requireAuth, requireRole } = require("./auth");
@@ -440,6 +441,27 @@ router.put("/state", requireAuth, requireRole("admin", "office"), async (req, re
 // so this is no wider than what the role can do anyway.
 router.patch("/settings", requireAuth, requireRole("admin", "office"), async (req, res, next) => {
   try { res.json(await erp.updateSettings(req.body)); } catch (e) { next(e); }
+});
+
+/* ---- THE CATALOGUE, ONE SHOT + THE APPROVAL QUEUE (2026-09-02) ----
+   A new item with its test parameters and its recipe in one request. Admin
+   and office apply it at once; the lab incharge's entry becomes a proposal
+   (202) that only an admin may approve — and an approval applies through the
+   very same service code, so the two paths cannot differ. */
+router.post("/catalogue/new-item", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
+  try { const r = await catalogue.submitNewItem(req.body || {}, req.user); res.status(r.proposed ? 202 : 201).json(r); } catch (e) { next(e); }
+});
+router.get("/approvals", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
+  try { res.json({ approvals: await catalogue.list() }); } catch (e) { next(e); }
+});
+router.post("/approvals", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
+  try { const b = req.body || {}; res.status(201).json(await catalogue.propose(b.kind, b.payload, req.user)); } catch (e) { next(e); }
+});
+router.post("/approvals/:id/decide", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try { res.json(await catalogue.decide(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
+});
+router.delete("/approvals/:id", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
+  try { res.json(await catalogue.remove(req.params.id, req.user)); } catch (e) { next(e); }
 });
 
 // Reset is destructive -> admin only.

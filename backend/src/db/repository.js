@@ -179,6 +179,7 @@ async function getState(x0) {
     movements, workorders, salesorders, purchaseorders, leads, appointments, complaints, quotations, settings,
     hrWorkers, hrAttendance, hrLeaveTypes, hrLeaves, hrPayruns, hrPayslips,
     labProducts, labReports, grns, grnTests,
+    approvals: (await x.all("SELECT `doc` FROM `approvals` ORDER BY `id` ASC")).map((r) => P(r.doc)),
   };
 }
 
@@ -1191,3 +1192,26 @@ module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, p
   getLabProduct, putLabProduct, deleteLabProduct, labProductsEmpty,
   getLabReport, putLabReport, deleteLabReport,
 };
+
+/* ---- the approval queue (JSON docs, like the lab tables) ---- */
+async function getApprovals(x0) {
+  const x = await ex(x0);
+  return (await x.all("SELECT `doc` FROM `approvals` ORDER BY `id` ASC")).map((r) => P(r.doc));
+}
+async function getApproval(id, x0) {
+  const x = await ex(x0);
+  const r = await x.one("SELECT `doc` FROM `approvals` WHERE `id`=?", [id]);
+  return r ? P(r.doc) : null;
+}
+async function putApproval(a, x0) {
+  const x = await ex(x0);
+  await x.run("INSERT INTO `approvals`(`id`,`doc`) VALUES(?,?) AS `new` " +
+    "ON DUPLICATE KEY UPDATE `doc`=`new`.`doc`", [a.id, J(a)]);
+  return a;
+}
+async function deleteApproval(id, x0) {
+  const x = await ex(x0);
+  await x.run("DELETE FROM `approvals` WHERE `id`=?", [id]);
+  return { id };
+}
+Object.assign(module.exports, { getApprovals, getApproval, putApproval, deleteApproval });

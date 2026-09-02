@@ -3419,3 +3419,24 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .crm-filter-sel{flex:1 1 140px;max-width:none}
 }
 
+
+/* ---- NEW ITEM, ONE SHOT (mod-catalogue.js, 2026-09-02) ----
+   Row grids: headers on top, a number down the left, boxes in columns, and
+   no table rules — the item's test parameters and its recipe are entered
+   this way, one row per parameter or component, as many as are added. */
+.cg-sec{margin:18px 0 6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mut);display:flex;align-items:center;gap:10px}
+.cg-sec .sp{flex:1;height:1px;background:var(--line)}
+.cg-grid{display:grid;gap:8px 10px;align-items:center;margin-top:8px}
+.cg-grid.tp{grid-template-columns:28px minmax(150px,1.5fr) 100px minmax(84px,1fr) minmax(84px,1fr) 92px 32px}
+.cg-grid.bm{grid-template-columns:28px minmax(200px,2fr) 110px 90px 32px}
+.cg-grid .h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-mut);white-space:nowrap}
+.cg-grid .n{font-size:12px;color:var(--text-mut);text-align:right;font-variant-numeric:tabular-nums}
+.cg-grid .input,.cg-grid .select,.cg-grid .ss{min-width:0}
+.cg-grid .input[disabled]{opacity:.35}
+.cg-empty{font-size:12px;color:var(--text-mut);padding:6px 0}
+.cg-kv{display:grid;grid-template-columns:160px 1fr;gap:4px 12px;font-size:13px}
+.cg-kv .k{color:var(--text-mut)}
+@media (max-width:900px){
+  .cg-grid.tp{grid-template-columns:24px 1fr 90px 1fr 1fr 76px 28px}
+  .cg-kv{grid-template-columns:1fr}
+}

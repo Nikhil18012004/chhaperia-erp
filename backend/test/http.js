@@ -3365,6 +3365,89 @@ async function run() {
     ok("the admin rules", rule.status === 200);
     ok("...and the floor's bell goes quiet", !((await state(C)).labAlerts || []).some((x) => x.woId === woB.id));
   }
+
+  section("A new item in one shot: item + test parameters + recipe, and the lab's approval queue");
+  {
+    const st1 = await state();
+    const supAny = st1.suppliers[0].id;
+    const rmA = st1.items.find((i) => i.cat === "RM").id;
+    const fgWithBom = Object.keys(st1.boms || {})[0];
+    // admin: a new material with two catalogue picks, a parameter of its own (a range), joining an existing recipe
+    const direct = await call("POST", "/catalogue/new-item", A, { item: { id: "RM-ONESHOT", name: "One-shot binder", cat: "RM", uom: "KG", cost: 55 },
+      tests: { params: ["solids", "viscosity"], custom: [{ label: "Peel strength", unit: "N/25mm" }], spec: { solids: { min: 40, max: 60 }, c_peel_strength: { min: 5 }, viscosity: { nominal: 1200 } } },
+      bom: fgWithBom ? { mode: "append", productId: fgWithBom, qty: 0.05, unit: "KG" } : { mode: "none" } });
+    ok("admin's entry lands at once (201)", direct.status === 201 && direct.d.item && direct.d.item.id === "RM-ONESHOT", direct.status + " " + JSON.stringify(direct.d).slice(0, 160));
+    ok("...the material carries its own parameter, with its unit", direct.status === 201 && direct.d.item.testParams && direct.d.item.testParams[0].key === "c_peel_strength" && direct.d.item.testParams[0].unit === "N/25mm", JSON.stringify(direct.d.item && direct.d.item.testParams));
+    ok("...the parameter list is the picks plus its own", direct.status === 201 && direct.d.qc && direct.d.qc.params.join() === "solids,viscosity,c_peel_strength", JSON.stringify(direct.d.qc && direct.d.qc.params));
+    const itA = ((await state()).items || []).find((i) => i.id === "RM-ONESHOT");
+    ok("...a range grades, a static figure is kept as the target", !!itA && itA.qcSpec && itA.qcSpec.c_peel_strength.min === 5 && itA.qcSpec.viscosity.nominal === 1200 && itA.qcSpec.solids.max === 60, JSON.stringify(itA && itA.qcSpec));
+    if (fgWithBom) ok("...and it joined the recipe", ((await state()).boms[fgWithBom].lines || []).some((l) => (Array.isArray(l) ? l[0] : l.id) === "RM-ONESHOT"), JSON.stringify((await state()).boms[fgWithBom]).slice(0, 200));
+    else ok("(no recipe in the seed to join)", true);
+    ok("...with an opening ledger line", ((await state()).movements || []).some((m) => m.itemId === "RM-ONESHOT" && m.type === "OPEN"));
+    // the reading form asks for its own parameter, on a real receipt
+    const poX = (await call("POST", "/purchase-orders", A, { supplierId: supAny, eta: "2026-09-12", lines: [{ itemId: "RM-ONESHOT", qty: 20, rate: 55 }] })).d;
+    const gX = (await call("POST", "/purchase-orders/" + poX.id + "/receive", A, { wh: "WH-PNY", lines: [{ i: 0, qty: 20 }] })).d.grn;
+    const formX = (await call("GET", "/grns/" + encodeURIComponent(gX.id) + "/tests/RM-ONESHOT", LB)).d;
+    ok("the incoming test asks for the material's own parameter, with its unit", (formX.params || []).some((p) => p.key === "c_peel_strength" && p.unit === "N/25mm"), JSON.stringify((formX.params || []).map((p) => p.key)));
+    const partX = await call("POST", "/grns/" + encodeURIComponent(gX.id) + "/tests", LB, { itemId: "RM-ONESHOT", values: { solids: 50, viscosity: 1150 } });
+    ok("...and will not file without it", partX.status === 400 && /Peel strength/.test(partX.d.error || ""), JSON.stringify(partX.d).slice(0, 120));
+    const fullX = await call("POST", "/grns/" + encodeURIComponent(gX.id) + "/tests", LB, { itemId: "RM-ONESHOT", values: { solids: 50, viscosity: 1150, c_peel_strength: 3 } });
+    const tX = ((await state()).grnTests || []).find((t) => t.grnId === gX.id && t.itemId === "RM-ONESHOT");
+    ok("...a reading under its range fails on that parameter; the static one is recorded", fullX.status === 201 && !!tX && tX.result === "Fail" && tX.results.c_peel_strength === "fail" && tX.results.viscosity === "na", JSON.stringify(tX && tX.results));
+
+    // a finished good with its own parameters gets a lab product that asks for them, and its recipe
+    const fgNew = await call("POST", "/catalogue/new-item", A, { item: { id: "FG-ONESHOT", name: "One-shot glass tape", cat: "FG", uom: "KG", thicknessMM: 0.12, gsm: 90, cost: 150, price: 300 },
+      tests: { custom: [{ label: "Adhesion", unit: "N/cm" }, { label: "Shrinkage", unit: "%" }], spec: { c_adhesion: { min: 2 }, c_shrinkage: { max: 1.5 } } },
+      bom: { mode: "create", yield: 95, lines: [{ id: rmA, qty: 0.8, unit: "KG" }, { id: "RM-ONESHOT", qty: 0.2, unit: "KG" }] } });
+    ok("a finished good is created with its recipe (201)", fgNew.status === 201 && !!fgNew.d.bom && !!fgNew.d.labProduct, fgNew.status + " " + JSON.stringify(fgNew.d).slice(0, 200));
+    ok("...its recipe has both components", fgNew.status === 201 && (fgNew.d.bom.lines || []).length === 2, JSON.stringify(fgNew.d.bom));
+    ok("...and its lab product carries the two parameters with their limits", fgNew.status === 201 && fgNew.d.labProduct.params.length === 2 && fgNew.d.labProduct.spec.c_adhesion.min === 2 && fgNew.d.labProduct.itemId === "FG-ONESHOT", JSON.stringify(fgNew.d.labProduct).slice(0, 200));
+    const woX = (await call("POST", "/production/wo", A, { itemId: "FG-ONESHOT", qty: 10 })).d;
+    const floorWo = ((await state(C)).workorders || []).find((w) => w.id === woX.id);
+    if (floorWo && floorWo.lab) ok("a work order on it asks the floor for exactly those parameters", (floorWo.lab.params || []).map((p) => p.key).join() === "c_adhesion,c_shrinkage", JSON.stringify(floorWo.lab.params));
+    else ok("(the job did not land on the coating board; the certificate check below covers the parameters)", true);
+    const cert = await call("POST", "/lab/reports", A, { productId: fgNew.d.labProduct.id, refNo: "B-ONESHOT", values: { c_adhesion: 1, c_shrinkage: 0.5 } });
+    const certDoc = ((await state()).labReports || []).find((r) => cert.d && r.id === cert.d.id);
+    ok("a certificate grades the product's own parameters", cert.status === 201 && !!certDoc && certDoc.result === "Fail" && certDoc.results.c_adhesion === "fail" && certDoc.results.c_shrinkage === "pass", cert.status + " " + JSON.stringify(certDoc && certDoc.results));
+
+    // rules
+    ok("a recipe of its own on a material is refused (400)", (await call("POST", "/catalogue/new-item", A, { item: { id: "RM-NOBOM", name: "x", cat: "RM" }, bom: { mode: "create", lines: [{ id: rmA, qty: 1 }] } })).status === 400);
+    ok("a second item with the same code is refused (409)", (await call("POST", "/catalogue/new-item", A, { item: { id: "RM-ONESHOT", name: "again", cat: "RM" } })).status === 409);
+    ok("the lab still cannot write the catalogue directly (403)", (await call("POST", "/items", LB, { id: "RM-LABDIRECT", name: "x", cat: "RM" })).status === 403);
+
+    // the lab proposes; nothing lands until the admin approves
+    const prop = await call("POST", "/catalogue/new-item", LB, { item: { id: "RM-LABPROP", name: "Lab-proposed primer", cat: "RM", uom: "KG", cost: 12 },
+      tests: { params: ["density"], custom: [{ label: "Cure time", unit: "min" }] }, bom: { mode: "none" } });
+    ok("the lab's entry becomes a proposal (202)", prop.status === 202 && prop.d.proposed && prop.d.proposal.status === "Pending", prop.status + " " + JSON.stringify(prop.d).slice(0, 160));
+    const apId = prop.d.proposal ? prop.d.proposal.id : "AP-0000";
+    ok("...nothing is in the catalogue yet", !((await state()).items || []).some((i) => i.id === "RM-LABPROP"));
+    const adminAps = (await state()).approvals || [];
+    ok("...and the proposal is in the admin's state, with a summary", adminAps.some((a) => a.id === apId && /RM-LABPROP/.test(a.summary) && /2 test parameters \(1 new\)/.test(a.summary)), JSON.stringify(adminAps.slice(0, 2)).slice(0, 240));
+    ok("...and in the lab's own", ((await state(LB)).approvals || []).some((a) => a.id === apId));
+    const labProp2 = await call("POST", "/catalogue/new-item", LB, { item: { id: "RM-LABPROP2", name: "To be rejected", cat: "RM" } });
+    ok("office cannot rule (403)", (await call("POST", "/approvals/" + apId + "/decide", O, { approve: true })).status === 403);
+    ok("nor the lab (403)", (await call("POST", "/approvals/" + apId + "/decide", LB, { approve: true })).status === 403);
+    ok("a ruling must say approve true or false (400)", (await call("POST", "/approvals/" + apId + "/decide", A, {})).status === 400);
+    const appr = await call("POST", "/approvals/" + apId + "/decide", A, { approve: true, note: "fine" });
+    ok("the admin approves", appr.status === 200 && appr.d.status === "Approved" && appr.d.decidedBy === "admin" && appr.d.result.itemId === "RM-LABPROP", appr.status + " " + JSON.stringify(appr.d).slice(0, 160));
+    const landed = ((await state()).items || []).find((i) => i.id === "RM-LABPROP");
+    ok("...and the item lands with its parameters", !!landed && landed.qcParams.join() === "density,c_cure_time" && landed.testParams[0].unit === "min", JSON.stringify(landed && { p: landed.qcParams, t: landed.testParams }));
+    ok("a second ruling on it is refused (409)", (await call("POST", "/approvals/" + apId + "/decide", A, { approve: false })).status === 409);
+    const rej = await call("POST", "/approvals/" + (labProp2.d.proposal ? labProp2.d.proposal.id : "AP-0000") + "/decide", A, { approve: false, note: "not needed" });
+    ok("a rejection keeps the catalogue as it was", rej.status === 200 && rej.d.status === "Rejected" && !((await state()).items || []).some((i) => i.id === "RM-LABPROP2"), rej.status + " " + JSON.stringify(rej.d).slice(0, 100));
+    // a recipe proposed on its own
+    const bomProp = await call("POST", "/approvals", LB, { kind: "bom", payload: { itemId: "FG-ONESHOT", bom: { yield: 90, lines: [{ id: rmA, qty: 1.1, unit: "KG" }] } } });
+    ok("the lab may propose a recipe change (201)", bomProp.status === 201 && bomProp.d.kind === "bom" && /Recipe for FG-ONESHOT/.test(bomProp.d.summary), bomProp.status + " " + JSON.stringify(bomProp.d).slice(0, 160));
+    ok("...the recipe is unchanged until approved", ((await state()).boms["FG-ONESHOT"].lines || []).length === 2);
+    ok("the lab cannot save a recipe directly (403)", (await call("PUT", "/boms/FG-ONESHOT", LB, { yield: 1, lines: [[rmA, 1]] })).status === 403);
+    const apprB = await call("POST", "/approvals/" + bomProp.d.id + "/decide", A, { approve: true });
+    ok("approved, it replaces the recipe", apprB.status === 200 && ((await state()).boms["FG-ONESHOT"].lines || []).length === 1, apprB.status + " " + JSON.stringify(apprB.d).slice(0, 120));
+    ok("a proposal is checked when it is made (400)", (await call("POST", "/approvals", LB, { kind: "bom", payload: { itemId: "FG-NOPE", bom: { lines: [{ id: rmA, qty: 1 }] } } })).status === 400);
+    const mine = await call("POST", "/approvals", LB, { kind: "item", payload: { item: { id: "RM-WITHDRAW", name: "x", cat: "RM" } } });
+    ok("the proposer may withdraw a pending proposal", mine.status === 201 && (await call("DELETE", "/approvals/" + mine.d.id, LB)).status === 200 && !((await state()).approvals || []).some((a) => a.id === mine.d.id));
+    ok("...but not one already ruled on", (await call("DELETE", "/approvals/" + apId, LB)).status === 409);
+    ok("the floor's payload has no approvals", (await state(C)).approvals === undefined);
+  }
   }
 
   // restore the BOM change we made so a re-run against a persisted DB stays clean

@@ -71,6 +71,48 @@ const PARAMS = [
 ];
 const BY_KEY = Object.fromEntries(PARAMS.map((p) => [p.key, p]));
 
+/* A MATERIAL'S OWN PARAMETERS (since 2026-09-02). The catalogue above is
+   what most materials are checked on; a material may also carry parameters
+   of its own — added one by one with a unit when the item is created, or
+   later from the QC dialog — which are asked for on every receipt exactly
+   like the catalogue's. They live on the item as `testParams` and are
+   numeric readings; a limit on one grades it like any other. Keys are made
+   from the label ("Peel strength" → c_peel_strength) and can never collide
+   with a catalogue key. */
+const KEY_RE = /^[a-z][a-zA-Z0-9_]{0,39}$/;
+function slugKey(label) {
+  const s = String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return s ? ("c_" + s).slice(0, 40) : "";
+}
+function normalizeCustom(list) {
+  const out = [], seen = new Set(Object.keys(BY_KEY));
+  (Array.isArray(list) ? list : []).slice(0, 40).forEach((p) => {
+    if (!p) return;
+    const label = str(p.label || p.name, 60);
+    if (!label) return;
+    let key = str(p.key, 40);
+    if (!KEY_RE.test(key) || BY_KEY[key]) key = slugKey(label);
+    if (!key) return;
+    let k = key, n = 2;
+    while (seen.has(k)) k = (key + "_" + n++).slice(0, 40);
+    seen.add(k);
+    out.push({ key: k, label, unit: str(p.unit, 20), type: "num" });
+  });
+  return out;
+}
+function customParamsOf(item) {
+  const own = (item || {}).testParams;
+  if (!Array.isArray(own)) return [];
+  return own.filter((p) => p && p.key && p.label)
+    .map((p) => ({ key: String(p.key), label: String(p.label), unit: String(p.unit || ""), type: "num" }));
+}
+/** The catalogue as THIS material sees it — the standard rows plus its own. */
+function byKeyFor(item) {
+  const m = Object.assign({}, BY_KEY);
+  customParamsOf(item).forEach((p) => { m[p.key] = p; });
+  return m;
+}
+
 /** Is this material a sheet good (fabric / tape / film) rather than a liquid? */
 function isSheet(item) {
   item = item || {};
@@ -125,17 +167,21 @@ function derivedParamKeys(item) {
   return kept.length ? kept : ["visual"];
 }
 function paramKeysForItem(item) {
+  const cat = byKeyFor(item);
+  // a material's own parameters are always asked for — they were defined for it
+  const custom = customParamsOf(item).map((p) => p.key);
   const own = (item || {}).qcParams;
   if (Array.isArray(own) && own.length) {
-    const picked = own.map((k) => str(k, 40)).filter((k) => BY_KEY[k]);
-    if (picked.length) return [...new Set(picked)];
+    const picked = own.map((k) => str(k, 40)).filter((k) => cat[k]);
+    if (picked.length) return [...new Set(picked.concat(custom))];
   }
-  return derivedParamKeys(item);
+  return [...new Set(derivedParamKeys(item).concat(custom))];
 }
-/** The parameter rows a report for this material carries, in catalogue order. */
+/** The parameter rows a report for this material carries, in catalogue order
+    — the standard rows first, then the material's own. */
 function paramsForItem(item) {
   const keys = paramKeysForItem(item);
-  return PARAMS.filter((p) => keys.indexOf(p.key) >= 0)
+  return PARAMS.concat(customParamsOf(item)).filter((p) => keys.indexOf(p.key) >= 0)
     .map((p) => ({ key: p.key, label: p.label, unit: p.unit, type: p.type }));
 }
 /** True when the material has been configured by hand (vs. running on defaults). */
@@ -255,9 +301,14 @@ async function setItemQc(itemId, body, user) {
   if (!item) throw err("Unknown item " + itemId, 404);
   body = body || {};
   const isAdmin = !user || user.role === "admin";
+  /* the material's OWN parameters ride with the list — deciding which
+     readings a material needs is the lab incharge's trade, so they may add
+     one here as well as pick from the catalogue */
+  if (Array.isArray(body.custom)) item.testParams = normalizeCustom(body.custom);
+  const cat = byKeyFor(item);
   let keys = null;
   if (Array.isArray(body.params)) {
-    keys = [...new Set(body.params.map((k) => str(k, 40)).filter((k) => BY_KEY[k]))];
+    keys = [...new Set(body.params.map((k) => str(k, 40)).filter((k) => cat[k]))];
   }
   if (keys) item.qcParams = keys;
 
@@ -267,17 +318,21 @@ async function setItemQc(itemId, body, user) {
     const src = body.spec && typeof body.spec === "object" ? body.spec : {};
     // limits are only meaningful for a parameter actually on the list, and only
     // for a numeric one — a visual check has no min/max
-    const allowed = keys || paramKeysForItem(item);
+    const allowed = (keys || paramKeysForItem(item)).concat(customParamsOf(item).map((p) => p.key));
     Object.keys(src).forEach((k) => {
-      if (!BY_KEY[k] || BY_KEY[k].type === "text" || allowed.indexOf(k) < 0) return;
+      if (!cat[k] || cat[k].type === "text" || allowed.indexOf(k) < 0) return;
       const min = num(src[k] && src[k].min), max = num(src[k] && src[k].max);
-      if (min == null && max == null) return;
+      /* a STATIC figure — the target the material is bought to — is kept and
+         printed beside the reading; only a RANGE (min / max) grades it */
+      const nominal = num(src[k] && src[k].nominal);
+      if (min == null && max == null && nominal == null) return;
       if (min != null && max != null && min > max) {
-        throw err("Minimum cannot exceed maximum for " + BY_KEY[k].label, 400);
+        throw err("Minimum cannot exceed maximum for " + cat[k].label, 400);
       }
       spec[k] = {};
       if (min != null) spec[k].min = min;
       if (max != null) spec[k].max = max;
+      if (nominal != null) spec[k].nominal = nominal;
     });
     item.qcSpec = spec;
     specChanged = true;
@@ -626,7 +681,7 @@ async function pendingTests(data) {
 
 module.exports = {
   PARAMS, paramsForItem, paramKeysForItem, isConfigured, specOf, specKeys,
-  classify, derivedParamKeys,
+  classify, derivedParamKeys, normalizeCustom, customParamsOf, byKeyFor,
   evaluate, pickValues, isComplete, missingParams,
   setItemQc, regradeItem, regradeUngraded, ensureItemQc,
   testFormFor, submitTest, deleteTest,

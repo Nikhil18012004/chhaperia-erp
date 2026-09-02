@@ -711,6 +711,8 @@
             /* A failed finished-goods certificate opens ITSELF — the admin rules
                on it there, the lab reads the flag there. */
             else if(a.kind==="labFail") this.go("lab-reports",{view:"reports", open:a.id});
+            // the lab's proposal for the catalogue: land on Stock Items with that proposal open
+            else if(a.kind==="approval") this.go("inventory",{approvals:true, open:a.id});
             /* A failed lot needs a decision, not a page: land on Procurement and
                open THAT lot's ruling, so the ruling is one click from the alert.
                The lab cannot rule, so its click opens the test report instead. */

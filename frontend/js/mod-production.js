@@ -2286,6 +2286,12 @@ recalc(); },50);
       h("button",{class:"btn",onclick:()=>bomCalc(),html:"🧮 BOM Calculator"}),
       h("button",{class:"btn primary",onclick:()=>bomForm(),html:"＋ Create BOM"})
     ]));
+    /* the lab may PROPOSE a recipe (pageHead hides its actions for a
+       read-only role) — it lands once an admin approves it */
+    if(App.isLab&&App.isLab()) root.appendChild(h("div",{class:"flex aic",style:"gap:8px;margin:-6px 0 14px"},[
+      h("button",{class:"btn primary",onclick:()=>bomForm(null,{propose:true}),html:"＋ Propose BOM"}),
+      h("span",{class:"muted",style:"font-size:12px",text:"A recipe you propose reaches the catalogue once an admin approves it."}),
+    ]));
     const fgs=ENG.data.items.filter(i=>i.cat==="FG");
     /* Grouping is DATA-DRIVEN: whatever `group` values actually exist get a
        section, known keys in a preferred order and anything else appended.
@@ -2454,7 +2460,9 @@ recalc(); },50);
              the lab, which may read this page, gets neither. */
           App.canWrite("bom")?h("button",{class:"btn",title:"Start a new product from this recipe",
             onclick:()=>{mo.close();bomForm(null,{copyFrom:fgId,altIdx});},html:"⧉ Copy BOM"}):null,
-          App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null]});
+          App.isAdmin()?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId);},html:"✎ Edit BOM"}):null,
+          // the lab proposes a change; the admin rules on it (2026-09-02)
+          (App.isLab&&App.isLab())?h("button",{class:"btn primary",onclick:()=>{mo.close();bomForm(fgId,{propose:true});},html:"✎ Propose change"}):null]});
 
       function draw(){
         const src=(bom.alternates && bom.alternates[altIdx])||bom;
@@ -3346,6 +3354,19 @@ recalc(); },50);
         // keep the other approved recipes; replace only the one being edited
         if(prev && prev.alternates && prev.alternates.length){
           next.alternates=prev.alternates.map((a,i)=> i===altIdx? {label:a.label, lines:out} : a);
+        }
+        /* THE LAB PROPOSES. Nothing of theirs lands until an admin approves
+           (ruled 2026-09-02): the same recipe — and the new product, when it
+           is one — goes to the approval queue instead of the catalogue. */
+        if(opts.propose || (App.isLab&&App.isLab())){
+          const payload={ itemId:fg2, bom:next };
+          if(newMode) payload.newItem={ name:draft.name, productName:draft.name, uom:draft.uom||"KG", group:draft.group||null,
+            typeCode:fg2.replace(/^FG-/,""), thicknessMM:draft.thicknessMM, gsm:draft.gsm, cost:draft.cost, price:draft.price, hsn:draft.hsn };
+          mo.close();
+          DB.approvals.propose("bom", payload)
+            .then(async ap=>{ toast("Sent to the admin for approval — "+ap.id, {type:"ok",title:"Proposal sent",dur:6000}); await App.reloadState(); })
+            .catch(e=>toast(e.message||"Could not send the proposal",{type:"danger"}));
+          return;
         }
         /* The product is written BEFORE its recipe — a BOM whose finished good
            does not exist is a row nothing can render. Both go out in the one

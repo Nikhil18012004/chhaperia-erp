@@ -7,12 +7,29 @@
   const {pageHead, kpi} = MW;
 
   /* ============== STOCK ITEMS ============== */
-  M.inventory = { title:"Stock Items", sub:"Auto-calculated inventory", render(root){
+  M.inventory = { title:"Stock Items", sub:"Auto-calculated inventory", render(root, params){
     let filter=App.viewState("filter",()=>({q:"", qRaw:"", cat:"all", state:"all"}));
+    const pendingAps=(ENG.data.approvals||[]).filter(a=>a.status==="Pending");
     root.appendChild(pageHead("Stock Items","On-hand, usage, pending & valuation — all computed live from the ledger",[
       MW.csvMenu(exportCSV),
+      /* what the lab proposed for the catalogue, waiting on the admin's ruling */
+      (App.isAdmin&&App.isAdmin()&&pendingAps.length&&window.CAT)
+        ?h("button",{class:"btn",onclick:()=>CAT.approvalsDialog(),html:"🗂 Approvals <span class=\"chip\" style=\"margin-left:6px;color:var(--warn)\">"+pendingAps.length+"</span>"}):null,
       newItemMenu()
     ]));
+    /* The lab may PROPOSE — a new item with its test parameters and recipe —
+       and follow what became of it. pageHead hides its actions for a
+       read-only role, so these sit on a row of their own. */
+    if(App.isLab&&App.isLab()&&window.CAT){
+      const n=(ENG.data.approvals||[]).filter(a=>a.status==="Pending").length;
+      root.appendChild(h("div",{class:"flex aic",style:"gap:8px;margin:-6px 0 14px"},[
+        h("button",{class:"btn primary",onclick:()=>CAT.newItemWizard(),html:"＋ Propose New Item"}),
+        h("button",{class:"btn",onclick:()=>CAT.proposalsDialog(),html:"🗂 My proposals"+(n?' <span class="chip" style="margin-left:6px">'+n+"</span>":"")}),
+        h("span",{class:"muted",style:"font-size:12px",text:"What you propose reaches the catalogue once an admin approves it."}),
+      ]));
+    }
+    // reached from the bell: open the queue (and the proposal the alert named)
+    if(params&&params.approvals&&window.CAT){ const openId=params.open; params.approvals=false; params.open=null; setTimeout(()=>CAT.approvalsDialog(openId),60); }
 
     /* summary strip */
     const inv=ENG.inventoryValue();
@@ -110,6 +127,9 @@
   /* ----- "New Item" split-button: create / receive via PO / add stock ----- */
   function newItemMenu(){
     const menu=h("div",{class:"ni-menu",hidden:true},[
+      /* the one-shot form: the item, what the lab tests it on, and its
+         recipe — created or joined — without leaving this page (mod-catalogue) */
+      h("button",{class:"ni-opt",onclick:()=>{close();(window.CAT?CAT.newItemWizard():itemForm());},html:"🧾 New Item — with test parameters &amp; BOM"}),
       h("button",{class:"ni-opt",onclick:()=>{close();addStockForm();},html:"📦 Add Stock"}),
       h("button",{class:"ni-opt",onclick:()=>{close();receiveStockForm();},html:"🚚 Receive via PO"}),
     ]);
@@ -261,6 +281,7 @@
               text:limited?"graded against a set limit":"limits set by admin"})]),
       ]);
     });
+    const ownHost=h("div");
     const body=h("div",{},[
       h("div",{class:"qc-note",style:"font-size:12px;margin-bottom:14px",
         text:usingDefaults
@@ -269,22 +290,61 @@
             ? "The ticked parameters are what the lab incharge is asked for when this material is received. Leave a limit blank to record the reading without grading it."
             : "The ticked parameters are what you will be asked to measure when this material is received. You can change that list; the pass/fail limits stay with the admin, so a reading cannot be graded against a limit the person measuring it chose."}),
       h("div",{class:"qc-plist"},rows),
+      /* THE MATERIAL'S OWN PARAMETERS — beyond the catalogue, added one by
+         one with a unit (2026-09-02). Always asked for on a receipt; a limit
+         grades one like any catalogue row. The lab may add one (which
+         readings a material needs is their trade); the limits stay admin's. */
+      h("div",{class:"cg-sec"},[h("span",{text:"Its own parameters"}),h("span",{class:"sp"})]),
+      ownHost,
+      h("div",{class:"flex aic",style:"gap:8px;margin-top:8px;flex-wrap:wrap"},[
+        h("input",{class:"input",id:"qc_nl",placeholder:"New parameter name",style:"flex:1;min-width:160px","data-enter":"ignore"}),
+        h("input",{class:"input",id:"qc_nu",placeholder:"unit",style:"width:100px","data-enter":"ignore"}),
+        h("button",{class:"btn sm",onclick:addOwn,html:"＋ Add parameter"}),
+      ]),
       /* said BEFORE the save, not discovered on the first report: a list with
          no numeric limit on it can never grade a reading — every report on
          the material will read "Recorded", never Pass or Fail */
       h("div",{class:"qc-note",id:"qcGradeNote",hidden:"",style:"font-size:12px;margin-top:12px;color:var(--warn)"}),
     ]);
+    let own=(Array.isArray(it.testParams)?it.testParams:[]).map(p=>({key:p.key,label:p.label,unit:p.unit||""}));
+    const slugKey=l=>{ const s=String(l||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,""); return s?("c_"+s).slice(0,40):""; };
+    function drawOwn(){
+      ownHost.innerHTML="";
+      if(!own.length){ ownHost.appendChild(h("div",{class:"cg-empty",text:"None yet — add one below."})); return; }
+      const g=h("div",{class:"cg-grid tp"});
+      ["#","Parameter","","Min","Max","UOM",""].forEach(t=>g.appendChild(h("div",{class:"h",text:t})));
+      own.forEach((p,i)=>{
+        const sp=spec[p.key]||{};
+        g.appendChild(h("div",{class:"n",text:String(i+1)}));
+        g.appendChild(h("input",{class:"input",value:p.label,readonly:""}));
+        g.appendChild(h("span",{class:"muted",style:"font-size:11px",text:mayLimits?"":(it.qcSpecSet?"limit set":"")}));
+        g.appendChild(mayLimits?h("input",{class:"input",id:"qmin_"+p.key,type:"number",step:"any",placeholder:"min",value:sp.min!=null?String(sp.min):""}):h("span",{class:"muted",style:"font-size:12px",text:"limits set by admin"}));
+        g.appendChild(mayLimits?h("input",{class:"input",id:"qmax_"+p.key,type:"number",step:"any",placeholder:"max",value:sp.max!=null?String(sp.max):""}):h("span"));
+        g.appendChild(h("input",{class:"input",value:p.unit||"",readonly:""}));
+        g.appendChild(h("button",{class:"icon-btn",title:"Remove",onclick:()=>{ own=own.filter(x=>x!==p); drawOwn(); refreshGradeNote(); },text:"✕"}));
+      });
+      ownHost.appendChild(g);
+    }
+    function addOwn(){
+      const l=UI.$("#qc_nl"), u=UI.$("#qc_nu");
+      const label=((l&&l.value)||"").trim(); if(!label){ toast("Give the parameter a name",{type:"warn"}); return; }
+      const key=slugKey(label);
+      if(!key||own.some(p=>p.key===key)||cat.some(p=>p.key===key||String(p.label).toLowerCase()===label.toLowerCase())){ toast("That parameter is already on the list",{type:"warn"}); return; }
+      own.push({key,label,unit:((u&&u.value)||"").trim()}); l.value=""; if(u) u.value="";
+      drawOwn(); refreshGradeNote();
+    }
+    drawOwn();
     const mo=modal({title:"🧪 QC Parameters", sub:it.name+" · "+it.id, wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",id:"qcpSave",onclick:save,text:"Save Parameters"})]});
     function gradeable(){
-      return cat.some(p=>{ const c=UI.$("#qp_"+p.key); if(!c||!c.checked||p.type==="text") return false;
-        const mn=UI.$("#qmin_"+p.key), mx=UI.$("#qmax_"+p.key);
-        return !!((mn&&mn.value!=="")||(mx&&mx.value!=="")); });
+      const limited=p=>{ const mn=UI.$("#qmin_"+p.key), mx=UI.$("#qmax_"+p.key); return !!((mn&&mn.value!=="")||(mx&&mx.value!=="")); };
+      return cat.some(p=>{ const c=UI.$("#qp_"+p.key); if(!c||!c.checked||p.type==="text") return false; return limited(p); })
+        || own.some(limited);
     }
     function refreshGradeNote(){
       const n=UI.$("#qcGradeNote"); if(!n||!mayLimits) return;
-      const ticked=cat.some(p=>{ const c=UI.$("#qp_"+p.key); return c&&c.checked; });
+      const ticked=own.length>0 || cat.some(p=>{ const c=UI.$("#qp_"+p.key); return c&&c.checked; });
       n.hidden=!ticked||gradeable();
       n.textContent="⚠ No pass/fail limit is set on any ticked parameter — every reading on this material will be recorded, never graded. Enter a min or a max on a numeric parameter to grade it.";
     }
@@ -303,11 +363,23 @@
         if(mn!=="") spOut[p.key].min=+mn;
         if(mx!=="") spOut[p.key].max=+mx;
       });
+      /* the material's own parameters: always on the list; limits admin's */
+      own.forEach(p=>{
+        params.push(p.key);
+        if(!mayLimits) return;
+        const mnEl=UI.$("#qmin_"+p.key), mxEl=UI.$("#qmax_"+p.key);
+        const mn=mnEl?mnEl.value:"", mx=mxEl?mxEl.value:"";
+        if(mn===""&&mx==="") return;
+        if(mn!==""&&mx!==""&&+mn>+mx){ spOut.__bad=p.label; return; }
+        spOut[p.key]={};
+        if(mn!=="") spOut[p.key].min=+mn;
+        if(mx!=="") spOut[p.key].max=+mx;
+      });
       if(spOut.__bad){ toast("Minimum cannot exceed maximum for "+spOut.__bad,{type:"warn"}); return; }
       if(!params.length){ toast("Tick at least one parameter, or cancel to keep the derived defaults",{type:"warn"}); return; }
       const btn=UI.$("#qcpSave"); btn.disabled=true; btn.textContent="Saving…";
       try{
-        const r=await DB.grnTests.setItemQc(it.id,params,spOut);
+        const r=await DB.grnTests.setItemQc(it.id,params,spOut,own);
         mo.close();
         /* Say when reports were re-graded. Changing a limit silently re-scores
            lots that were already signed off, and that is exactly the kind of
@@ -1567,6 +1639,6 @@
   window.ERPActions = Object.assign(window.ERPActions||{}, {
     addStock:    { mod:"inventory", create:true, ic:"📦", label:"Add Stock",             run:()=>addStockForm() },
     receivePO:   { mod:"inventory", create:true, ic:"🚚", label:"Receive via PO",        run:()=>receiveStockForm() },
-    newItem:     { mod:"inventory", create:true, ic:"＋", label:"New Item",               run:()=>itemForm() },
+    newItem:     { mod:"inventory", create:true, ic:"＋", label:"New Item",               run:()=>(window.CAT?CAT.newItemWizard():itemForm()) },
   });
 })();
