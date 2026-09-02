@@ -156,12 +156,27 @@
   }
 
   /* ---------------- DONUT ---------------- */
+  /* FOUR hues, not eight (ruled 2026-08-14). A ring with more than four
+     slices keeps its three largest and folds the rest into one "Other"
+     slice, drawn in the muted text colour — a fifth hue would only be a
+     colour nobody can tell from the first. Callers that build a legend run
+     their list through this too, so ring and legend agree. */
+  const MAX_SLICES=4;
+  function lump(data, max){
+    max=max||MAX_SLICES;
+    if(!Array.isArray(data) || data.length<=max) return data||[];
+    const sorted=data.slice().sort((a,b)=>(b.value||0)-(a.value||0));
+    const keep=sorted.slice(0,max-1), rest=sorted.slice(max-1);
+    const other={ name:"Other ("+rest.length+")", value:rest.reduce((s,d)=>s+(d.value||0),0), other:true,
+      count:rest.reduce((s,d)=>s+(d.count||0),0) };
+    return keep.concat([other]);
+  }
   function donut(canvas, cfg){
     const box=canvas.parentElement; const {ctx,w,h}=setup(canvas);
     const cx=w/2, cy=h/2, R=Math.min(w,h)/2-8, r=R*0.62;
-    const data=cfg.data; const total=data.reduce((s,d)=>s+d.value,0)||1;
-    const cols=series(canvas);
-    data.forEach((d,i)=> d._c = d.color||cols[i%cols.length]);
+    const data=lump(cfg.data); const total=data.reduce((s,d)=>s+d.value,0)||1;
+    const cols=series(canvas).slice(0,MAX_SLICES);
+    data.forEach((d,i)=> d._c = d.color||(d.other?css("--text-mut"):cols[i%cols.length]));
     function render(prog){
       ctx.clearRect(0,0,w,h); let a=-Math.PI/2;
       data.forEach(d=>{ const ang=d.value/total*Math.PI*2*prog;
@@ -223,5 +238,5 @@
   function hexA(hex,a){ hex=hex.replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
     const n=parseInt(hex,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
 
-  global.Charts = { line, bars, donut, spark, gauge, soon, quietFor };
+  global.Charts = { line, bars, donut, spark, gauge, soon, quietFor, lump };
 })(window);

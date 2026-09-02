@@ -106,9 +106,12 @@
     fmt=fmt||(v=>ENG.money(v));
     const cv=h("canvas",{"data-h":200});
     const box=h("div",{class:"chart-box",style:"flex:0 0 200px"},cv);
+    /* four hues, so beyond four slices the tail folds into "Other" — the
+       legend and the ring read the same list (Charts.lump) */
+    data=(global.Charts&&Charts.lump)?Charts.lump(data):data;
     const total=data.reduce((s,d)=>s+d.value,0)||1;
     const legend=h("div",{class:"legend",style:"flex:1"}, data.map((d,i)=>h("div",{class:"li"},[
-      h("span",{class:"d",style:`background:var(--c${(i%8)+1})`}),
+      h("span",{class:"d",style:d.other?"background:var(--text-mut)":`background:var(--c${(i%4)+1})`}),
       h("span",{text:d.name}),
       h("span",{class:"v",text: fmt(d.value)})
     ])));

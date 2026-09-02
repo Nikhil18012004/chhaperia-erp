@@ -3130,7 +3130,8 @@
           el.hidden=!hit; if(hit) shown++;
         });
         const none=wrap.querySelector(".ls-gal-none");
-        if(none) none.hidden=!!shown;
+        if(none){ none.hidden=!!shown;
+          none.textContent=qq?"No label matches “"+galQuery.trim()+"”.":"No labels saved yet — press New label above to start one."; }
       });
 
       wrap.appendChild(h("div",{class:"ls-sec"},[
@@ -3222,8 +3223,10 @@
         grid.appendChild(card);
       });
 
+      /* two different empties: a search that found nothing, and a library
+         with nothing in it — the old line said "no label matches" to both */
       grid.appendChild(h("div",{class:"ls-gal-none",hidden:hits.length?"":null,
-        text:"No label matches that."}));
+        text:q?"No label matches “"+galQuery.trim()+"”.":"No labels saved yet — press New label above to start one."}));
       wrap.appendChild(grid);
       return wrap;
     }

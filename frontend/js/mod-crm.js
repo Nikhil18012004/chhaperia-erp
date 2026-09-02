@@ -884,7 +884,8 @@
 
   M.quotations = { title: "Samples & Quotations", sub: "Samples out, prices offered, and what came of them", render(root, params) {
     let tab = (params && params.tab) || "quotations";
-    let q = "";
+    const qf = App.viewState("filter", () => ({ q: "", qRaw: "" }));   // the search survives a quiet refresh
+    let q = qf.q;
     const allLeads = ENG.leads();
     const sampled = allLeads.filter((l) => l.sample && l.sample.sentDate);
     const waiting = openSamples(allLeads);
@@ -906,7 +907,7 @@
       [...seg.children].forEach((c) => c.classList.remove("on")); btn.classList.add("on"); draw();
     }
     root.appendChild(h("div", { class: "toolbar" }, [
-      MW.searchInput("Search customer, product, batch, note…", (v) => { q = v.toLowerCase().trim(); draw(); }),
+      MW.searchInput("Search customer, product, batch, note…", (v) => { qf.qRaw = v; q = qf.q = v.toLowerCase().trim(); draw(); }, qf.qRaw),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "sqCount" })),
     ]));
     const host = h("div"); root.appendChild(host);
@@ -2119,14 +2120,14 @@
 
   /* open leads → where they came from */
   function sourceDrill(allLeads, stats) {
-    const data = bySource(allLeads);
+    const data = Charts.lump(bySource(allLeads));   // four hues: the tail folds into "Other"
     const cv = h("canvas", { "data-h": 180 });
     const body = h("div", {}, [
       data.length
         ? h("div", { class: "crm-split" }, [
             h("div", { class: "chart-box" }, cv),
             h("div", { class: "crm-legend" }, data.map((d, i) => h("div", { class: "crm-leg-row" }, [
-              h("span", { class: "d", style: "background:var(--c" + ((i % 8) + 1) + ")" }),
+              h("span", { class: "d", style: d.other ? "background:var(--text-mut)" : "background:var(--c" + ((i % 4) + 1) + ")" }),
               h("span", { class: "crm-leg-nm", title: d.name, text: d.name }),
               h("span", { class: "crm-leg-n", text: d.count + (d.count === 1 ? " lead" : " leads") }),
               h("span", { class: "crm-leg-v", text: money(d.value) }),
@@ -2311,7 +2312,10 @@
      small shared helpers
      ============================================================ */
   function field(label, inner, cls) {
-    return h("div", { class: "field" + (cls === "full" ? " full" : "") }, [h("label", { text: label }), h("div", { html: inner })]);
+    const d = h("div", { class: "field" + (cls === "full" ? " full" : "") }, [h("label", { text: label }), h("div", { html: inner })]);
+    // a label ending in "*" marks its control required — what Enter reads (ui.js)
+    if (/\*\s*$/.test(String(label || ""))) { const c = d.querySelector("input,select,textarea"); if (c) c.setAttribute("required", ""); }
+    return d;
   }
   function selectHTML(id, opts, sel) {
     return `<select class="select" id="${id}">` +

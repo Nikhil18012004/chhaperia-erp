@@ -3241,6 +3241,132 @@ async function run() {
   }
   }
 
+  /* ================================================================ */
+  { // the sections below share one state() reader
+  const state = async (tok) => (await call("GET", "/state", tok || A)).d;
+  section("A purchase order buys raw material — the API says so too (QA-3)");
+  {
+    const st0 = await state();
+    const supA = st0.suppliers[0].id;
+    const fgAny = st0.items.find((i) => i.cat === "FG");
+    const wipAny = st0.items.find((i) => i.cat === "WIP");
+    const pkgAny = st0.items.find((i) => i.cat === "PKG" || i.cat === "CON");
+    const onFg = await call("POST", "/purchase-orders", A, { supplierId: supA, lines: [{ itemId: fgAny.id, qty: 5, rate: 10 }] });
+    ok("an order for a finished good is refused (400)", onFg.status === 400 && /finished good/.test(onFg.d.error || ""), onFg.status + " " + JSON.stringify(onFg.d).slice(0, 160));
+    if (wipAny) {
+      const onWip = await call("POST", "/purchase-orders", A, { supplierId: supA, lines: [{ itemId: wipAny.id, qty: 5, rate: 10 }] });
+      ok("an order for work in process is refused (400)", onWip.status === 400 && /work in process/.test(onWip.d.error || ""), onWip.status + " " + JSON.stringify(onWip.d).slice(0, 160));
+    } else ok("(no WIP item in the seed to try)", true);
+    const rmOnly = await call("POST", "/purchase-orders", A, { supplierId: supA, lines: [{ itemId: rm, qty: 5, rate: 10 }] });
+    ok("raw material still goes through (201)", rmOnly.status === 201, rmOnly.status + " " + JSON.stringify(rmOnly.d).slice(0, 100));
+    if (pkgAny) ok("packaging / consumables are bought too (201)",
+      (await call("POST", "/purchase-orders", A, { supplierId: supA, lines: [{ itemId: pkgAny.id, qty: 5, rate: 10 }] })).status === 201);
+    else ok("(no packaging item in the seed to try)", true);
+    const mixed = await call("POST", "/purchase-orders", A, { supplierId: supA, lines: [{ itemId: rm, qty: 5, rate: 10 }, { itemId: fgAny.id, qty: 1, rate: 10 }] });
+    ok("one finished-goods line spoils the whole order (400)", mixed.status === 400);
+    const sneak = await call("PATCH", "/purchase-orders/" + rmOnly.d.id, A, { lines: [{ itemId: rm, qty: 5, rate: 10 }, { itemId: fgAny.id, qty: 1, rate: 10 }] });
+    ok("nor can a finished good be edited onto an open order (400)", sneak.status === 400, sneak.status + " " + JSON.stringify(sneak.d).slice(0, 120));
+    ok("...while an ordinary edit still lands (200)", (await call("PATCH", "/purchase-orders/" + rmOnly.d.id, A, { lines: [{ itemId: rm, qty: 6, rate: 10 }] })).status === 200);
+    await call("DELETE", "/purchase-orders/" + rmOnly.d.id, A);
+  }
+
+  section("A reading nothing can grade reads Recorded, not Pending for ever (QA-4)");
+  {
+    const rmT = { id: "RM-TEXTONLY", name: "Text-only checked liner", cat: "RM", uom: "KG", cost: 12 };
+    await call("POST", "/items", A, rmT);
+    const setT = await call("PUT", "/items/" + rmT.id + "/qc", A, { params: ["visual", "packing"] });
+    ok("a material may be checked on visual and packing alone", setT.status === 200 && setT.d.params.join() === "visual,packing", JSON.stringify(setT.d).slice(0, 120));
+    const supT = (await state()).suppliers[0].id;
+    const poT = (await call("POST", "/purchase-orders", A, { supplierId: supT, eta: "2026-09-10", lines: [{ itemId: rmT.id, qty: 30, rate: 12 }] })).d;
+    const gT = (await call("POST", "/purchase-orders/" + poT.id + "/receive", A, { wh: "WH-PNY", lines: [{ i: 0, qty: 30 }] })).d.grn;
+    ok("fixture: the lot is received", !!gT);
+    const filedT = await call("POST", "/grns/" + encodeURIComponent(gT.id) + "/tests", LB, { itemId: rmT.id, values: { visual: "clean, no creases", packing: "intact" } });
+    ok("a complete text-only reading is accepted (201)", filedT.status === 201, filedT.status + " " + JSON.stringify(filedT.d).slice(0, 120));
+    // the verdict is read as admin — the writer's own reply is redacted (testForWriter)
+    const tT = ((await state()).grnTests || []).find((t) => t.grnId === gT.id && t.itemId === rmT.id);
+    ok("...and reads Recorded — not Pending", !!tT && tT.result === "Recorded", JSON.stringify(tT && { result: tT.result, complete: tT.complete }));
+    ok("...with the values on record, ungraded", !!tT && tT.complete === true && tT.results.visual === "na" && tT.results.packing === "na", JSON.stringify(tT && tT.results));
+    ok("it leaves the incharge's worklist", !(((await call("GET", "/grn-tests/pending", LB)).d.pending || []).some((p) => p.grnId === gT.id)));
+    ok("...and raises no ruling", !((await state()).grnQcDecisions || []).some((x) => x.grnId === gT.id));
+
+    // a NUMERIC parameter with no limit is just as ungradable
+    const rmN = { id: "RM-NOLIMIT", name: "Measured but unlimited film", cat: "RM", uom: "KG", cost: 12 };
+    await call("POST", "/items", A, rmN);
+    await call("PUT", "/items/" + rmN.id + "/qc", A, { params: ["thickness", "visual"] });
+    const poN = (await call("POST", "/purchase-orders", A, { supplierId: supT, eta: "2026-09-10", lines: [{ itemId: rmN.id, qty: 30, rate: 12 }] })).d;
+    const gN = (await call("POST", "/purchase-orders/" + poN.id + "/receive", A, { wh: "WH-PNY", lines: [{ i: 0, qty: 30 }] })).d.grn;
+    const filedN = await call("POST", "/grns/" + encodeURIComponent(gN.id) + "/tests", LB, { itemId: rmN.id, values: { thickness: 0.08, visual: "ok" } });
+    const tN0 = ((await state()).grnTests || []).find((t) => t.grnId === gN.id && t.itemId === rmN.id);
+    ok("a number with no limit to judge it by is Recorded too", filedN.status === 201 && !!tN0 && tN0.result === "Recorded", filedN.status + " " + JSON.stringify(tN0 && tN0.result));
+    // ...until the admin sets one — then the reading on file is graded for real
+    const lim = await call("PUT", "/items/" + rmN.id + "/qc", A, { params: ["thickness", "visual"], spec: { thickness: { min: 0.1, max: 0.2 } } });
+    ok("setting a limit re-grades the report on file", lim.status === 200 && lim.d.regraded === 1, JSON.stringify(lim.d).slice(0, 120));
+    const tN = ((await state()).grnTests || []).find((t) => t.grnId === gN.id && t.itemId === rmN.id);
+    ok("...and it now reads Fail against the new limit", !!tN && tN.result === "Fail", JSON.stringify(tN && tN.result));
+  }
+
+  section("Copy: a leave decision names its three answers (QA-5)");
+  {
+    const wk = ((await state()).hrWorkers || [])[0];
+    if (!wk) ok("(no worker on file to try)", true);
+    else {
+      const lvQ = await call("POST", "/hr/leaves", A, { workerId: wk.id, type: "PL", fromDate: "2026-11-03", toDate: "2026-11-03" });
+      ok("fixture: a leave request", lvQ.status === 201 || lvQ.status === 200, lvQ.status + " " + JSON.stringify(lvQ.d).slice(0, 100));
+      const bad = await call("POST", "/hr/leaves/" + lvQ.d.id + "/decide", A, { status: "Maybe" });
+      ok("an unknown status is refused (400)", bad.status === 400);
+      ok("...and the reply says what IS accepted", /Approved, Rejected or Pending/.test(bad.d.error || "") && /Maybe/.test(bad.d.error || ""), JSON.stringify(bad.d));
+      ok("Rejected still works", (await call("POST", "/hr/leaves/" + lvQ.d.id + "/decide", A, { status: "Rejected" })).status === 200);
+    }
+  }
+
+  section("An imported transfer must be a matched pair (the Excel path)");
+  {
+    const full = await state();
+    const whs = (full.warehouses || []).map((w) => w.id);
+    const ledgerOf = (id) => (full.movements || []).filter((m) => m.itemId === id).reduce((s, m) => s + (+m.qty || 0), 0);
+    ok("fixture: two stores and stock to move", whs.length >= 2 && ledgerOf(rm) > 10, whs.join() + " " + ledgerOf(rm));
+    const lone = JSON.parse(JSON.stringify(full));
+    lone.movements.push({ id: "MV-IMP-LONE", date: "2026-09-02", itemId: rm, wh: whs[0], type: "XFER", qty: -5, rate: 0, ref: "T-LONE" });
+    const rLone = await call("PUT", "/state", A, lone);
+    ok("a lone transfer leg on a bulk save is refused (400)", rLone.status === 400 && /matched pair/.test(rLone.d.error || ""), rLone.status + " " + JSON.stringify(rLone.d).slice(0, 200));
+    const unbalanced = JSON.parse(JSON.stringify(full));
+    unbalanced.movements.push({ id: "MV-IMP-U1", date: "2026-09-02", itemId: rm, wh: whs[0], type: "XFER", qty: -5, rate: 0, ref: "T-UNB" });
+    unbalanced.movements.push({ id: "MV-IMP-U2", date: "2026-09-02", itemId: rm, wh: whs[1], type: "XFER", qty: 3, rate: 0, ref: "T-UNB" });
+    ok("two legs that do not add up are refused (400)", (await call("PUT", "/state", A, unbalanced)).status === 400);
+    const paired = JSON.parse(JSON.stringify(full));
+    paired.movements.push({ id: "MV-IMP-P1", date: "2026-09-02", itemId: rm, wh: whs[0], type: "XFER", qty: -5, rate: 0, ref: "T-PAIR" });
+    paired.movements.push({ id: "MV-IMP-P2", date: "2026-09-02", itemId: rm, wh: whs[1], type: "XFER", qty: 5, rate: 0, ref: "T-PAIR" });
+    const rPair = await call("PUT", "/state", A, paired);
+    ok("a matched pair lands (200)", rPair.status === 200, rPair.status + " " + JSON.stringify(rPair.d).slice(0, 120));
+    const after = await state();
+    ok("...both legs on file", (after.movements || []).filter((m) => m.ref === "T-PAIR").length === 2);
+    ok("...and the material's total is unchanged", Math.abs(((after.movements || []).filter((m) => m.itemId === rm).reduce((s, m) => s + (+m.qty || 0), 0)) - ledgerOf(rm)) < 1e-6);
+    ok("re-saving the same ledger is fine — legs already on file are not re-judged", (await call("PUT", "/state", A, after)).status === 200);
+  }
+
+  section("The floor's bell: a failed batch from my jobs, until the admin rules");
+  {
+    const fgId = "FG-LABALERT";   // fixture from the failed-batch section above
+    const woB = (await call("POST", "/production/wo", A, { itemId: fgId, qty: 40 })).d;
+    ok("fixture: a job on the coating board", !!(woB && woB.id), JSON.stringify(woB).slice(0, 100));
+    await call("POST", "/production/wo/" + woB.id + "/advance", C, { action: "start" });
+    const badB = await call("POST", "/production/wo/" + woB.id + "/lab", C, { values: { thickness: 0.9, tensile: 5 } });
+    const doneB = await call("POST", "/production/wo/" + woB.id + "/advance", C, { action: "complete", wipWh: "WH-WIP" });
+    ok("the batch fails and leaves the floor", badB.status === 201 && doneB.status === 200 && !!doneB.d.labWarning, doneB.status + " " + JSON.stringify(doneB.d).slice(0, 100));
+    const floor = await state(C);
+    const al = (floor.labAlerts || []).find((x) => x.woId === woB.id);
+    ok("the coating board's payload carries the alert", !!al, JSON.stringify(floor.labAlerts || null).slice(0, 160));
+    ok("...naming the batch, the product and the readings that failed", !!al && al.batchNo === woB.id.replace(/^WO-/, "") && al.productCode === "CHDNW-97" && (al.failed || []).includes("Thickness"), JSON.stringify(al));
+    ok("...but never a limit or a measured value", !!al && !/"min"|"max"|0\.9/.test(JSON.stringify(al)));
+    const slim = (await call("GET", "/state?slim=1", C)).d;
+    ok("the slim refresh after a tap carries it too", (slim.labAlerts || []).some((x) => x.id === al.id));
+    ok("the office payload has no such key (it has labQcDecisions)", (await state()).labAlerts === undefined);
+    const rule = await call("POST", "/lab/reports/" + (al ? al.id : "LR-0000") + "/decision", A, { accept: true, note: "Use for the trial order" });
+    ok("the admin rules", rule.status === 200);
+    ok("...and the floor's bell goes quiet", !((await state(C)).labAlerts || []).some((x) => x.woId === woB.id));
+  }
+  }
+
   // restore the BOM change we made so a re-run against a persisted DB stays clean
   await call("DELETE", "/items/RM-HTTP", A);
 }

@@ -253,7 +253,7 @@
     const f = (k, d) => (w[k] != null ? w[k] : (d == null ? "" : d));
     const body = h("div", { class: "form-grid" }, [
       U.field("Worker Code", `<input class="input" id="w_id" value="${esc(f("id"))}" ${edit ? "disabled" : ""} placeholder="Auto (EMP-000N) if blank">`),
-      U.field("Full Name", `<input class="input" id="w_name" value="${esc(f("name"))}" placeholder="e.g. Ramesh Kumar">`),
+      U.field("Full Name *", `<input class="input" id="w_name" value="${esc(f("name"))}" placeholder="e.g. Ramesh Kumar">`),
       U.field("Department", U.selectHTML("w_dept", DEPTS.map((d) => ({ v: d, l: cap(d) })), f("dept", "coating"))),
       U.field("Designation", `<input class="input" id="w_desig" value="${esc(f("designation"))}" placeholder="e.g. Machine Operator">`),
       U.field("Monthly CTC (₹)", `<input class="input" id="w_ctc" type="number" value="${f("monthlyCtc", 0)}">`),
@@ -1549,7 +1549,7 @@
   function leaveTypeForm(t) {
     const edit = !!t; t = t || { accrual: "fixed", paid: true };
     const body = h("div", { class: "form-grid" }, [
-      U.field("Code", `<input class="input" id="lt_id" value="${esc(t.id || "")}" ${edit ? "disabled" : ""} placeholder="e.g. EL / CL / SL">`),
+      U.field("Code *", `<input class="input" id="lt_id" value="${esc(t.id || "")}" ${edit ? "disabled" : ""} placeholder="e.g. EL / CL / SL">`),
       U.field("Name", `<input class="input" id="lt_name" value="${esc(t.name || "")}" placeholder="e.g. Earned Leave">`),
       U.field("Annual Quota (days)", `<input class="input" id="lt_quota" type="number" step="0.5" value="${t.quota || 0}">`),
       U.field("Accrual", U.selectHTML("lt_accrual", [{ v: "fixed", l: "Fixed (credited yearly)" }, { v: "earned", l: "Earned (1 day per month worked)" }, { v: "none", l: "None (0 balance)" }], t.accrual || "fixed")),

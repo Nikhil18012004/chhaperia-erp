@@ -198,6 +198,10 @@ async function boot() {
      every boot and simply covers anything newly added. */
   try { const qc = await grnTestService.ensureItemQc(); if (qc.changed) console.log("  ├─ Incoming : QC parameters set on " + qc.changed + " of " + qc.items + " materials"); }
   catch (e) { console.error("[incoming qc seed]", e.message); }
+  /* a complete reading with no limit to grade it by reads "Recorded", not
+     "Pending" — bring the reports filed before that rule into line */
+  try { const n = await grnTestService.regradeUngraded(); if (n) console.log("  ├─ Incoming : " + n + " ungradable test report" + (n === 1 ? "" : "s") + " now read Recorded"); }
+  catch (e) { console.error("[incoming qc regrade]", e.message); }
 
   console.log(`\n  Chhaperia ERP`);
   console.log(`  ├─ API      : http://localhost:${PORT}/api`);

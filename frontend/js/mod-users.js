@@ -84,12 +84,12 @@
 
     const body = h("div", { class: "form-grid" }, [
       field("Full Name", `<input class="input" id="u_name" value="${esc(f("name", ""))}" placeholder="e.g. Ramesh Kumar">`),
-      field("Username (for login)", edit
+      field("Username (for login) *", edit
         ? `<input class="input" value="${esc(u.username)}" disabled>`
         : `<input class="input" id="u_username" placeholder="e.g. coating3" autocomplete="off">`),
       field("Role", roleSel),
       field("Work Area (supervisors only)", areaSel, "area-wrap"),
-      edit ? null : field("Password", `<input class="input" id="u_pass" type="text" placeholder="set an initial password (min 4 chars)">`, "full"),
+      edit ? null : field("Password *", `<input class="input" id="u_pass" type="text" placeholder="set an initial password (min 4 chars)">`, "full"),
     ].filter(Boolean));
 
     const mo = modal({ title: edit ? "Edit User" : "New User", sub: edit ? u.username : "Create a login account", body,
@@ -161,7 +161,10 @@
   }
 
   function field(label, inner, cls) {
-    return h("div", { class: "field" + (cls ? " " + cls : "") }, [h("label", { text: label }), h("div", { html: inner })]);
+    const d = h("div", { class: "field" + (cls ? " " + cls : "") }, [h("label", { text: label }), h("div", { html: inner })]);
+    // a label ending in "*" marks its control required — what Enter reads (ui.js)
+    if (/\*\s*$/.test(String(label || ""))) { const c = d.querySelector("input,select,textarea"); if (c) c.setAttribute("required", ""); }
+    return d;
   }
 
   // register the ⌘K quick action for user management (admin-only; gate the run

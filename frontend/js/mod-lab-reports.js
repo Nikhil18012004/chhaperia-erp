@@ -280,7 +280,7 @@
   }
 
   function renderIncoming(root, labOnly) {
-    let filter = { q: "" };
+    const filter = App.viewState("incomingFilter", () => ({ q: "", qRaw: "" }));   // survives a quiet refresh
     const pend = grnPending();
     const done = grnTests();
     const me = (App.user && App.user.username) || "";
@@ -312,7 +312,7 @@
     root.appendChild(seg);
 
     root.appendChild(h("div", { class: "toolbar" }, [
-      searchInput("Search material, code, PO, GRN, supplier…", (v) => { filter.q = v.toLowerCase(); draw(); }),
+      searchInput("Search material, code, PO, GRN, supplier…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "grnCount" })),
     ]));
     root.appendChild(h("div", { class: "muted", style: "font-size:12px;margin:-4px 0 10px;line-height:1.6",
@@ -364,7 +364,7 @@
      TEST REPORTS
      ============================================================ */
   function renderReports(root, labOnly) {
-    let filter = { q: "", result: "all", series: "all" };
+    const filter = App.viewState("reportsFilter", () => ({ q: "", qRaw: "", result: "all", series: "all" }));   // survives a quiet refresh
     const rs = reports();
     /* The incharge sees EVERY outstanding batch, the same list the office
        sees — he may enter a reading whether or not the coating floor has
@@ -406,9 +406,9 @@
     const seriesList = [...new Set(products().map((p) => p.series).filter(Boolean))].sort();
     root.appendChild(h("div", { class: "toolbar" }, [
       searchInput(labOnly ? "Search batch, W.O. no., product…" : "Search product, code, batch / lot no…",
-        (v) => { filter.q = v.toLowerCase(); draw(); }),
-      labOnly ? null : select([{ value: "all", label: "All Results" }, { value: "Pass", label: "Pass" }, { value: "Fail", label: "Fail" }, { value: "Pending", label: "Pending" }], (v) => { filter.result = v; draw(); }),
-      select([{ value: "all", label: "All Series" }, ...seriesList.map((s) => ({ value: s, label: s }))], (v) => { filter.series = v; draw(); }),
+        (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
+      labOnly ? null : select([{ value: "all", label: "All Results" }, { value: "Pass", label: "Pass" }, { value: "Fail", label: "Fail" }, { value: "Pending", label: "Pending" }], (v) => { filter.result = v; draw(); }, filter.result),
+      select([{ value: "all", label: "All Series" }, ...seriesList.map((s) => ({ value: s, label: s }))], (v) => { filter.series = v; draw(); }, filter.series),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "lrCount" })),
     ].filter(Boolean)));
     const host = h("div"); root.appendChild(host);
@@ -668,7 +668,7 @@
         html: `Work order <b>${esc(seed.woId)}</b> · batch <b>${esc(refSeed)}</b> — the readings below are graded against this product's TDS spec.` }) : null,
       h("div", { class: "form-grid" }, [
         U.field("Product", U.searchSelect("lr_prod", prodOpts, prod.id, "Search product…"), "full"),
-        U.field("Reference No.",
+        U.field("Reference No. *",
           `<input class="input" id="lr_ref" value="${esc(refSeed)}"${lockRef ? " readonly" : ""} placeholder="e.g. B-2026-0142"><div class="muted" id="lr_refmode" style="font-size:11px;margin-top:3px">${refLabel(prod.refMode)}</div>`),
         U.field("Report Date", `<input class="input" id="lr_date" type="date" value="${edit ? esc(existing.reportDate) : DB.helpers.iso(DB.helpers.today())}">`),
       ]),
@@ -801,7 +801,7 @@
 
     const body = h("div", {}, [
       h("div", { class: "form-grid" }, [
-        U.field("Product Name", `<input class="input" id="lp_name" value="${esc(f("name"))}" placeholder="e.g. NON CONDUCTIVE WATER BLOCKING TAPE">`, "full"),
+        U.field("Product Name *", `<input class="input" id="lp_name" value="${esc(f("name"))}" placeholder="e.g. NON CONDUCTIVE WATER BLOCKING TAPE">`, "full"),
         U.field("Code / Type", `<input class="input" id="lp_code" value="${esc(f("code"))}" placeholder="e.g. CHDNW-20">`),
         U.field("Thickness (mm)", `<input class="input" id="lp_thk" value="${esc(f("thickness"))}" placeholder="e.g. 0.2">`),
         U.field("Series", `<input class="input" id="lp_series" value="${esc(f("series", "Other"))}">`),

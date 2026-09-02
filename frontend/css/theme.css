@@ -28,9 +28,14 @@
   --info:#3b82f6; --info-soft:rgba(59,130,246,.15);
   --violet:#8b5cf6; --violet-soft:rgba(139,92,246,.15);
 
-  /* chart series */
-  --c1:var(--accent); --c2:#3b82f6; --c3:#18b364; --c4:#eab308;
-  --c5:#8b5cf6; --c6:#f04438; --c7:#0fb5ae; --c8:#ec4899;
+  /* chart series — FOUR hues, not eight (ruled 2026-08-14, applied 09-02):
+     the accent, then blue, green and violet, machine-checked for contrast
+     and for colour-blind separation. --c5…--c8 stay defined for the code
+     that still counts to eight, and repeat the four; a donut with more
+     than four slices folds the rest into "Other" (charts.js) rather than
+     reaching for a fifth colour. */
+  --c1:var(--accent); --c2:#1668a8; --c3:#4a7a1e; --c4:#7a4fa0;
+  --c5:var(--c1); --c6:var(--c2); --c7:var(--c3); --c8:var(--c4);
 
   /* geometry — one radius family: 6 / 10 / 14 */
   --radius:10px; --radius-sm:6px; --radius-lg:14px; --radius-pill:999px;
@@ -40,8 +45,10 @@
   --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
 
   /* typography */
-  --font:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* the operating system's own faces — no web-font download (the plant PC has
+     no internet, and the download shifted every text box as it arrived) */
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
 
   /* type scale — golden-ratio ladder on a 13px base:
      13 → 21 → 34 (×φ), half-steps 17/26 (×√φ), data steps 10/11/12/15 */
@@ -58,6 +65,7 @@
 
 /* ---------- DARK (default) — Graphite Industrial ---------- */
 [data-theme="dark"]{
+  --c2:#3e90cc; --c3:#6fa13c; --c4:#9878ce;   /* the dark-ground set of the same four chart hues */
   --bg:#0b0d13;
   --panel:#12151d;
   --panel-2:#171b25;

@@ -70,6 +70,12 @@
       };
       const mt = UI.$("#menuToggle"); if (mt) mt.onclick = () => UI.$("#app").classList.toggle("collapsed");
       const lo = UI.$("#logoutBtn"); if (lo) lo.onclick = () => App.logout();
+      /* the bell: the office has one, and the floor's carries the failed
+         batches from its own jobs (labAlerts in the payload) until the admin
+         rules on them */
+      const bb = UI.$("#bellBtn"); if (bb) bb.onclick = () => this.openAlerts();
+      const cd = UI.$("#closeDrawer"); if (cd) cd.onclick = () => this.closeAlerts();
+      const sc = UI.$("#scrim"); if (sc) sc.onclick = () => this.closeAlerts();
       const on = UI.$("#orgName"), os = UI.$("#orgSub");
       if (on) on.textContent = (this.data && this.data.org ? this.data.org.short : "Chhaperia");
       if (os) os.textContent = "Production Floor";
@@ -147,6 +153,7 @@
           ? Object.assign({}, this.data, fresh, { finishedProducts: (this.data || {}).finishedProducts || [] })
           : fresh;
         if (this.data && this.data.org) { const on = UI.$("#orgName"); if (on) on.textContent = this.data.org.short; }
+        this.refreshBell();
         this.buildNav();
         this.render();
       } catch (err) {
@@ -787,7 +794,62 @@
       if (!lw) return;
       toast("Batch " + (lw.batchNo || "") + " measured outside its limits"
         + (lw.failed && lw.failed.length ? " (" + lw.failed.join(", ") + ")" : "")
-        + " — the admin and the lab have been alerted.", { type: "warn", title: "Lab data failed", dur: 9000 });
+        + " — the admin and the lab have been alerted. It stays under the bell until they rule.", { type: "warn", title: "Lab data failed", dur: 9000 });
+    },
+
+    /* ---- the floor's bell ----
+       The toast above is gone in nine seconds; the bell keeps every failed
+       batch from this board's jobs until the admin has ruled (the server
+       scopes labAlerts to my jobs and sends parameter names only). */
+    alerts() { return (this.data && this.data.labAlerts) || []; },
+    refreshBell() {
+      const n = this.alerts().length, badge = UI.$("#bellBadge");
+      if (!badge) return;
+      if (n) { badge.hidden = false; badge.textContent = n > 99 ? "99+" : String(n); } else badge.hidden = true;
+    },
+    openAlerts() {
+      const list = UI.$("#alertList"); if (!list) return;
+      list.innerHTML = "";
+      const al = this.alerts();
+      if (!al.length) {
+        list.appendChild(H("div", { class: "empty" }, [H("div", { class: "big", text: "✓" }), H("div", { text: "No batch of yours is waiting on a ruling." })]));
+      } else {
+        list.appendChild(H("div", { class: "alert-date" }, [
+          H("span", { class: "alert-date-lbl", text: "Awaiting the admin's ruling" }),
+          H("span", { class: "alert-date-rule" }),
+          H("span", { class: "alert-date-n", text: al.length + (al.length > 1 ? " batches" : " batch") }),
+        ]));
+        al.forEach((a) => {
+          const who = a.stage === "lab" ? "lab reading" : "floor reading";
+          list.appendChild(H("div", { class: "alert-item", onclick: () => { this.closeAlerts(); this.showAlert(a); } }, [
+            H("div", { class: "alert-ic", style: "background:var(--danger-soft);color:var(--danger)", text: "🧪" }),
+            H("div", { style: "flex:1;min-width:0" }, [
+              H("div", { class: "t", text: "Lab data FAILED — " + (a.productCode || a.productName || "") + (a.batchNo ? " · batch " + a.batchNo : "") }),
+              H("div", { class: "d", text: (a.failed && a.failed.length ? a.failed.join(", ") + " outside limits · " : "")
+                + who + (a.by ? " by " + a.by : "") + (a.woId ? " · " + a.woId : "") + " — nothing to do on the floor; the admin and the lab have it" }),
+            ]),
+          ]));
+        });
+      }
+      const dr = UI.$("#alertDrawer"), sc = UI.$("#scrim");
+      if (dr) { dr.hidden = false; requestAnimationFrame(() => dr.classList.add("open")); }
+      if (sc) sc.hidden = false;
+    },
+    closeAlerts() {
+      const dr = UI.$("#alertDrawer"), sc = UI.$("#scrim");
+      if (dr) { dr.classList.remove("open"); setTimeout(() => { dr.hidden = true; }, 300); }
+      if (sc) sc.hidden = true;
+    },
+    /* the batch behind an alert: the job card's own reading when the job is
+       still on this board, else the bare facts */
+    showAlert(a) {
+      const w = (this.data.workorders || []).find((x) => x.id === a.woId);
+      if (w && w.lab && (w.lab.params || []).length) { this.readLab(w); return; }
+      const mo = UI.modal({ title: "🧪 Batch " + (a.batchNo || a.woId) + " — measured outside its limits",
+        sub: (a.productName || a.productCode || "") + " · " + (a.stage === "lab" ? "the lab's reading" : "the floor's reading"),
+        body: H("p", { class: "dim", style: "line-height:1.6", text: (a.failed && a.failed.length ? "Outside limits: " + a.failed.join(", ") + ". " : "")
+          + "The batch has left the floor. The admin rules on the certificate and the lab has been told; nothing moves until then." }),
+        foot: [H("button", { class: "btn ghost", onclick: () => mo.close(), text: "Close" })] });
     },
 
     async act(w, action, btn) {
@@ -1292,6 +1354,11 @@
   };
 
   function field(label, control) {
+    // a label ending in "*" marks its control required — what Enter reads (ui.js)
+    if (/\*\s*$/.test(String(label || "")) && control && control.querySelector) {
+      const c = control.matches && control.matches("input,select,textarea") ? control : control.querySelector("input,select,textarea");
+      if (c) c.setAttribute("required", "");
+    }
     return UI.h("div", { style: "margin-bottom:14px" }, [
       UI.h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px", text: label }),
       control,

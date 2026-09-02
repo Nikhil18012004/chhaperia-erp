@@ -535,11 +535,11 @@
       const fam=key.split("|")[0], nm=key.split("|").slice(1).join("|");
       return (fam? fam+" — ":"")+nm;
     };
-    const hid=h("input",{type:"hidden",id,value:init?init.id:""});
+    const hid=h("input",{type:"hidden",id,value:init?init.id:"",required:""});   // required: what Enter reads (ui.js)
     const thkHost=h("div");
     const wrap=h("div",{style:"display:contents"},[
       hid,
-      h("div",{class:"field full"},[h("label",{text:"Product"}),
+      h("div",{class:"field full"},[h("label",{text:"Product *"}),
         h("div",{html:U.searchSelect(id+"_nm", names.map(nm=>({v:nm,l:nameLabel(nm)})), curName, "Search product…")})]),
       h("div",{class:"field"},[h("label",{text:"Thickness"}), thkHost]),
     ]);
@@ -1396,7 +1396,7 @@
         U.field("Category",U.selectHTML("fs_cat",[{v:"FG",l:"Finished Goods"},{v:"WIP",l:"Work in Process"}],"FG")),
         pickHost,
         gsmField,
-        U.field("Quantity produced",`<input class="input" id="fs_qty" type="number" min="0" step="any" placeholder="0">`),
+        U.field("Quantity produced *",`<input class="input" id="fs_qty" type="number" min="0" step="any" placeholder="0">`),
         uomField,
         tapeField,
         U.field("Store it in",U.selectHTML("fs_wh",whs.map(w=>({v:w.id,l:w.name+(w.type?" · "+w.type:"")})),fgStore)),
@@ -1449,7 +1449,7 @@
         list.forEach(i=>{ (byName[keyOf(i)]=byName[keyOf(i)]||[]).push(i); });
         Object.values(byName).forEach(a=>a.sort((x,y)=>(thkOf(x)||0)-(thkOf(y)||0)));
         const names=Object.keys(byName).sort();
-        const hid=h("input",{type:"hidden",id:"fs_item",value:""});
+        const hid=h("input",{type:"hidden",id:"fs_item",value:"",required:""});   // required: what Enter reads (ui.js)
         const thkHost=h("div");
         pickHost.appendChild(hid);
         pickHost.appendChild(h("div",{class:"field full"},[
@@ -1795,7 +1795,7 @@
       const custs=(ENG.data.customers||[]).slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
       const body=h("div",{class:"form-grid"},[
         fgPicker("w_item", fgs, fgs[0]&&fgs[0].id),
-        U.field("Quantity",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
+        U.field("Quantity *",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
         /* Width is a per-ORDER parameter, not a product one: the same tape is
            slit to whatever width the customer ordered, so it is captured on the
            run and travels with the batch onto the invoice. */
@@ -3030,9 +3030,9 @@ recalc(); },50);
         }
         if(newMode){
           const series=[...new Set(ENG.data.items.filter(i=>i.cat==="FG"&&i.group).map(i=>i.group))].sort();
-          prodHost.appendChild(U.field("Product Code",
+          prodHost.appendChild(U.field("Product Code *",
             `<input class="input" id="bm_np_id" value="${esc(draft.id)}" placeholder="FG-CCM25GE-10">`));
-          prodHost.appendChild(U.field("Product Name",
+          prodHost.appendChild(U.field("Product Name *",
             `<input class="input" id="bm_np_name" value="${esc(draft.name)}" placeholder="Name as it reads on the label">`));
           prodHost.appendChild(U.field("Series",
             `<input class="input" id="bm_np_group" list="bm_np_series" value="${esc(draft.group)}" placeholder="e.g. MICA SERIES">`

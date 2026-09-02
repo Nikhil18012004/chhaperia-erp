@@ -269,10 +269,27 @@
             ? "The ticked parameters are what the lab incharge is asked for when this material is received. Leave a limit blank to record the reading without grading it."
             : "The ticked parameters are what you will be asked to measure when this material is received. You can change that list; the pass/fail limits stay with the admin, so a reading cannot be graded against a limit the person measuring it chose."}),
       h("div",{class:"qc-plist"},rows),
+      /* said BEFORE the save, not discovered on the first report: a list with
+         no numeric limit on it can never grade a reading — every report on
+         the material will read "Recorded", never Pass or Fail */
+      h("div",{class:"qc-note",id:"qcGradeNote",hidden:"",style:"font-size:12px;margin-top:12px;color:var(--warn)"}),
     ]);
     const mo=modal({title:"🧪 QC Parameters", sub:it.name+" · "+it.id, wide:true, body,
       foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
         h("button",{class:"btn primary",id:"qcpSave",onclick:save,text:"Save Parameters"})]});
+    function gradeable(){
+      return cat.some(p=>{ const c=UI.$("#qp_"+p.key); if(!c||!c.checked||p.type==="text") return false;
+        const mn=UI.$("#qmin_"+p.key), mx=UI.$("#qmax_"+p.key);
+        return !!((mn&&mn.value!=="")||(mx&&mx.value!=="")); });
+    }
+    function refreshGradeNote(){
+      const n=UI.$("#qcGradeNote"); if(!n||!mayLimits) return;
+      const ticked=cat.some(p=>{ const c=UI.$("#qp_"+p.key); return c&&c.checked; });
+      n.hidden=!ticked||gradeable();
+      n.textContent="⚠ No pass/fail limit is set on any ticked parameter — every reading on this material will be recorded, never graded. Enter a min or a max on a numeric parameter to grade it.";
+    }
+    body.addEventListener("input",refreshGradeNote); body.addEventListener("change",refreshGradeNote);
+    refreshGradeNote();
     async function save(){
       const params=[], spOut={};
       cat.forEach(p=>{
@@ -298,6 +315,8 @@
         toast(r.regraded
           ? "Parameters saved — "+r.regraded+" existing test report"+(r.regraded===1?"":"s")+" re-graded against the new limits"
           : "Parameters saved for "+it.name,{type:"ok",title:"QC parameters"});
+        if(mayLimits && !Object.keys(spOut).length)
+          toast("No limit is set, so readings on "+it.name+" are recorded, not graded pass or fail",{type:"warn",dur:6000});
         /* The caller may need the NEW list before it redraws — the test form
            reopens itself so the added parameter appears as a field to fill in —
            so the fresh state is pulled before handing back. */
@@ -320,8 +339,8 @@
     const edit=!!it; it=it||Object.assign({cat:"RM",uom:"KG",abc:"B",lead:7}, opts.seed||{});
     const f=(k,v)=>it[k]!=null?it[k]:v;
     const body=h("div",{class:"form-grid"},[
-      field("Item Code",`<input class="input" id="f_id" value="${esc(f('id',''))}" ${edit?'disabled':''} placeholder="e.g. RM-XYZ">`),
-      field("Item Name",`<input class="input" id="f_name" value="${esc(f('name',''))}" placeholder="Descriptive name">`),
+      field("Item Code *",`<input class="input" id="f_id" value="${esc(f('id',''))}" ${edit?'disabled':''} placeholder="e.g. RM-XYZ">`),
+      field("Item Name *",`<input class="input" id="f_name" value="${esc(f('name',''))}" placeholder="Descriptive name">`),
       /* Work in Process is offered here too. It has to be: a WIP item reached
          from the Stock Items list would otherwise open on a picker that does
          not contain its own category, and saving would quietly re-file it as
@@ -562,7 +581,7 @@
           field("Category",selectHTML("s_cat",stockCats.map(c=>({v:c.id,l:c.name})),"RM")),
           thkField,
           gsmField,
-          field("Quantity",`<input class="input" id="s_qty" type="number" step="0.001" placeholder="0">`),
+          field("Quantity *",`<input class="input" id="s_qty" type="number" step="0.001" placeholder="0">`),
           field("Unit of Quantity",selectHTML("s_uom",UNITS,"KG")),
           widField,
           tapeField,
@@ -848,6 +867,7 @@
   }
 
   /* ============== STOCK LEDGER ============== */
+  const LEDGER_PAGE=200;   // rows per page of the ledger
   M.ledger = { title:"Stock Ledger", sub:"Every movement, running balance", render(root, params){
     /* params.item is an EXACT material id. Reached from a material (📒 Full
        Ledger in its details, or a row in a warehouse's drill-down) the ledger
@@ -874,12 +894,15 @@
       );
       itemChip.hidden=false;
     }
+    /* a changed filter starts the paging over; the type and store selects
+       hand their value back so a quiet refresh keeps them too */
+    const first=()=>{ filter.shown=0; draw(); };
     const bar=h("div",{class:"toolbar"},[
-      MW.searchInput("Search item, reference…", v=>{filter.qRaw=v;filter.q=v.toLowerCase();draw();}, filter.qRaw),
+      MW.searchInput("Search item, reference…", v=>{filter.qRaw=v;filter.q=v.toLowerCase();first();}, filter.qRaw),
       itemChip,
-      MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP","XFER"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;draw();}),
-      MW.select([{value:"all",label:"All Warehouses"},...ENG.data.warehouses.map(w=>({value:w.id,label:w.name}))], v=>{filter.wh=v;draw();}),
-      MW.dateRange(filter, draw, {label:"Movement Date"}),
+      MW.select([{value:"all",label:"All Types"},...["OPEN","GRN","ISSUE","PROD","SALE","ADJ","RET","SCRAP","XFER"].map(t=>({value:t,label:typeLabel(t)}))], v=>{filter.type=v;first();}, filter.type),
+      MW.select([{value:"all",label:"All Warehouses"},...ENG.data.warehouses.map(w=>({value:w.id,label:w.name}))], v=>{filter.wh=v;first();}, filter.wh),
+      MW.dateRange(filter, first, {label:"Movement Date"}),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"ledCount"}))
     ]);
     syncChip();
@@ -894,8 +917,15 @@
         if(!MW.inDateRange(m.date, filter)) return false;
         if(filter.q){ const it=ENG.item(m.itemId)||{}; const s=(m.itemId+" "+(it.name||"")+" "+(m.ref||"")+" "+(m.note||"")).toLowerCase(); if(!s.includes(filter.q)) return false; }
         return true;
-      }).slice(0,400);
-      UI.$("#ledCount").textContent=data.length+" entries";
+      });
+      /* PAGED, not capped. The list used to stop at 400 rows without a word;
+         it shows a page at a time now, says how many there are, and offers
+         the next page — and a quiet refresh keeps how far you had gone
+         (filter.shown rides in the view state). */
+      const all=data.length;
+      filter.shown=Math.max(LEDGER_PAGE, +filter.shown||0);
+      data=data.slice(0, filter.shown);
+      UI.$("#ledCount").textContent=all>data.length ? "Showing "+ENG.num(data.length)+" of "+ENG.num(all)+" entries" : ENG.num(all)+" entries";
       /* THE RUNNING BALANCE, for every material on screen — not just the one
          the ledger happens to be pinned to. The page has always promised an
          "auto running balance" and never shown a column of it; the engine has
@@ -942,6 +972,13 @@
         {key:"rate",label:"Rate",num:true,width:"86px",render:r=>r.rate?"₹"+ENG.num(ENG.dispRate(ENG.item(r.itemId),r.rate),2):"—",sort:r=>r.rate||0},
         {key:"value",label:"Value",num:true,width:"86px",render:r=>r.rate?ENG.money(Math.abs(r.qty*r.rate)):"—",sort:r=>Math.abs(r.qty*(r.rate||0))},
       ],{onRow:openMove,empty:"No movements match"}));
+      if(all>data.length){
+        const left=all-data.length;
+        tableHost.appendChild(h("div",{class:"flex aic",style:"justify-content:center;gap:10px;padding:12px 0"},[
+          h("button",{class:"btn",onclick:()=>{ filter.shown+=LEDGER_PAGE; draw(); },text:"Show "+ENG.num(Math.min(LEDGER_PAGE,left))+" more"}),
+          left>LEDGER_PAGE?h("button",{class:"btn ghost",onclick:()=>{ filter.shown=all; draw(); },text:"Show all "+ENG.num(all)}):null,
+        ]));
+      }
     }
     draw();
 
@@ -952,7 +989,7 @@
         field("Item",selectHTML("a_item",items.map(i=>({v:i.id,l:i.id+" — "+trim(i.name,30)})),items[0].id)),
         field("Warehouse",selectHTML("a_wh",ENG.data.warehouses.map(w=>({v:w.id,l:w.name})),"WH-PNY")),
         field("Adjustment Type",selectHTML("a_type",[{v:"ADJ",l:"Adjustment (+/-)"},{v:"SCRAP",l:"Scrap (-)"} ,{v:"RET",l:"Return (+)"}],"ADJ")),
-        field("Quantity (use - to reduce)",`<input class="input" id="a_qty" type="number" value="0">`),
+        field("Quantity (use - to reduce) *",`<input class="input" id="a_qty" type="number" value="0">`),
         field("Reason / Note",`<input class="input" id="a_note" placeholder="e.g. Cycle count variance">`,"full"),
       ]);
       const mo=modal({title:"Stock Adjustment", sub:"Posts an audited ledger entry", body,
@@ -1146,8 +1183,8 @@
           field("From Warehouse", selectHTML("t_from", whs.map(w=>({v:w.id,l:w.name})), whs[0].id)),
           field("To Warehouse", selectHTML("t_to", whs.map(w=>({v:w.id,l:w.name})), whs[1].id)),
           h("div",{class:"field full",id:"t_item_wrap"}),
-          h("div",{class:"field"},[h("label",{id:"t_qty_lbl",text:"Quantity to move"}),
-            h("div",{html:`<input class="input" id="t_qty" type="number" step="0.001" min="0" value="0">`})]),
+          h("div",{class:"field"},[h("label",{id:"t_qty_lbl",text:"Quantity to move *"}),
+            h("div",{html:`<input class="input" id="t_qty" type="number" step="0.001" min="0" value="0" required>`})]),
           field("Note (optional)", `<input class="input" id="t_note" placeholder="e.g. Rebalancing stock">`),
         ]),
         h("div",{id:"t_avail",style:"margin-top:4px"})
@@ -1162,8 +1199,9 @@
       function renderMats(){
         const from=UI.$("#t_from").value, opts=matsIn(from), wrap=UI.$("#t_item_wrap");
         if(opts.length){
-          wrap.innerHTML = `<label>Material in this warehouse</label><div>`
+          wrap.innerHTML = `<label>Material in this warehouse *</label><div>`
             + searchSelect("t_item", opts, opts[0].v, "Search material in this warehouse…") + `</div>`;
+          const th=UI.$("#t_item"); if(th) th.setAttribute("required","");   // what Enter reads (ui.js)
         } else {
           wrap.innerHTML = `<label>Material in this warehouse</label>`
             + `<input type="hidden" id="t_item" value="">`
@@ -1264,7 +1302,15 @@
   }};
 
   /* ---------- shared helpers ---------- */
-  function field(label, inner, cls){ return h("div",{class:"field"+(cls==="full"?" full":"")},[h("label",{text:label}),h("div",{html:inner})]); }
+  /* A label ending in "*" marks its control `required` — that is what the
+     Enter key reads to know when a dialog has everything it needs (ui.js). A
+     searchable select keeps its value in a hidden input, which comes first
+     in its markup, so the mark lands on the value and not the search box. */
+  function field(label, inner, cls){
+    const d=h("div",{class:"field"+(cls==="full"?" full":"")},[h("label",{text:label}),h("div",{html:inner})]);
+    if(/\*\s*$/.test(String(label||""))){ const c=d.querySelector("input,select,textarea"); if(c) c.setAttribute("required",""); }
+    return d;
+  }
   function selectHTML(id,opts,sel){ return `<select class="select" id="${id}">`+opts.map(o=>`<option value="${o.v}" ${o.v===sel?"selected":""}>${esc(o.l)}</option>`).join("")+`</select>`; }
   function miniStat(label,val,state){ const c={danger:"var(--danger)",warn:"var(--warn)",ok:"var(--ok)",info:"var(--info)",mut:"var(--text)"}[state]||"var(--text)";
     return h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:13px"},[

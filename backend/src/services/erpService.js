@@ -90,6 +90,28 @@ async function saveState(data) {
   const itemIds = new Set(data.items.map((i) => i && i.id));
   const orphan = data.movements.find((m) => m && m.itemId && !itemIds.has(m.itemId));
   if (orphan) throw err(`Movement ${orphan.id || ""} references unknown item ${orphan.itemId}`, 400);
+  /* A TRANSFER IS A PAIR. The movements endpoint refuses a lone XFER leg (it
+     would mint or destroy stock) — but a bulk save, which is where the Excel
+     import lands, took one without a word. New transfer rows must balance:
+     for one material, one date and one reference the legs sum to zero, with
+     an OUT and an IN. Rows already on file are left alone, so an old ledger
+     never blocks a save. */
+  const known = new Set(((await repo.getState()).movements || []).map((m) => m && m.id));
+  const legs = {};
+  data.movements.forEach((m) => {
+    if (!m || m.type !== "XFER" || known.has(m.id)) return;
+    const k = [m.itemId, String(m.date || "").slice(0, 10), m.ref || ""].join("|");
+    const g = legs[k] = legs[k] || { rows: [], sum: 0, item: m.itemId, ref: m.ref || "", date: m.date };
+    g.rows.push(m); g.sum += +m.qty || 0;
+  });
+  const odd = Object.values(legs).find((g) => g.rows.length < 2 || Math.abs(g.sum) > 1e-6
+    || !g.rows.some((r) => +r.qty > 0) || !g.rows.some((r) => +r.qty < 0));
+  if (odd) {
+    throw err("Transfer " + (odd.ref ? odd.ref + " " : "") + "of " + odd.item + " on " + String(odd.date || "").slice(0, 10)
+      + " is not a matched pair (" + odd.rows.length + " leg" + (odd.rows.length === 1 ? "" : "s") + ", net "
+      + (+odd.sum.toFixed(3)) + "). A transfer needs an OUT leg and an IN leg of the same quantity — post it "
+      + "from Move Stock, or put both legs on the sheet with the same item, date and reference.", 400);
+  }
   // keep any newly-introduced work orders / products stage-ready
   S.ensureStageModel(data);
   // pay is monthly only — an imported sheet may still carry daily rates
@@ -649,6 +671,27 @@ async function assertLinesReferenceRealItems(lines, what) {
   }
 }
 
+/* ---- A PURCHASE ORDER BUYS MATERIAL ------------------------------------
+   Raw material, packaging and consumables come in through the gate; work in
+   process is made on the floor, and finished goods go OUT, on a sales order.
+   The picker in the browser has offered raw material only since 2026-08-22,
+   but the API still accepted an order for a finished good — the rule lived in
+   the browser alone. It lives here now. A line an older order already carried
+   keeps its item, so editing that order never trips over its own history. */
+const BOUGHT_CATS = ["RM", "PKG", "CON"];   // the same list grnTestService calls PURCHASABLE
+async function assertLinesAreBought(lines, existingLines) {
+  const already = new Set((existingLines || []).map((l) => l && l.itemId));
+  for (const l of (lines || [])) {
+    if (!l || !l.itemId || already.has(l.itemId)) continue;
+    const it = await repo.getItem(l.itemId);
+    if (it && BOUGHT_CATS.indexOf(it.cat) < 0) {
+      const what = it.cat === "FG" ? "a finished good" : it.cat === "WIP" ? "work in process" : "not a bought-in material";
+      throw err("A purchase order buys raw material — " + (it.name || l.itemId) + " (" + l.itemId + ") is " + what
+        + ". Finished goods are made here and sold on a sales order; work in process is never bought.", 400);
+    }
+  }
+}
+
 /* ---- Purchase orders (create / update / delete) ---- */
 async function createPurchaseOrder(po) {
   po = po || {};
@@ -656,6 +699,7 @@ async function createPurchaseOrder(po) {
   if (!po.supplierId) throw err("A purchase order needs a supplier", 400);
   if (!await repo.getSupplier(po.supplierId)) throw err("Unknown supplier " + po.supplierId, 400);
   await assertLinesReferenceRealItems(po.lines, "purchase order");
+  await assertLinesAreBought(po.lines, []);
   if (!po.id) po.id = nextId((await repo.getState()).purchaseorders, "PO-");
   else if (await repo.getPurchaseOrder(po.id)) throw err("Purchase order " + po.id + " already exists", 409);
   po.date = po.date || todayISO();
@@ -688,6 +732,7 @@ async function updatePurchaseOrder(id, patch) {
   if (merged.supplierId && !await repo.getSupplier(merged.supplierId))
     throw err("Unknown supplier " + merged.supplierId, 400);
   await assertLinesReferenceRealItems(merged.lines, "purchase order");
+  await assertLinesAreBought(merged.lines, existing.lines);
   return await repo.putPurchaseOrder(merged);
 }
 async function deletePurchaseOrder(id) {

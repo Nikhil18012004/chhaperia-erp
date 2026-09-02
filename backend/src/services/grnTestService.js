@@ -159,9 +159,13 @@ function specKeys(item) {
    A numeric parameter with a limit passes or fails; one without a
    limit is "na" (nothing to grade against yet); a text parameter is
    always "na" — it is recorded for the record, not graded.
-     Fail    → any parameter breached its limit
-     Pass    → at least one parameter graded and none failed
-     Pending → nothing could be graded (no limits set yet)
+     Fail     → any parameter breached its limit
+     Pass     → at least one parameter graded and none failed
+     Pending  → a limit exists but nothing was graded against it yet
+     Recorded → NO limit exists to grade against — the reading is on
+                record, and that is all it can ever be. A material checked
+                on visual and packing alone (the default) used to sit
+                "Pending" for ever, which read as work still owed.
    ============================================================ */
 function evaluate(values, spec, params) {
   values = values || {}; spec = spec || {};
@@ -181,7 +185,23 @@ function evaluate(values, spec, params) {
     results[p.key] = ok ? "pass" : "fail";
     if (!ok) anyFail = true;
   });
-  return { results, result: !anyEval ? "Pending" : anyFail ? "Fail" : "Pass" };
+  const gradable = (params || []).some((p) => p.type !== "text" && hasLimit(spec[p.key]));
+  return { results, result: anyEval ? (anyFail ? "Fail" : "Pass") : gradable ? "Pending" : "Recorded" };
+}
+/* Reports filed before "Recorded" existed sit "Pending" although nothing
+   could ever grade them. Runs at boot; a report whose verdict does not change
+   is not touched. */
+async function regradeUngraded() {
+  let n = 0;
+  for (const t of await repo.getGrnTests()) {
+    if (!t || !t.complete || t.result !== "Pending") continue;
+    const item = await repo.getItem(t.itemId) || {};
+    const graded = evaluate(t.values, specOf(item), paramsForItem(item));
+    if (graded.result === t.result) continue;
+    await repo.putGrnTest(Object.assign({}, t, { results: graded.results, result: graded.result }));
+    n++;
+  }
+  return n;
 }
 
 /** Keep only the parameters this material is checked on, in their own type. */
@@ -608,7 +628,7 @@ module.exports = {
   PARAMS, paramsForItem, paramKeysForItem, isConfigured, specOf, specKeys,
   classify, derivedParamKeys,
   evaluate, pickValues, isComplete, missingParams,
-  setItemQc, regradeItem, ensureItemQc,
+  setItemQc, regradeItem, regradeUngraded, ensureItemQc,
   testFormFor, submitTest, deleteTest,
   decideTest, awaitingDecision, pendingDecisions,
   quarantineWarehouse, heldWarehouseIds,

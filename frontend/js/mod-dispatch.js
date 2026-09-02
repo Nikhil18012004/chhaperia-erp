@@ -151,7 +151,7 @@
       const f = (k, d) => (t[k] != null ? t[k] : (d == null ? "" : d));
       const body = h("div", {}, [
         h("div", { class: "form-grid" }, [
-          U.field("Agency / Carrier Name", `<input class="input" id="t_name" value="${esc(f("name"))}" placeholder="e.g. Sri Balaji Roadways">`),
+          U.field("Agency / Carrier Name *", `<input class="input" id="t_name" value="${esc(f("name"))}" placeholder="e.g. Sri Balaji Roadways">`),
           U.field("Contact Person", `<input class="input" id="t_contact" value="${esc(f("contact"))}">`),
           U.field("Phone", `<input class="input" id="t_phone" value="${esc(f("phone"))}">`),
           U.field("Email", `<input class="input" id="t_email" value="${esc(f("email"))}">`),

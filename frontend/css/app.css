@@ -1148,8 +1148,8 @@ canvas{display:block;width:100%}
 /* hide office/admin-only chrome when the shell is in supervisor mode — the
    search box stays: the floor reaches the TDS booklet by searching, the same
    way every other login does (mod-supervisor binds it) */
-.app-shell.sup-mode .accent-pop,
-.app-shell.sup-mode #bellBtn{ display:none }
+/* the floor keeps the bell (its failed batches live under it since 2026-09-02) */
+.app-shell.sup-mode .accent-pop{ display:none }
 
 .sup-loading{padding:60px 20px;text-align:center;color:var(--text-mut);font-size:15px}
 .sup-tabs{display:flex;gap:8px;margin:0 0 16px;overflow-x:auto;flex-wrap:wrap}

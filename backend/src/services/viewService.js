@@ -377,9 +377,25 @@ async function stateForSupervisor(area, username, opts) {
   });
   Object.values(warehouseStock).forEach((rows) => rows.sort((a, b) => b.qty - a.qty));
 
+  /* THE FLOOR'S OWN ALERTS. A batch from one of these jobs that measured
+     outside its limits raises a ruling for the admin; the floor got a toast
+     at the moment it happened and nothing afterwards. The bell carries every
+     such batch still awaiting that ruling — scoped to this board's jobs, with
+     parameter NAMES only, never a limit or a value (the same redaction the
+     toast has always kept). */
+  const myIds = new Set(myWOs.map((w) => w.id));
+  let labAlerts = [];
+  try {
+    labAlerts = (await LAB.pendingLabDecisions(d)).filter((q) => myIds.has(q.woId))
+      .map((q) => ({ id: q.id, woId: q.woId, batchNo: q.batchNo, productCode: q.productCode,
+        productName: q.productName, stage: q.stage, by: q.by, failed: q.failed || [],
+        reportDate: q.reportDate, createdAt: q.createdAt }));
+  } catch { labAlerts = []; }
+
   return {
     role: "supervisor",
     area,
+    labAlerts,                   // failed batches from my jobs, awaiting the admin's ruling
     org: { name: d.org.name, short: d.org.short, group: d.org.group },
     workorders: myWOs,
     stockItems: stock,           // names/uom only; live qty comes from /production/stock if needed

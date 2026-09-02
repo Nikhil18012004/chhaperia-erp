@@ -64,15 +64,22 @@
   M.calendar = { title: "Calendar", sub: "Appointments and lead follow-ups", render(root, params) {
     /* filter + view state survives a redraw but not a page change, which is
        the same lifetime the other modules give their toolbars */
-    const on = {}; SOURCES.forEach((s) => { on[s.key] = s.on; });
-    let view = "month";
-    let q = "";
+    /* …and, since 2026-09-02, a quiet refresh too: the view, the month the
+       grid points at, the search and the source chips live in App.viewState,
+       which a deliberate navigation empties (see App.refreshView). */
+    const st = App.viewState("cal", () => {
+      const on0 = {}; SOURCES.forEach((s) => { on0[s.key] = s.on; });
+      return { view: "month", q: "", qRaw: "", cursor: startOfDay(DB.helpers.today()).getTime(), on: on0 };
+    });
+    const on = st.on;
+    let view = st.view;
+    let q = st.q;
     // the month/week/day the grid is pointing at — always a real Date at 00:00
-    let cursor = startOfDay(DB.helpers.today());
+    let cursor = new Date(st.cursor);
 
     root.appendChild(pageHead("Calendar",
       "The CRM diary — meetings, calls, visits and the leads due a chase",
-      [ h("button", { class: "btn", onclick: () => { cursor = startOfDay(DB.helpers.today()); draw(); },
+      [ h("button", { class: "btn", onclick: () => { cursor = startOfDay(DB.helpers.today()); st.cursor = cursor.getTime(); draw(); },
           html: "◎ Today" }),
         h("button", { class: "btn primary", onclick: () => apptForm(null, todayISO()), html: "＋ New Appointment" }) ]));
 
@@ -112,7 +119,7 @@
         label,
         h("button", { class: "icon-btn", "aria-label": "Next", onclick: () => { step(1); }, html: "&rsaquo;" }),
       ]),
-      MW.searchInput("Search company, contact, product…", (v) => { q = v.toLowerCase().trim(); draw(); }),
+      MW.searchInput("Search company, contact, product…", (v) => { st.qRaw = v; q = st.q = v.toLowerCase().trim(); draw(); }, st.qRaw),
       chips,
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "calCount" })),
     ]);
@@ -122,7 +129,7 @@
 
     function segBtn(l, k) {
       const b = h("button", { class: view === k ? "on" : "", text: l, onclick: () => {
-        view = k; [...seg.children].forEach((c) => c.classList.remove("on")); b.classList.add("on"); draw();
+        view = st.view = k; [...seg.children].forEach((c) => c.classList.remove("on")); b.classList.add("on"); draw();
       } });
       return b;
     }
@@ -134,6 +141,7 @@
       else if (view === "week") cursor = new Date(cursor.getTime() + dir * 7 * DAY);
       else if (view === "day") cursor = new Date(cursor.getTime() + dir * DAY);
       else cursor = new Date(cursor.getTime() + dir * 30 * DAY);
+      st.cursor = cursor.getTime();
       draw();
     }
 

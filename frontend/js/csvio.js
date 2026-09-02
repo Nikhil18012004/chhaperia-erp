@@ -449,9 +449,31 @@
         const rawQ = cellAt(row, colIndex.onHand);
         if (rawQ !== "" && isFinite(+rawQ)) qty.push({ id, shown: +rawQ, isNew: !prev });
       }
-      if (!prev) add.push({ id, after });
+      if (!prev) add.push({ id, after, line: r + 1 });
       else if (JSON.stringify(prev) !== JSON.stringify(after)) update.push({ id, before: prev, after });
       else unchanged.push({ id });
+    }
+    /* A TRANSFER IS A PAIR. A sheet may carry both legs of a transfer — same
+       material, date and reference, one negative and one positive — but a
+       lone leg would mint or destroy stock, and the server refuses the whole
+       save when it meets one. Say so here, row by row, before the save. */
+    if (key === "movements") {
+      const groups = {};
+      add.forEach((a) => {
+        const m = a.after; if (!m || m.type !== "XFER") return;
+        const k = [m.itemId, String(m.date || "").slice(0, 10), m.ref || ""].join("|");
+        (groups[k] = groups[k] || []).push(a);
+      });
+      Object.values(groups).forEach((g) => {
+        const sum = g.reduce((s, a) => s + (+a.after.qty || 0), 0);
+        const paired = g.length >= 2 && Math.abs(sum) < 1e-6 && g.some((a) => +a.after.qty > 0) && g.some((a) => +a.after.qty < 0);
+        if (paired) return;
+        g.forEach((a) => {
+          const at = add.indexOf(a); if (at >= 0) add.splice(at, 1);
+          errors.push({ line: a.line, msg: "transfer leg without its matching pair — a transfer needs an OUT leg and an IN leg "
+            + "of the same quantity (same item, date and reference); post it from Move Stock instead" });
+        });
+      });
     }
     return { key, ent, add, update, unchanged, errors, qty };
   }

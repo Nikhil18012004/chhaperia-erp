@@ -381,21 +381,66 @@
     {id:"settings", icon:"⚙️", label:"Settings", accent:"orange", adminOnly:true},
   ];
 
-  /* ---------- ENTER SAVES ----------
-     One handler for every dialog: Enter inside a dialog presses its primary
-     button — Save, Update, Next, Create — so a form can be worked from the
-     keyboard without reaching for the mouse each time. Registered ONCE, on
-     the document, and scoped to the dialog actually on screen: dialogs are
-     chained by clearing the host, so a listener per dialog would fire once
-     for every dialog ever opened. Registered after the modules have loaded,
-     so a handler that already consumed the key (a scan field, an inline
-     edit) has had its say.
-     Left alone on purpose: a textarea (Enter is a new line there — Ctrl or
-     Cmd + Enter presses the button instead), a button, link or select (their
-     own behaviour), a searchable select with its list open (Enter picks the
-     option), anything marked data-enter="ignore", the command palette, and a
-     key another handler already handled. The LAST enabled primary button in
-     the foot is pressed — that is the convention every dialog follows. */
+  /* ---------- ENTER: NEXT FIELD, THEN SAVE ----------
+     One handler for every dialog. Enter inside a dialog WALKS the form: it
+     moves to the next field, the way Tab does, and presses the dialog's
+     primary button — Save, Update, Next, Create — only once every REQUIRED
+     field holds a value. So a fresh form is filled top to bottom on Enter
+     alone and the last Enter files it, while a form that already has all it
+     needs (an edit, say) files on the first. It used to file on the first
+     Enter regardless, which posted half-typed forms (changed 2026-09-02).
+     A field is required when its label ends in "*" — the field() helpers
+     mark the control — or when the control itself carries `required`. A
+     dialog that names no required field walks to its last field and saves
+     from there. When the walk reaches the end with a required field still
+     empty, Enter jumps back to the first such field and says which.
+     Ctrl or Cmd + Enter skips the walk: it files the dialog (or jumps to
+     what is still missing) from anywhere, including a textarea.
+     Registered ONCE, on the document, and scoped to the dialog actually on
+     screen: dialogs are chained by clearing the host, so a listener per
+     dialog would fire once for every dialog ever opened. Registered after
+     the modules have loaded, so a handler that already consumed the key (a
+     scan field, an inline edit) has had its say.
+     Left alone on purpose: a plain Enter in a textarea (a new line), a
+     button or link, a searchable select with a HIGHLIGHTED option (its own
+     Enter picks it), anything marked data-enter="ignore", the command
+     palette, and a key another handler already handled. The LAST enabled
+     primary button in the foot is pressed — the convention every dialog
+     follows. */
+  /* the walk visits inputs and selects. A textarea is not a stop: a plain
+     Enter inside one only adds a line, so the walk would stall there — a note
+     is reached by Tab or a click, and a REQUIRED textarea is still what the
+     jump-back lands on when it is empty. */
+  const WALKABLE=['input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"])'
+      +':not([type="submit"]):not([type="file"]):not([type="range"]):not([type="color"]):not([disabled]):not([readonly])',
+    'select:not([disabled])'];
+  const WALK_SEL=WALKABLE.map(s=>".modal-body "+s).join(",");
+  function walkFields(m){ return [...m.querySelectorAll(WALK_SEL)].filter(el=>el.offsetParent!==null); }
+  /* the box the operator actually types into for a control — a searchable
+     select and a product picker keep their value in a hidden input */
+  function proxyOf(c){
+    if(!c || c.type!=="hidden") return c;
+    const id=c.id||"";
+    const byId=id && (document.getElementById(id+"_s") || document.getElementById(id+"_nm_s"));
+    if(byId) return byId;
+    const ss=c.closest(".ss"); return ss?ss.querySelector(".ss-input"):null;
+  }
+  function requiredControls(m){
+    return [...m.querySelectorAll('.modal-body [required],.modal-body [aria-required="true"],.modal-body [data-required]')]
+      .filter(c=>!c.disabled)
+      .filter(c=>{ const p=proxyOf(c); return p ? p.offsetParent!==null : c.type==="hidden"; });
+  }
+  const isEmpty=c=>String(c.value==null?"":c.value).trim()==="";
+  function focusField(el){
+    try{ el.focus(); }catch{ return; }
+    if(el.tagName==="INPUT" && el.select && !/^(date|time|month|number)$/.test(el.type)) try{ el.select(); }catch{}
+  }
+  function labelOf(c){
+    const p=proxyOf(c)||c;
+    const f=p.closest(".field"); const l=f && f.querySelector("label");
+    const t=l ? l.textContent : (p.getAttribute("placeholder")||p.getAttribute("aria-label")||"");
+    return String(t||"").replace(/\s*\*\s*$/,"").trim();
+  }
   function enterSaves(e){
     if(e.key!=="Enter" || e.defaultPrevented || e.altKey || e.shiftKey || e.isComposing) return;
     const host=$("#modalHost"); if(!host || host.hidden) return;
@@ -403,19 +448,39 @@
     const ck=$("#cmdk"); if(ck && !ck.hidden) return;
     const t=e.target;
     if(!(t instanceof Element) || !m.contains(t)) return;
-    const tag=t.tagName;
-    if(tag==="TEXTAREA" && !(e.ctrlKey||e.metaKey)) return;
+    const tag=t.tagName, jump=!!(e.ctrlKey||e.metaKey);
+    if(tag==="TEXTAREA" && !jump) return;
     if(t.isContentEditable) return;
-    if(tag==="BUTTON" || tag==="A" || tag==="SELECT") return;
+    if(tag==="BUTTON" || tag==="A") return;
     if(t.closest('[data-enter="ignore"]')) return;
     const ss=t.closest(".ss");
-    if(ss){ const pop=ss.querySelector(".ss-pop"); if(pop && !pop.hidden && pop.offsetParent!==null) return; }
-    const foot=m.querySelector(".modal-foot"); if(!foot) return;
-    const btns=[...foot.querySelectorAll("button.primary:not([disabled]),button.danger-solid:not([disabled])")]
-      .filter(b=>b.offsetParent!==null);
-    const btn=btns[btns.length-1]; if(!btn) return;
+    if(ss){
+      const pop=ss.querySelector(".ss-pop"), hid=ss.querySelector('input[type="hidden"]');
+      if(pop && !pop.hidden && pop.offsetParent!==null){
+        if(pop.querySelector(".ss-opt.act")) return;              // the list's own Enter picks it
+        const opts=pop.querySelectorAll(".ss-opt");
+        if(opts.length===1){ opts[0].dispatchEvent(new MouseEvent("mousedown",{bubbles:true})); }   // the one match is the answer
+        else if(hid && hid.value){ pop.hidden=true; t.setAttribute("aria-expanded","false"); }      // keep what it holds, move on
+        else return;                                                // nothing chosen yet — choose first
+      }
+    }
+    const foot=m.querySelector(".modal-foot");
+    const btns=foot?[...foot.querySelectorAll("button.primary:not([disabled]),button.danger-solid:not([disabled])")].filter(b=>b.offsetParent!==null):[];
+    const btn=btns[btns.length-1];
+    const fields=walkFields(m);
+    const req=requiredControls(m);
+    const missing=req.filter(isEmpty);
+    const i=fields.indexOf(t);
+    const next=i>=0?fields[i+1]:null;
     e.preventDefault();
-    btn.click();
+    const goMissing=()=>{ const c=missing[0]; const target=proxyOf(c)||fields[0];
+      if(target) focusField(target);
+      const nm=labelOf(c); toast(nm?"Fill in "+nm+" first":"A required field is still empty",{type:"warn",dur:2400}); };
+    if(jump){ if(missing.length) goMissing(); else if(btn) btn.click(); return; }
+    if(req.length && !missing.length){ if(btn) btn.click(); return; }   // it has everything it needs — file it
+    if(next){ focusField(next); return; }                              // on to the next field
+    if(missing.length){ goMissing(); return; }                         // the end, with a gap — back to it
+    if(btn) btn.click();                                               // the end of a form that names nothing required
   }
   document.addEventListener("DOMContentLoaded",()=>document.addEventListener("keydown",enterSaves));
 

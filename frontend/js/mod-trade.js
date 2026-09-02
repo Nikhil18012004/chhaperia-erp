@@ -1349,7 +1349,7 @@
           U.field("Document Type",U.selectHTML("po_dtype",[
             {v:"po",l:"Purchase Order"},{v:"proforma",l:"Proforma Invoice"}],
             editPo?(editPo.docType||"po"):"po")),
-          U.field("Supplier",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
+          U.field("Supplier *",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
           U.field("PO Date",`<input class="input" id="po_date" type="date" value="${editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
           U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
           U.field("Valid Upto",`<input class="input" id="po_valid" type="date" value="${ev("validUpto")}">`),
@@ -1962,7 +1962,7 @@
         sec("Parties"),
         h("div",{class:"form-grid g3"},[
           U.field("Billing Company (invoice under) *",U.selectHTML("so_co",companyOpts(),editSo?editSo.company:companies()[0].key)),
-          U.field("Customer (Bill To)",U.searchSelect("so_cust",custs.map(c=>({v:c.id,l:c.name})),editSo?editSo.customerId:(cust0&&cust0.id),"Search customer…")),
+          U.field("Customer (Bill To) *",U.searchSelect("so_cust",custs.map(c=>({v:c.id,l:c.name})),editSo?editSo.customerId:(cust0&&cust0.id),"Search customer…")),
           U.field("Place of Supply",U.selectHTML("so_pos",stateOpts(),
             (editSo&&editSo.placeOfSupply)||partyStateCode(cust0)||"29")),
           U.field("Ship To (delivery address)",`<textarea class="input" id="so_ship" rows="2" placeholder="same as billing">${esc(editSo?(editSo.shipTo||""):(cust0&&(cust0.shipTo||cust0.address)||""))}</textarea>`,"full"),
@@ -2277,9 +2277,10 @@
     ]));
     const spend=ENG.purchaseBySupplier(365);
     const spendMap={}; spend.forEach(s=>spendMap[s.id]=s.value);
-    let q="";
+    const sf=App.viewState("filter",()=>({q:"",qRaw:""}));   // the search survives a quiet refresh
+    let q=sf.q;
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search supplier, city, category, GSTIN, contact, item…", v=>{q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search supplier, city, category, GSTIN, contact, item…", v=>{sf.qRaw=v;q=sf.q=v.toLowerCase().trim();draw();}, sf.qRaw),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"supCount"}))
     ]));
     const host=h("div"); root.appendChild(host);
@@ -2352,7 +2353,8 @@
        through reloadState → refreshView, which re-renders this module from
        scratch. Without this, raising a complaint snapped the page back to
        "All customers" and the row you had just created was out of sight. */
-    let q="", tab=(params&&params.tab)||"all";
+    const cf=App.viewState("filter",()=>({q:"",qRaw:""}));   // the search survives a quiet refresh
+    let q=cf.q, tab=(params&&params.tab)||"all";
     /* Two views of the same list. "Gone quiet" is not a filter on a field —
        it is worked out from each client's own ordering rhythm (ENG.dormantCustomers),
        so it can only be a tab, not a search term. */
@@ -2371,7 +2373,7 @@
       [...seg.children].forEach(c=>c.classList.remove("on")); btn.classList.add("on"); draw();
     }
     root.appendChild(h("div",{class:"toolbar"},[
-      MW.searchInput("Search customer, city, country, currency, GSTIN, contact…", v=>{q=v.toLowerCase().trim();draw();}),
+      MW.searchInput("Search customer, city, country, currency, GSTIN, contact…", v=>{cf.qRaw=v;q=cf.q=v.toLowerCase().trim();draw();}, cf.qRaw),
       h("div",{style:"margin-left:auto"},h("span",{class:"chip",id:"custCount"}))
     ]));
     const host=h("div"); root.appendChild(host);

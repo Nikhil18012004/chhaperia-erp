@@ -302,7 +302,8 @@ async function applyLeave(l) {
 async function decideLeave(id, status, user) {
   const lv = await repo.getLeave(id);
   if (!lv) throw err("Leave not found", 404);
-  if (!["Approved", "Rejected", "Pending"].includes(status)) throw err("Invalid status", 400);
+  if (!["Approved", "Rejected", "Pending"].includes(status))
+    throw err("Invalid status \"" + (status == null ? "" : String(status)) + "\" — a leave is decided as Approved, Rejected or Pending.", 400);
   lv.status = status;
   lv.decidedBy = (user && user.username) || "office";
   await repo.putLeave(lv);
