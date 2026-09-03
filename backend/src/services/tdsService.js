@@ -4,8 +4,8 @@
    that admin replaces from the browser.
 
    Where the bytes live: an uploaded booklet sits under the data
-   directory (DATA_DIR/tds), beside the BarTender template and for
-   the same reason — it is the plant's document, not the repo's.
+   directory (DATA_DIR/tds) — it is the plant's document, not the
+   repo's.
    Until one is uploaded the bundled PDF in frontend/assets/docs is
    what everybody gets, so a fresh install is never without one.
 

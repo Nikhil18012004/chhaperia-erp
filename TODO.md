@@ -35,7 +35,7 @@ Nothing below can be built without these; they are not software tasks.
 - Lab Reports → Products form: offer "add a parameter of its own" there too. Today a product's own parameters are defined only when the product is created through Stock Items → New Item (or on a material through the QC dialog).
 - Work orders: the production line of a released order cannot be changed (every stage's stock is issued at release). Allowing it needs a rollback-of-postings design.
 - Lab Reports: the incoming-material tab's Pending / Completed sub-tab resets on the 15-second refresh (the search and the result/series selects are kept).
-- Test suite: the BarTender install-layout test fails on any PC where BarTender is installed (environmental, not a defect); `chh_smoke_disp` scratch database is left behind by `backend/test/smoke.js`.
+- Test suite: `chh_smoke_disp` scratch database is left behind by `backend/test/smoke.js`.
 
 ## 4. Recently closed (for reference)
 

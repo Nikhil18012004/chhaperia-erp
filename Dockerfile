@@ -14,7 +14,7 @@ RUN npm install --prefix backend --omit=dev
 # App source: backend (API), frontend (served static), database (schema.sql).
 COPY . .
 
-# /data holds the BarTender hand-off CSVs (and any future file artefacts) —
+# /data holds the plant's uploaded documents (and any future file artefacts) —
 # the database itself lives in MySQL, not on this volume.
 ENV CHHAPERIA_DATA_DIR=/data
 RUN mkdir -p /data

@@ -39,9 +39,9 @@ const ROOT = path.join(__dirname, "..", "..", "..");
 const SCHEMA_FILE = path.join(ROOT, "database", "schema.mysql.sql");
 
 /* The application's own data DIRECTORY on disk. Nothing to do with the
-   database any more — the rows live in MySQL — but BarTender's hand-off CSVs
-   are still files, and this is where they go. It stayed in this module
-   because that is where everything already imports it from. */
+   database any more — the rows live in MySQL — but the plant's uploaded
+   documents are still files, and this is where they go. It stayed in this
+   module because that is where everything already imports it from. */
 const DATA_DIR = process.env.CHHAPERIA_DATA_DIR || path.join(ROOT, "data");
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch { /* best effort */ }
 

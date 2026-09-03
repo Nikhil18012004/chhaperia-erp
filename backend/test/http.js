@@ -18,7 +18,6 @@ const SCRATCH = "chh_http_" + process.pid + "_" + Date.now();
 process.env.CHHAPERIA_DB_NAME = SCRATCH;
 process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
 process.env.PORT = "0"; // ask the OS for a free port
-process.env.CHHAPERIA_BARTENDER_NOLAUNCH = "1"; // never pop the label app open mid-test
 process.env.CHHAPERIA_TDS_NOCONVERT = "1";      // nor Word, for a TDS upload
 
 const { server, ready } = require("../src/server");
@@ -2621,53 +2620,6 @@ async function run() {
       .reduce((n, m) => n + (+m.qty || 0), 0);
     ok("so the half-made shelf is untouched by them", Math.abs(wipAfter2 - wipBefore2) < 0.01,
       wipBefore2 + " -> " + wipAfter2);
-  }
-
-  section("BarTender sticker hand-off");
-  {
-    const csv = '"PONo","Product"\r\n"PO-BT-1","MICA TAPE"';
-    const bt = await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv });
-    ok("admin hand-off answers ok", bt.status === 200 && bt.d.ok === true, JSON.stringify(bt.d).slice(0, 110));
-    ok("…reporting each step honestly", typeof bt.d.exeFound === "boolean" && typeof bt.d.launched === "boolean"
-      && /stickers\.csv$/.test(bt.d.csvPath) && !!bt.d.message, JSON.stringify(bt.d).slice(0, 110));
-    ok("the rows landed at the fixed path the .btw binds to",
-      fs.existsSync(bt.d.csvPath) && fs.readFileSync(bt.d.csvPath, "utf8") === csv);
-    ok("a second PO overwrites the same file", (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-2", csv: '"PONo"\r\n"PO-BT-2"' })).d.csvPath === bt.d.csvPath
-      && /PO-BT-2/.test(fs.readFileSync(bt.d.csvPath, "utf8")));
-    ok("supervisor is refused (403)", (await call("POST", "/bartender/stickers", C, { poId: "PO-BT-1", csv })).status === 403);
-    ok("anonymous is refused (401)", (await call("POST", "/bartender/stickers", null, { poId: "PO-BT-1", csv })).status === 401);
-    ok("a path-traversal PO id is rejected (400)", (await call("POST", "/bartender/stickers", A, { poId: "../evil", csv })).status === 400);
-    ok("empty rows are rejected (400)", (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv: "   " })).status === 400);
-
-    /* The exe hunt must see a MODERN install: BarTender 2019+ lives at
-       Seagull\BarTender <year>\BarTender Suite\bartend.exe — three levels —
-       and the old two-level scan reported a healthy install as missing.
-       The scan roots are injectable via env, so a fake install proves it. */
-    const btRoot = path.join(os.tmpdir(), "chh-btscan-" + process.pid);
-    const deepDir = path.join(btRoot, "Seagull", "BarTender 2022", "BarTender Suite");
-    const fakeExe = path.join(deepDir, "bartend.exe");
-    fs.mkdirSync(deepDir, { recursive: true });
-    fs.writeFileSync(fakeExe, "MZ");
-    process.env.CHHAPERIA_BARTENDER_SCAN = btRoot;
-    const deep = (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv })).d;
-    ok("a three-level 2019+ install layout IS found", deep.exeFound === true && deep.exePath === fakeExe,
-      JSON.stringify({ exeFound: deep.exeFound, exePath: deep.exePath }));
-    ok("…and the test server still never launches it", deep.launched === false && /suppressed/.test(deep.message),
-      deep.message);
-    // uninstall: the cached hit must revalidate, not answer from memory
-    fs.rmSync(btRoot, { recursive: true, force: true });
-    const gone = (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv })).d;
-    ok("a removed install is not reported from the cache", gone.exePath !== fakeExe,
-      JSON.stringify({ exePath: gone.exePath }));
-    delete process.env.CHHAPERIA_BARTENDER_SCAN;
-
-    // with a designed .btw on disk the association route becomes available;
-    // the response reports the template so the client knows the label exists
-    const btwPath = path.join(path.dirname(bt.d.csvPath), "test-label.btw");
-    fs.writeFileSync(btwPath, "btw");
-    const withTpl = (await call("POST", "/bartender/stickers", A, { poId: "PO-BT-1", csv })).d;
-    ok("a saved .btw template is detected", withTpl.templateFound === true, JSON.stringify(withTpl).slice(0, 110));
-    fs.rmSync(btwPath, { force: true });
   }
 
   section("Sticker print settings (size + fields, shared via /settings)");

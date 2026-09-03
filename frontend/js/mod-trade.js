@@ -314,8 +314,7 @@
     /* One raw-material identification label per ordered line, on the company's
        own template. A three-step dialog: tick and edit the fields, lay the
        labels out on any sheet size, then approve the preview and print. The
-       layout is remembered in settings for every browser; the BarTender file
-       carries the same rows for label-printer runs. */
+       layout is remembered in settings for every browser. */
     function stickersPO(po){
       const cfg=stickerCfg();
       const vals=stickerValues(po,cfg);
@@ -369,8 +368,8 @@
         requestAnimationFrame(grow);
         return el;
       }
-      /* cfg.fields mirrors cfg.order — the BarTender CSV still reads one flag
-         per field, so the two must never drift apart. */
+      /* cfg.fields mirrors cfg.order — the saved settings carry one flag per
+         field, so the two must never drift apart. */
       const syncFields=()=>{ const all=fieldDefs(cfg); cfg.fields={};
         all.forEach(f=>{ cfg.fields[f.k]=cfg.order.indexOf(f.k)>=0; }); };
 
@@ -450,7 +449,7 @@
           let k="cx"+clean, n=2;
           while(all.some(f=>f.k===k)) k="cx"+clean.slice(0,17)+(n++);
           cfg.custom=(cfg.custom||[]).concat([{k,label,cap:label.toUpperCase(),
-            csv:k,row:true,custom:true}]);
+            row:true,custom:true}]);
           cfg.order.push(k); syncFields();
           vals.forEach(v=>{ if(v[k]==null) v[k]=""; });   // the new field starts empty on every label
           nameIn.value=""; createRow.hidden=true;
@@ -3023,8 +3022,8 @@
      ============================================================ */
   /* One record per ordered line — only what the PO and its goods receipt
      actually know; every unknown stays "" so it renders as a blank to fill.
-     Shared by the printed label sheet and the BarTender export, so the
-     label a machine prints can never disagree with the one printed here. */
+     Shared by the printed label sheet and the dialog's editable value boxes,
+     so what is previewed can never disagree with what is printed. */
   function stickerData(po){
     return ((po&&po.lines)||[]).map((l)=>{
       const it=ENG.item(l.itemId)||{};
@@ -3056,27 +3055,27 @@
   }
 
   /* ---- ONE list drives everything a label can carry: the tick-list in the
-     dialog, the editable value box beside each tick, the printed row and the
-     BarTender CSV column. TO ADD A FIELD: add an entry here AND add the same
+     dialog, the editable value box beside each tick, and the printed row.
+     TO ADD A FIELD: add an entry here AND add the same
      key to the whitelist in backend/src/services/erpService.js →
      updateSettings(), or the choice will not survive a save. Nothing else.
-       k     settings key + CSV value source (src overrides the source)
+       k     settings key + value source (src overrides the source)
        cap   the caption printed on the label
        row   renders as a table row · head = the headline · boxes = tick-boxes
-     A field left unticked disappears from the label AND the CSV alike, so no
+     A field left unticked disappears from the label, so no
      format can quietly disagree with another. ---- */
   const STICKER_FIELDS=[
-    {k:"product",      label:"Product",            cap:"PRODUCT",               csv:"Product",       head:true},
-    {k:"supplier",     label:"Supplier",           cap:"SUPPLIER",              csv:"SupplierName",  row:true},
-    {k:"grade",        label:"Grade / Type",       cap:"GRADE/TYPE",            csv:"GradeType",     row:true},
-    {k:"dateOfReceipt",label:"Date of Receipt",    cap:"DATE OF RECEIPT",       csv:"DateOfReceipt", row:true},
-    {k:"grnNo",        label:"GRN / Lot No",       cap:"GRN/LOT NO",            csv:"GRNLotNo",      row:true},
-    {k:"invoiceNo",    label:"Invoice No",         cap:"INVOICE NO",            csv:"InvoiceNo",     row:true},
-    {k:"qty",          label:"Qty & UOM",          cap:"QTY & UOM",             csv:"QtyAndUom",     row:true, src:"qtyUom"},
-    {k:"thickness",    label:"Thickness (fabric)", cap:"THICKNESS (if fabric)", csv:"Thickness",     row:true},
-    {k:"gsm",          label:"GSM (fabric)",       cap:"GSM (if fabric)",       csv:"GSM",           row:true},
-    {k:"inspectedBy",  label:"Inspected By",       cap:"INSPECTED BY",          csv:"InspectedBy",   row:true},
-    {k:"status",       label:"Status tick-boxes",  cap:"STATUS",                csv:"Status",        boxes:true},
+    {k:"product",      label:"Product",            cap:"PRODUCT",               head:true},
+    {k:"supplier",     label:"Supplier",           cap:"SUPPLIER",              row:true},
+    {k:"grade",        label:"Grade / Type",       cap:"GRADE/TYPE",            row:true},
+    {k:"dateOfReceipt",label:"Date of Receipt",    cap:"DATE OF RECEIPT",       row:true},
+    {k:"grnNo",        label:"GRN / Lot No",       cap:"GRN/LOT NO",            row:true},
+    {k:"invoiceNo",    label:"Invoice No",         cap:"INVOICE NO",            row:true},
+    {k:"qty",          label:"Qty & UOM",          cap:"QTY & UOM",             row:true, src:"qtyUom"},
+    {k:"thickness",    label:"Thickness (fabric)", cap:"THICKNESS (if fabric)", row:true},
+    {k:"gsm",          label:"GSM (fabric)",       cap:"GSM (if fabric)",       row:true},
+    {k:"inspectedBy",  label:"Inspected By",       cap:"INSPECTED BY",          row:true},
+    {k:"status",       label:"Status tick-boxes",  cap:"STATUS",                boxes:true},
   ];
 
   /* The standard colour set beside the dial. Deliberately pale: a label is
@@ -3156,13 +3155,13 @@
      configs stored only the roll size as w/h; those still open correctly. */
   /* Fields the operator invented in the dialog, stored beside the built-ins so
      a label can carry anything this list never thought of. Kept to a sane
-     count and a strict key shape — the key becomes a settings key and a CSV
-     column name, so it cannot be arbitrary text. */
+     count and a strict key shape — the key becomes a settings key, so it
+     cannot be arbitrary text. */
   function customFields(s){
     return (Array.isArray(s&&s.custom)?s.custom:[]).slice(0,40)
       .map(c=>({ k:String((c&&c.k)||""), label:String((c&&c.label)||"").slice(0,44) }))
       .filter(c=>/^cx[A-Za-z0-9]{1,20}$/.test(c.k)&&c.label)
-      .map(c=>({ k:c.k, label:c.label, cap:c.label.toUpperCase(), csv:c.k, row:true, custom:true }));
+      .map(c=>({ k:c.k, label:c.label, cap:c.label.toUpperCase(), row:true, custom:true }));
   }
   /* Every field the picker can offer = the built-ins plus the invented ones. */
   function fieldDefs(cfg){ return STICKER_FIELDS.concat((cfg&&cfg.custom)||[]); }

@@ -57,7 +57,6 @@ data/demo-manifest.json
 # Env
 .env
 .env.local
-data/bartender/
 # the plant's uploaded TDS booklet (and its converted PDF) — the plant's document, not the repo's
 data/tds/
 run-local.cmd
