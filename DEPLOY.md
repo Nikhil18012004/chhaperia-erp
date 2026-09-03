@@ -17,11 +17,23 @@ CREATE USER 'chhaperia'@'%' IDENTIFIED BY '<a real password>';
 GRANT ALL PRIVILEGES ON chhaperia_erp.* TO 'chhaperia'@'%';
 ```
 
+On a machine that also RUNS THE TESTS, add the scratch schemas the suite
+creates and drops for itself — and nothing wider:
+
+```
+GRANT ALL PRIVILEGES ON `chh\_smoke\_%`.* TO 'chhaperia'@'%';
+GRANT ALL PRIVILEGES ON `chh\_http\_%`.*  TO 'chhaperia'@'%';
+```
+
 Never point the app at `root`. See `database/MIGRATION.md` for carrying data
 across from the old SQLite file — one command, and it verifies the row counts
 itself.
 
 ## 2. The environment
+
+Copy `.env.example` to **`.env` in the repository root** and fill it in. That
+file is this project's configuration and it is gitignored — see §2a for why it
+is a file rather than machine-wide variables.
 
 | Variable | Why it matters |
 |---|---|
@@ -34,6 +46,36 @@ itself.
 Generate the secret once and keep it: `openssl rand -hex 32`. Changing it logs
 everyone out, which is the correct way to end all sessions after a breach.
 
+Anything already exported in the real environment wins over `.env`; the file
+only fills in what is missing. That is what lets a container or a Render
+service keep injecting its own secrets while a laptop reads them from disk.
+
+## 2a. One project, one database, one folder
+
+This machine may run other things. The ERP is built so that it cannot reach
+into them, and nothing of it leaks out:
+
+- **Configuration is a file inside the project**, not machine-wide variables.
+  The bare `DATABASE_URL` — the most-shared variable name there is — is
+  deliberately **not read**; if one is set the server says so once and ignores
+  it. Every name the app honours starts with `CHHAPERIA_`.
+- **One schema, and it must be ours.** On boot the app checks the schema it is
+  pointed at. Empty, or already holding its own tables: it proceeds. Holding
+  tables that belong to something else: it **refuses to start** rather than
+  stamp an ERP over another application's data. (`CHHAPERIA_DB_ALLOW_FOREIGN=1`
+  overrides it, for the one case where two things really do share a schema.)
+- **Give the database account rights to this database only.** The `GRANT` in
+  §1 is scoped to `chhaperia_erp.*` — so even a misconfiguration cannot write
+  anywhere else. Never point the app at `root`.
+- **Every file goes under the project.** `CHHAPERIA_DATA_DIR` defaults to
+  `<repo>/data` and holds the BarTender hand-off CSVs and the TDS booklet.
+  Override it for a mounted volume (the container image does); never point it
+  at a shared location such as the system temp folder.
+- **The test suite is fenced too.** Each run takes a throwaway schema named
+  `chh_smoke_…` / `chh_http_…` and a directory under `data/_scratch/`, drops
+  both at the end, and sweeps anything a killed run left behind. It never
+  touches `chhaperia_erp`.
+
 In production the server **refuses to start** if `AUTH_SECRET` is missing, if
 the database password is empty, or if it would reach a remote database
 unencrypted. Those refusals are the point — do not work around them.
@@ -42,7 +84,8 @@ unencrypted. Those refusals are the point — do not work around them.
 
 ```
 npm install --prefix backend --omit=dev
-NODE_ENV=production AUTH_SECRET=... CHHAPERIA_DB_USER=... node backend/src/server.js
+cp .env.example .env    # then fill it in (§2)
+node backend/src/server.js
 ```
 
 The schema and the eight seed accounts are created on first boot. **Change

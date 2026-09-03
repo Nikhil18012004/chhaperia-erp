@@ -8,15 +8,16 @@
    ============================================================ */
 "use strict";
 const path = require("path");
-const os = require("os");
 const fs = require("fs");
 
-/* A scratch DATABASE on the configured MySQL server, named for this run and
-   dropped at the end — the same isolation the throwaway .db file used to
-   give, one level up. Set BEFORE the connection module loads. */
-const SCRATCH = "chh_smoke_" + process.pid + "_" + Date.now();
-process.env.CHHAPERIA_DB_NAME = SCRATCH;
-process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
+/* A scratch DATABASE on the configured MySQL server and a scratch DIRECTORY
+   inside the project, both named for this run and both removed at the end —
+   the same isolation the throwaway .db file used to give, one level up. The
+   files no longer go to the shared system temp folder: everything this
+   project writes stays under the project. Set BEFORE the connection module
+   loads. */
+const scratch = require("./scratch");
+const RUN = scratch.claim("smoke");
 
 const repo = require("../src/db/repository");
 const erp = require("../src/services/erpService");
@@ -552,16 +553,10 @@ try {
   fail++;
   console.log("\n  ✗ UNCAUGHT: " + (e && e.stack ? e.stack : e));
 } finally {
-  /* drop the scratch database, then close the pool */
-  try {
-    const mysql = require("../node_modules/mysql2/promise");
-    const cfg = require("../src/db/connection").readConfig();
-    const c = await mysql.createConnection({ host: cfg.host, port: cfg.port,
-      user: cfg.user, password: cfg.password });
-    await c.query("DROP DATABASE IF EXISTS `" + SCRATCH + "`");
-    await c.end();
-  } catch { /* leaving a scratch db behind is untidy, not fatal */ }
+  /* close the pool, then drop this run's scratch database and directory
+     (and sweep anything a run that died left behind) */
   try { await closeDb(); } catch {}
+  await scratch.release(RUN);
 }
 
 }

@@ -6,6 +6,10 @@
    The database layer lives behind the service + repository.
    ============================================================ */
 "use strict";
+/* FIRST — the project's own .env, before any module reads process.env
+   (authService decides its secret at require time, and the database layer
+   its credentials). Configuration for this project lives in this project. */
+require("./env");
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
