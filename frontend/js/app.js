@@ -741,15 +741,24 @@
     cmdkItems(q){
       q=q.toLowerCase(); const out=[];
       UI.NAV.forEach(n=>{ if(n.sec||!this.canAccess(n.id))return; if(!q||n.label.toLowerCase().includes(q)) out.push({ic:n.icon,label:n.label,tag:"Module",act:()=>this.go(n.id)}); });
-      // quick actions registered by modules (Add Stock, Receive PO, …)
+      /* Quick actions registered by modules (Add Stock, Receive PO, …). Each
+         names the module it belongs to, and a role that cannot reach that
+         module is not offered the action: go() would bounce it straight back
+         home, so an ungated entry reads as a command that does nothing rather
+         than one that was never theirs. `changePassword` carries no module —
+         it belongs to every login — so a missing `mod` means "always". */
       const acts=global.ERPActions||{};
       Object.keys(acts).forEach(k=>{ const a=acts[k];
+        if(a.mod&&!this.canAccess(a.mod)) return;
         if(!q||a.label.toLowerCase().includes(q)) out.push({ic:a.ic||"⚡",label:a.label,tag:"Action",act:()=>a.run()}); });
       if(q.length>=2){
         ENG.data.items.forEach(it=>{ if((it.name+" "+it.id).toLowerCase().includes(q)) out.push({ic:"📦",label:it.name,meta:it.id,tag:"Item",act:()=>this.go("inventory")}); });
         ENG.data.salesorders.forEach(s=>{ if(s.id.toLowerCase().includes(q)) out.push({ic:"🧾",label:s.id+" — "+ENG.custName(s.customerId),tag:"Sales",act:()=>this.go("sales")}); });
         (ENG.data.quotations||[]).forEach(qt=>{ if((qt.id+" "+(qt.company||"")+" "+(qt.productName||"")).toLowerCase().includes(q)) out.push({ic:"📄",label:qt.id+" — "+(qt.company||ENG.custName(qt.customerId)),meta:(qt.productName||"")+" · "+qt.status,tag:"Quotation",act:()=>this.go("quotations",{tab:"quotations",open:qt.id})}); });
-        ENG.data.purchaseorders.forEach(p=>{ if(p.id.toLowerCase().includes(q)) out.push({ic:"🛒",label:p.id+" — "+ENG.sup(p.supplierId),tag:"PO",act:()=>this.go("purchase")}); });
+        // the lab holds purchase orders for its GRN worklist but has no
+        // Procurement screen to open them on, so they are not offered here
+        if(this.canAccess("purchase"))
+          ENG.data.purchaseorders.forEach(p=>{ if(p.id.toLowerCase().includes(q)) out.push({ic:"🛒",label:p.id+" — "+ENG.sup(p.supplierId),tag:"PO",act:()=>this.go("purchase")}); });
         ENG.data.workorders.forEach(w=>{ const nm=(ENG.item(w.itemId)||{}).name||w.itemId; if((w.id+" "+nm).toLowerCase().includes(q)) out.push({ic:"⚙️",label:w.id+" — "+nm,tag:"Work Order",act:()=>this.go("production")}); });
         (ENG.data.leads||[]).forEach(l=>{ if((l.company+" "+l.id).toLowerCase().includes(q)) out.push({ic:"🎯",label:l.company,meta:l.id,tag:"Lead",act:()=>this.go("crm")}); });
         ENG.data.customers.forEach(c=>{ if((c.name+" "+c.id).toLowerCase().includes(q)) out.push({ic:"🤝",label:c.name,tag:"Customer",act:()=>this.go("customers")}); });

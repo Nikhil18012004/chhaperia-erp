@@ -357,13 +357,21 @@
     // sits under CRM because that is who books appointments, but the grid
     // itself spans procurement, sales, production and HR
     {id:"calendar", icon:"📅", label:"Calendar", accent:"violet", pillKey:"calToday"},
-    /* Procurement is open to the lab incharge (labOk) but NOT writable by them
-       (no labWrite): they go there to test what a goods receipt brought in, so
-       they read the orders and the receipts and file readings — they never
-       raise, edit or receive an order. The GRN test button is the one action
-       exempted from the read-only rule, in mod-trade. */
+    /* Procurement is NOT open to the lab incharge (removed 2026-09-03). They
+       used to come here to test what a goods receipt brought in; that work has
+       its own home now — Lab Reports ▸ Raw Materials (GRN) — and its rows open
+       the very same incoming-test form, shared through _erpUtil.grnTestForm,
+       so filing a reading is unchanged. Purchase orders and receipts stay in
+       their payload (viewService.stateForLab) because that worklist reads
+       them; what went is the screen, not the data.
+       ⚠ The section below KEEPS labOk on purpose even though nothing under it
+       is labOk today. buildNav tracks the section it is filling in a running
+       `itemsHost`, so a section head the role filters out does not reset it —
+       a labOk item added here later would silently land in the Operations
+       fold above. An empty fold costs nothing: buildNav drops any group that
+       ends up with no items, so the lab never sees a bare "Trade". */
     {sec:"Trade", labOk:true},
-    {id:"purchase", icon:"🛒", label:"Procurement", accent:"blue", pillKey:"openPO", labOk:true},
+    {id:"purchase", icon:"🛒", label:"Procurement", accent:"blue", pillKey:"openPO"},
     {id:"sales", icon:"🧾", label:"Sales Orders", accent:"orange", pillKey:"openSO"},
     {id:"suppliers", icon:"🏭", label:"Suppliers", accent:"violet"},
     {id:"customers", icon:"🤝", label:"Customers", accent:"pink"},
