@@ -1,8 +1,13 @@
 name: CI
 
 # Runs the backend smoke + HTTP integration tests on every push / PR.
-# The HTTP test boots the real Express app against a throwaway SQLite DB on
-# an ephemeral port, so routes, auth/RBAC and the role-scoped view are covered.
+# Both need a MySQL server: the smoke test drives the service + repository
+# layers, and the HTTP test boots the real Express app on an ephemeral port,
+# so routes, auth/RBAC and the role-scoped view are covered end to end.
+#
+# Each run takes a THROWAWAY schema of its own (chh_smoke_… / chh_http_…) and
+# drops it at the end, which is why the account below is granted those name
+# patterns and nothing else — the same fence the factory server runs behind.
 
 on:
   push:
@@ -16,6 +21,26 @@ jobs:
     strategy:
       matrix:
         node-version: [18.x, 20.x]
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      CHHAPERIA_DB_HOST: 127.0.0.1
+      CHHAPERIA_DB_PORT: "3306"
+      CHHAPERIA_DB_USER: chhaperia
+      CHHAPERIA_DB_PASSWORD: ci-app-password
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +52,27 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm install
+
+      # Done through mysql2 (just installed) rather than a mysql client, so the
+      # job does not depend on what happens to be on the runner image.
+      - name: Create the test account, fenced to this project's schemas
+        working-directory: backend
+        run: |
+          node -e '
+            const mysql = require("mysql2/promise");
+            (async () => {
+              const c = await mysql.createConnection({
+                host: "127.0.0.1", port: 3306, user: "root",
+                password: "ci-root-password", multipleStatements: false });
+              for (const sql of [
+                "CREATE USER IF NOT EXISTS \x27chhaperia\x27@\x27%\x27 IDENTIFIED BY \x27ci-app-password\x27",
+                "GRANT ALL PRIVILEGES ON `chh\\_smoke\\_%`.* TO \x27chhaperia\x27@\x27%\x27",
+                "GRANT ALL PRIVILEGES ON `chh\\_http\\_%`.* TO \x27chhaperia\x27@\x27%\x27",
+                "FLUSH PRIVILEGES",
+              ]) await c.query(sql);
+              await c.end();
+            })().catch((e) => { console.error(e); process.exit(1); });
+          '
 
       - name: Run tests (smoke + HTTP integration)
         working-directory: backend
