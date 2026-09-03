@@ -92,6 +92,21 @@ The schema and the eight seed accounts are created on first boot. **Change
 every seeded password before the machine is reachable by anyone else** — they
 start as `<username>@123`.
 
+### On the factory's own Windows machine — one script
+
+This is the deployment that keeps every feature working, and it is scripted:
+
+```
+powershell -ExecutionPolicy Bypass -File deploy\local\setup-windows.ps1 -OpenFirewall -AutoStart
+```
+
+Node and MySQL checked, the project's database and a fenced account created,
+`.env` written and locked down, dependencies installed, port 4000 opened to
+private networks only, and the server registered to start at logon. Re-running
+it keeps the existing secrets rather than rotating them. `deploy/local/README.md`
+has the detail — including why the server has to live on the machine that has
+BarTender and Word, and why the task starts at logon and not at boot.
+
 ## 3a. Or: one command, on any machine
 
 `docker-compose.yml` brings up the database and the ERP together, and is the
