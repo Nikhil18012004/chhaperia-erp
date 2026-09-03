@@ -92,6 +92,48 @@ The schema and the eight seed accounts are created on first boot. **Change
 every seeded password before the machine is reachable by anyone else** — they
 start as `<username>@123`.
 
+## 3a. Or: one command, on any machine
+
+`docker-compose.yml` brings up the database and the ERP together, and is the
+shortest honest path from a bare machine to a working server — the office PC,
+a VPS, an EC2 instance, all the same three lines:
+
+```
+cp .env.example .env      # fill in the two passwords and AUTH_SECRET
+docker compose up -d --build
+#   → http://<this machine's IP>:4000/
+```
+
+What it is doing, and why it is arranged that way:
+
+- **The database has no published port.** It is reachable from the application
+  and from nothing else — not the LAN, not another container, not a stray
+  client on the host. Dumps come from `docker compose exec db mysqldump …`.
+- **The application reaches it over loopback**, not a network: the two
+  containers share one network namespace (`network_mode: service:db`), which
+  is also why the ERP's port is published on the `db` service.
+- **The MySQL account is fenced to this ERP's schema** by `MYSQL_USER` /
+  `MYSQL_DATABASE`, the same narrow grant as §1.
+- **The rows live in a named volume** (`chhaperia-erp_db`), not a folder
+  anything else can reach. `docker compose down` keeps it; `down -v` destroys
+  it. Back it up before you touch either.
+- **Both containers restart with the machine.** A factory PC gets rebooted on
+  a Monday morning; the ERP has to come back without anybody logging in.
+- **`.env` is never baked into the image** — it is dockerignored, and the
+  settings are handed to the container at run time.
+
+`NODE_ENV` is deliberately left out of that stack. Production mode marks the
+login cookie `secure`, and a browser will not keep a secure cookie from a
+plain `http://` page — on a LAN with no certificate, **nobody can sign in**,
+with no error saying why. The three refusals production mode buys are enforced
+by the compose file instead (both secrets required, database on loopback). Put
+a certificate in front of it (§5) and turn `NODE_ENV: production` on the same
+day.
+
+Moving the database off the machine later — RDS, Aiven, anything managed —
+means deleting the `db` service and the `network_mode` line and setting
+`CHHAPERIA_DB_URL` with SSL. Nothing else changes.
+
 ## 4. Reaching it from the floor
 
 The server binds all interfaces, so any device on the same network can reach

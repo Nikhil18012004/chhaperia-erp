@@ -86,6 +86,17 @@ accounts are created on first boot (`admin` / `admin@123` — change them).
 > The database auto-seeds ~120 days of realistic, balanced demo data on first run.
 > Use **Settings → Reset to Demo Data** (or `POST /api/reset`) to regenerate.
 
+### …or the whole thing in one command
+
+```bash
+cp .env.example .env          # two passwords and AUTH_SECRET
+docker compose up -d --build  # → http://<this machine's IP>:4000/
+```
+
+Database and server together, the database with **no published port** (the app
+reaches it over loopback, nothing else reaches it at all), the rows in a named
+volume, both containers restarting with the machine. `DEPLOY.md §3a`.
+
 ### Where this project's data lives — and only there
 
 | | |

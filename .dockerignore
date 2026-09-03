@@ -1,6 +1,12 @@
 # keep the build context small & the image clean
 **/node_modules
 .git
+# NEVER bake the machine's own configuration into an image: .env holds the
+# database password and the token-signing secret, and an image gets pushed.
+# The container is handed its settings at run time instead.
+.env
+.env.*
+!.env.example
 .gitignore
 .gitattributes
 data/

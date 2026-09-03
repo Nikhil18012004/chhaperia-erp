@@ -1,0 +1,109 @@
+# ============================================================
+# Chhaperia ERP — the whole thing, on one machine, in one command
+#
+#   cp .env.example .env     # fill in the two passwords and the secret
+#   docker compose up -d --build
+#   → http://<this machine's IP>:4000/
+#
+# WHAT THIS STACK DELIBERATELY DOES
+#
+# • Nothing it stores can collide with, or be reached by, anything else on
+#   the machine. The project name below prefixes both volumes and the
+#   network, so `chhaperia-erp_db` is this ERP's database and no other
+#   stack's. The rows live in a named volume, not a folder somebody might
+#   share, and the ERP's files in a second one.
+#
+# • The database has NO published port. It is reachable from the
+#   application and from nothing else — not the LAN, not another container,
+#   not a stray client on the host. Take a dump with
+#   `docker compose exec db mysqldump …`, not by opening 3306.
+#
+# • The application connects over LOOPBACK, not a network. `network_mode:
+#   service:db` puts both containers in ONE network namespace, so the
+#   database really is on 127.0.0.1 as far as the app is concerned. That is
+#   why the production guard in db/connection.js — which refuses to reach a
+#   REMOTE database unencrypted — is satisfied honestly here rather than
+#   waved through with a flag. It is also why the app's port is published on
+#   the `db` service below: the two share one set of ports.
+#
+# • The MySQL account is fenced to this ERP's schema. MYSQL_USER/_DATABASE
+#   grant it rights on `chhaperia_erp` and nothing else, so even a
+#   misconfigured CHHAPERIA_DB_NAME cannot write into another database.
+#   The app's own CREATE DATABASE is refused (1044) and handled — the
+#   schema is made here, by the server, once.
+#
+# • Both containers restart with the machine, which is what "hosted" has to
+#   mean for a factory that reboots the office PC on a Monday morning.
+#
+# MOVING THE DATABASE OFF THIS MACHINE LATER (RDS, Aiven, …): delete the
+# `db` service and the `network_mode` line, and set CHHAPERIA_DB_URL with
+# ssl enabled. Nothing else changes.
+# ============================================================
+name: chhaperia-erp
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CHHAPERIA_DB_ROOT_PASSWORD:?set CHHAPERIA_DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${CHHAPERIA_DB_NAME:-chhaperia_erp}
+      MYSQL_USER: ${CHHAPERIA_DB_USER:-chhaperia}
+      MYSQL_PASSWORD: ${CHHAPERIA_DB_PASSWORD:?set CHHAPERIA_DB_PASSWORD in .env}
+    # The ERP's HTTP port. It lives on this service because the app shares
+    # this container's network namespace — see the header.
+    ports:
+      - "${PORT:-4000}:4000"
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${CHHAPERIA_DB_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  app:
+    build: .
+    restart: unless-stopped
+    # One network namespace with the database: the connection below is
+    # loopback, and the published port above is this server's.
+    network_mode: "service:db"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # NODE_ENV is deliberately NOT "production" here, and that is not
+      # laziness. Production mode marks the login cookie `secure`, and a
+      # browser will not send — or even keep — a secure cookie from a plain
+      # http:// page. On a factory LAN with no certificate that means NOBODY
+      # CAN SIGN IN, with no error that says why.
+      #
+      # The three things production mode refuses are enforced by this file
+      # instead: AUTH_SECRET is required above, the database password is
+      # required above, and the database is on loopback rather than reached
+      # over a network. Nothing is being waved through.
+      #
+      # Put a certificate in front of it — Caddy on a real domain, per
+      # DEPLOY.md §5 — and set NODE_ENV: production the same day.
+      PORT: "4000"
+      CHHAPERIA_DB_HOST: 127.0.0.1
+      CHHAPERIA_DB_PORT: "3306"
+      CHHAPERIA_DB_NAME: ${CHHAPERIA_DB_NAME:-chhaperia_erp}
+      CHHAPERIA_DB_USER: ${CHHAPERIA_DB_USER:-chhaperia}
+      CHHAPERIA_DB_PASSWORD: ${CHHAPERIA_DB_PASSWORD:?set CHHAPERIA_DB_PASSWORD in .env}
+      # Signs every login token. Changing it logs everyone out.
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env — openssl rand -hex 32}
+      CHHAPERIA_DATA_DIR: /data
+    volumes:
+      - data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  db:      # the ledger. Back this up; `docker compose down` keeps it, `down -v` does not.
+  data:    # BarTender hand-off CSVs and the TDS booklet
