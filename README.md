@@ -63,22 +63,50 @@ chhaperia-erp/
 ## 🚀 Run
 
 ```bash
-# 1. install backend deps (also builds the SQLite native module)
-cd backend
-npm install
+# 1. install backend deps (pure JS — mysql2 needs no compiler)
+npm install --prefix backend
 
-# 2. (optional) seed the database explicitly — otherwise it auto-seeds on first request
-npm run seed
+# 2. give the project its own MySQL database and an account that can reach
+#    that database and nothing else
+mysql -u root -e "CREATE DATABASE chhaperia_erp CHARACTER SET utf8mb4;
+  CREATE USER 'chhaperia'@'localhost' IDENTIFIED BY '<a real password>';
+  GRANT ALL PRIVILEGES ON chhaperia_erp.* TO 'chhaperia'@'localhost';"
 
-# 3. start the server (serves API + frontend on one origin)
+# 3. this project's configuration lives in this project
+cp .env.example .env      # then fill in the password and AUTH_SECRET
+
+# 4. start the server (serves API + frontend on one origin)
 npm start
 #   → http://localhost:4000
 ```
 
-Open **http://localhost:4000** in your browser.
+Open **http://localhost:4000** in your browser. The schema and the eight seed
+accounts are created on first boot (`admin` / `admin@123` — change them).
 
 > The database auto-seeds ~120 days of realistic, balanced demo data on first run.
 > Use **Settings → Reset to Demo Data** (or `POST /api/reset`) to regenerate.
+
+### …or the whole thing in one command
+
+```bash
+cp .env.example .env          # two passwords and AUTH_SECRET
+docker compose up -d --build  # → http://<this machine's IP>:4000/
+```
+
+Database and server together, the database with **no published port** (the app
+reaches it over loopback, nothing else reaches it at all), the rows in a named
+volume, both containers restarting with the machine. `DEPLOY.md §3a`.
+
+### Where this project's data lives — and only there
+
+| | |
+|---|---|
+| Configuration | `<repo>/.env` (gitignored). Machine-wide `DATABASE_URL` is **ignored** — every name the app reads is `CHHAPERIA_*` |
+| Rows | one MySQL schema, `CHHAPERIA_DB_NAME` (default `chhaperia_erp`). The server **refuses to boot** if that schema holds another application's tables |
+| Files | `CHHAPERIA_DATA_DIR`, default `<repo>/data` — BarTender CSVs, the TDS booklet, nothing outside |
+| Tests | a throwaway `chh_smoke_…`/`chh_http_…` schema plus `data/_scratch/<run>/`, both dropped afterwards and swept if a run is killed |
+
+Full reasoning in `DEPLOY.md` §2a.
 
 ## 🔌 API
 

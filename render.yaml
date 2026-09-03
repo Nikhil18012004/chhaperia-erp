@@ -15,7 +15,7 @@ services:
     plan: free
     region: singapore        # closest free region to India; also: oregon, frankfurt, ohio, virginia
     branch: main
-    buildCommand: npm install # root postinstall installs backend deps (better-sqlite3 ships prebuilt binaries)
+    buildCommand: npm install # root postinstall installs backend deps (mysql2 is pure JS — no toolchain)
     startCommand: npm start    # node backend/src/server.js — serves /api + the frontend
     healthCheckPath: /api/health
     autoDeploy: true
@@ -26,3 +26,6 @@ services:
         value: production   # engages the AUTH_SECRET fail-fast in authService
       - key: AUTH_SECRET
         generateValue: true # Render mints a random secret; never commit one here
+      # Set CHHAPERIA_DB_URL (or the CHHAPERIA_DB_* parts) in the Render
+      # dashboard. A DATABASE_URL from a linked Render database is NOT read —
+      # the app only accepts credentials addressed to it by name.

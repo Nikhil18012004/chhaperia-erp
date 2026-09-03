@@ -9,14 +9,14 @@
    ============================================================ */
 "use strict";
 const path = require("path");
-const os = require("os");
 const fs = require("fs");
 
-/* A scratch DATABASE on the configured MySQL server for this run, dropped at
-   the end. Set BEFORE the server module loads. */
-const SCRATCH = "chh_http_" + process.pid + "_" + Date.now();
-process.env.CHHAPERIA_DB_NAME = SCRATCH;
-process.env.CHHAPERIA_DATA_DIR = os.tmpdir();
+/* A scratch DATABASE on the configured MySQL server and a scratch DIRECTORY
+   inside the project for this run, both dropped at the end — no file this
+   run writes lands in the machine's shared temp folder. Set BEFORE the
+   server module loads. */
+const scratch = require("./scratch");
+const RUN = scratch.claim("http");
 process.env.PORT = "0"; // ask the OS for a free port
 process.env.CHHAPERIA_BARTENDER_NOLAUNCH = "1"; // never pop the label app open mid-test
 process.env.CHHAPERIA_TDS_NOCONVERT = "1";      // nor Word, for a TDS upload
@@ -2643,7 +2643,7 @@ async function run() {
        Seagull\BarTender <year>\BarTender Suite\bartend.exe — three levels —
        and the old two-level scan reported a healthy install as missing.
        The scan roots are injectable via env, so a fake install proves it. */
-    const btRoot = path.join(os.tmpdir(), "chh-btscan-" + process.pid);
+    const btRoot = path.join(RUN.dir, "btscan");
     const deepDir = path.join(btRoot, "Seagull", "BarTender 2022", "BarTender Suite");
     const fakeExe = path.join(deepDir, "bartend.exe");
     fs.mkdirSync(deepDir, { recursive: true });
@@ -3459,15 +3459,9 @@ run()
   .finally(async () => {
     try { server.close(); } catch {}
     try { await closeDb(); } catch {}
-    /* drop this run's scratch database */
-    try {
-      const mysql = require("../node_modules/mysql2/promise");
-      const cfg = require("../src/db/connection").readConfig();
-      const c = await mysql.createConnection({ host: cfg.host, port: cfg.port,
-        user: cfg.user, password: cfg.password });
-      await c.query("DROP DATABASE IF EXISTS `" + SCRATCH + "`");
-      await c.end();
-    } catch { /* untidy, not fatal */ }
+    /* drop this run's scratch database and directory, and sweep any that a
+       run which died before this point left behind */
+    await scratch.release(RUN);
     console.log("\n" + (fail === 0 ? "PASS" : "FAIL") + " — " + pass + " passed, " + fail + " failed\n");
     process.exit(fail === 0 ? 0 : 1);
   });

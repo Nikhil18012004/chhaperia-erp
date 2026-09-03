@@ -47,6 +47,10 @@ data/chhaperia.db
 data/*.db
 data/chhaperia.db.premysql-*.bak
 
+# Test scratch space: one directory per run under data/_scratch/, alongside a
+# scratch MySQL schema of the same name. Both are swept by backend/test/scratch.js.
+data/_scratch/
+
 # Demo-layer manifests: a record of which rows THIS machine's database holds,
 # written by tools/temp-demo, tools/temp-directories.js and tools/demo-data.js.
 # Local state, not source.

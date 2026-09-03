@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Windows scripts must arrive with CRLF whatever the checkout settings are:
+# cmd.exe mis-parses an LF-only batch file, and a .ps1 read as ANSI garbles
+# every accented character in its messages (the .ps1 also carries a UTF-8 BOM,
+# which is what makes Windows PowerShell 5.1 read it as UTF-8 at all).
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf

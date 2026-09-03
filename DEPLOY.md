@@ -17,11 +17,23 @@ CREATE USER 'chhaperia'@'%' IDENTIFIED BY '<a real password>';
 GRANT ALL PRIVILEGES ON chhaperia_erp.* TO 'chhaperia'@'%';
 ```
 
+On a machine that also RUNS THE TESTS, add the scratch schemas the suite
+creates and drops for itself — and nothing wider:
+
+```
+GRANT ALL PRIVILEGES ON `chh\_smoke\_%`.* TO 'chhaperia'@'%';
+GRANT ALL PRIVILEGES ON `chh\_http\_%`.*  TO 'chhaperia'@'%';
+```
+
 Never point the app at `root`. See `database/MIGRATION.md` for carrying data
 across from the old SQLite file — one command, and it verifies the row counts
 itself.
 
 ## 2. The environment
+
+Copy `.env.example` to **`.env` in the repository root** and fill it in. That
+file is this project's configuration and it is gitignored — see §2a for why it
+is a file rather than machine-wide variables.
 
 | Variable | Why it matters |
 |---|---|
@@ -34,6 +46,36 @@ itself.
 Generate the secret once and keep it: `openssl rand -hex 32`. Changing it logs
 everyone out, which is the correct way to end all sessions after a breach.
 
+Anything already exported in the real environment wins over `.env`; the file
+only fills in what is missing. That is what lets a container or a Render
+service keep injecting its own secrets while a laptop reads them from disk.
+
+## 2a. One project, one database, one folder
+
+This machine may run other things. The ERP is built so that it cannot reach
+into them, and nothing of it leaks out:
+
+- **Configuration is a file inside the project**, not machine-wide variables.
+  The bare `DATABASE_URL` — the most-shared variable name there is — is
+  deliberately **not read**; if one is set the server says so once and ignores
+  it. Every name the app honours starts with `CHHAPERIA_`.
+- **One schema, and it must be ours.** On boot the app checks the schema it is
+  pointed at. Empty, or already holding its own tables: it proceeds. Holding
+  tables that belong to something else: it **refuses to start** rather than
+  stamp an ERP over another application's data. (`CHHAPERIA_DB_ALLOW_FOREIGN=1`
+  overrides it, for the one case where two things really do share a schema.)
+- **Give the database account rights to this database only.** The `GRANT` in
+  §1 is scoped to `chhaperia_erp.*` — so even a misconfiguration cannot write
+  anywhere else. Never point the app at `root`.
+- **Every file goes under the project.** `CHHAPERIA_DATA_DIR` defaults to
+  `<repo>/data` and holds the BarTender hand-off CSVs and the TDS booklet.
+  Override it for a mounted volume (the container image does); never point it
+  at a shared location such as the system temp folder.
+- **The test suite is fenced too.** Each run takes a throwaway schema named
+  `chh_smoke_…` / `chh_http_…` and a directory under `data/_scratch/`, drops
+  both at the end, and sweeps anything a killed run left behind. It never
+  touches `chhaperia_erp`.
+
 In production the server **refuses to start** if `AUTH_SECRET` is missing, if
 the database password is empty, or if it would reach a remote database
 unencrypted. Those refusals are the point — do not work around them.
@@ -42,12 +84,70 @@ unencrypted. Those refusals are the point — do not work around them.
 
 ```
 npm install --prefix backend --omit=dev
-NODE_ENV=production AUTH_SECRET=... CHHAPERIA_DB_USER=... node backend/src/server.js
+cp .env.example .env    # then fill it in (§2)
+node backend/src/server.js
 ```
 
 The schema and the eight seed accounts are created on first boot. **Change
 every seeded password before the machine is reachable by anyone else** — they
 start as `<username>@123`.
+
+### On the factory's own Windows machine — one script
+
+This is the deployment that keeps every feature working, and it is scripted:
+
+```
+powershell -ExecutionPolicy Bypass -File deploy\local\setup-windows.ps1 -OpenFirewall -AutoStart
+```
+
+Node and MySQL checked, the project's database and a fenced account created,
+`.env` written and locked down, dependencies installed, port 4000 opened to
+private networks only, and the server registered to start at logon. Re-running
+it keeps the existing secrets rather than rotating them. `deploy/local/README.md`
+has the detail — including why the server has to live on the machine that has
+BarTender and Word, and why the task starts at logon and not at boot.
+
+## 3a. Or: one command, on any machine
+
+`docker-compose.yml` brings up the database and the ERP together, and is the
+shortest honest path from a bare machine to a working server — the office PC,
+a VPS, an EC2 instance, all the same three lines:
+
+```
+cp .env.example .env      # fill in the two passwords and AUTH_SECRET
+docker compose up -d --build
+#   → http://<this machine's IP>:4000/
+```
+
+What it is doing, and why it is arranged that way:
+
+- **The database has no published port.** It is reachable from the application
+  and from nothing else — not the LAN, not another container, not a stray
+  client on the host. Dumps come from `docker compose exec db mysqldump …`.
+- **The application reaches it over loopback**, not a network: the two
+  containers share one network namespace (`network_mode: service:db`), which
+  is also why the ERP's port is published on the `db` service.
+- **The MySQL account is fenced to this ERP's schema** by `MYSQL_USER` /
+  `MYSQL_DATABASE`, the same narrow grant as §1.
+- **The rows live in a named volume** (`chhaperia-erp_db`), not a folder
+  anything else can reach. `docker compose down` keeps it; `down -v` destroys
+  it. Back it up before you touch either.
+- **Both containers restart with the machine.** A factory PC gets rebooted on
+  a Monday morning; the ERP has to come back without anybody logging in.
+- **`.env` is never baked into the image** — it is dockerignored, and the
+  settings are handed to the container at run time.
+
+`NODE_ENV` is deliberately left out of that stack. Production mode marks the
+login cookie `secure`, and a browser will not keep a secure cookie from a
+plain `http://` page — on a LAN with no certificate, **nobody can sign in**,
+with no error saying why. The three refusals production mode buys are enforced
+by the compose file instead (both secrets required, database on loopback). Put
+a certificate in front of it (§5) and turn `NODE_ENV: production` on the same
+day.
+
+Moving the database off the machine later — RDS, Aiven, anything managed —
+means deleting the `db` service and the `network_mode` line and setting
+`CHHAPERIA_DB_URL` with SSL. Nothing else changes.
 
 ## 4. Reaching it from the floor
 

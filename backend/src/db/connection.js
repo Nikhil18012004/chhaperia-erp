@@ -35,23 +35,34 @@ const fs = require("fs");
 const path = require("path");
 const mysql = require("mysql2/promise");
 
-const ROOT = path.join(__dirname, "..", "..", "..");
-const SCHEMA_FILE = path.join(ROOT, "database", "schema.mysql.sql");
+/* Project-scoped configuration, read before anything looks at process.env.
+   It also owns DATA_DIR — the one directory this project writes files into. */
+const { ROOT, DATA_DIR } = require("../env");
 
-/* The application's own data DIRECTORY on disk. Nothing to do with the
-   database any more — the rows live in MySQL — but BarTender's hand-off CSVs
-   are still files, and this is where they go. It stayed in this module
-   because that is where everything already imports it from. */
-const DATA_DIR = process.env.CHHAPERIA_DATA_DIR || path.join(ROOT, "data");
-try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch { /* best effort */ }
+const SCHEMA_FILE = path.join(ROOT, "database", "schema.mysql.sql");
 
 /* ---- configuration: environment only, never a literal ----
    A connection string wins if one is given (managed providers hand
    you one); otherwise the parts. There is no default password and
    there is no default that reaches a remote host: an unconfigured
-   install talks to localhost or it does not start. */
+   install talks to localhost or it does not start.
+
+   Every name is prefixed CHHAPERIA_. The bare DATABASE_URL is NOT read:
+   it is the most-shared variable name on any machine that runs more than
+   one application, and honouring it meant a database belonging to some
+   other project could be adopted — schema applied, rows written — purely
+   because a shell profile still exported it. If one is present we say so
+   once and ignore it, because silently ignoring a variable somebody
+   believed was configuring this app is its own kind of trap. */
+let warnedForeignUrl = false;
 function readConfig() {
-  const url = process.env.CHHAPERIA_DB_URL || process.env.DATABASE_URL || "";
+  const url = process.env.CHHAPERIA_DB_URL || "";
+  if (!url && process.env.DATABASE_URL && !warnedForeignUrl) {
+    warnedForeignUrl = true;
+    console.warn("[db] DATABASE_URL is set but IGNORED — it is shared with " +
+      "whatever else runs on this machine. Set CHHAPERIA_DB_URL (or the " +
+      "CHHAPERIA_DB_HOST/_USER/_PASSWORD/_NAME parts) in the project's .env.");
+  }
   if (url) {
     let u;
     try { u = new URL(url); } catch {
@@ -97,6 +108,52 @@ function sslOptions(cfg) {
 
 let pool = null;
 let ready = null;
+
+/* ---- the database this project owns, and no other -----------
+   init() applies the schema to whatever CHHAPERIA_DB_NAME points at.
+   That is the right behaviour when it points at OUR database and a
+   destructive one when a typo, a copied .env or a stale variable
+   points it at a database belonging to something else — the tables
+   would be created there, the seed would run, and the first anyone
+   knew of it would be an ERP's worth of rows inside another app.
+
+   So: an EMPTY schema is ours to fill; a schema already holding at
+   least one of our own tables is ours to migrate; a schema holding
+   tables and none of ours belongs to somebody else and we stop
+   before writing a single statement into it. The table list is read
+   out of schema.mysql.sql rather than kept in a second list here, so
+   it cannot fall behind. */
+function ourTableNames(sql) {
+  const names = new Set();
+  const re = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`([^`]+)`/gi;
+  let m;
+  while ((m = re.exec(sql))) names.add(m[1].toLowerCase());
+  return names;
+}
+
+async function assertSchemaIsOurs(conn, database) {
+  const [rows] = await conn.query(
+    "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?",
+    [database]);
+  if (!rows.length) return;                       // empty — ours to fill
+  const ours = ourTableNames(fs.readFileSync(SCHEMA_FILE, "utf8"));
+  const present = rows.map((r) => String(r.t).toLowerCase());
+  if (present.some((t) => ours.has(t))) return;   // ours, or a half-built one
+
+  if (/^(1|true|yes)$/i.test(process.env.CHHAPERIA_DB_ALLOW_FOREIGN || "")) {
+    console.warn("[db] `" + database + "` holds tables that are not this " +
+      "application's, and CHHAPERIA_DB_ALLOW_FOREIGN says to proceed anyway.");
+    return;
+  }
+  throw new Error(
+    "Refusing to install the ERP schema into `" + database + "`: it already " +
+    "holds " + present.length + " table(s) and none of them are this " +
+    "application's (" + present.slice(0, 5).join(", ") +
+    (present.length > 5 ? ", …" : "") + "). That database belongs to " +
+    "something else. Point CHHAPERIA_DB_NAME at this project's own database " +
+    "— the default is `chhaperia_erp` — or, if you are certain the two are " +
+    "meant to share one schema, set CHHAPERIA_DB_ALLOW_FOREIGN=1.");
+}
 
 /* ---- refuse to run misconfigured in production ----
    The SQLite build could always fall back to a file it created
@@ -283,6 +340,7 @@ async function init() {
 
     const conn = await pool.getConnection();
     try {
+      await assertSchemaIsOurs(conn, cfg.database);
       const sql = fs.readFileSync(SCHEMA_FILE, "utf8");
       for (const stmt of splitStatements(sql)) await conn.query(stmt);
       await migrate(conn, cfg.database);
