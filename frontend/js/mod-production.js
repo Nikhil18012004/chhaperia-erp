@@ -2549,14 +2549,11 @@ recalc(); },50);
           sort:fg=>(ENG.data.boms[fg.id]||{}).yield||0},
         {key:"bom",label:"BOM",render:fg=>{const b=ENG.data.boms[fg.id];
           return b?`<span style="color:var(--accent);font-weight:600;font-size:12px">${BOMCALC.normalize(b.lines).length} components ›</span>`:'<span class="muted">No BOM</span>';},noSort:true},
-        /* Copy, on every product that HAS a recipe — the row is where someone
-           is looking when they think "another one like this". The table ignores
-           clicks that land on a button, so this does not also open the row. */
-        {key:"copy",label:"",noSort:true,render:fg=>{
-          if(!ENG.data.boms[fg.id] || !App.canWrite("bom")) return '<span class="muted"></span>';
-          return h("button",{class:"btn sm ghost",title:"Copy this BOM into a new product",
-            onclick:()=>bomForm(null,{copyFrom:fg.id}),text:"⧉"});
-        }},
+        /* No copy icon on the row. Copying a recipe is a thing you decide
+           having LOOKED at it — and the recipe itself carries "⧉ Copy BOM" in
+           its footer, so the row icon was a second door to the same place,
+           sitting in a column of its own on every line of a hundred-product
+           table. Open the product, read the recipe, copy it from there. */
       ],{empty:"No products in this series",
          onRow:fg=>{ if(ENG.data.boms[fg.id]) bomView(fg.id); else bomForm(fg.id); }});
     }
