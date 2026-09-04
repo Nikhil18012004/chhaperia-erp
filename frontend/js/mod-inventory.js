@@ -127,9 +127,12 @@
   /* ----- "New Item" split-button: create / receive via PO / add stock ----- */
   function newItemMenu(){
     const menu=h("div",{class:"ni-menu",hidden:true},[
-      /* the one-shot form: the item, what the lab tests it on, and its
-         recipe — created or joined — without leaving this page (mod-catalogue) */
-      h("button",{class:"ni-opt",onclick:()=>{close();(window.CAT?CAT.newItemWizard():itemForm());},html:"🧾 New Item — with test parameters &amp; BOM"}),
+      /* ADD STOCK IS THE ONE WAY IN. It used to sit beside a second form that
+         created an item with its test parameters and its recipe but no stock,
+         so the same material could be invented two ways and only one of them
+         put anything on the shelf. Add Stock now carries that whole form —
+         the parameters, the recipe, the catalogue fields — so the split is
+         gone and there is a single place a new material is born. */
       h("button",{class:"ni-opt",onclick:()=>{close();addStockForm();},html:"📦 Add Stock"}),
       h("button",{class:"ni-opt",onclick:()=>{close();receiveStockForm();},html:"🚚 Receive via PO"}),
     ]);
@@ -639,6 +642,32 @@
     /* single form: quantity sits right below the category, the unit (kg /
        sqm / m) below it, and the auto-calculated length below the unit — the
        length re-derives live from quantity, GSM and width */
+    /* ---- THE CATALOGUE HALF OF A NEW MATERIAL ----
+       A material invented at the counter is a catalogue entry like any other:
+       it is tested on something, and it either has a recipe of its own or
+       belongs to somebody else's. These are the very editors the New Item form
+       was built from, lent whole by mod-catalogue, so a material created here
+       is defined exactly as one created there and the two cannot drift apart.
+       They show only while CREATING — an existing item's parameters and recipe
+       are already filed, and a goods receipt is no place to edit them. */
+    const CATED = (window.CAT && CAT.testParamsEditor && CAT.bomEditor) ? CAT : null;
+    const tpEd  = CATED ? CATED.testParamsEditor("s") : null;
+    const bomEd = CATED ? CATED.bomEditor("s", ()=>catNow()) : null;
+    const catExtra = CATED ? h("div",{id:"s_newonly"},[
+      h("div",{class:"cg-sec"},[h("span",{text:"The item — catalogue details"}),h("span",{class:"sp"})]),
+      h("div",{class:"form-grid"},[
+        field("Selling Price (₹)",`<input class="input" id="s_price" type="number" step="0.01" value="0">`),
+        field("Lead Time (days)",`<input class="input" id="s_lead" type="number" value="7">`),
+        field("GST Rate (%)",`<input class="input" id="s_gst" type="number" step="0.1" value="18">`),
+      ]),
+      h("div",{class:"cg-sec"},[h("span",{text:"Testing parameters"}),h("span",{class:"sp"})]),
+      h("p",{class:"dim",style:"font-size:12px;margin:0 0 8px;line-height:1.5",
+        text:"What the lab measures on it — on every receipt of a material, on every batch certificate of a product. Search a parameter already in use, or add a new one with its unit. A range grades the reading pass or fail; a static figure is the target printed beside it."}),
+      tpEd.node,
+      h("div",{class:"cg-sec"},[h("span",{text:"Recipe (BOM)"}),h("span",{class:"sp"})]),
+      bomEd.node,
+    ]) : h("div",{hidden:true});
+
     const body=h("div",{},[
       h("p",{class:"dim",style:"margin-bottom:12px",text:"Scan a barcode or pick an item (or create a new one). Enter the quantity in kg, sqm or metres — for fabrics and tapes the other two are derived from the GSM and the width, and the item's own tracking unit is what posts to the ledger."}),
       h("div",{class:"form-grid"},[
@@ -663,12 +692,13 @@
           field("Rate (₹ per unit)",`<input class="input" id="s_rate" type="number" step="0.01" placeholder="0">`),
           field("Warehouse",selectHTML("s_wh",whs.map(w=>({v:w.id,l:w.name})),defaultWh("RM"))
             +`<div class="muted" id="s_whnote" style="font-size:11px;margin-top:4px"></div>`),
-        ])
+        ]),
+        catExtra
       ])
     ]);
-    const mo=modal({title:"Add Stock", sub:"Add / update an item and post a receipt", wide:true, body,
-      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
-        h("button",{class:"btn primary",onclick:save,text:"Add to Inventory"})]});
+    const addBtn=h("button",{class:"btn primary",onclick:save,text:"Add to Inventory"});
+    const mo=modal({title:"Add Stock", sub:"An item — with what the lab tests it on and its recipe — and the receipt that puts it on the shelf", wide:true, body,
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), addBtn]});
     { const w=UI.$("#s_wh"); if(w) w.addEventListener("change",()=>{ whTouched=true; }); }
     const sel=UI.$("#s_item");
     const setVal=(id,v)=>{const el=UI.$("#"+id); if(el) el.value=v;};
@@ -696,6 +726,9 @@
         setVal("s_reorder",it.reorder!=null?it.reorder:"0");
         setVal("s_hsn",it.hsn||"");
       }
+      /* the parameters and the recipe are asked for only when the material is
+         being invented; an existing one already has both on file */
+      catExtra.style.display = (sel.value==="__new") ? "" : "none";
       updFab();
     }
     /* which category the form is working in — the picked item's own category
@@ -799,16 +832,22 @@
       if(el) el.textContent="= "+ENG.num(c.sqm,1)+" sqm → "+ENG.num(c.len,1)+" m @ "+c.wid+" mm width"
         +(c.kg!=null?" · "+ENG.num(c.kg,2)+" kg":"");
     }
+    /* the borrowed editors hang their listeners off element ids, so they are
+       drawn once the dialog is in the document — and after `sel`, which the
+       recipe section reads through catNow() to know which way round it goes */
+    if(CATED){ tpEd.draw(); bomEd.draw(); }
     sel.onchange=fillParams; fillParams();
     const uomSel=UI.$("#s_uom"); if(uomSel) uomSel.addEventListener("change",updFab);
-    const catSel=UI.$("#s_cat"); if(catSel) catSel.addEventListener("change",updFab);
+    /* FG builds a recipe of its own, everything else joins a product's — so
+       the recipe section is redrawn whenever the category changes */
+    const catSel=UI.$("#s_cat"); if(catSel) catSel.addEventListener("change",()=>{ updFab(); if(bomEd) bomEd.draw(); });
     ["s_qty","s_wid","s_tapewid"].forEach(id=>{ const el=UI.$("#"+id); if(el) el.addEventListener("input",calcLen); });
     const gsmIn=UI.$("#s_gsm"); if(gsmIn) gsmIn.addEventListener("input",updFab);
     /* barcode scan: match by barcode or item code, select it, jump to qty */
     attachScan(UI.$("#s_scan"), (found)=>{
       if(!stockCatIds.has(found.cat)){ toast(found.name+" is not a stockable item",{type:"warn"}); return; }
       setSel("s_item",found.id); fillParams(); const q=UI.$("#s_qty"); if(q) q.focus(); });
-    function save(){
+    async function save(){
       const g=id=>{const el=UI.$("#"+id); return el?el.value:"";};
       let qty=+g("s_qty"); const rate=+g("s_rate")||0, wh=g("s_wh"), qUnit=g("s_uom");
       if(!qty || isNaN(qty) || qty<=0){ toast("Enter a quantity greater than zero",{type:"warn"}); return; }
@@ -830,7 +869,7 @@
         /* chemicals: kg entry converted into the item's own tracking unit */
         qty=qty*({KG:1,GRAM:1000,MG:1e6}[postUom]||1);
       }
-      let itemId=sel.value, it;
+      let itemId=sel.value, it, itemSaved=false;
       if(itemId==="__new"){
         const name=g("s_name").trim();
         if(!name){ toast("Item name is required for a new item",{type:"warn"}); return; }
@@ -843,9 +882,39 @@
           thicknessMM:+g("s_thk")||null, gsm:+g("s_gsm")||null, fabric:fab,
           width:+g("s_wid")||(fab?1000:null), length:+g("s_len")||null,
           tapeWidthMM:fgNow?(+g("s_tapewid")||null):null,
-          reorder:+g("s_reorder")||0, safety:0, lead:7,
-          cost:rate||0, price:0, hsn:g("s_hsn").trim(), abc:"C", moq:0, active:true,
+          reorder:+g("s_reorder")||0, safety:0, lead:+g("s_lead")||7,
+          cost:rate||0, price:+g("s_price")||0, hsn:g("s_hsn").trim(),
+          gstRate:g("s_gst")===""?18:+g("s_gst"), abc:"C", moq:0, active:true,
           barcode:"890"+Math.floor(Math.random()*1e7) };
+        /* THE PARAMETERS AND THE RECIPE ARE THE SERVER'S TO WRITE. It keys a
+           new parameter the way every other parameter is keyed, files the
+           limits against the material, raises the lab product a finished good
+           is certified against, and saves the recipe — none of which pushing
+           an item into the local dataset can do. So the moment either section
+           holds anything, the item is created through the one-shot catalogue
+           endpoint, and only the goods receipt is posted from here. With both
+           left empty nothing has changed and the old local path stands. */
+        if(CATED && (tpEd.count() || bomEd.active())){
+          const tests=tpEd.collect(cat); if(!tests) return;
+          const bom=bomEd.collect(cat); if(!bom) return;
+          addBtn.disabled=true; addBtn.textContent="Creating…";
+          let r=null;
+          try{ r=await DB.catalogue.newItem({item:it, tests, bom}); }
+          catch(e){ toast(e.message||"Could not create the item",{type:"danger"}); }
+          addBtn.disabled=false; addBtn.textContent="Add to Inventory";
+          if(!r) return;
+          /* the lab only ever PROPOSES — the item does not exist yet, so there
+             is nothing to book stock against. Say so, rather than post a
+             receipt against something that may never be approved. */
+          if(r.proposed){
+            mo.close();
+            toast("Sent to the admin for approval — "+r.proposal.id+". The stock goes in once the item is approved.",
+              {type:"ok",title:"Proposal sent",dur:7000});
+            await App.reloadState();
+            return;
+          }
+          it=r.item||it; itemSaved=true;
+        }
         ENG.data.items.push(it);
       } else {
         it=ENG.item(itemId);
@@ -872,7 +941,14 @@
       ENG.data.movements.push(move);
       mo.close();
       toast(`${ENG.num(qty,2)} ${it.uom} added to ${it.name}`,{type:"ok",title:"Stock added"});
-      App.saveDelta(async()=>{ await DB.items.put(it); await DB.movements.add(move); });
+      /* an item the catalogue endpoint has already written is left alone —
+         re-putting the draft would overwrite the server's own cleaned copy,
+         and its parameters and recipe with it. Only the receipt is left to
+         post; the state is then pulled back so the new parameters, the lab
+         product and the recipe are all on screen without a page reload. */
+      App.saveDelta(async()=>{ if(!itemSaved) await DB.items.put(it); await DB.movements.add(move); })
+        .then(()=>{ if(itemSaved) return App.reloadState(); })
+        .catch(()=>{});
     }
   }
 
@@ -1639,6 +1715,9 @@
   window.ERPActions = Object.assign(window.ERPActions||{}, {
     addStock:    { mod:"inventory", create:true, ic:"📦", label:"Add Stock",             run:()=>addStockForm() },
     receivePO:   { mod:"inventory", create:true, ic:"🚚", label:"Receive via PO",        run:()=>receiveStockForm() },
-    newItem:     { mod:"inventory", create:true, ic:"＋", label:"New Item",               run:()=>(window.CAT?CAT.newItemWizard():itemForm()) },
+    /* one form creates a material now — Add Stock. The lab is the exception:
+       it may only PROPOSE, which posts nothing to a store, so it keeps the
+       proposal form the Stock Items page offers it. */
+    newItem:     { mod:"inventory", create:true, ic:"＋", label:"New Item",               run:()=>((App.isLab&&App.isLab()&&window.CAT)?CAT.newItemWizard():addStockForm()) },
   });
 })();

@@ -671,36 +671,116 @@ function onHandIn(rid, wh, movements) {
   return n;
 }
 
+/* ============================================================
+   WHERE A DRAW COMES FROM, AND HOW MUCH OUT OF EACH
+   The ONE answer to that question. The ledger posts through it, the office's
+   job sheet prints it, the floor's card reads it and Add to Finished Stock
+   deducts by it — so no screen can tell the storeman something the issue will
+   then contradict. Anything that names a store for a material comes here.
+
+   WHICH STORE LEADS. The office may name the store each material comes out of
+   when it raises the order or books the production (a material can sit in
+   several); a finished-roll line may name its own. That choice is honoured
+   whenever it is a store the draw MAY touch at all — it does not have to COVER
+   the whole draw, because a draw it cannot cover is spread rather than
+   abandoned. Quarantine and other held stores are never drawn on, however much
+   they hold. With nothing named, the standing rule picks: the tightest store
+   that still covers, else the biggest pile.
+
+   HOW IT IS SPREAD. A material can sit in more than one store, and the whole
+   draw used to come out of a single one: where that store did not hold enough
+   it simply went below zero while another store on the same site held the
+   balance all along. So the leading store goes first, for as much as it can
+   cover; the rest is taken from the other stores, biggest pile first, until
+   the draw is met. Only where every store together still falls short does the
+   remainder stay on the leading store and take it negative — whether the job
+   may run at all was settled upstream, and the ledger has to balance either
+   way.
+
+   Returns [{ wh, qty }] with POSITIVE quantities adding back up to `need`
+   EXACTLY. The caller decides whether that is an issue, a forecast, or a line
+   on a picking list.
+   ============================================================ */
+function drawPlan(rid, need, wo, itemsById, movements, held, named) {
+  need = Math.abs(+need || 0);
+  if (!rid || !need) return [];
+  const block = held instanceof Set ? held : new Set(held || []);
+  const chosen = (wo && wo.materialWarehouses) || {};
+  let lead;
+  if (named && !block.has(named)) lead = named;
+  else if (chosen[rid] && !block.has(chosen[rid])) lead = chosen[rid];
+  else lead = issuingWarehouse(rid, itemsById, movements, held, need);
+  const it = (itemsById || {})[rid] || {};
+  // half-made goods live in the one place by definition — nothing to spread
+  if (it.cat === "WIP" || /^WIP-/.test(String(rid))) return [{ wh: lead, qty: need }];
+  const byWh = {};
+  (movements || []).forEach((m) => {
+    if (m.itemId !== rid || !m.wh || block.has(m.wh)) return;
+    byWh[m.wh] = (byWh[m.wh] || 0) + (+m.qty || 0);
+  });
+  const order = Object.keys(byWh)
+    .filter((wh) => wh !== lead && byWh[wh] > 1e-9)
+    .sort((a, b) => byWh[b] - byWh[a]);
+  order.unshift(lead);
+  const out = [];
+  let left = need;
+  order.forEach((wh) => {
+    if (left <= 1e-9) return;
+    const have = byWh[wh] || 0;
+    if (have <= 1e-9) return;
+    const take = Math.min(left, have);
+    out.push({ wh, qty: take });
+    left -= take;
+  });
+  if (left > 1e-9) {
+    const first = out.find((o) => o.wh === lead);
+    if (first) first.qty += left; else out.push({ wh: lead, qty: left });
+  }
+  /* the shares must add back up to the draw EXACTLY. Rounding each one on its
+     own would issue a few grams more or less than the stage consumes, and that
+     difference would sit in the ledger for ever, so whatever the rounding
+     drops is put back on the leading share. */
+  const q6 = (n) => Math.round(n * 1e6) / 1e6;
+  const shares = out.map((o) => ({ wh: o.wh, qty: q6(o.qty) }));
+  if (shares.length) shares[0].qty = q6(shares[0].qty + (need - shares.reduce((n, o) => n + o.qty, 0)));
+  return shares.filter((o) => Math.abs(o.qty) > 1e-9);
+}
+
+/* EVERY MATERIAL A STAGE DRAWS, AND WHERE FROM — the forecast the job sheet
+   and the floor's card print, built from the very function that will post the
+   issue. Hands back [{ id, qty, sources: [{ wh, qty }] }]. */
+function stageDraw(plan, stageKey, wo, itemsById, movements, held) {
+  const st = plan && plan[stageKey];
+  if (!st) return [];
+  return (st.consume || []).map(([rid, q, named]) => {
+    const need = Math.abs(+q || 0);
+    return { id: rid, qty: need, sources: drawPlan(rid, need, wo, itemsById, movements, held, named) };
+  }).filter((m) => m.qty > 0);
+}
+
 function stageMovements(plan, stageKey, wo, itemsById, byWho, dateISO, movements, held) {
   const st = plan[stageKey];
   if (!st) return [];
-  /* The office may name the store each material comes out of when it raises
-     the order (a material can sit in several). That choice is honoured here,
-     so the issue posts where the planner said it would — but only while it is
-     still a store this issue MAY draw on: one put into quarantine since, or
-     one the stock has since moved out of, falls back to the standing rule
-     rather than posting an issue against a store that cannot cover it. */
-  const chosen = (wo && wo.materialWarehouses) || {};
-  const block = held instanceof Set ? held : new Set(held || []);
-  const whFor = (rid, need) => {
-    const want = chosen[rid];
-    // the office's choice stands as long as it can actually cover the draw
-    if (want && !block.has(want) && onHandIn(rid, want, movements) + 1e-9 >= need) return want;
-    return issuingWarehouse(rid, itemsById, movements, held, need);
-  };
-  /* A finished roll drawn from a NAMED store (the office chose it store by
-     store when it raised the order) leaves that store — again only while the
-     store still holds enough for the draw. */
-  const whOf = (rid, need, named) => {
-    if (named && !block.has(named) && onHandIn(rid, named, movements) + 1e-9 >= need) return named;
-    return whFor(rid, need);
-  };
   const moves = [];
   st.consume.forEach(([rid, q, named]) => {
     if (!q) return;
-    moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: whOf(rid, Math.abs(q), named), type: "ISSUE",
-      qty: -Math.abs(q), rate: (itemsById[rid] || {}).cost || 0, ref: wo.id,
-      note: "Stage " + stageKey + " → " + wo.itemId, by: byWho });
+    const need = Math.abs(q);
+    const shares = drawPlan(rid, need, wo, itemsById, movements, held, named);
+    shares.forEach((sh) => {
+      moves.push({ id: mvId(), date: dateISO, itemId: rid, wh: sh.wh, type: "ISSUE",
+        qty: -Math.abs(sh.qty), rate: (itemsById[rid] || {}).cost || 0, ref: wo.id,
+        /* WHICH STAGE DREW IT. The work order alone was not enough to say: a
+           material two stages both consume gave one heap of issues against one
+           reference, so a card asking "what has coating taken?" could only be
+           told what the whole order had taken. Written on the line itself
+           rather than read back out of the note, which is prose. */
+        stage: stageKey,
+        /* a split draw puts two lines in the ledger against one stage; the note
+           says why, so the second line does not read as a double issue */
+        note: "Stage " + stageKey + " → " + wo.itemId
+          + (shares.length > 1 ? " · drawn from " + shares.length + " stores" : ""),
+        by: byWho });
+    });
   });
   /* No receipt is posted for any stage — see computeStagePlan(). A stage's
      output is not stock, so completing coating, slitting or packing books
@@ -878,7 +958,7 @@ module.exports = {
   isKnownLine, lineRequested, heldStoreIds,
   materialRole, areaCovers,
   planForRequirement, plannedStages, finishedStockFor, finishedStockByStore, wipStockFor, drawFrom,
-  computeStagePlan, stageMovements, issuingWarehouse, onHandIn,
+  computeStagePlan, stageMovements, drawPlan, stageDraw, issuingWarehouse, onHandIn,
   freshRoute, seedRouteFromLegacy, rollupStatus, calcProgress,
   stageForArea, currentStage, ensureStageModel,
 };

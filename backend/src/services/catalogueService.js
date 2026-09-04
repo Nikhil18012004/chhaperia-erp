@@ -96,7 +96,11 @@ function cleanBom(raw) {
     const qty = num(raw.qty);
     if (!productId) throw err("Pick the product whose recipe this material joins", 400);
     if (!(qty > 0)) throw err("The quantity per kg of product must be greater than zero", 400);
-    return { mode: "append", productId, qty, unit: str(raw.unit, 10).toUpperCase() || "KG", pickupPct: num(raw.pickupPct) };
+    /* the component this one takes the place of, where it takes anyone's:
+       blank means it simply joins the recipe and nothing comes off */
+    const replaceId = str(raw.replaceId, 80).toUpperCase();
+    return { mode: "append", productId, qty, unit: str(raw.unit, 10).toUpperCase() || "KG",
+      pickupPct: num(raw.pickupPct), replaceId: replaceId || null };
   }
   throw err("Unknown recipe mode " + str(raw.mode, 20), 400);
 }
@@ -122,7 +126,16 @@ async function validateNewItem(payload) {
   }
   if (bom && bom.mode === "append") {
     if (item.cat === "FG") throw err("A finished good does not go into another product's recipe — give it a recipe of its own", 400);
-    if (!await repo.getBom(bom.productId)) throw err(bom.productId + " has no recipe to add this material to", 400);
+    const b = await repo.getBom(bom.productId);
+    if (!b) throw err(bom.productId + " has no recipe to add this material to", 400);
+    /* replacing something means there is something to replace: a stale form,
+       or a recipe edited since it was opened, must not silently append */
+    if (bom.replaceId) {
+      if (bom.replaceId === item.id) throw err("A material cannot replace itself", 400);
+      if (!BC.normalize(b.lines || []).some((l) => l.id === bom.replaceId)) {
+        throw err(bom.replaceId + " is not on the recipe of " + bom.productId + " — there is nothing to replace", 400);
+      }
+    }
   }
   return { item, tests, bom, lab: payload.lab && typeof payload.lab === "object" ? payload.lab : null };
 }
@@ -175,7 +188,28 @@ async function applyNewItem(payload, user) {
   } else if (p.bom && p.bom.mode === "append") {
     const b = await repo.getBom(p.bom.productId);
     const lines = (b.lines || []).slice();
-    lines.push({ id: item.id, rm: item.name, qty: p.bom.qty, unit: p.bom.unit, pickupPct: p.bom.pickupPct == null ? null : p.bom.pickupPct });
+    const line = { id: item.id, rm: item.name, qty: p.bom.qty, unit: p.bom.unit,
+      pickupPct: p.bom.pickupPct == null ? null : p.bom.pickupPct };
+    /* REPLACING KEEPS THE LINE WHERE IT STOOD. A line's position is its layer,
+       and a coating line that jumped to the end of the list would be computed
+       as a different product altogether. The layer and the pickup the old line
+       carried belong to that position, so they stay with it unless the new
+       material brought its own. Lines are matched ONE AT A TIME so a malformed
+       line further up cannot shift the index normalisation would drop. */
+    let at = -1;
+    if (p.bom.replaceId) {
+      for (let i = 0; i < lines.length; i++) {
+        const n = BC.normalize([lines[i]])[0];
+        if (n && n.id === p.bom.replaceId) { at = i; break; }
+      }
+    }
+    if (at >= 0) {
+      const old = BC.normalize([lines[at]])[0] || {};
+      if (line.pickupPct == null) line.pickupPct = old.pickupPct == null ? null : old.pickupPct;
+      if (old.layer != null) line.layer = old.layer;
+      if (old.optional) line.optional = true;
+      lines[at] = line;
+    } else lines.push(line);
     bom = await erp.saveBom(p.bom.productId, Object.assign({}, b, { lines }));
   }
   return { ok: true, item, qc, labProduct, bom };
@@ -226,7 +260,9 @@ function summaryOf(kind, p) {
     const n = p.tests.params.length + p.tests.custom.length;
     if (n) bits.push(n + " test parameter" + (n === 1 ? "" : "s") + (p.tests.custom.length ? " (" + p.tests.custom.length + " new)" : ""));
     if (p.bom && p.bom.mode === "create") bits.push("recipe with " + p.bom.lines.length + " component" + (p.bom.lines.length === 1 ? "" : "s"));
-    if (p.bom && p.bom.mode === "append") bits.push("joins the recipe of " + p.bom.productId);
+    if (p.bom && p.bom.mode === "append") bits.push(p.bom.replaceId
+      ? "replaces " + p.bom.replaceId + " on the recipe of " + p.bom.productId
+      : "joins the recipe of " + p.bom.productId);
     return bits.join(" · ");
   }
   return "Recipe for " + p.itemId + (p.newItem ? " (new product " + p.newItem.name + ")" : "") + " · " + p.bom.lines.length + " component" + (p.bom.lines.length === 1 ? "" : "s");

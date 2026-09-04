@@ -14,7 +14,12 @@
       `Welcome back — here's Chhaperia's plant status for ${ENG.data.org.fyStart? "FY 2026-27":""} · ${new Date().toDateString()}`,
       [
         h("button",{class:"btn",onclick:()=>App.go("reports"),text:"📊 Reports"}),
-        h("button",{class:"btn primary",onclick:()=>App.go("production"),html:"⚙️ New Work Order"})
+        /* the button names the form, so it opens the form — landing on the
+           Production list and leaving the operator to find the button again
+           was a step this promised to skip. `openNew` is the one-shot the
+           Production page already reads (and app.js drops after the render),
+           the same way the ⌘K action reaches it. */
+        h("button",{class:"btn primary",onclick:()=>App.go("production",{openNew:true}),html:"⚙️ New Work Order"})
       ]));
 
     /* KPI row */

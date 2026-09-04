@@ -206,18 +206,58 @@
       .sort((a,b)=>byWh[b]-byWh[a])
       .map(wh=>({wh, qty:byWh[wh]}));
   }
-  function issuingWh(rid){
+  function issuingWh(rid, need){
     if(!rid) return null;
     const it=ENG.item(rid)||{};
     if(it.cat==="WIP"||/^WIP-/.test(String(rid))) return "WH-WIP";
-    // the biggest pile, quarantine excluded — exactly issuingWarehouse's rule,
-    // including that it picks a store even where every figure is negative
+    /* exactly issuingWarehouse's rule: given a quantity, the TIGHTEST store
+       that still covers it — the big pile is left whole for the job that needs
+       it — and otherwise the biggest pile, quarantine excluded, picking a store
+       even where every figure is negative. */
     const held=new Set(heldWhIds());
     const byWh=(ENG.stock(rid)||{}).byWh||{};
+    const whs=Object.keys(byWh).filter(wh=>!held.has(wh));
+    if(need>0){
+      let covers=null;
+      whs.forEach(wh=>{ if(byWh[wh]+1e-9<need) return;
+        if(covers==null||byWh[wh]<byWh[covers]) covers=wh; });
+      if(covers) return covers;
+    }
     let best=null;
-    Object.keys(byWh).forEach(wh=>{ if(held.has(wh)) return;
-      if(best==null||byWh[wh]>byWh[best]) best=wh; });
+    whs.forEach(wh=>{ if(best==null||byWh[wh]>byWh[best]) best=wh; });
     return best||"WH-PNY";
+  }
+  /* ---- HOW MUCH COMES OUT OF WHICH STORE ---------------------------------
+     Mirrors stageService.drawPlan, the function the server posts the issue
+     with — the leading store (the one the office named, else the standing
+     rule) gives what it has and the balance comes off the others, biggest pile
+     first. So what a screen tells the storeman is what the ledger will do.
+     Hands back [{wh, qty}] adding up to `need` exactly; [] for nothing to draw. */
+  function drawSharesFor(rid, need, chosenWh){
+    need=Math.abs(+need||0);
+    if(!rid || !need) return [];
+    const held=new Set(heldWhIds());
+    const lead=(chosenWh && !held.has(chosenWh)) ? chosenWh : issuingWh(rid, need);
+    const it=ENG.item(rid)||{};
+    if(it.cat==="WIP"||/^WIP-/.test(String(rid))) return [{wh:lead, qty:need}];
+    const byWh=(ENG.stock(rid)||{}).byWh||{};
+    const order=Object.keys(byWh).filter(wh=>!held.has(wh) && wh!==lead && byWh[wh]>1e-9)
+      .sort((a,b)=>byWh[b]-byWh[a]);
+    order.unshift(lead);
+    const out=[]; let left=need;
+    order.forEach(wh=>{
+      if(left<=1e-9) return;
+      const have=byWh[wh]||0; if(have<=1e-9) return;
+      const take=Math.min(left,have);
+      out.push({wh, qty:take}); left-=take;
+    });
+    // short everywhere: the shortfall stays on the leading store, as it will
+    // on the issue — the ledger has to balance either way
+    if(left>1e-9){ const f=out.find(o=>o.wh===lead); if(f) f.qty+=left; else out.push({wh:lead, qty:left}); }
+    const q6=n=>Math.round(n*1e6)/1e6;
+    const sh=out.map(o=>({wh:o.wh, qty:q6(o.qty)}));
+    if(sh.length) sh[0].qty=q6(sh[0].qty+(need-sh.reduce((n,o)=>n+o.qty,0)));
+    return sh.filter(o=>Math.abs(o.qty)>1e-9);
   }
   /* Where a RAISED order actually drew each item from. The store written on the
      issue posted against the work order is a fact, not a forecast, and it can
@@ -231,7 +271,10 @@
     (ENG.data.movements||[]).forEach(m=>{
       if(m.ref!==woId || !m.wh || (+m.qty||0)>=0) return;
       const seen=by[m.itemId]=by[m.itemId]||[];
-      if(!seen.includes(m.wh)) seen.push(m.wh);
+      const row=seen.find(x=>x.wh===m.wh);
+      // how much each store actually gave, not merely that it gave something
+      if(row) row.qty+=Math.abs(+m.qty||0);
+      else seen.push({wh:m.wh, qty:Math.abs(+m.qty||0)});
     });
     return by;
   }
@@ -251,8 +294,27 @@
     if(!whId) return null;
     return h("span",{class:"muted",style:"font-size:11px;white-space:nowrap",text:"🏬 "+whName(whId)});
   }
-  /* one chip per store, for the callers that hand over a list */
-  function whChips(list){ return (list||[]).filter(Boolean).map(whChip); }
+  /* THE STORE AND WHAT COMES OUT OF IT. Naming the store was only half the
+     answer wherever a draw is split across two: the storeman has to know how
+     much to take off each shelf, so the quantity rides on the chip.
+     `sources` is [{wh, qty}] — drawSharesFor's shape, and the server's. */
+  function whQtyChip(src, it, opts){
+    opts=opts||{};
+    const q=it?ENG.qtyText(it,src.qty,2):ENG.num(src.qty,2);
+    return h("span",{class:"wo-src-wh"+(opts.done?" is-done":""),
+      title:(opts.done?"Already issued from ":"To be drawn from ")+whName(src.wh),
+      text:"🏬 "+whName(src.wh)+" · "+q});
+  }
+  function whQtyChips(sources, it, opts){
+    const list=(sources||[]).filter(s=>s&&s.wh&&Math.abs(+s.qty||0)>1e-9);
+    if(!list.length) return [];
+    const row=list.map(s=>whQtyChip(s,it,opts));
+    /* a split draw is worth saying out loud — two chips against one material
+       read like a double issue otherwise */
+    if(list.length>1) row.push(h("span",{class:"muted",style:"font-size:10.5px",
+      text:"across "+list.length+" stores"}));
+    return row;
+  }
   /* the store the coating floor put the coated roll down in, recorded on the
      stage that made it as that stage was closed. Not stock — a location. */
   function coatedRollAt(wo){
@@ -309,9 +371,13 @@
      — `agg` is the need across ALL layers when a material appears in more
      than one, since the store is shared between them, and `wh` is the store
      the line is issued from, shown only where the caller knows it.
+     A line may instead carry `sources` — [{wh, qty}], how much comes off EACH
+     store — and then the row says so shelf by shelf rather than naming one
+     store for a draw that will actually be split.
      `opts.whPick(line)` may return a node to render IN PLACE of that chip — New
-     Work Order hands over a store picker for a material that sits in several,
-     so the store is chosen where it is read rather than on a separate screen. */
+     Work Order and both Add-to-Finished-Stock forms hand over a store picker
+     for a material that sits in several, so the store is chosen where it is
+     read rather than on a separate screen. */
   function materialsList(host, groups, opts){
     opts=opts||{};
     groups=(groups||[]).filter(g=>g&&(g.lines||[]).length);
@@ -342,10 +408,15 @@
               l.code?h("span",{class:"muted mono",style:"font-size:11px",text:l.code}):null
             ]),
             l.spec?h("div",{class:"muted mono",style:"font-size:11px",text:l.spec}):null,
-            // which store this one is issued from — a picker where the caller
-            // offers one, otherwise the plain chip, and nothing at all where the
-            // caller has no store to name, so the other forms render as before
-            (opts.whPick && opts.whPick(l)) || (l.wh?whChip(l.wh):null)
+            /* WHERE THIS ONE COMES FROM. A picker where the caller offers
+               one; otherwise the split — store by store, with the quantity off
+               each — falling back to the plain chip for a caller that only
+               knows the store, and to nothing at all for one that knows
+               neither, so those forms render exactly as before. */
+            (opts.whPick && opts.whPick(l))
+              || ((l.sources||[]).length
+                    ? h("div",{class:"wo-src-whs"}, whQtyChips(l.sources, li, {done:l.issued}))
+                    : (l.wh?whChip(l.wh):null))
           ]),
           h("div",{class:"flex aic",style:"gap:10px;flex:0 0 auto;white-space:nowrap"},[
             h("span",{class:"muted",text:"Need "},[h("b",{class:"mono",style:"color:var(--text)",text:q(l.need,2)+sfx(l.need)})]),
@@ -391,9 +462,11 @@
      `opts.choices` resolves ranged lines to the material actually picked;
      `opts.always` keeps the panel for a single-layer product, which the BOM
      view suppresses (there is no layer story) but a work order still needs;
-     `opts.whOf(line)` returns the stores a material leaves — a list, since a
-     resumed order can draw the same material out of two — which a raised work
-     order wants on the job sheet and the BOM view has no use for. */
+     `opts.srcOf(line)` returns where a material comes from and HOW MUCH off
+     each — [{wh, qty}], a list because a draw one store cannot cover is split
+     across several — which a raised work order wants on the job sheet and the
+     BOM view has no use for; `opts.issuedOf(line)` says whether that is the
+     ledger's record or still a forecast. */
   /* ---- typing into a box that redraws the form around it -------------------
      The "take from stock" quantities re-run the whole calculation on every
      keystroke, which rebuilds the panel and destroys the input being typed
@@ -498,7 +571,10 @@
         const li=l.id?ENG.item(l.id):null;
         const unit=li?ENG.dispUom(li):(l.unit||"");
         const qShown=li?ENG.dispQty(li,q):q;
-        const whs=opts.whOf?whChips(opts.whOf(l)):[];
+        // the stores this line comes out of, with what comes off each
+        const whs=opts.srcOf
+          ? whQtyChips(opts.srcOf(l), li, {done: opts.issuedOf ? opts.issuedOf(l) : false})
+          : [];
         box.appendChild(h("div",{class:"flex aic wrap lp-row"+(whs.length?" lp-row-wh":""),style:"gap:8px;padding:3px 0 3px "+(many?"14px":"0")+";font-size:13px;"+(many?"border-left:2px solid var(--line);margin-left:2px":"")},[
           h("span",{style:"font-weight:600",text:matLineName(l)}),
           matLineCode(l)?h("span",{class:"muted mono",style:"font-size:11px",text:matLineCode(l)}):null,
@@ -510,6 +586,81 @@
       });
     });
     return box;
+  }
+
+  /* ---- THE STORE PICKER, LENT TO EVERY FORM THAT DRAWS MATERIAL ----------
+     A material held in ONE store needs no decision — the row names the store
+     and the quantity coming off it. Held in SEVERAL, the store becomes a
+     choice: whoever raises the run picks where it draws from, with what each
+     store holds shown against it, and that choice travels onto the issue.
+
+     Either way the SPLIT is spelled out underneath — how much comes off each
+     shelf — because a draw one store cannot cover is spread across the rest,
+     and the storeman is the person who has to walk to them. The figures come
+     from drawSharesFor, which mirrors the server's drawPlan, so what is shown
+     here is what the ledger will post.
+
+     `store` is the caller's own rid -> warehouse map: the pick is written
+     straight into it and the caller sends it to the server as
+     materialWarehouses. New Work Order and both Add-to-Finished-Stock forms
+     share this one control. */
+  function storePicker(store){
+    return function whPick(l){
+      const rid=l.id;
+      if(!rid) return null;
+      const choices=whChoicesFor(rid);
+      if(choices.length<2) return null;
+      const it=ENG.item(rid)||{};
+      /* What this run draws of it. A material that appears in two layers is
+         drawn once against a shared pile, so the AGGREGATE need is what a
+         store has to cover — the same figure the row's own Short badge uses. */
+      const need=(l.agg!=null?l.agg:l.need)||0;
+      if(store[rid]==null){
+        const std=issuingWh(rid,need);
+        store[rid]=choices.some(c=>c.wh===std)?std:choices[0].wh;
+      }
+      const covers=c=>c.qty+1e-6>=need;
+      const split=h("div",{class:"wo-src-whs"});
+      const short=h("div",{class:"wo-wh-short"});
+      const paint=()=>{
+        const cur=choices.find(c=>c.wh===store[rid]);
+        split.innerHTML=""; short.innerHTML="";
+        if(!cur||!(need>0)) return;
+        // WHAT COMES OFF EACH SHELF — the answer, whether or not it is split
+        whQtyChips(drawSharesFor(rid,need,cur.wh), it).forEach(n=>split.appendChild(n));
+        if(covers(cur)) return;
+        /* A CHOICE THAT CANNOT COVER THE DRAW IS NO LONGER A STORE DRIVEN
+           BELOW ZERO. The issue is spread: this store gives what it has and
+           the balance comes off the others, biggest pile first. Only where the
+           stores together still fall short does anything go negative, and that
+           is said as the different thing it is. */
+        const pool=choices.reduce((n,c)=>n+c.qty,0);
+        short.appendChild(h("span",{
+          text:"⚠ "+whName(cur.wh)+" holds "+ENG.qtyText(it,cur.qty,2)
+            +" of the "+ENG.qtyText(it,need,2)+" this run draws."}));
+        short.appendChild(h("span",{class:"wo-wh-alt",
+          text: pool+1e-6>=need
+            ? " The balance of "+ENG.qtyText(it,need-cur.qty,2)+" comes off the stores above."
+            : " Every store together holds only "+ENG.qtyText(it,pool,2)
+              +" — "+whName(cur.wh)+" carries the "+ENG.qtyText(it,need-pool,2)
+              +" still missing and goes below zero."}));
+        const better=choices.filter(c=>c.wh!==cur.wh&&covers(c));
+        if(better.length) short.appendChild(h("span",{class:"wo-wh-alt",
+          text:" ("+better.map(c=>whName(c.wh)).join(" or ")+" could cover the whole run on its own.)"}));
+      };
+      const sel=h("select",{class:"select wo-wh-pick",title:"Which store this run draws this material from",
+        onchange:e=>{ store[rid]=e.target.value; paint(); }},
+        choices.map(c=>h("option",{value:c.wh,selected:store[rid]===c.wh,
+          // each store says whether it can actually cover this run, not just what it holds
+          text:"🏬 "+whName(c.wh)+" · "+ENG.qtyText(it,c.qty,1)+ENG.kgSuffix(it,c.qty)
+            +(need>0?(covers(c)?" · covers this run":" · short by "+ENG.qtyText(it,need-c.qty,2)):"")})));
+      paint();
+      return h("div",{},[
+        h("div",{class:"wo-wh-wrap"},[
+          h("span",{class:"wo-wh-lbl",text:"Draw from"}), sel,
+          h("span",{class:"muted",style:"font-size:10.5px",text:"in "+choices.length+" stores"})]),
+        split, short]);
+    };
   }
 
   /* ---- two-step product picker: NAME first, then THICKNESS ----
@@ -1110,7 +1261,8 @@
               need: perOf(l)*q/bom.yield,
               have: rid?(ENG.stock(rid).onHand||0):0,
               agg: rid?needBy[rid]:undefined,
-              wh: rid?issuingWh(rid):null,
+              // where the balance being released will actually be drawn from
+              sources: rid?drawSharesFor(rid, perOf(l)*q/bom.yield, (wo.materialWarehouses||{})[rid]):[],
               uom: r.uom||l.unit||"" };
           }),
         })), {outputKg:q, title:"Stock availability — the same check as a new work order"});
@@ -1258,21 +1410,25 @@
       const note = took.length
         ? "For the "+ENG.num(makeQty,2)+" "+uomIt+" being made — "+took.join(" and ")+" needs no raw material."
         : "For the "+ENG.num(makeQty,2)+" "+uomIt+" this order produces.";
-      /* Where this order took its stock from. The issues posted against the
-         work order are the record, so those are read first; a line that has
-         not been issued yet (a pending balance) falls back to the store the
-         planner would draw it from. */
+      /* WHERE THIS ORDER TAKES EACH MATERIAL FROM, AND HOW MUCH OFF EACH
+         SHELF. Naming the store was only half of it: an issue is split across
+         stores whenever one cannot cover the draw, so the job sheet the office
+         reads — and hands the floor — says how much comes out of each.
+         The issues POSTED against the work order are the record and are read
+         first, each store with what it actually gave. A balance not yet issued
+         is forecast by drawSharesFor, which mirrors the server's own drawPlan,
+         led by the store the office chose when it raised the order. */
       const drawn = drawnWhFor(wo.id);
-      /* What was actually drawn wins; for a balance not yet issued, the store
-         the office CHOSE when it raised the order, and only then the standing
-         biggest-pile rule. */
       const chosenWh = (wo.materialWarehouses)||{};
-      const whOfId = id => !id ? []
-        : (drawn[id] && drawn[id].length) ? drawn[id]
-        : [chosenWh[id] || issuingWh(id)];
+      const srcOf = l => {
+        const id=l&&l.id; if(!id) return [];
+        const done=drawn[id];
+        if(done && done.length) return done;
+        return drawSharesFor(id, needOf(l), chosenWh[id]);
+      };
       const matHost = bom
         ? (layerPanel(it, bom.lines, { choices: wo.materialChoices || {}, qtyOf: needOf,
-            whOf: l => whOfId(l.id),
+            srcOf, issuedOf: l => !!(l&&l.id&&(drawn[l.id]||[]).length),
             note, always: true, title: "Materials for this order" })
            || h("div",{class:"muted",style:"font-size:12px",text:"No materials on this recipe"}))
         : h("div",{class:"muted",style:"font-size:12px",text:"No BOM for this product"});
@@ -1293,7 +1449,9 @@
           ...list.map(s=>h("div",{class:"flex aic wrap wo-src",style:"gap:8px;margin-top:3px;font-size:12px"},[
             h("span",{class:"wo-src-nm",text:s.name||s.id}),
             h("span",{class:"mono muted",text:ENG.num(s.qty,2)+" "+uomIt}),
-            ...whChips(whOfId(s.id)),
+            ...whQtyChips(
+              (drawn[s.id]||[]).length ? drawn[s.id] : drawSharesFor(s.id, s.qty, chosenWh[s.id]),
+              ENG.item(s.id), {done: !!(drawn[s.id]||[]).length}),
           ])),
         ]);
       };
@@ -1392,6 +1550,14 @@
       let fsFgWanted=0, fsWipWanted=0, fsFgTyped=null, fsWipTyped=null;
       let fsChoices={};   // ranged BOM line index -> the stock item chosen
       let fsShort=[];     // materials short of stock — blocks the booking
+      /* WHICH STORE EACH MATERIAL COMES OUT OF — the same control a work order
+         has. Booking production deducts exactly as a work order's stage does,
+         so it earns the same say over where the stock is taken from: the pick
+         travels to the server as materialWarehouses and leads the draw there.
+         Empty means every material sits in one store and there was nothing to
+         choose. */
+      const fsWhs={};
+      const fsWhPick=storePicker(fsWhs);
       const body=h("div",{class:"form-grid"},[
         U.field("Category",U.selectHTML("fs_cat",[{v:"FG",l:"Finished Goods"},{v:"WIP",l:"Work in Process"}],"FG")),
         pickHost,
@@ -1684,9 +1850,12 @@
               need: perOf(l)*qty/bom.yield,
               have: rid?(ENG.stock(rid).onHand||0):0,
               agg: rid?needBy[rid]:undefined,
+              // one store, and how much off it; several, and the picker says
+              sources: rid?drawSharesFor(rid, perOf(l)*qty/bom.yield, fsWhs[rid]):[],
               uom: r.uom||l.unit||"" };
           }),
-        })), {title:"Raw materials to be deducted from store", outputKg:ENG.kg(owner,qty)});
+        })), {title:"Raw materials to be deducted from store", outputKg:ENG.kg(owner,qty),
+          whPick: fsWhPick});
 
         /* ---- a short material blocks the booking, exactly as it blocks a
            work order: stock cannot be issued that is not there ---- */
@@ -1759,6 +1928,15 @@
             // which material was picked for each ranged BOM line — so the issue
             // posts the material actually chosen, exactly as a work order does
             Object.keys(fsChoices).length?{materialChoices:fsChoices}:{},
+            /* and which STORE each of them comes out of. Only the ones that
+               were actually a choice: a material sitting in one store has none,
+               and freezing its store here would stop the standing rule
+               following the stock if it moves before this is saved. */
+            (function(){
+              const picked={};
+              Object.keys(fsWhs).forEach(rid=>{ if(whChoicesFor(rid).length>1) picked[rid]=fsWhs[rid]; });
+              return Object.keys(picked).length?{materialWarehouses:picked}:{};
+            })(),
             // admin-only: how much of this run comes off the shelf instead of
             // being made from the recipe (the server enforces the role too)
             canSource?{fgQty:fsFgWanted, wipQty:fsWipWanted}:{}));
@@ -1994,57 +2172,7 @@
       // every rebuild goes through keepCaret, so typing in the stock boxes above
       // survives the re-render it triggers
       const recalc=()=>keepCaret(recalcNow);
-      /* A material held in ONE store needs no decision — it reads as the chip it
-         always did. Held in SEVERAL, the store becomes a choice: the office picks
-         where this run draws from, with what each store holds shown against it,
-         and that choice travels with the order onto the issue. */
-      function whPicker(l){
-        const rid=l.id;
-        if(!rid) return null;
-        const choices=whChoicesFor(rid);
-        if(choices.length<2) return null;
-        const it=ENG.item(rid)||{};
-        if(matWhs[rid]==null){
-          const std=issuingWh(rid);
-          matWhs[rid]=choices.some(c=>c.wh===std)?std:choices[0].wh;
-        }
-        /* What this run draws of it. A material that appears in two layers is
-           drawn once against a shared pile, so the AGGREGATE need is what a
-           store has to cover — the same figure the row's own Short badge uses. */
-        const need=(l.agg!=null?l.agg:l.need)||0;
-        const covers=c=>c.qty+1e-6>=need;
-        const short=h("div",{class:"wo-wh-short"});
-        const paint=()=>{
-          const cur=choices.find(c=>c.wh===matWhs[rid]);
-          short.innerHTML="";
-          if(!cur||covers(cur)||!(need>0)) return;
-          /* A DELIBERATE choice that cannot cover the draw is worth saying out
-             loud. The standing rule is just as lenient — it takes the biggest
-             pile whether or not it is enough — but nobody chose that, so the
-             store going negative is a surprise only here. The order is still
-             allowed: a transfer may well be on its way, and refusing would make
-             this control useless exactly when it matters. */
-          short.appendChild(h("span",{
-            text:"⚠ "+whName(cur.wh)+" holds "+ENG.qtyText(it,cur.qty,2)
-              +", this run draws "+ENG.qtyText(it,need,2)
-              +" — it will go "+ENG.qtyText(it,need-cur.qty,2)+" below zero."}));
-          const better=choices.filter(covers);
-          if(better.length) short.appendChild(h("span",{class:"wo-wh-alt",
-            text:" "+better.map(c=>whName(c.wh)).join(" or ")+" can cover it."}));
-        };
-        const sel=h("select",{class:"select wo-wh-pick",title:"Which store this run draws this material from",
-          onchange:e=>{ matWhs[rid]=e.target.value; paint(); }},
-          choices.map(c=>h("option",{value:c.wh,selected:matWhs[rid]===c.wh,
-            // each store says whether it can actually cover this run, not just what it holds
-            text:"🏬 "+whName(c.wh)+" · "+ENG.qtyText(it,c.qty,1)+ENG.kgSuffix(it,c.qty)
-              +(need>0?(covers(c)?" · covers this run":" · short by "+ENG.qtyText(it,need-c.qty,2)):"")})));
-        paint();
-        return h("div",{},[
-          h("div",{class:"wo-wh-wrap"},[
-            h("span",{class:"wo-wh-lbl",text:"Draw from"}), sel,
-            h("span",{class:"muted",style:"font-size:10.5px",text:"in "+choices.length+" stores"})]),
-          short]);
-      }
+      const whPicker = storePicker(matWhs);
 
       const recalcNow=()=>{ const id=UI.$("#w_item").value; convHint(); widthHint(); const qty=qtyKg()||0; const bom=ENG.data.boms[id];
         /* the stages this product will actually run. The line is the OFFICE'S
@@ -2170,9 +2298,11 @@
               need: perOf(l)*makeQty/bom.yield,
               have: rid?(ENG.stock(rid).onHand||0):0,
               agg: rid?needBy[rid]:undefined,
-              // the store this material will be issued from, by the same rule
-              // the server uses when it posts the issue
-              wh: rid?issuingWh(rid):null,
+              /* which store this line comes out of and how much off it — by
+                 the same rule the server uses when it posts the issue. A
+                 material in several stores gets the picker instead, which
+                 spells out the split against the store chosen there. */
+              sources: rid?drawSharesFor(rid, perOf(l)*makeQty/bom.yield, matWhs[rid]):[],
               uom: r.uom||l.unit||"" };
           }),
         })), {outputKg: makeQty, whPick: whPicker});

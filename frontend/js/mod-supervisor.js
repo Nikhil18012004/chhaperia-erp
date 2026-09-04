@@ -504,22 +504,37 @@
       }
 
       /* Materials for THIS area's stage (only meaningful while it's their turn).
-         Each line names the STORE it comes out of — the server works that out
-         from the issue posted against this job, falling back to the store the
-         issue will use — so the floor is not sent hunting round the stores for
-         a material the ledger already knows the location of. */
+         Each line says WHICH STORES it comes out of and HOW MUCH OFF EACH.
+         Naming one store was a half-answer wherever the material sat in two:
+         the issue splits the draw across them, so the card splits it too, and
+         the floor is not sent to a shelf that cannot cover the job. The server
+         works the shares out — off the issues already posted where there are
+         any, else off the very function that will post them. */
       let mat = null;
       if (w.mine && w.materials && w.materials.length) {
         mat = H("details", { class: "sup-mat" }, [
           H("summary", { text: "🧱 Materials for " + ((STAGE_META[cur.key] || {}).label || "this stage") + " (" + w.materials.length + ")" }),
-          H("div", { class: "sup-mat-list" }, w.materials.map((m) =>
-            H("div", { class: "sup-mat-row" }, [
+          H("div", { class: "sup-mat-list" }, w.materials.map((m) => {
+            const src = (m.sources || []).filter((x) => x && x.wh && Math.abs(+x.qty || 0) > 1e-9);
+            return H("div", { class: "sup-mat-row" }, [
               H("div", { class: "sup-mat-nm" }, [
                 H("span", { text: m.name || m.id }),
-                m.whName ? H("span", { class: "sup-mat-wh", text: "🏬 " + m.whName }) : null,
+                /* one chip per store, each carrying what comes off it. Where a
+                   draw is split the chips say so, so two lines against one
+                   material do not read as a double issue. */
+                src.length
+                  ? H("div", { class: "sup-mat-whs" }, src.map((x) => H("span",
+                      { class: "sup-mat-wh" + (m.issued ? " is-done" : ""),
+                        title: (m.issued ? "Already issued from " : "To be drawn from ") + (x.name || x.wh),
+                        text: "🏬 " + (x.name || x.wh) + (src.length > 1 || !m.issued
+                          ? " · " + supQty(m, x.qty, m.uom) : "") })
+                    ).concat(src.length > 1
+                      ? [H("span", { class: "sup-mat-split", text: "across " + src.length + " stores" })] : []))
+                  : (m.whName ? H("span", { class: "sup-mat-wh", text: "🏬 " + m.whName }) : null),
               ].filter(Boolean)),
               H("b", { text: supQty(m, m.required, m.uom) }),
-            ]))),
+            ]);
+          })),
         ]);
       }
 
@@ -722,14 +737,12 @@
       go.onclick = async () => {
         go.disabled = true; go.textContent = "…";
         try {
-          let res = null;
           if (backfill) await DB.production.setWipStore(w.id, sel.value);
-          else res = await DB.production.advance(w.id, "complete", { wipWh: sel.value });
+          else await DB.production.advance(w.id, "complete", { wipWh: sel.value });
           mo.close();
           const nm = (whs.find((x) => x.id === sel.value) || {}).name || sel.value;
           toast(backfill ? "Recorded — slitting is sent to " + nm : "Coating completed — roll left at " + nm,
             { type: "ok", title: backfill ? "Store recorded" : "Handed to slitting" });
-          self.labWarn(res);
           await self.refresh({ quiet: true, slim: true });
         } catch (err) {
           toast(err.message, { type: "danger" });
@@ -785,22 +798,18 @@
       });
     },
 
-    /* The floor is told when the batch it just closed measured outside its
-       limits. The stage still closed (ruled 2026-09-02); the admin and the lab
-       have the alert, and the ruling is theirs. Named parameters only — never
-       a limit — exactly what the old refusal used to say. */
-    labWarn(res) {
-      const lw = res && res.labWarning;
-      if (!lw) return;
-      toast("Batch " + (lw.batchNo || "") + " measured outside its limits"
-        + (lw.failed && lw.failed.length ? " (" + lw.failed.join(", ") + ")" : "")
-        + " — the admin and the lab have been alerted. It stays under the bell until they rule.", { type: "warn", title: "Lab data failed", dur: 9000 });
-    },
-
     /* ---- the floor's bell ----
-       The toast above is gone in nine seconds; the bell keeps every failed
-       batch from this board's jobs until the admin has ruled (the server
-       scopes labAlerts to my jobs and sends parameter names only). */
+       THE BELL IS THE ONLY WAY THE FLOOR IS TOLD. A stage that closed on a
+       batch measuring outside its limits used to throw a nine-second toast
+       across the board as well — "Lab data failed", naming the parameters.
+       It was noise laid over a signal that was already there: the refresh on
+       the very next line puts that batch under the bell, where it stays until
+       the admin rules, and the bell is what the supervisor acts on. Taken out
+       2026-09-04 at the user's ask. The server still sends `labWarning` on the
+       advance — nothing here reads it, and the alert itself is unaffected.
+       The bell keeps every failed batch from this board's jobs until the admin
+       has ruled (the server scopes labAlerts to my jobs and sends parameter
+       names only). */
     alerts() { return (this.data && this.data.labAlerts) || []; },
     refreshBell() {
       const n = this.alerts().length, badge = UI.$("#bellBadge");
@@ -855,10 +864,9 @@
     async act(w, action, btn) {
       if (btn) { btn.disabled = true; btn.textContent = "…"; }
       try {
-        const res = await DB.production.advance(w.id, action);
+        await DB.production.advance(w.id, action);
         const verb = { start: "started", complete: "completed", pause: "paused" }[action] || action;
         toast((w.product ? w.product.name : w.id) + " — stage " + verb, { type: "ok" });
-        this.labWarn(res);
         await this.refresh({ quiet: true, slim: true });
       } catch (err) {
         toast(err.message, { type: "danger" });
@@ -1114,6 +1122,68 @@
          materialStock is the floor's own (quantities-only) stock feed */
       const matStock = this.data.materialStock || {};
       const onHandOf = (id) => (matStock[id] || []).reduce((n, r) => n + (+r.qty || 0), 0);
+      /* ---- WHICH STORE EACH MATERIAL COMES OUT OF, AND HOW MUCH -----------
+         The same control and the same arithmetic the office gets on a work
+         order, on the floor's own stock feed (materialStock is already per
+         store, biggest pile first, quarantine left out). Booking production
+         deducts exactly as a stage does, so it earns the same say over where
+         the stock is taken from — and, either way, the form says how much
+         comes off each shelf, because whoever books it is the person who then
+         has to fetch it.
+         Mirrors stageService.drawPlan: the leading store gives what it has and
+         the balance comes off the others, biggest pile first. */
+      const fsWhs = {};                    // itemId -> the store chosen
+      const drawShares = (id, need, lead) => {
+        need = Math.abs(+need || 0);
+        const rows = matStock[id] || [];
+        if (!id || !need || !rows.length) return [];
+        const head = rows.find((r) => r.wh === lead) || rows[0];
+        const order = [head].concat(rows.filter((r) => r.wh !== head.wh));
+        const out = [];
+        let left = need;
+        order.forEach((r) => {
+          if (left <= 1e-9 || r.qty <= 1e-9) return;
+          const take = Math.min(left, r.qty);
+          out.push({ wh: r.wh, name: r.name, qty: take });
+          left -= take;
+        });
+        // short everywhere: the shortfall stays on the leading store, as it
+        // will on the issue itself
+        if (left > 1e-9) {
+          const f = out.find((o) => o.wh === head.wh);
+          if (f) f.qty += left; else out.push({ wh: head.wh, name: head.name, qty: left });
+        }
+        return out;
+      };
+      const fsWhPick = (l) => {
+        const id = l.id, rows = matStock[id] || [];
+        if (!id || rows.length < 2) return null;
+        const need = (l.agg != null ? l.agg : l.need) || 0;
+        if (fsWhs[id] == null) fsWhs[id] = rows[0].wh;
+        const uom = l.uom || "";
+        const split = H("div", { class: "sup-mat-whs" });
+        const paint = () => {
+          split.innerHTML = "";
+          if (!(need > 0)) return;
+          const sh = drawShares(id, need, fsWhs[id]);
+          sh.forEach((x) => split.appendChild(H("span", { class: "sup-mat-wh",
+            text: "🏬 " + (x.name || x.wh) + " · " + fmtQty(x.qty) + " " + uom })));
+          if (sh.length > 1) split.appendChild(H("span", { class: "sup-mat-split",
+            text: "across " + sh.length + " stores — no single store covers it" }));
+        };
+        const sel = H("select", { class: "select wo-wh-pick",
+          title: "Which store this booking draws this material from",
+          onchange: (e) => { fsWhs[id] = e.target.value; paint(); } },
+          rows.map((r) => H("option", { value: r.wh, selected: fsWhs[id] === r.wh ? "selected" : null,
+            text: "🏬 " + (r.name || r.wh) + " · " + fmtQty(r.qty) + " " + uom
+              + (need > 0 ? (r.qty + 1e-6 >= need ? " · covers this run" : " · short by " + fmtQty(need - r.qty)) : "") })));
+        paint();
+        return H("div", {}, [
+          H("div", { class: "wo-wh-wrap" }, [
+            H("span", { class: "wo-wh-lbl", text: "Draw from" }), sel,
+            H("span", { class: "muted", style: "font-size:10.5px", text: "in " + rows.length + " stores" })]),
+          split]);
+      };
 
       /* half-made stock is only ever the COATED JUMBO */
       const wipStage = () => "Coated Jumbo Roll";
@@ -1229,9 +1299,11 @@
           const rows = p.recipe.map((r) => ({
             id: r.id, name: r.name, code: r.id !== r.name ? r.id : null, uom: r.uom || "",
             need: r.perUnit * qty, have: onHandOf(r.id),
+            // one store, and how much off it; several, and the picker says
+            sources: drawShares(r.id, r.perUnit * qty, fsWhs[r.id]),
           }));
           if (U.materialsList) U.materialsList(preview, [{ label: null, lines: rows }],
-            { title: "Raw materials to be deducted from store" });
+            { title: "Raw materials to be deducted from store", whPick: fsWhPick });
         }
         preview.appendChild(H("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:10px 0 0;font-weight:700;color:var(--ok)" }, [
           H("span", { text: catNow() === "FG" ? "→ Added to finished stock" : "→ Added to work in process" }),
@@ -1337,10 +1409,19 @@
         }
         if (btn) { btn.disabled = true; btn.textContent = "…"; }
         try {
+          /* which STORE each material comes out of — only the ones that were
+             actually a choice. A material in one store has none, and freezing
+             its store here would stop the standing rule following the stock if
+             it moves before this is saved. */
+          const whPicked = {};
+          Object.keys(fsWhs).forEach((rid) => {
+            if ((matStock[rid] || []).length > 1) whPicked[rid] = fsWhs[rid];
+          });
           const res = await DB.production.addFinishedStock(Object.assign({
             itemId: p.id, qty: +qty.toFixed(3), wh: whSel.value,
             tapeWidthMM, gsm: +gsmInp.value || null,
-          }, labParams.length ? { refNo: batch, labValues: labValuesNow() } : {}));
+          }, labParams.length ? { refNo: batch, labValues: labValuesNow() } : {},
+             Object.keys(whPicked).length ? { materialWarehouses: whPicked } : {}));
           mo.close();
           const where = (res && res.produced && res.produced.whName) || "stock";
           toast("Added " + fmtQty(qty) + " " + (p.uom || "") + " of " + p.name + " → " + where, { type: "ok" });

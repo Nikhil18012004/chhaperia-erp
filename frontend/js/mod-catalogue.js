@@ -47,6 +47,223 @@
     (ENG.data.labProducts || []).forEach((lp) => (lp.params || []).forEach((p) => add(p, false)));
     return out.sort((a, b) => a.label.localeCompare(b.label));
   }
+  /* ============================================================
+     THE TWO EDITORS THIS FORM IS MADE OF
+     Kept as things of their own so ADD STOCK can borrow them
+     whole: a material created over the counter is then defined
+     exactly as one entered here — the same rows, the same rules,
+     the same payload — and the two forms cannot drift apart.
+     `pfx` keeps the element ids apart so both may be open at once.
+     Each editor is BUILT, then mounted, then drawn: the search
+     boxes hang their listeners off ids, so they have to be in the
+     document before draw() is called.
+     ============================================================ */
+
+  /* ---- 2 · testing parameters: a row per parameter ---- */
+  function testParamsEditor(pfx) {
+    pfx = pfx || "c";
+    const eid = (s) => pfx + "_" + s;
+    let tp = [], seq = 0;
+    const tpHost = h("div");
+    const pickHost = h("div", { style: "flex:1;min-width:220px" });
+    function addRow(p) {
+      tp.push(Object.assign({ _k: ++seq, label: "", unit: "", std: false, key: "", mode: "range", v1: "", v2: "" }, p || {}));
+      drawTp();
+      const last = tp[tp.length - 1];
+      setTimeout(() => { const el = UI.$("#" + eid("tp_l_" + last._k)) || UI.$("#" + eid("tp_v1_" + last._k)); if (el && !el.readOnly) el.focus(); else { const v = UI.$("#" + eid("tp_v1_" + last._k)); if (v) v.focus(); } }, 20);
+    }
+    function drawTp() {
+      tpHost.innerHTML = "";
+      if (!tp.length) { tpHost.appendChild(h("div", { class: "cg-empty", text: "No parameters yet — search one above, or add a new one." })); return; }
+      const g = h("div", { class: "cg-grid tp" });
+      ["#", "Parameter", "Type", "Value / Min", "Max", "UOM", ""].forEach((t) => g.appendChild(h("div", { class: "h", text: t })));
+      tp.forEach((r, i) => {
+        g.appendChild(h("div", { class: "n", text: String(i + 1) }));
+        const lbl = h("input", { class: "input", id: eid("tp_l_" + r._k), value: r.label, placeholder: "Parameter name", readonly: r.std ? "" : null,
+          title: r.std ? "A catalogue parameter — its name is fixed" : "", oninput: (e) => { r.label = e.target.value; } });
+        g.appendChild(lbl);
+        const mode = h("select", { class: "select", id: eid("tp_m_" + r._k), onchange: (e) => { r.mode = e.target.value; const mx = UI.$("#" + eid("tp_v2_" + r._k)); if (mx) { mx.disabled = r.mode === "static"; if (mx.disabled) { mx.value = ""; r.v2 = ""; } } const v1 = UI.$("#" + eid("tp_v1_" + r._k)); if (v1) v1.placeholder = r.mode === "static" ? "target" : "min"; } },
+          [h("option", { value: "range", text: "Range" }), h("option", { value: "static", text: "Static" })]);
+        mode.value = r.mode;
+        g.appendChild(mode);
+        g.appendChild(h("input", { class: "input", id: eid("tp_v1_" + r._k), type: "number", step: "any", value: r.v1, placeholder: r.mode === "static" ? "target" : "min", oninput: (e) => { r.v1 = e.target.value; } }));
+        g.appendChild(h("input", { class: "input", id: eid("tp_v2_" + r._k), type: "number", step: "any", value: r.v2, placeholder: "max", disabled: r.mode === "static" ? "" : null, oninput: (e) => { r.v2 = e.target.value; } }));
+        g.appendChild(h("input", { class: "input", id: eid("tp_u_" + r._k), value: r.unit, placeholder: "unit", readonly: r.std ? "" : null, oninput: (e) => { r.unit = e.target.value; } }));
+        g.appendChild(h("button", { class: "icon-btn", title: "Remove", "aria-label": "Remove parameter", onclick: () => { tp = tp.filter((x) => x !== r); drawTp(); }, text: "✕" }));
+      });
+      tpHost.appendChild(g);
+    }
+    /* the search box over everything already in use; picking one adds a row
+       and clears the box, ready for the next */
+    function drawPick() {
+      const SS = U().searchSelect; if (!SS) return;
+      const pool = paramPool().filter((p) => !tp.some((r) => r.label.trim().toLowerCase() === p.label.toLowerCase()));
+      pickHost.innerHTML = SS(eid("pick"), pool.map((p) => ({ v: p.key + "|" + p.label, l: p.label + (p.unit ? " (" + p.unit + ")" : "") + (p.std ? "" : " · in use") })), "", "Search a parameter already in use — thickness, GSM, viscosity…");
+      const hid = UI.$("#" + eid("pick"));
+      if (hid) hid.addEventListener("change", () => {
+        const v = hid.value; if (!v) return;
+        const p = pool.find((x) => x.key + "|" + x.label === v); if (!p) return;
+        addRow({ label: p.label, unit: p.unit, std: p.std, key: p.key });
+        drawPick();
+      });
+    }
+    const node = h("div", {}, [
+      h("div", { class: "flex aic", style: "gap:8px;flex-wrap:wrap" }, [
+        pickHost,
+        h("button", { class: "btn", onclick: () => addRow(), html: "＋ Add parameter" }),
+      ]),
+      tpHost,
+    ]);
+    /* the incoming-material catalogue is fetched once. A form opened before it
+       lands still offers every standard parameter — the box redraws when the
+       fetch returns, but only once it is on screen to be redrawn. */
+    gtCatalogue().then(() => { if (node.isConnected) drawPick(); });
+
+    /* THE ROWS, READ BACK THE WAY THE SERVER WANTS THEM. A catalogue parameter
+       of a MATERIAL keeps its catalogue key; everything else — a product's own
+       parameters, a new one — belongs to the item, keyed from its name exactly
+       as the server keys it. Returns null, having said what is wrong, rather
+       than a half-built payload. */
+    function collect(cat) {
+      const gtKeys = new Set((GT_CAT || []).map((p) => p.key));
+      const params = [], custom = [], spec = {}, seenKeys = new Set();
+      for (const r of tp) {
+        const label = String(r.label || "").trim();
+        if (!label) { toast("Every parameter needs a name — or remove the empty row", { type: "warn" }); return null; }
+        let key;
+        if (cat !== "FG" && r.std && gtKeys.has(r.key)) { key = r.key; params.push(key); }
+        else { key = slug(label); if (!key) { toast("The parameter name " + label + " needs a letter or a digit", { type: "warn" }); return null; } custom.push({ key, label, unit: String(r.unit || "").trim() }); }
+        if (seenKeys.has(key)) { toast("The parameter " + label + " is listed twice", { type: "warn" }); return null; }
+        seenKeys.add(key);
+        const v1 = num(r.v1), v2 = num(r.v2);
+        if (r.mode === "static") { if (v1 != null) spec[key] = { nominal: v1 }; }
+        else if (v1 != null || v2 != null) {
+          if (v1 != null && v2 != null && v1 > v2) { toast("Minimum cannot exceed maximum for " + label, { type: "warn" }); return null; }
+          spec[key] = {}; if (v1 != null) spec[key].min = v1; if (v2 != null) spec[key].max = v2;
+        }
+      }
+      return { params, custom, spec };
+    }
+    return { node, count: () => tp.length, collect, draw() { drawPick(); drawTp(); } };
+  }
+
+  /* ---- 3 · the recipe: created for a product, joined for a material ---- */
+  function bomEditor(pfx, getCat) {
+    pfx = pfx || "c";
+    const eid = (s) => pfx + "_" + s;
+    let bomOn = false, bomLines = [], bseq = 0;
+    const bomHost = h("div");
+    const compOpts = () => (ENG.data.items || []).filter((i) => ["RM", "PKG", "CON"].includes(i.cat)).map((i) => ({ v: i.id, l: i.name + "  ·  " + i.id }));
+    const productOpts = () => (ENG.data.items || []).filter((i) => i.cat === "FG" && ENG.data.boms && ENG.data.boms[i.id]).map((i) => ({ v: i.id, l: (i.productName || i.name) + "  ·  " + i.id }));
+    const catNow = () => (typeof getCat === "function" ? getCat() : "RM") || "RM";
+    /* ---- ONE MATERIAL IN PLACE OF ANOTHER ----
+       A new grade of resin is rarely an EXTRA ingredient: it is the old grade,
+       bettered, and the recipe should end up holding one resin and not two. So
+       a material may take an existing component's place instead of joining
+       beside it. This is the picker for that, redrawn whenever the product
+       changes, because it lists that product's own components. */
+    const repHost = h("div");
+    function bomLinesOf(pid) {
+      const b = ((ENG.data.boms || {})[pid]) || null;
+      if (!b) return [];
+      const raw = (window.BOMCALC ? BOMCALC.normalize(b.lines || []) : (b.lines || []));
+      const seen = new Set(), out = [];
+      raw.forEach((l) => { if (l && l.id && !seen.has(l.id)) { seen.add(l.id); out.push(l); } });
+      return out;
+    }
+    function drawReplace() {
+      const F = U().field; if (!F) return;
+      repHost.innerHTML = "";
+      const pid = (UI.$("#" + eid("bp")) || {}).value || "";
+      const lines = bomLinesOf(pid);
+      if (!lines.length) return;
+      const optsHtml = ['<option value="">— add it as a new line, changing nothing else —</option>']
+        .concat(lines.map((l) => '<option value="' + esc(l.id) + '">'
+          + esc(itemName(l.id) + "  ·  " + l.id + "  —  " + l.qty + " " + (l.unit || "KG") + " per kg")
+          + "</option>")).join("");
+      repHost.appendChild(F("Take the place of",
+        '<select class="select" id="' + eid("brep") + '">' + optsHtml + "</select>"
+        + '<div class="muted" id="' + eid("brepnote") + '" style="font-size:11px;margin-top:4px"></div>', "full"));
+      const sel = UI.$("#" + eid("brep")), note = UI.$("#" + eid("brepnote"));
+      if (!sel) return;
+      sel.addEventListener("change", () => {
+        const l = lines.find((x) => x.id === sel.value);
+        if (note) note.textContent = l
+          ? itemName(l.id) + " comes off the recipe and this material goes in at its place."
+          : "";
+        /* a replacement usually goes in at the rate the old one did. Offered,
+           not imposed: only a quantity box still empty is filled in. */
+        if (l) {
+          const q = UI.$("#" + eid("bq")), u = UI.$("#" + eid("bu"));
+          if (q && !q.value) q.value = l.qty;
+          if (u && l.unit) u.value = l.unit;
+        }
+      });
+    }
+    function drawBom() {
+      const F = U().field, SEL = U().selectHTML, SS = U().searchSelect;
+      if (!F || !SEL || !SS) return;
+      bomHost.innerHTML = "";
+      const fg = catNow() === "FG";
+      const tick = h("label", { class: "flex aic", style: "gap:8px;font-size:13px;cursor:pointer" }, [
+        h("input", { type: "checkbox", id: eid("bomon"), checked: bomOn ? "" : null, onchange: (e) => { bomOn = e.target.checked; drawBom(); } }),
+        h("span", { text: fg ? "Create the recipe (BOM) for this product now" : "Add this material to an existing product's recipe" }),
+      ]);
+      bomHost.appendChild(tick);
+      if (!bomOn) return;
+      if (fg) {
+        const g = h("div", { class: "cg-grid bm" });
+        ["#", "Component", "Qty per kg", "Unit", ""].forEach((t) => g.appendChild(h("div", { class: "h", text: t })));
+        if (!bomLines.length) bomLines.push({ _k: ++bseq, id: "", qty: "", unit: "KG" });
+        bomLines.forEach((l, i) => {
+          g.appendChild(h("div", { class: "n", text: String(i + 1) }));
+          const host = h("div", { html: SS(eid("bl_" + l._k), compOpts(), l.id, "Search material…") });
+          g.appendChild(host);
+          g.appendChild(h("input", { class: "input", type: "number", step: "any", min: "0", value: l.qty, placeholder: "0.000", oninput: (e) => { l.qty = e.target.value; } }));
+          const u = h("select", { class: "select", onchange: (e) => { l.unit = e.target.value; } }, ["KG", "GRAM", "MG", "MTR", "SQM", "NOS"].map((x) => h("option", { value: x, text: x })));
+          u.value = l.unit || "KG"; g.appendChild(u);
+          g.appendChild(h("button", { class: "icon-btn", title: "Remove", "aria-label": "Remove component", onclick: () => { bomLines = bomLines.filter((x) => x !== l); drawBom(); }, text: "✕" }));
+          setTimeout(() => { const hid = UI.$("#" + eid("bl_" + l._k)); if (hid) hid.addEventListener("change", () => { l.id = hid.value; }); }, 0);
+        });
+        bomHost.appendChild(g);
+        bomHost.appendChild(h("div", { class: "flex aic", style: "gap:10px;margin-top:10px;flex-wrap:wrap" }, [
+          h("button", { class: "btn sm", onclick: () => { bomLines.push({ _k: ++bseq, id: "", qty: "", unit: "KG" }); drawBom(); }, html: "＋ Add component" }),
+          h("span", { class: "muted", style: "font-size:12px", text: "Yield %" }),
+          h("input", { class: "input", id: eid("yield"), type: "number", min: "1", max: "100", step: "any", value: UI.$("#" + eid("yield")) ? UI.$("#" + eid("yield")).value : "100", style: "width:90px" }),
+        ]));
+      } else {
+        const opts = productOpts();
+        if (!opts.length) { bomHost.appendChild(h("div", { class: "cg-empty", text: "No product has a recipe yet to add this material to." })); return; }
+        bomHost.appendChild(h("div", { class: "form-grid", style: "margin-top:10px" }, [
+          F("Product whose recipe this joins", SS(eid("bp"), opts, opts[0].v, "Search product…"), "full"),
+          F("Quantity per kg of product", `<input class="input" id="${eid("bq")}" type="number" step="any" min="0" placeholder="e.g. 0.050">`),
+          F("Unit", SEL(eid("bu"), ["KG", "GRAM", "MG", "MTR", "SQM", "NOS"].map((x) => ({ v: x, l: x })), "KG")),
+        ]));
+        bomHost.appendChild(repHost);
+        drawReplace();
+        setTimeout(() => { const hid = UI.$("#" + eid("bp")); if (hid) hid.addEventListener("change", drawReplace); }, 0);
+      }
+    }
+    /* what the recipe section amounts to — nothing, a recipe of its own, or a
+       line on somebody else's. Null, having said why, when it is half-filled. */
+    function collect(cat) {
+      const g = (id) => { const e = UI.$("#" + eid(id)); return e ? e.value : ""; };
+      if (!bomOn) return { mode: "none" };
+      if (cat === "FG") {
+        const lines = bomLines.filter((l) => l.id && num(l.qty) > 0).map((l) => ({ id: l.id, qty: +l.qty, unit: l.unit || "KG" }));
+        if (!lines.length) { toast("Add at least one component with a quantity, or untick the recipe", { type: "warn" }); return null; }
+        return { mode: "create", yield: num(g("yield")) || 100, lines };
+      }
+      const pid = g("bp"), q = num(g("bq"));
+      if (!pid) { toast("Pick the product whose recipe this material joins", { type: "warn" }); return null; }
+      if (!(q > 0)) { toast("Enter the quantity per kg of product", { type: "warn" }); return null; }
+      const out = { mode: "append", productId: pid, qty: q, unit: g("bu") || "KG" };
+      const rep = g("brep");                 // blank = join the recipe, leaving it otherwise as it was
+      if (rep) out.replaceId = rep;
+      return out;
+    }
+    return { node: bomHost, active: () => bomOn, collect, draw: drawBom };
+  }
 
   /* ============================================================
      THE FORM
@@ -59,100 +276,8 @@
     const cats = (ENG.data.categories || []).filter((c) => ["raw", "wip", "fg"].includes(c.kind) || true);
     const UNITS = [{ v: "KG", l: "Kilogram (kg)" }, { v: "MTR", l: "Metre (m)" }, { v: "SQM", l: "Square metre (sqm)" }, { v: "GRAM", l: "Gram (g)" }, { v: "LTR", l: "Litre (l)" }, { v: "NOS", l: "Numbers (nos)" }];
 
-    /* ---- 2 · testing parameters: a row per parameter ---- */
-    let tp = [], seq = 0;
-    const tpHost = h("div");
-    function addRow(p) {
-      tp.push(Object.assign({ _k: ++seq, label: "", unit: "", std: false, key: "", mode: "range", v1: "", v2: "" }, p || {}));
-      drawTp();
-      const last = tp[tp.length - 1];
-      setTimeout(() => { const el = UI.$("#tp_l_" + last._k) || UI.$("#tp_v1_" + last._k); if (el && !el.readOnly) el.focus(); else { const v = UI.$("#tp_v1_" + last._k); if (v) v.focus(); } }, 20);
-    }
-    function drawTp() {
-      tpHost.innerHTML = "";
-      if (!tp.length) { tpHost.appendChild(h("div", { class: "cg-empty", text: "No parameters yet — search one above, or add a new one." })); return; }
-      const g = h("div", { class: "cg-grid tp" });
-      ["#", "Parameter", "Type", "Value / Min", "Max", "UOM", ""].forEach((t) => g.appendChild(h("div", { class: "h", text: t })));
-      tp.forEach((r, i) => {
-        g.appendChild(h("div", { class: "n", text: String(i + 1) }));
-        const lbl = h("input", { class: "input", id: "tp_l_" + r._k, value: r.label, placeholder: "Parameter name", readonly: r.std ? "" : null,
-          title: r.std ? "A catalogue parameter — its name is fixed" : "", oninput: (e) => { r.label = e.target.value; } });
-        g.appendChild(lbl);
-        const mode = h("select", { class: "select", id: "tp_m_" + r._k, onchange: (e) => { r.mode = e.target.value; const mx = UI.$("#tp_v2_" + r._k); if (mx) { mx.disabled = r.mode === "static"; if (mx.disabled) { mx.value = ""; r.v2 = ""; } } const v1 = UI.$("#tp_v1_" + r._k); if (v1) v1.placeholder = r.mode === "static" ? "target" : "min"; } },
-          [h("option", { value: "range", text: "Range" }), h("option", { value: "static", text: "Static" })]);
-        mode.value = r.mode;
-        g.appendChild(mode);
-        g.appendChild(h("input", { class: "input", id: "tp_v1_" + r._k, type: "number", step: "any", value: r.v1, placeholder: r.mode === "static" ? "target" : "min", oninput: (e) => { r.v1 = e.target.value; } }));
-        g.appendChild(h("input", { class: "input", id: "tp_v2_" + r._k, type: "number", step: "any", value: r.v2, placeholder: "max", disabled: r.mode === "static" ? "" : null, oninput: (e) => { r.v2 = e.target.value; } }));
-        g.appendChild(h("input", { class: "input", id: "tp_u_" + r._k, value: r.unit, placeholder: "unit", readonly: r.std ? "" : null, oninput: (e) => { r.unit = e.target.value; } }));
-        g.appendChild(h("button", { class: "icon-btn", title: "Remove", "aria-label": "Remove parameter", onclick: () => { tp = tp.filter((x) => x !== r); drawTp(); }, text: "✕" }));
-      });
-      tpHost.appendChild(g);
-    }
-    /* the search box over everything already in use; picking one adds a row
-       and clears the box, ready for the next */
-    const pickHost = h("div", { style: "flex:1;min-width:220px" });
-    function drawPick() {
-      const pool = paramPool().filter((p) => !tp.some((r) => r.label.trim().toLowerCase() === p.label.toLowerCase()));
-      pickHost.innerHTML = SS("c_pick", pool.map((p) => ({ v: p.key + "|" + p.label, l: p.label + (p.unit ? " (" + p.unit + ")" : "") + (p.std ? "" : " · in use") })), "", "Search a parameter already in use — thickness, GSM, viscosity…");
-      const hid = UI.$("#c_pick");
-      if (hid) hid.addEventListener("change", () => {
-        const v = hid.value; if (!v) return;
-        const p = pool.find((x) => x.key + "|" + x.label === v); if (!p) return;
-        addRow({ label: p.label, unit: p.unit, std: p.std, key: p.key });
-        drawPick();
-      });
-    }
-    const pickRow = h("div", { class: "flex aic", style: "gap:8px;flex-wrap:wrap" }, [
-      pickHost,
-      h("button", { class: "btn", onclick: () => addRow(), html: "＋ Add parameter" }),
-    ]);
-
-    /* ---- 3 · the recipe ---- */
-    let bomOn = false, bomLines = [], bseq = 0;
-    const bomHost = h("div");
-    const compOpts = () => (ENG.data.items || []).filter((i) => ["RM", "PKG", "CON"].includes(i.cat)).map((i) => ({ v: i.id, l: i.name + "  ·  " + i.id }));
-    const productOpts = () => (ENG.data.items || []).filter((i) => i.cat === "FG" && ENG.data.boms && ENG.data.boms[i.id]).map((i) => ({ v: i.id, l: (i.productName || i.name) + "  ·  " + i.id }));
-    function catNow() { const e = UI.$("#c_cat"); return e ? e.value : "RM"; }
-    function drawBom() {
-      bomHost.innerHTML = "";
-      const fg = catNow() === "FG";
-      const tick = h("label", { class: "flex aic", style: "gap:8px;font-size:13px;cursor:pointer" }, [
-        h("input", { type: "checkbox", id: "c_bomon", checked: bomOn ? "" : null, onchange: (e) => { bomOn = e.target.checked; drawBom(); } }),
-        h("span", { text: fg ? "Create the recipe (BOM) for this product now" : "Add this material to an existing product's recipe" }),
-      ]);
-      bomHost.appendChild(tick);
-      if (!bomOn) return;
-      if (fg) {
-        const g = h("div", { class: "cg-grid bm" });
-        ["#", "Component", "Qty per kg", "Unit", ""].forEach((t) => g.appendChild(h("div", { class: "h", text: t })));
-        if (!bomLines.length) bomLines.push({ _k: ++bseq, id: "", qty: "", unit: "KG" });
-        bomLines.forEach((l, i) => {
-          g.appendChild(h("div", { class: "n", text: String(i + 1) }));
-          const host = h("div", { html: SS("c_bl_" + l._k, compOpts(), l.id, "Search material…") });
-          g.appendChild(host);
-          g.appendChild(h("input", { class: "input", type: "number", step: "any", min: "0", value: l.qty, placeholder: "0.000", oninput: (e) => { l.qty = e.target.value; } }));
-          const u = h("select", { class: "select", onchange: (e) => { l.unit = e.target.value; } }, ["KG", "GRAM", "MG", "MTR", "SQM", "NOS"].map((x) => h("option", { value: x, text: x })));
-          u.value = l.unit || "KG"; g.appendChild(u);
-          g.appendChild(h("button", { class: "icon-btn", title: "Remove", "aria-label": "Remove component", onclick: () => { bomLines = bomLines.filter((x) => x !== l); drawBom(); }, text: "✕" }));
-          setTimeout(() => { const hid = UI.$("#c_bl_" + l._k); if (hid) hid.addEventListener("change", () => { l.id = hid.value; }); }, 0);
-        });
-        bomHost.appendChild(g);
-        bomHost.appendChild(h("div", { class: "flex aic", style: "gap:10px;margin-top:10px;flex-wrap:wrap" }, [
-          h("button", { class: "btn sm", onclick: () => { bomLines.push({ _k: ++bseq, id: "", qty: "", unit: "KG" }); drawBom(); }, html: "＋ Add component" }),
-          h("span", { class: "muted", style: "font-size:12px", text: "Yield %" }),
-          h("input", { class: "input", id: "c_yield", type: "number", min: "1", max: "100", step: "any", value: UI.$("#c_yield") ? UI.$("#c_yield").value : "100", style: "width:90px" }),
-        ]));
-      } else {
-        const opts = productOpts();
-        if (!opts.length) { bomHost.appendChild(h("div", { class: "cg-empty", text: "No product has a recipe yet to add this material to." })); return; }
-        bomHost.appendChild(h("div", { class: "form-grid", style: "margin-top:10px" }, [
-          F("Product whose recipe this joins", SS("c_bp", opts, opts[0].v, "Search product…"), "full"),
-          F("Quantity per kg of product", `<input class="input" id="c_bq" type="number" step="any" min="0" placeholder="e.g. 0.050">`),
-          F("Unit", SEL("c_bu", ["KG", "GRAM", "MG", "MTR", "SQM", "NOS"].map((x) => ({ v: x, l: x })), "KG")),
-        ]));
-      }
-    }
+    const tpEd = testParamsEditor("c");
+    const bomEd = bomEditor("c", () => { const e = UI.$("#c_cat"); return e ? e.value : "RM"; });
 
     /* ---- the dialog ---- */
     const body = h("div", {}, [
@@ -174,17 +299,16 @@
       h("div", { class: "cg-sec" }, [h("span", { text: "2 · Testing parameters" }), h("span", { class: "sp" })]),
       h("p", { class: "dim", style: "font-size:12px;margin:0 0 8px;line-height:1.5",
         text: "What the lab measures on it — on every receipt of a material, on every batch certificate of a product. Search a parameter already in use, or add a new one with its unit. A range grades the reading pass or fail; a static figure is the target printed beside it." }),
-      pickRow,
-      tpHost,
+      tpEd.node,
       h("div", { class: "cg-sec" }, [h("span", { text: "3 · Recipe (BOM)" }), h("span", { class: "sp" })]),
-      bomHost,
+      bomEd.node,
     ]);
     const btnLabel = lab ? "Send for approval" : "Create Item";
     const btn = h("button", { class: "btn primary", onclick: save, text: btnLabel });
     const mo = modal({ title: lab ? "Propose a new item" : "New Item — one shot",
       sub: lab ? "Goes to the admin for approval; nothing lands until then" : "The item, what the lab tests it on, and its recipe — all at once",
       wide: true, body, foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }), btn] });
-    drawPick(); drawTp(); drawBom();
+    tpEd.draw(); bomEd.draw();
     /* the code follows the name — CATEGORY-STEM, the way the catalogue is
        coded — until the operator edits the code by hand */
     setTimeout(() => {
@@ -194,7 +318,7 @@
       const suggest = () => { if (!auto) return; const stem = String(nameEl.value || "").toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, ""); codeEl.value = stem ? (catEl.value || "RM") + "-" + stem : ""; };
       codeEl.addEventListener("input", () => { auto = false; });
       nameEl.addEventListener("input", suggest);
-      catEl.addEventListener("change", () => { suggest(); drawBom(); });
+      catEl.addEventListener("change", () => { suggest(); bomEd.draw(); });
       nameEl.focus();
     }, 30);
 
@@ -206,45 +330,20 @@
       const item = { id, name, cat, uom: g("c_uom"), thicknessMM: num(g("c_thk")), gsm: num(g("c_gsm")),
         cost: num(g("c_cost")) || 0, price: num(g("c_price")) || 0, reorder: num(g("c_reorder")) || 0,
         lead: num(g("c_lead")) || 7, hsn: g("c_hsn").trim(), gstRate: g("c_gst") === "" ? 18 : +g("c_gst") };
-      /* the readings: a catalogue parameter of a MATERIAL keeps its catalogue
-         key; everything else — a product's parameters, a new one — is the
-         item's own, keyed from its name the same way the server keys it */
-      const gtKeys = new Set((GT_CAT || []).map((p) => p.key));
-      const params = [], custom = [], spec = {}, seenKeys = new Set();
-      for (const r of tp) {
-        const label = String(r.label || "").trim();
-        if (!label) { toast("Every parameter needs a name — or remove the empty row", { type: "warn" }); return; }
-        let key;
-        if (cat !== "FG" && r.std && gtKeys.has(r.key)) { key = r.key; params.push(key); }
-        else { key = slug(label); if (!key) { toast("The parameter name " + label + " needs a letter or a digit", { type: "warn" }); return; } custom.push({ key, label, unit: String(r.unit || "").trim() }); }
-        if (seenKeys.has(key)) { toast("The parameter " + label + " is listed twice", { type: "warn" }); return; }
-        seenKeys.add(key);
-        const v1 = num(r.v1), v2 = num(r.v2);
-        if (r.mode === "static") { if (v1 != null) spec[key] = { nominal: v1 }; }
-        else if (v1 != null || v2 != null) {
-          if (v1 != null && v2 != null && v1 > v2) { toast("Minimum cannot exceed maximum for " + label, { type: "warn" }); return; }
-          spec[key] = {}; if (v1 != null) spec[key].min = v1; if (v2 != null) spec[key].max = v2;
-        }
-      }
-      let bom = { mode: "none" };
-      if (bomOn && cat === "FG") {
-        const lines = bomLines.filter((l) => l.id && num(l.qty) > 0).map((l) => ({ id: l.id, qty: +l.qty, unit: l.unit || "KG" }));
-        if (!lines.length) { toast("Add at least one component with a quantity, or untick the recipe", { type: "warn" }); return; }
-        bom = { mode: "create", yield: num(g("c_yield")) || 100, lines };
-      } else if (bomOn && cat !== "FG") {
-        const pid = g("c_bp"), q = num(g("c_bq"));
-        if (!pid) { toast("Pick the product whose recipe this material joins", { type: "warn" }); return; }
-        if (!(q > 0)) { toast("Enter the quantity per kg of product", { type: "warn" }); return; }
-        bom = { mode: "append", productId: pid, qty: q, unit: g("c_bu") || "KG" };
-      }
+      const tests = tpEd.collect(cat); if (!tests) return;
+      const bom = bomEd.collect(cat); if (!bom) return;
       btn.disabled = true; btn.textContent = lab ? "Sending…" : "Creating…";
       try {
-        const r = await DB.catalogue.newItem({ item, tests: { params, custom, spec }, bom });
+        const r = await DB.catalogue.newItem({ item, tests, bom });
         mo.close();
-        const n = params.length + custom.length;
+        const n = tests.params.length + tests.custom.length;
         if (r.proposed) toast("Sent to the admin for approval — " + r.proposal.id + ". Follow it under My proposals.", { type: "ok", title: "Proposal sent", dur: 6000 });
         else toast(name + " created" + (n ? " with " + n + " test parameter" + (n === 1 ? "" : "s") : "")
-          + (bom.mode === "create" ? " and its recipe" : bom.mode === "append" ? ", added to the recipe of " + bom.productId : ""), { type: "ok", title: "New item", dur: 5000 });
+          + (bom.mode === "create" ? " and its recipe"
+            : bom.mode === "append" ? (bom.replaceId
+                ? ", in place of " + bom.replaceId + " on the recipe of " + bom.productId
+                : ", added to the recipe of " + bom.productId)
+            : ""), { type: "ok", title: "New item", dur: 5000 });
         await App.reloadState();
       } catch (e) {
         toast(e.message || "Could not save", { type: "danger" });
@@ -288,7 +387,12 @@
         { key: "qty", label: "Qty per kg", num: true, render: (l) => esc(l.qty), noSort: true, width: "120px" },
         { key: "unit", label: "Unit", render: (l) => esc(l.unit || "KG"), noSort: true, width: "90px" },
       ], { mobileCards: false }));
-      else if (b.mode === "append") out.push(kv([["Joins the recipe of", itemName(b.productId) + " (" + b.productId + ")"], ["Quantity per kg", b.qty + " " + (b.unit || "KG")]]));
+      else if (b.mode === "append") out.push(kv(b.replaceId
+        ? [["Replaces, on the recipe of", itemName(b.productId) + " (" + b.productId + ")"],
+           ["The component it replaces", itemName(b.replaceId) + " (" + b.replaceId + ")"],
+           ["Quantity per kg", b.qty + " " + (b.unit || "KG")]]
+        : [["Joins the recipe of", itemName(b.productId) + " (" + b.productId + ")"],
+           ["Quantity per kg", b.qty + " " + (b.unit || "KG")]]));
       else out.push(h("div", { class: "cg-empty", text: "No recipe" }));
     } else {
       const b = p.bom || {};
@@ -367,5 +471,8 @@
       ].filter(Boolean) });
   }
 
-  window.CAT = { newItemWizard, approvalsDialog, proposalsDialog, paramPool };
+  /* the two editors go out with the rest: Add Stock builds a new material with
+     the very same parameter rows and recipe block, so what is created over the
+     counter is a catalogue entry like any other */
+  window.CAT = { newItemWizard, approvalsDialog, proposalsDialog, paramPool, testParamsEditor, bomEditor };
 })();

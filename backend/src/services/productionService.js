@@ -27,10 +27,20 @@ const BC = require("../../../frontend/js/bomcalc");
    floor reports what it has PACKED; the office decides what has SHIPPED. */
 const ACTIONS = ["start", "pause", "complete"];
 
-// The raw-material store the BOM draws down when finished stock is produced.
+/* The store a raw issue falls back to when the ledger names none at all — a
+   material with no movement anywhere has no store to be drawn from, and the
+   issue still has to land somewhere. Everything else goes through
+   stageService.drawPlan, which reads the ledger. */
 const RAW_STORE = "WH-PNY";
 
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
+
+/* the one label for a store, so a consumed-material line reads the same
+   wherever it is printed */
+function whNameOf(data, id) {
+  const w = ((data || {}).warehouses || []).find((x) => x.id === id);
+  return (w && w.name) || id || "";
+}
 
 /* ---- STOCK HAS A FLOOR ON THE FLOOR TOO ---------------------------------
    Manual movements have been unable to take an item below zero for a while
@@ -1068,6 +1078,18 @@ async function produceFinished(user, body) {
     });
   }
 
+  /* ---- WHICH STORE EACH MATERIAL LEAVES ----------------------------------
+     Booking production used to post every raw issue against WH-PNY, whatever
+     the ledger said. A drum standing in the second store was deducted from the
+     main one, which went below zero while the stock that was actually consumed
+     sat there untouched — and the storeman was never told which shelf to walk
+     to. It now goes through the same drawPlan a work-order stage does: the
+     store the form named leads, the draw spreads across the rest when one
+     cannot cover it, and quarantine is never touched. */
+  const heldIds = await GT.heldWarehouseIds(data);
+  const matWhs = materialWarehousesOf(body.materialWarehouses, data, heldIds);
+  const drawWo = matWhs ? { materialWarehouses: matWhs } : null;
+
   /* ---- part of the output can come from stock that already exists --------
      ADMIN ONLY. A run of finished goods can be made partly from half-made
      rolls already on the shelf (and, where a matching item exists, from
@@ -1117,10 +1139,20 @@ async function produceFinished(user, body) {
     if (isWip && !["base", "paste"].includes(S.materialRole(rid))) return;
     const need = r2(per * makeQty / Y);
     if (!need || !itemsById[rid]) return;
-    moves.push({ id: mvId(), date, itemId: rid, wh: RAW_STORE, type: "ISSUE",
-      qty: -Math.abs(need), rate: (itemsById[rid] || {}).cost || 0, ref,
-      note: "Production issue → " + item.id, by });
-    consumed.push({ id: rid, name: (itemsById[rid] || {}).name || rid, qty: need, uom: (itemsById[rid] || {}).uom || "" });
+    const shares = S.drawPlan(rid, need, drawWo, itemsById, data.movements, heldIds);
+    const from = shares.length ? shares : [{ wh: RAW_STORE, qty: need }];
+    from.forEach((sh) => {
+      moves.push({ id: mvId(), date, itemId: rid, wh: sh.wh, type: "ISSUE",
+        qty: -Math.abs(sh.qty), rate: (itemsById[rid] || {}).cost || 0, ref,
+        // a split draw puts two lines in the ledger against one booking; the
+        // note says why, so the second does not read as a double issue
+        note: "Production issue → " + item.id
+          + (from.length > 1 ? " · drawn from " + from.length + " stores" : ""), by });
+    });
+    consumed.push({ id: rid, name: (itemsById[rid] || {}).name || rid, qty: need,
+      uom: (itemsById[rid] || {}).uom || "",
+      // where it came out of, and how much out of each — the booking's receipt
+      sources: from.map((sh) => ({ wh: sh.wh, name: whNameOf(data, sh.wh), qty: sh.qty })) });
   });
   // 2) add the produced quantity to the chosen warehouse
   const tapeWidth = body.tapeWidthMM == null || body.tapeWidthMM === "" ? null : +body.tapeWidthMM || null;
@@ -1442,13 +1474,22 @@ async function createAdhocProduction(user, body) {
   if (bom && (bom.lines || []).length) {
     const itemsById = Object.fromEntries((data.items || []).map((i) => [i.id, i]));
     const Y = bom.yield || 1;
+    const adhocHeld = await GT.heldWarehouseIds(data);
     BC.toLegacy(bom, BC.metaFromItem(item), null, itemsById).forEach(([rid, per]) => {
       const need = r2(per * kg / Y);
       if (!need || !itemsById[rid]) return;
-      moves.push({ id: mvId(), date: todayISO(), itemId: rid, wh: RAW_STORE, type: "ISSUE",
-        qty: -Math.abs(need), rate: itemsById[rid].cost || 0, ref,
-        note: "Ad-hoc issue → " + item.id, by: user.username });
-      consumed.push({ id: rid, name: itemsById[rid].name || rid, qty: need, uom: itemsById[rid].uom || "" });
+      // the same rule as every other issue — the store the stock is in, split
+      // where one cannot cover the draw
+      const shares = S.drawPlan(rid, need, null, itemsById, data.movements, adhocHeld);
+      const from = shares.length ? shares : [{ wh: RAW_STORE, qty: need }];
+      from.forEach((sh) => {
+        moves.push({ id: mvId(), date: todayISO(), itemId: rid, wh: sh.wh, type: "ISSUE",
+          qty: -Math.abs(sh.qty), rate: itemsById[rid].cost || 0, ref,
+          note: "Ad-hoc issue → " + item.id
+            + (from.length > 1 ? " · drawn from " + from.length + " stores" : ""), by: user.username });
+      });
+      consumed.push({ id: rid, name: itemsById[rid].name || rid, qty: need, uom: itemsById[rid].uom || "",
+        sources: from.map((sh) => ({ wh: sh.wh, name: whNameOf(data, sh.wh), qty: sh.qty })) });
     });
     deducted = consumed.length > 0;
   }

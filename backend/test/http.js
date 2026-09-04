@@ -3362,6 +3362,39 @@ async function run() {
     const certDoc = ((await state()).labReports || []).find((r) => cert.d && r.id === cert.d.id);
     ok("a certificate grades the product's own parameters", cert.status === 201 && !!certDoc && certDoc.result === "Fail" && certDoc.results.c_adhesion === "fail" && certDoc.results.c_shrinkage === "pass", cert.status + " " + JSON.stringify(certDoc && certDoc.results));
 
+    /* ONE MATERIAL IN PLACE OF ANOTHER. A better grade takes the old one's seat
+       on the recipe instead of joining beside it — and the seat is the point:
+       a line's position is its layer, so a swap that appended to the end would
+       quietly turn the product into a different one. */
+    const beforeSwap = (await state()).boms["FG-ONESHOT"];
+    const swapAt = (beforeSwap.lines || []).findIndex((l) => (Array.isArray(l) ? l[0] : l.id) === "RM-ONESHOT");
+    const swap = await call("POST", "/catalogue/new-item", A, {
+      item: { id: "RM-SWAP", name: "One-shot binder mk2", cat: "RM", uom: "KG", cost: 60 },
+      tests: {}, bom: { mode: "append", productId: "FG-ONESHOT", qty: 0.25, unit: "KG", replaceId: "RM-ONESHOT" } });
+    const afterSwap = (await state()).boms["FG-ONESHOT"];
+    const idsAfter = (afterSwap.lines || []).map((l) => (Array.isArray(l) ? l[0] : l.id));
+    ok("a new material takes the place of one already on a recipe (201)", swap.status === 201, swap.status + " " + JSON.stringify(swap.d).slice(0, 160));
+    ok("...the material it replaced is off the recipe", idsAfter.indexOf("RM-ONESHOT") < 0, JSON.stringify(idsAfter));
+    ok("...the new one stands exactly where the old one stood", swapAt >= 0 && idsAfter[swapAt] === "RM-SWAP" && idsAfter.length === (beforeSwap.lines || []).length, swapAt + " of " + JSON.stringify(idsAfter));
+    ok("...at the quantity that was asked for", +((afterSwap.lines || [])[swapAt] || {}).qty === 0.25, JSON.stringify((afterSwap.lines || [])[swapAt]));
+    const swapGone = await call("POST", "/catalogue/new-item", A, {
+      item: { id: "RM-SWAPX", name: "Replaces a ghost", cat: "RM", uom: "KG" },
+      tests: {}, bom: { mode: "append", productId: "FG-ONESHOT", qty: 0.1, unit: "KG", replaceId: "RM-ONESHOT" } });
+    ok("...replacing what is no longer there is refused, never quietly appended (400)", swapGone.status === 400 && /nothing to replace/.test(swapGone.d.error || ""), swapGone.status + " " + JSON.stringify(swapGone.d).slice(0, 140));
+    ok("...and the refused item was not created on the way past", !((await state()).items || []).some((i) => i.id === "RM-SWAPX"));
+    const swapSelf = await call("POST", "/catalogue/new-item", A, {
+      item: { id: "RM-SWAPSELF", name: "Replaces itself", cat: "RM", uom: "KG" },
+      tests: {}, bom: { mode: "append", productId: "FG-ONESHOT", qty: 0.1, unit: "KG", replaceId: "RM-SWAPSELF" } });
+    ok("...and a material cannot replace itself (400)", swapSelf.status === 400, swapSelf.status + " " + JSON.stringify(swapSelf.d).slice(0, 140));
+    // a plain append still appends, leaving every existing line where it was
+    const plainAdd = await call("POST", "/catalogue/new-item", A, {
+      item: { id: "RM-JOINER", name: "Joins beside the rest", cat: "RM", uom: "KG" },
+      tests: {}, bom: { mode: "append", productId: "FG-ONESHOT", qty: 0.03, unit: "KG" } });
+    const joined = (await state()).boms["FG-ONESHOT"];
+    const joinedIds = (joined.lines || []).map((l) => (Array.isArray(l) ? l[0] : l.id));
+    ok("with no component named, the material still simply joins the recipe", plainAdd.status === 201 && joinedIds.length === idsAfter.length + 1 && joinedIds[joinedIds.length - 1] === "RM-JOINER", plainAdd.status + " " + JSON.stringify(joinedIds));
+    ok("...and the swap made a moment ago is still in its seat", joinedIds[swapAt] === "RM-SWAP", JSON.stringify(joinedIds));
+
     // rules
     ok("a recipe of its own on a material is refused (400)", (await call("POST", "/catalogue/new-item", A, { item: { id: "RM-NOBOM", name: "x", cat: "RM" }, bom: { mode: "create", lines: [{ id: rmA, qty: 1 }] } })).status === 400);
     ok("a second item with the same code is refused (409)", (await call("POST", "/catalogue/new-item", A, { item: { id: "RM-ONESHOT", name: "again", cat: "RM" } })).status === 409);
@@ -3388,9 +3421,12 @@ async function run() {
     const rej = await call("POST", "/approvals/" + (labProp2.d.proposal ? labProp2.d.proposal.id : "AP-0000") + "/decide", A, { approve: false, note: "not needed" });
     ok("a rejection keeps the catalogue as it was", rej.status === 200 && rej.d.status === "Rejected" && !((await state()).items || []).some((i) => i.id === "RM-LABPROP2"), rej.status + " " + JSON.stringify(rej.d).slice(0, 100));
     // a recipe proposed on its own
+    // what the recipe holds RIGHT NOW — the point is that proposing changes
+    // nothing, so the count to beat is read here rather than written in
+    const bomBefore = ((await state()).boms["FG-ONESHOT"].lines || []).length;
     const bomProp = await call("POST", "/approvals", LB, { kind: "bom", payload: { itemId: "FG-ONESHOT", bom: { yield: 90, lines: [{ id: rmA, qty: 1.1, unit: "KG" }] } } });
     ok("the lab may propose a recipe change (201)", bomProp.status === 201 && bomProp.d.kind === "bom" && /Recipe for FG-ONESHOT/.test(bomProp.d.summary), bomProp.status + " " + JSON.stringify(bomProp.d).slice(0, 160));
-    ok("...the recipe is unchanged until approved", ((await state()).boms["FG-ONESHOT"].lines || []).length === 2);
+    ok("...the recipe is unchanged until approved", ((await state()).boms["FG-ONESHOT"].lines || []).length === bomBefore, bomBefore + " -> " + ((await state()).boms["FG-ONESHOT"].lines || []).length);
     ok("the lab cannot save a recipe directly (403)", (await call("PUT", "/boms/FG-ONESHOT", LB, { yield: 1, lines: [[rmA, 1]] })).status === 403);
     const apprB = await call("POST", "/approvals/" + bomProp.d.id + "/decide", A, { approve: true });
     ok("approved, it replaces the recipe", apprB.status === 200 && ((await state()).boms["FG-ONESHOT"].lines || []).length === 1, apprB.status + " " + JSON.stringify(apprB.d).slice(0, 120));
@@ -3400,6 +3436,236 @@ async function run() {
     ok("...but not one already ruled on", (await call("DELETE", "/approvals/" + apId, LB)).status === 409);
     ok("the floor's payload has no approvals", (await state(C)).approvals === undefined);
   }
+  }
+
+  section("A draw spread across stores: one gives what it has, the rest comes off the others");
+  {
+    /* stageMovements is pure, so this is put to it directly with a ledger built
+       for the purpose — no job has to be walked down a board to prove where the
+       material comes out of. */
+    const Ssvc = require("../src/services/stageService");
+    const rid = "RM-SPREAD";
+    const itemsById = { [rid]: { id: rid, cat: "RM", cost: 10 }, "FG-SPREAD": { id: "FG-SPREAD", cat: "FG" } };
+    const ledger = [
+      { itemId: rid, wh: "WH-A", qty: 30 },
+      { itemId: rid, wh: "WH-B", qty: 25 },
+      { itemId: rid, wh: "WH-C", qty: 8 },
+      { itemId: rid, wh: "WH-HOLD", qty: 100 },   // quarantined — never drawn on
+    ];
+    const heldWh = ["WH-HOLD"];
+    const draw = (need, pick, id) => Ssvc.stageMovements(
+      { coating: { consume: [[rid, need]] } }, "coating",
+      Object.assign({ id: id || "WO-SPREAD", itemId: "FG-SPREAD" },
+        pick ? { materialWarehouses: { [rid]: pick } } : {}),
+      itemsById, "tester", "2026-09-04", ledger, heldWh);
+    const sum = (ms) => ms.reduce((n, m) => n + (+m.qty || 0), 0);
+    const per = (ms) => { const o = {}; ms.forEach((m) => { o[m.wh] = (o[m.wh] || 0) + m.qty; }); return o; };
+
+    // the office picked WH-A, which holds 30 of the 50 this run draws
+    const ms = draw(50, "WH-A");
+    const byWh = per(ms);
+    ok("the draw is split across stores rather than sinking one", ms.length === 2, JSON.stringify(ms.map((m) => m.wh + ":" + m.qty)));
+    ok("...the store the office picked gives everything it has", Math.abs((byWh["WH-A"] || 0) + 30) < 1e-6, JSON.stringify(byWh));
+    ok("...and the balance is taken off the next biggest pile", Math.abs((byWh["WH-B"] || 0) + 20) < 1e-6, JSON.stringify(byWh));
+    ok("...the shares add up to exactly what the stage consumes", Math.abs(sum(ms) + 50) < 1e-9, String(sum(ms)));
+    ok("...a quarantined store is never drawn on, however much it holds", !ms.some((m) => m.wh === "WH-HOLD"), JSON.stringify(byWh));
+    ok("...and every line is an issue against the work order", ms.every((m) => m.type === "ISSUE" && m.ref === "WO-SPREAD" && m.itemId === rid));
+    ok("...a split line says so, so it does not read as a double issue", ms.every((m) => /drawn from 2 stores/.test(m.note || "")), JSON.stringify(ms.map((m) => m.note)));
+
+    // a draw one store covers is not split at all
+    const ms2 = draw(12, "WH-A", "WO-SPREAD2");
+    ok("a draw the chosen store covers stays whole, on that store", ms2.length === 1 && ms2[0].wh === "WH-A" && Math.abs(ms2[0].qty + 12) < 1e-9, JSON.stringify(ms2.map((m) => m.wh + ":" + m.qty)));
+    ok("...and is not labelled a split", !/drawn from/.test(ms2[0].note || ""), ms2[0].note);
+
+    // more than every store holds: the shortfall lands on the one that was chosen
+    const ms3 = draw(80, "WH-B", "WO-SPREAD3");
+    const byWh3 = per(ms3);
+    ok("short everywhere, the shortfall falls on the store that was chosen", Math.abs((byWh3["WH-B"] || 0) + 42) < 1e-6, JSON.stringify(byWh3));
+    ok("...the other stores still give all they had", Math.abs((byWh3["WH-A"] || 0) + 30) < 1e-6 && Math.abs((byWh3["WH-C"] || 0) + 8) < 1e-6, JSON.stringify(byWh3));
+    ok("...and the total is still exactly the draw", Math.abs(sum(ms3) + 80) < 1e-9, String(sum(ms3)));
+
+    // with nothing chosen, the standing rule still leads
+    const ms4 = draw(40, null, "WO-SPREAD4");
+    ok("with no store named, the standing pick leads and the rest follows", Math.abs(sum(ms4) + 40) < 1e-9 && ms4[0].wh === "WH-A", JSON.stringify(ms4.map((m) => m.wh + ":" + m.qty)));
+
+    // a quantity that does not divide cleanly still balances to the last gram
+    const ms5 = draw(41.37, "WH-C", "WO-SPREAD5");
+    ok("an awkward quantity still adds back up to the draw exactly", Math.abs(sum(ms5) + 41.37) < 1e-9, String(sum(ms5)) + " from " + JSON.stringify(per(ms5)));
+  }
+
+  section("The same draw, shown before it is posted: how much off which shelf");
+  {
+    /* THE FORECAST AND THE ISSUE ARE THE SAME ARITHMETIC. Everything that
+       names a store for a material — the office's job sheet, the floor's card,
+       Add to Finished Stock — asks drawPlan; the ledger posts through it too.
+       So the test is not that the numbers are plausible but that the two can
+       never differ: the forecast is compared line for line with the movements
+       the very same plan produces. */
+    const Ssvc = require("../src/services/stageService");
+    const rid = "RM-SHOWN";
+    const itemsById = { [rid]: { id: rid, cat: "RM", cost: 10 }, "FG-SHOWN": { id: "FG-SHOWN", cat: "FG" },
+      "WIP-SHOWN": { id: "WIP-SHOWN", cat: "WIP" } };
+    const ledger = [
+      { itemId: rid, wh: "WH-A", qty: 30 },
+      { itemId: rid, wh: "WH-B", qty: 25 },
+      { itemId: rid, wh: "WH-HOLD", qty: 100 },
+      { itemId: "WIP-SHOWN", wh: "WH-WIP", qty: 40 },
+    ];
+    const heldWh = ["WH-HOLD"];
+    const wo = { id: "WO-SHOWN", itemId: "FG-SHOWN", materialWarehouses: { [rid]: "WH-A" } };
+    const plan = { coating: { consume: [[rid, 50], ["WIP-SHOWN", 10]] } };
+
+    const shown = Ssvc.stageDraw(plan, "coating", wo, itemsById, ledger, heldWh);
+    const posted = Ssvc.stageMovements(plan, "coating", wo, itemsById, "tester", "2026-09-04", ledger, heldWh);
+    const flat = (rows) => rows.reduce((a, r) => a.concat(r.sources.map((x) => r.id + "@" + x.wh + ":" + x.qty)), []);
+    const flatMv = posted.map((m) => m.itemId + "@" + m.wh + ":" + Math.abs(m.qty));
+
+    ok("what the screens are told is exactly what the ledger will post",
+      flat(shown).join(" | ") === flatMv.join(" | "), flat(shown).join(" | ") + "  vs  " + flatMv.join(" | "));
+    const one = shown.find((r) => r.id === rid);
+    ok("...a draw no one store covers is shown split, store by store",
+      one.sources.length === 2 && one.sources[0].wh === "WH-A" && Math.abs(one.sources[0].qty - 30) < 1e-6
+        && one.sources[1].wh === "WH-B" && Math.abs(one.sources[1].qty - 20) < 1e-6,
+      JSON.stringify(one.sources));
+    ok("...each material's shares add back up to what the stage needs",
+      shown.every((r) => Math.abs(r.sources.reduce((n, x) => n + x.qty, 0) - r.qty) < 1e-9),
+      JSON.stringify(shown));
+    ok("...a quarantined store is never shown as a place to fetch from",
+      !flat(shown).some((x) => /WH-HOLD/.test(x)), flat(shown).join(" | "));
+    ok("...a half-made roll is shown in the one place it can be",
+      JSON.stringify(shown.find((r) => r.id === "WIP-SHOWN").sources) === JSON.stringify([{ wh: "WH-WIP", qty: 10 }]),
+      JSON.stringify(shown.find((r) => r.id === "WIP-SHOWN").sources));
+
+    // drawPlan on its own: nothing to draw is no store named at all
+    ok("nothing to draw names no store", Ssvc.drawPlan(rid, 0, wo, itemsById, ledger, heldWh).length === 0);
+    ok("an unknown material names no store", Ssvc.drawPlan("", 5, wo, itemsById, ledger, heldWh).length === 0);
+  }
+
+  section("Add to Finished Stock draws from the stores the stock is actually in");
+  {
+    /* Booking production used to post every raw issue against the main store,
+       whatever the ledger said — a drum standing in the second store was
+       deducted from the first, which went below zero while the stock actually
+       consumed sat there untouched, and nobody was told which shelf to walk
+       to. It now draws the way a work order's stage does. */
+    const state = async (tok) => (await call("GET", "/state", tok || A)).d;
+    const st0 = await state();
+    const whs = (st0.warehouses || []).map((w) => w.id);
+    /* a SECOND drawable store. The factory seeds four — main, WIP, finished
+       and quarantine — so the finished bay stands in as the second store a
+       drum could have been left in; drawPlan cares only that a store is not
+       one nothing may be issued from. */
+    const wh2 = "WH-FG";
+    ok("the factory has a second store to spread a draw across",
+      whs.includes("WH-PNY") && whs.includes(wh2), JSON.stringify(whs));
+
+    await call("POST", "/items", A, { id: "RM-FSSPREAD", name: "Two-store resin", cat: "RM", uom: "KG", cost: 20 });
+    await call("POST", "/items", A, { id: "FG-FSSPREAD", name: "Two-store tape", cat: "FG", uom: "KG", cost: 90, gsm: 100, thicknessMM: 0.1 });
+    await call("PUT", "/boms/FG-FSSPREAD", A, { yield: 1, lines: [{ id: "RM-FSSPREAD", qty: 1, unit: "KG" }] });
+    const put = (wh, qty) => call("POST", "/movements", A, { date: "2026-09-04", itemId: "RM-FSSPREAD", wh,
+      type: "GRN", qty, rate: 20, ref: "OPEN-FSSPREAD", note: "seed" });
+    const drewOn = async (ref) => ((await state()).movements || [])
+      .filter((m) => m.itemId === "RM-FSSPREAD" && m.ref === ref && (+m.qty || 0) < 0);
+    const perWh = (mv) => { const o = {}; mv.forEach((m) => { o[m.wh] = (o[m.wh] || 0) + Math.abs(+m.qty || 0); }); return o; };
+
+    /* WHAT ONE RUN ACTUALLY DRAWS. The recipe is scaled by the product's own
+       geometry, so the figure is read off a first booking rather than written
+       in here — the stores are then sized against it and the test says what it
+       means whatever the arithmetic upstream does. */
+    await put("WH-PNY", 1000);
+    const warm = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG" });
+    ok("a booking against a single store goes through (201)", warm.status === 201, warm.status + " " + JSON.stringify(warm.d).slice(0, 160));
+    const need = ((warm.d.consumed || []).find((c) => c.id === "RM-FSSPREAD") || {}).qty || 0;
+    ok("...and reports what it consumed", need > 0, String(need));
+    const warmMv = await drewOn(warm.d.ref);
+    ok("...out of the one store that held it, in one line", warmMv.length === 1 && warmMv[0].wh === "WH-PNY",
+      JSON.stringify(perWh(warmMv)));
+    ok("...saying which store gave it", (warm.d.consumed || []).some((c) => c.id === "RM-FSSPREAD"
+      && (c.sources || []).length === 1 && c.sources[0].wh === "WH-PNY" && c.sources[0].name),
+      JSON.stringify((warm.d.consumed || []).map((c) => c.sources)));
+
+    /* NOW NEITHER STORE CAN COVER A RUN ON ITS OWN, though between them they
+       hold more than enough: 0.4 of a run in the main store, 0.7 in the other.
+       That is the case the old code got wrong — it deducted the whole draw
+       from one store and drove it below zero. */
+    const rest = ((await state()).movements || [])
+      .filter((m) => m.itemId === "RM-FSSPREAD" && m.wh === "WH-PNY").reduce((n, m) => n + (+m.qty || 0), 0);
+    // written off with an ADJ — a receipt cannot carry a negative quantity
+    await call("POST", "/movements", A, { date: "2026-09-04", itemId: "RM-FSSPREAD", wh: "WH-PNY",
+      type: "ADJ", qty: -(rest - need * 0.4), rate: 20, manual: true, note: "leave four tenths of a run" });
+    await put(wh2, need * 0.7);
+    const prod = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG" });
+    ok("the booking goes through (201)", prod.status === 201, prod.status + " " + JSON.stringify(prod.d).slice(0, 200));
+    const mv = await drewOn(prod.d.ref);
+    const byWh = perWh(mv);
+    ok("...the bigger pile leads and gives everything it has",
+      Math.abs((byWh[wh2] || 0) - need * 0.7) < 1e-6, JSON.stringify(byWh) + " of " + need);
+    ok("...and the balance comes off the other store rather than sinking one",
+      Math.abs((byWh["WH-PNY"] || 0) - need * 0.3) < 1e-6, JSON.stringify(byWh));
+    ok("...the issues add up to exactly what the recipe consumes",
+      Math.abs(mv.reduce((n, m) => n + Math.abs(+m.qty || 0), 0) - need) < 1e-6, JSON.stringify(byWh));
+    ok("...a split issue says so on the ledger line",
+      mv.length === 2 && mv.every((m) => /drawn from 2 stores/.test(m.note || "")), JSON.stringify(mv.map((m) => m.note)));
+    ok("...and the booking reports which store gave what",
+      (prod.d.consumed || []).some((c) => c.id === "RM-FSSPREAD" && (c.sources || []).length === 2
+        && Math.abs(c.sources.reduce((n, x) => n + x.qty, 0) - need) < 1e-6),
+      JSON.stringify((prod.d.consumed || []).map((c) => c.sources)));
+    ok("...and no store was driven below zero while the stock sat in another",
+      Object.keys(byWh).every((w) => byWh[w] > 0), JSON.stringify(byWh));
+
+    // the store NAMED on the booking leads the draw, exactly as on a work order —
+    // with the main store now holding plenty, so the standing rule would not
+    // have picked the other one
+    await put("WH-PNY", need * 10);
+    await put(wh2, need * 2);
+    const pick = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG",
+      materialWarehouses: { "RM-FSSPREAD": wh2 } });
+    const mv2 = await drewOn(pick.d.ref);
+    ok("the store named on the booking is the one it draws from",
+      pick.status === 201 && mv2.length === 1 && mv2[0].wh === wh2 && Math.abs(Math.abs(mv2[0].qty) - need) < 1e-6,
+      pick.status + " " + JSON.stringify(perWh(mv2)));
+    ok("...even though the main store could have covered it on its own",
+      Math.abs((await drewOn(pick.d.ref)).filter((m) => m.wh === "WH-PNY").length) === 0);
+
+    const bad = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 1, wh: "WH-FG",
+      materialWarehouses: { "RM-FSSPREAD": "WH-NOPE" } });
+    ok("...an unknown store on a booking is refused (400)", bad.status === 400 && /Unknown warehouse/.test(bad.d.error || ""),
+      bad.status + " " + JSON.stringify(bad.d).slice(0, 140));
+    const held = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 1, wh: "WH-FG",
+      materialWarehouses: { "RM-FSSPREAD": "WH-QC" } });
+    ok("...and a quarantine store is refused outright (400)", held.status === 400 && /quarantin/i.test(held.d.error || ""),
+      held.status + " " + JSON.stringify(held.d).slice(0, 140));
+
+    await call("DELETE", "/boms/FG-FSSPREAD", A);
+  }
+
+  section("The floor is told how much to fetch off each shelf");
+  {
+    /* The supervisor's card used to name ONE store for a draw the issue would
+       split — so the floor walked to a shelf that could not cover the job. The
+       payload now carries the shares. */
+    const sup = (await call("GET", "/state", C)).d;
+    const mats = (sup.workorders || []).reduce((a, w) => a.concat(w.materials || []), []);
+    ok("the floor's materials carry the stores they come out of",
+      mats.length === 0 || mats.every((m) => Array.isArray(m.sources)),
+      JSON.stringify(mats.slice(0, 2)));
+    ok("...each with a quantity against it, not merely a name",
+      mats.every((m) => (m.sources || []).every((x) => x.wh && x.name != null && typeof x.qty === "number")),
+      JSON.stringify((mats[0] || {}).sources));
+    /* a FORECAST has to add back up to the draw exactly. What was already
+       ISSUED is a fact and is reported as it stands — a stage re-released after
+       an excess draw really did take more than the plan said. */
+    const fc = mats.filter((m) => !m.issued && (m.sources || []).length);
+    ok("...a forecast adds back up to exactly what the stage needs",
+      fc.every((m) => Math.abs(m.sources.reduce((n, x) => n + x.qty, 0) - m.required) < 1e-6),
+      JSON.stringify(fc.map((m) => m.id + ":" + m.required + " vs " + m.sources.reduce((n, x) => n + x.qty, 0)).slice(0, 4)));
+    ok("...and say whether that is a fact off the ledger or still a forecast",
+      mats.every((m) => typeof m.issued === "boolean"), JSON.stringify(mats.slice(0, 1)));
+    // the floor's own stock feed never offers a store nothing may be issued from
+    const heldNames = (sup.warehouses || []).filter((w) => /quarantine|reject/i.test(String(w.type || "") + " " + String(w.name || ""))).map((w) => w.id);
+    const feed = Object.values(sup.materialStock || {}).reduce((a, r) => a.concat(r), []);
+    ok("a quarantine store is never offered to the floor as a place to draw from",
+      !feed.some((r) => heldNames.includes(r.wh)), JSON.stringify(heldNames) + " in " + JSON.stringify(feed.map((r) => r.wh).slice(0, 8)));
   }
 
   // restore the BOM change we made so a re-run against a persisted DB stays clean

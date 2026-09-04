@@ -121,6 +121,9 @@ async function stateForSupervisor(area, username, opts) {
   // the one label for a store, used by the job sheets and the stock feeds below
   const whNameById = Object.fromEntries((d.warehouses || []).map((w) => [w.id, w.name]));
   const whNameOf = (id) => whNameById[id] || id || "";
+  // stores no issue may be drawn from — the same list the issue itself honours,
+  // so the floor is never sent to a quarantine shelf
+  const heldWhIds = await GT.heldWarehouseIds(d);
   // slitting team does packing → they may see the customer name (for labels) but NO money
   const showCustomer = area === "slitting" || area === "all";
 
@@ -159,29 +162,57 @@ async function stateForSupervisor(area, username, opts) {
      is a fact and wins; a material not yet issued (a pending balance) falls
      back to stageService.issuingWarehouse — the very rule the issue will use
      when it is posted, so the answer cannot contradict itself later. */
-  const woIssuedFrom = {};   // woId -> { itemId -> [whId] }
+  const woIssuedFrom = {};   // woId -> { stageKey|"*" -> { itemId -> [{ wh, qty }] } }
   (d.movements || []).forEach((m) => {
     if (!m.ref || !m.wh || (+m.qty || 0) >= 0) return;
     const by = woIssuedFrom[m.ref] || (woIssuedFrom[m.ref] = {});
-    const seen = by[m.itemId] || (by[m.itemId] = []);
-    if (!seen.includes(m.wh)) seen.push(m.wh);
+    /* filed under the stage that drew it, and under "*" as well. A material
+       two stages both consume gives one heap of issues against one work order,
+       so asking what COATING has drawn needs the stage; issues posted before
+       the stage was written on the line have only the heap, and those still
+       answer the old way rather than not at all. */
+    [m.stage || null, "*"].forEach((k) => {
+      if (!k) return;
+      const box = by[k] || (by[k] = {});
+      const seen = box[m.itemId] || (box[m.itemId] = []);
+      const row = seen.find((x) => x.wh === m.wh);
+      // a resumed order issues again, and can take the second lot out of
+      // another store — so every store is kept, each with what it gave
+      if (row) row.qty += Math.abs(+m.qty || 0);
+      else seen.push({ wh: m.wh, qty: Math.abs(+m.qty || 0) });
+    });
   });
 
-  // materials THIS area needs for the WO's current stage (quantities only, no cost)
+  /* materials THIS area needs for the WO's current stage (quantities only, no
+     cost) — and HOW MUCH COMES OUT OF WHICH STORE. Being told to fetch 50 kg
+     with one store named was a half-answer whenever the material sat in two:
+     the issue splits the draw, so the floor is told the split. Already issued,
+     the ledger's own lines are the answer; not yet, stageService.drawPlan
+     forecasts it — the same function that will post the issue, so the card and
+     the ledger cannot disagree. */
   function stageMaterials(wo, stage) {
     const plan = S.computeStagePlan(wo.itemId, wo.qty, d, wo.materialChoices, wo.plan);
     if (!plan || !plan[stage.key]) return [];
     const issued = woIssuedFrom[wo.id] || {};
-    return plan[stage.key].consume.map(([rid, q]) => {
-      const stores = (issued[rid] && issued[rid].length)
-        ? issued[rid]
-        : [S.issuingWarehouse(rid, itemById, d.movements)].filter(Boolean);
+    // this stage's own issues; failing that (a line posted before stages were
+    // written on issues) everything drawn against the order
+    const drewFor = (rid) => ((issued[stage.key] || {})[rid])
+      || (Object.keys(issued).every((k) => k === "*") ? (issued["*"] || {})[rid] : null);
+    return plan[stage.key].consume.map(([rid, q, named]) => {
+      const hit = drewFor(rid);
+      const done = hit && hit.length ? hit : null;
+      const sources = done || S.drawPlan(rid, q, wo, itemById, d.movements, heldWhIds, named);
       return {
         id: rid, name: (itemById[rid] || {}).name || rid,
         uom: (itemById[rid] || {}).uom || "", required: q,
-        // the store to fetch it from — id for the client, name to print
-        wh: stores[0] || null,
-        whName: stores.map((w) => whNameOf(w)).join(" · ") || null,
+        // whether the split is a FACT off the ledger or still a forecast
+        issued: !!done,
+        // how much comes out of each store, in the order it will be drawn
+        sources: sources.map((x) => ({ wh: x.wh, name: whNameOf(x.wh), qty: x.qty })),
+        // the leading store — id for the client, name to print. Kept for the
+        // one-store case and for anything still reading the old shape.
+        wh: (sources[0] || {}).wh || null,
+        whName: sources.map((x) => whNameOf(x.wh)).join(" · ") || null,
       };
     });
   }
@@ -350,12 +381,17 @@ async function stateForSupervisor(area, username, opts) {
     (onHand[m.itemId] || (onHand[m.itemId] = {}));
     onHand[m.itemId][m.wh] = (onHand[m.itemId][m.wh] || 0) + (+m.qty || 0);
   });
-  // raw materials only — lets the floor pick, when reporting excess,
-  // only the store(s) that actually hold the chosen material
-  const materialStock = {}; // itemId -> [{ wh, name, qty }] (only stores with stock, most first)
+  /* raw materials only — the store(s) that actually hold each material, so
+     the floor can be told where its draw comes from and can name a store when
+     it reports excess. A HELD store (quarantine, a lot that failed its
+     incoming test) is left out: nothing may be issued from one, so offering it
+     to the floor would only get the booking refused, and counting its stock as
+     on hand would say a material is covered when none of it can be touched. */
+  const materialStock = {}; // itemId -> [{ wh, name, qty }] (only drawable stores, most first)
   Object.keys(onHand).forEach((iid) => {
     if (!RAW.has((itemById[iid] || {}).cat)) return;
     const rows = Object.keys(onHand[iid])
+      .filter((wh) => heldWhIds.indexOf(wh) < 0)
       .map((wh) => ({ wh, name: whNameOf(wh), qty: Math.round(onHand[iid][wh] * 100) / 100 }))
       .filter((r) => r.qty > 0.0001)
       .sort((a, b) => b.qty - a.qty);

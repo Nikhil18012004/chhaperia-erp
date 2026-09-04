@@ -1178,9 +1178,22 @@ canvas{display:block;width:100%}
 .sup-mat summary{font-size:13px;font-weight:700;color:var(--text-dim);cursor:pointer;padding:10px 0}
 .sup-mat-list{padding:4px 0 12px;display:flex;flex-direction:column;gap:8px}
 .sup-mat-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;font-size:13px;color:var(--text-dim)}
-/* the material, and under it the store it is fetched from */
+/* the material, and under it the store(s) it is fetched from */
 .sup-mat-nm{display:flex;flex-direction:column;gap:1px;min-width:0;overflow-wrap:anywhere}
 .sup-mat-wh{font-size:12px;color:var(--text-mut)}
+/* HOW MUCH OFF WHICH SHELF. A draw that no single store covers is split, and
+   the floor has to walk to each one — so every store gets its own line with
+   its own quantity, set apart from the material's total on the right. A store
+   the stock has ALREADY been issued from is a fact and stays quiet; one still
+   to be drawn carries the accent edge the floor's outstanding work uses.
+   Stacked, not inline: on a phone in a workshop three stores across one line
+   would wrap into an unreadable run of names and numbers. */
+.sup-mat-whs{display:flex;flex-direction:column;gap:2px;margin-top:2px;align-items:flex-start}
+.sup-mat-whs .sup-mat-wh{display:inline-flex;align-items:center;gap:4px;
+  padding:1px 8px;border-radius:var(--radius-pill);background:var(--panel-3);
+  border:1px solid var(--accent-line);color:var(--text-dim);font-weight:600}
+.sup-mat-whs .sup-mat-wh.is-done{border-color:transparent;color:var(--text-mut);font-weight:400}
+.sup-mat-split{font-size:11px;color:var(--text-mut)}
 .sup-mat-row b{flex:0 0 auto;white-space:nowrap}
 .sup-actions{display:flex;gap:10px;flex-wrap:wrap}
 .sup-act{flex:1;min-width:150px;padding:16px;border:none;border-radius:10px;font-size:17px;font-weight:800;cursor:pointer;transition:var(--tr)}
@@ -1703,6 +1716,23 @@ canvas{display:block;width:100%}
 /* a chosen store that cannot cover the draw says so, and names one that can */
 .wo-wh-short{font-size:11px;line-height:1.5;color:var(--warn);margin-top:3px;max-width:420px}
 .wo-wh-short .wo-wh-alt{color:var(--text-mut)}
+
+/* ---- HOW MUCH OFF WHICH SHELF ---------------------------------------------
+   A draw is split across stores whenever one cannot cover it, so a material
+   naming a single store was telling the storeman half the answer. Each store
+   it comes out of gets a chip carrying its own quantity — set in the figure
+   type the rest of the sheet uses for quantities, so the numbers line up with
+   the need beside them. A chip for stock ALREADY ISSUED is a fact rather than
+   a forecast and reads in the settled colour; one still to be drawn carries
+   the accent edge that marks everything on these sheets the floor has yet to
+   do. Wrapping, because three stores on one line would push the quantity
+   column off a narrow card. */
+.wo-src-whs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px}
+.wo-src-wh{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
+  font-size:11px;font-weight:600;padding:2px 7px;border-radius:var(--radius-pill);
+  color:var(--text-dim);background:var(--panel-3);
+  border:1px solid var(--accent-line)}
+.wo-src-wh.is-done{border-color:transparent;color:var(--text-mut);font-weight:500}
 
 /* ---- HR PERKS: one tile per perk ------------------------------------------
    The two perks were a card each, then plain rows in a shared card, and both

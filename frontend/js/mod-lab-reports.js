@@ -40,6 +40,57 @@
     { key: "mica",           label: "Mica (BDV)" },
   ];
 
+  /* ============================================================
+     THE DIVISIONS OF THE PRODUCT MASTER — READ OFF THE NAME
+     The three toggles above are what a product is TESTED on: they
+     decide which parameters its certificate carries, and nothing
+     else. As a way of dividing the master they barely divide it —
+     more than half the catalogue is flagged with none of them and
+     read "General", so a list of a hundred products offered one
+     undifferentiated heap.
+     What the names say, though, is exactly what the tape is MADE
+     of: cotton, mica, glass, non-woven, copper. So the division is
+     taken from the name, first match winning, most-defining first
+     — bituminised COTTON is cotton, rubberised COTTON is cotton,
+     and a mica tape backed with glass is mica. Nothing is stored:
+     the name IS the classification, so a renamed product divides
+     itself and there is no second field to keep in step.
+     Order is meaning here. Moving a rule up or down re-files
+     products, so keep the specific above the general — WOVEN sits
+     below NON WOVEN because "NON WOVEN" contains it.
+     ============================================================ */
+  const DIVISIONS = [
+    /* `covers` names the toggle a division already says out loud: the mica
+       toggle is read off the same word, so printing both would give every
+       mica tape a cell reading "Mica  Mica (BDV)". */
+    { key: "mica",       label: "Mica",           re: /\bMICA\b/, covers: "mica" },
+    // LSZH and fire-survival: the name's own promise, whatever the substrate
+    { key: "zeroHal",    label: "Zero-halogen",   re: /ZERO\s*HAL|LOW\s*SMOKE|FIRE\s*SURVIVAL/ },
+    // aluminium / copper — foil-laminated or copper-wire woven
+    { key: "metal",      label: "Metallised",     re: /ALUMINI?UM|\bCOPPER\b/ },
+    { key: "ptfe",       label: "PTFE",           re: /\bPTFE\b/ },
+    { key: "polyimide",  label: "Polyimide",      re: /POLY\s*IMIDE/ },
+    { key: "foam",       label: "Foam",           re: /\bFOAM/ },
+    // the treatment is not the cloth: bituminised and rubberised cotton are cotton
+    { key: "cotton",     label: "Cotton",         re: /\bCOTTON\b/ },
+    { key: "rubber",     label: "Rubber",         re: /\bRUBBER/ },
+    { key: "glass",      label: "Glass",          re: /\bGLASS\b/ },
+    { key: "nonwoven",   label: "Non-woven",      re: /NON[\s-]*WOVEN|NONWOVEN|\bFLEECE\b/ },
+    { key: "woven",      label: "Woven",          re: /\bWOVEN\b/ },
+    { key: "polyester",  label: "Polyester",      re: /POLY\s*ESTER|\bPET\b/ },
+    { key: "polyprop",   label: "Polypropylene",  re: /POLY\s*PROPYLENE/ },
+    { key: "laminate",   label: "Laminated",      re: /LAMINAT/ },
+    { key: "rope",       label: "Rope",           re: /\bROPE\b/ },
+    // says nothing of its substrate, but the name's own word still divides it
+    { key: "nonCond",    label: "Non-conductive", re: /NON[\s-]*CONDUCTIVE/ },
+  ];
+  /* the division a name falls in — null when no rule recognises a word in it,
+     which reads "General" the way an unflagged product always has */
+  function divisionOf(name) {
+    const s = String(name || "").toUpperCase();
+    return DIVISIONS.find((d) => d.re.test(s)) || null;
+  }
+
   const products = () => ENG.data.labProducts || [];
   const reports = () => ENG.data.labReports || [];
   const isAdmin = () => !!(App.isAdmin && App.isAdmin());
@@ -80,6 +131,19 @@
   }
   const refLabel = (mode) => (mode === "lot" ? "Lot / W.O. No." : "Batch No.");
   const typeChips = (flags) => TYPE_TOGGLES.filter((t) => (flags || {})[t.key]).map((t) => `<span class="chip">${t.label}</span>`).join("") || `<span class="muted" style="font-size:11px">General</span>`;
+  /* THE TYPE CELL OF THE PRODUCT MASTER — two axes, not one. First the
+     division the product's NAME puts it in (what it is made of), then the
+     toggles its certificate is graded on (what it is tested for). "General"
+     is left for the product whose name says nothing and carries no toggle. */
+  function typeCell(p) {
+    const d = divisionOf(p && p.name);
+    const flags = TYPE_TOGGLES
+      .filter((t) => ((p && p.flags) || {})[t.key] && !(d && d.covers === t.key))
+      .map((t) => `<span class="chip">${t.label}</span>`).join("");
+    if (!d && !flags) return `<span class="muted" style="font-size:11px">General</span>`;
+    return (d ? badge("info", d.label) : "") + flags;
+  }
+  const divisionLabel = (p) => (divisionOf(p && p.name) || {}).label || "General";
   function resultBadge(r) { return r === "Pass" ? badge("ok", "Pass") : r === "Fail" ? badge("danger", "Fail") : badge("mut", "Pending"); }
   const prodById = (id) => products().find((p) => p.id === id);
 
@@ -758,7 +822,7 @@
      PRODUCTS (lab master)
      ============================================================ */
   function renderProducts(root) {
-    let filter = { q: "", series: "all", type: "all" };
+    const filter = App.viewState("labProductsFilter", () => ({ q: "", qRaw: "", series: "all", type: "all" }));   // survives a quiet refresh
     const ps = products();
     root.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" }, [
       kpi({ icon: "📦", label: "Products", value: ENG.num(ps.length) }),
@@ -768,30 +832,69 @@
     ]));
     const seriesList = [...new Set(ps.map((p) => p.series).filter(Boolean))].sort();
     root.appendChild(h("div", { class: "toolbar" }, [
-      searchInput("Search product name or code…", (v) => { filter.q = v.toLowerCase(); draw(); }),
-      select([{ value: "all", label: "All Series" }, ...seriesList.map((s) => ({ value: s, label: s }))], (v) => { filter.series = v; draw(); }),
-      select([{ value: "all", label: "All Types" }, { value: "waterBlocking", label: "Water-blocking" }, { value: "semiConductive", label: "Semi-conductive" }, { value: "mica", label: "Mica" }], (v) => { filter.type = v; draw(); }),
+      searchInput("Search product, code or division…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
+      select([{ value: "all", label: "All Series" }, ...seriesList.map((s) => ({ value: s, label: s }))], (v) => { filter.series = v; draw(); }, filter.series),
+      typeFilter(),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "lpCount" })),
     ]));
     const host = h("div"); root.appendChild(host);
 
+    /* THE TYPE FILTER SPANS BOTH AXES. "Tested as" is the three toggles, which
+       decide a certificate's parameters; "Made of" is the division the name
+       puts the product in. Only the entries the master actually holds are
+       offered — each with its count — so the list is as short as the catalogue
+       makes it, and a division nobody uses never appears. */
+    function typeFilter() {
+      const counts = {};
+      ps.forEach((x) => { const d = divisionOf(x.name); if (d) counts[d.key] = (counts[d.key] || 0) + 1; });
+      const sel = h("select", { class: "select", title: "Filter by what a product is tested on, or by what its name says it is made of",
+        onchange: (e) => { filter.type = e.target.value; draw(); } }, [h("option", { value: "all", text: "All Types" })]);
+      const group = (label, opts) => {
+        if (!opts.length) return;
+        const g = h("optgroup", { label });
+        opts.forEach((o) => g.appendChild(h("option", { value: o.v, text: o.l })));
+        sel.appendChild(g);
+      };
+      group("Tested as", TYPE_TOGGLES
+        .filter((t) => ps.some((x) => x.flags && x.flags[t.key]))
+        .map((t) => ({ v: t.key, l: t.label + " (" + ps.filter((x) => x.flags && x.flags[t.key]).length + ")" })));
+      group("Made of", DIVISIONS
+        .filter((d) => counts[d.key])
+        .map((d) => ({ v: "div:" + d.key, l: d.label + " (" + counts[d.key] + ")" })));
+      /* the kept filter may name something the master no longer holds — the
+         last cotton tape deleted, say. Rather than show "All Types" over an
+         empty table, fall back to all of them for real. */
+      if (filter.type !== "all" && !sel.querySelector('option[value="' + filter.type + '"]')) filter.type = "all";
+      sel.value = filter.type;
+      return sel;
+    }
+
     function rows() {
       return products().filter((p) => {
         if (filter.series !== "all" && p.series !== filter.series) return false;
-        if (filter.type !== "all" && !(p.flags && p.flags[filter.type])) return false;
-        if (filter.q) { const s = (p.name + " " + (p.code || "") + " " + (p.series || "")).toLowerCase(); if (!s.includes(filter.q)) return false; }
+        if (filter.type !== "all") {
+          if (filter.type.indexOf("div:") === 0) {
+            const d = divisionOf(p.name);
+            if (!d || d.key !== filter.type.slice(4)) return false;
+          } else if (!(p.flags && p.flags[filter.type])) return false;
+        }
+        // the division is searchable too, so "cotton" finds them however they are named
+        if (filter.q) { const s = (p.name + " " + (p.code || "") + " " + (p.series || "") + " " + divisionLabel(p)).toLowerCase(); if (!s.includes(filter.q)) return false; }
         return true;
       }).sort((a, b) => (a.series + a.code).localeCompare(b.series + b.code));
     }
     function draw() {
-      const data = rows(); const c = UI.$("#lpCount"); if (c) c.textContent = data.length + " products";
+      const data = rows(); const c = UI.$("#lpCount");
+      // how many divisions the filtered list spans — the heap has a shape now
+      const nd = new Set(data.map((x) => divisionLabel(x))).size;
+      if (c) c.textContent = data.length + " products · " + nd + " division" + (nd === 1 ? "" : "s");
       host.innerHTML = "";
       host.appendChild(table(data, [
         { key: "code", label: "Code / Type", width: "170px", render: (p) => `<span style="font-weight:600">${esc(p.code || "—")}</span>` },
         { key: "name", label: "Product", cls: "nm", render: (p) => esc(U.trim(p.name, 46)) },
         { key: "thickness", label: "Thk (mm)", width: "90px", render: (p) => esc(p.thickness || "—") },
         { key: "series", label: "Series", width: "130px", render: (p) => esc(p.series || "—") },
-        { key: "type", label: "Type", noSort: true, render: (p) => `<div class="flex gap wrap">${typeChips(p.flags)}</div>` },
+        { key: "type", label: "Type", render: (p) => `<div class="flex gap wrap">${typeCell(p)}</div>`, sort: (p) => divisionLabel(p) },
         { key: "ref", label: "Ref", width: "84px", render: (p) => refLabel(p.refMode).replace(" No.", ""), sort: (p) => p.refMode },
         // `specSet` is what non-admins receive — the limits themselves are
         // withheld so a tester cannot grade against them by eye.
@@ -821,6 +924,14 @@
       h("div", { class: "flex gap wrap", id: "lp_flags" }, TYPE_TOGGLES.map((t) => h("label", { class: "chip", style: "cursor:pointer" }, [
         h("input", { type: "checkbox", "data-flag": t.key, checked: flags[t.key] ? "checked" : null }), " " + t.label]))),
       h("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: "Tip: leave all unticked for a general tape (common parameters only)." }),
+      /* THE DIVISION IS NOT A FIELD — it is read off the name, so it is shown
+         rather than asked for, and it moves as the name is typed. Seeing it
+         here is what tells the operator that "RUBBERISED COTTON TAPE" files
+         itself under Cotton, and that renaming a product re-files it. */
+      h("div", { class: "flex aic", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, [
+        h("span", { class: "muted", style: "font-size:11px", text: "Division — read off the name:" }),
+        h("span", { id: "lp_div" }),
+      ]),
       specSection(),
     ]);
 
@@ -857,6 +968,15 @@
     }
     rebuildSpec();
     UI.$("#lp_flags").addEventListener("change", rebuildSpec);
+    function showDivision() {
+      const host = UI.$("#lp_div"); if (!host) return;
+      const nm = (UI.$("#lp_name") || {}).value || "";
+      const d = divisionOf(nm);
+      host.innerHTML = d ? badge("info", d.label)
+        : `<span class="muted" style="font-size:11px">${nm.trim() ? "General — no material word in the name" : "—"}</span>`;
+    }
+    showDivision();
+    { const nm = UI.$("#lp_name"); if (nm) nm.addEventListener("input", showDivision); }
 
     function collectSpec() {
       if (!admin) return p.spec || {};
