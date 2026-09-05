@@ -2173,8 +2173,13 @@
         note:"Chhaperia Label Studio template. Import it from Label Studio.",
         exported:new Date().toISOString(),
         labels:[cleanDoc(JSON.parse(JSON.stringify(d)))]};
-      const name=String(d.name||"label").replace(/[^w .()-]+/g,"_")
-        .replace(/s+/g," ").trim().slice(0,60)||"label";
+      /* \w and \s, not the letters w and s. Written without their backslashes
+         the class read "anything that is not the letter w, a space, a dot, a
+         bracket or a hyphen" — so every letter and digit in the name became an
+         underscore and EVERY label downloaded as "_ _.json". A folder of
+         exports was a folder of identical names. */
+      const name=String(d.name||"label").replace(/[^\w .()-]+/g,"_")
+        .replace(/\s+/g," ").trim().slice(0,60)||"label";
       const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
       const url=URL.createObjectURL(blob);
       const a=h("a",{href:url,download:name+LABEL_EXT,style:"display:none"});
@@ -2183,6 +2188,32 @@
       setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },0);
       toast("Saved “"+name+LABEL_EXT+"” — bring it back with Import.",
             {type:"ok",title:"Downloaded",dur:6000});
+    }
+
+    /* ============================================================
+       RENAMING A LABEL, IN A DIALOG OF OUR OWN
+
+       This was window.prompt(). In a browser that is merely out of keeping
+       with every other question this app asks — all of them modal() — but in
+       the Android build it is worse than that: MainActivity installs a plain
+       WebChromeClient, whose onJsPrompt() shows nothing and returns null, so
+       Rename on a tablet did nothing at all and gave no reason. Same dialog as
+       everywhere else, so it works wherever the app runs.
+       ============================================================ */
+    function renameDialog(current,onOk){
+      const inp=h("input",{class:"input",value:String(current||""),maxlength:"60",
+        placeholder:"e.g. Carton 100 × 60","aria-label":"Label name"});
+      const go=()=>{ const v=inp.value.trim().slice(0,60); mo.close(); if(v&&v!==current) onOk(v); };
+      inp.addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); go(); } });
+      const mo=modal({title:"Rename label",sub:"What it is called in your library",
+        body:h("div",{},[
+          h("div",{class:"field"},[h("label",{text:"Label name"}),inp]),
+          h("div",{class:"muted",style:"font-size:11px;margin-top:8px",
+            text:"Up to 60 characters. The name is what you search the library by."}),
+        ]),
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+          h("button",{class:"btn primary",onclick:go,text:"Rename"})]});
+      setTimeout(()=>{ try{ inp.focus(); inp.select(); }catch(e){} },30);
     }
 
     /* A name nobody else in the library is already using, so two imports of the
@@ -2431,6 +2462,18 @@
             ? "Click one to open it. Right-click a name in the designer for more."
             : "Start one below, design it, and press Save — it will be waiting here next time."}),
           h("div",{class:"sp"}),
+          /* ⚠ THE ONLY DOOR TO A NEW LABEL FROM THIS SCREEN.
+             It had been taken off both places that used to carry it — the
+             banner ("starting one belongs with the library, below") and the
+             grid ("the hero already carries a New label button") — each move
+             pointing at the other, and neither left one standing. The gallery
+             is where the studio opens, and with nothing saved it is the ONLY
+             screen there is, so a new plant could not make its first label at
+             all. Two empty-state lines on this very screen still read "press
+             New label above". This is that button. */
+          h("button",{class:"btn sm primary",onclick:newBlank,
+            title:"Start a new label — it will ask what you are printing on"},
+            [ico("plus",13),h("span",{text:"New label"})]),
           /* Import sits with the library it adds to. It is an occasional
              errand — a supplier's file, a restore from a backup — and the
              banner was too loud a place to keep asking about it. */
@@ -2481,9 +2524,10 @@
           ]),
           h("div",{class:"ls-gal-act"},[
             h("button",{class:"mini",title:"Rename",onclick:(e)=>{ e.stopPropagation();
-              const nm=prompt("Template name",d.name); if(nm==null) return;
-              d.name=String(nm).slice(0,60)||d.name; docs=saveDocs(docs); paint();
-              toast("Renamed",{type:"ok"}); }},"✎"),
+              renameDialog(d.name,(nm)=>{
+                d.name=nm; docs=saveDocs(docs); paint();
+                toast("Renamed to “"+nm+"”",{type:"ok"});
+              }); }},"✎"),
             h("button",{class:"mini",title:"Duplicate",onclick:(e)=>{ e.stopPropagation();
               if(docs.length>=MAX_DOCS) return toast("That is the "+MAX_DOCS+"-template limit",{type:"warn"});
               const c=cleanDoc(JSON.parse(JSON.stringify(d)));
@@ -3356,9 +3400,7 @@
       docs.push(c); di=docs.length-1; selIds=[]; dirty=true; resetHistory(); paint();
     }
     function renameDoc(){
-      const nm=prompt("Label name",doc().name);
-      if(nm==null) return;
-      doc().name=String(nm).slice(0,60)||doc().name; touch(); paint();
+      renameDialog(doc().name,(nm)=>{ doc().name=nm; touch(); paint(); });
     }
     /* Deleting the label that is open — the same question and the same route
        as the cross on its name, so there is only one way a label can go. */

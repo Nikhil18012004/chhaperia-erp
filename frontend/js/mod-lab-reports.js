@@ -9,9 +9,13 @@
    Three views (segmented): "Finished Goods" (batch certificates),
    "Raw Materials (GRN)" (incoming-material tests, raised ONLY against a
    purchase order's goods receipt — added 2026-08-27 at the user's ask)
-   and "Products" (the lab product master; admin can also set the
-   hidden spec there). Reports are graded server-side, so writes go
-   through a reload (not optimistic) to bring back the computed result.
+   and "Products" — everything the lab tests: the lab product master
+   for finished goods, and the raw materials and work-in-process it
+   also measures, each opening the editor that owns it. Admin sets the
+   limits; everyone else, the incharge included, sees which parameters
+   a thing is tested on and never the numbers. Reports are graded
+   server-side, so writes go through a reload (not optimistic) to
+   bring back the computed result.
    ============================================================ */
 (function () {
   "use strict";
@@ -129,6 +133,15 @@
     if (keys && keys.length) return PARAMS.concat(customOf(prod)).filter((p) => keys.indexOf(p.key) >= 0);
     return paramsFor(prod, r && r.flags);
   }
+  /* A PRODUCT'S NAME IS SHOWN IN FULL, EVERYWHERE ON THIS PAGE. These names
+     run long by design — "FIRES M DOUBLE GLASS – MUSCOVITE GLASS MICA GLASS
+     TAPE" is what distinguishes it from the four tapes whose names begin the
+     same way — and every list here used to cut them at forty-odd characters,
+     which is exactly where they start to differ. A trimmed name saved a line
+     of table and cost the reader the one thing the name was for. They wrap
+     instead; `nameCell` is that wrap, so the rule is kept in one place. */
+  const nameCell = (name, sub) => `<div style="font-weight:600;overflow-wrap:anywhere">${esc(name || "—")}</div>`
+    + (sub ? `<div class="muted" style="font-size:11px;overflow-wrap:anywhere">${sub}</div>` : "");
   const refLabel = (mode) => (mode === "lot" ? "Lot / W.O. No." : "Batch No.");
   const typeChips = (flags) => TYPE_TOGGLES.filter((t) => (flags || {})[t.key]).map((t) => `<span class="chip">${t.label}</span>`).join("") || `<span class="muted" style="font-size:11px">General</span>`;
   /* THE TYPE CELL OF THE PRODUCT MASTER — two axes, not one. First the
@@ -172,7 +185,6 @@
        nobody made. A certificate leaves his list the moment he files it.
        Everyone else gets the full three-tab view. */
     const labOnly = App.isLab();
-    if (labOnly && VIEW === "products") VIEW = "reports";
 
     /* No "New Report" button anywhere: a certificate is only ever raised
        against a real batch — by the coating floor, by whoever books finished
@@ -183,9 +195,13 @@
       : null;
     const subText = VIEW === "incoming"
       ? "Incoming raw materials are tested only against the goods receipt of a purchase order — every line here came in on a PO, and nothing that did not can be tested."
-      : labOnly
-        ? "Pending lists every batch awaiting a reading; enter the measured values against a batch number and it moves to Completed. Values are graded against the product's TDS spec on submit."
-        : "Test certificates for finished goods. A report carries the parameters this product's entry under Products states a limit for; measured values are graded against that spec on submit.";
+      : VIEW === "products"
+        ? (labOnly
+          ? "Everything the lab tests — finished goods, raw materials and work in process — and the parameters each one is measured on. The pass/fail limits behind them are the admin's and are not shown here."
+          : "Everything the lab tests — finished goods, raw materials and work in process — and what each one is measured on. A finished good opens its lab product; a material opens its QC parameters.")
+        : labOnly
+          ? "Pending lists every batch awaiting a reading; enter the measured values against a batch number and it moves to Completed. Values are graded against the product's TDS spec on submit."
+          : "Test certificates for finished goods. A report carries the parameters this product's entry under Products states a limit for; measured values are graded against that spec on submit.";
     root.appendChild(pageHead(
       labOnly ? "Lab Reports" : "Lab Reports — Quality Control",
       subText,
@@ -193,12 +209,19 @@
       // master; the GRN worklist prints per receipt (the GRN cum test report)
       labOnly ? [] : [VIEW === "incoming" ? null : MW.excelMenu(VIEW === "reports" ? "labreports" : "labproducts"), newBtn].filter(Boolean)));
 
-    /* segmented view switch — the incharge has the two worklists and no
-       product master */
-    root.appendChild(h("div", { class: "flex gap", style: "margin-bottom:16px" }, [
+    /* segmented view switch — the two worklists and the master they are
+       measured against, which every role can read */
+    /* three of them now that the incharge keeps the master too, and the third
+       ran off the edge of a phone — they wrap rather than overflow */
+    root.appendChild(h("div", { class: "flex gap wrap", style: "margin-bottom:16px" }, [
       segBtn("reports", "🧪 Finished Goods"),
       segBtn("incoming", "🚚 Raw Materials (GRN)"),
-      labOnly ? null : segBtn("products", "📦 Products"),
+      /* THE INCHARGE GETS THIS TAB TOO (2026-09-05). Which parameters a thing
+         is tested on is his own worklist written down; what it must MEASURE is
+         not his to see, or a reading could be tuned until it passes. The server
+         already withholds the limits from him, so the tab costs nothing to
+         open: he gets every detail but the numbers. */
+      segBtn("products", "📦 Products"),
     ].filter(Boolean)));
 
     /* Incoming-material testing used to live ONLY in Procurement, against the
@@ -268,7 +291,7 @@
         render: (r) => `<div style="font-weight:700">${esc(r.batchNo)}</div><div class="muted" style="font-size:11px">${esc(r.woId)}</div>`,
         sort: (r) => r.woId },
       { key: "product", label: "Product", cls: "nm",
-        render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:12px">${esc(U.trim(r.productName || "", 40))}</div>`,
+        render: (r) => nameCell(r.productCode, esc(r.productName || "")),
         sort: (r) => r.productCode || "" },
       { key: "qty", label: "Qty", width: "84px", render: (r) => (r.qty == null ? "—" : ENG.num(r.qty)), sort: (r) => r.qty || 0 },
       { key: "floor", label: "Production", width: "116px", noSort: true,
@@ -396,7 +419,7 @@
     const hay = (r) => [r.itemName, r.itemId, r.poId, r.grnId, r.invNo, supplierName(r.supplierId)].join(" ").toLowerCase();
     const matches = (r) => !filter.q || hay(r).includes(filter.q);
     const poCell = (r) => `<div style="font-weight:700">${esc(r.poId || "—")}</div><div class="muted" style="font-size:11px">${esc(r.grnId)}${r.invNo ? " · inv " + esc(r.invNo) : ""}</div>`;
-    const matCell = (r) => `<div style="font-weight:600">${esc(U.trim(r.itemName || r.itemId, 44))}</div><div class="muted" style="font-size:11px">${esc(r.itemId)} · ${esc(itemCat(r.itemId))}</div>`;
+    const matCell = (r) => nameCell(r.itemName || r.itemId, esc(r.itemId) + " · " + esc(itemCat(r.itemId)));
 
     function draw() {
       const c = UI.$("#grnCount");
@@ -530,7 +553,7 @@
       if (c) c.textContent = data.length + " report" + (data.length === 1 ? "" : "s");
       host.appendChild(table(data, [
         { key: "reportDate", label: "Date", width: "104px" },
-        { key: "product", label: "Product", cls: "nm", render: (r) => `<div style="font-weight:600">${esc(r.productCode || "—")}</div><div class="muted" style="font-size:12px">${esc(U.trim(r.productName, 40))}</div>`, sort: (r) => r.productCode || "" },
+        { key: "product", label: "Product", cls: "nm", render: (r) => nameCell(r.productCode, esc(r.productName || "")), sort: (r) => r.productCode || "" },
         { key: "ref", label: "Batch / Lot", render: (r) => `<div>${esc(r.refNo || "—")}</div><div class="muted" style="font-size:11px">${refLabel(r.refMode)}</div>`, sort: (r) => r.refNo || "" },
         { key: "type", label: "Type", noSort: true, render: (r) => `<div class="flex gap wrap">${typeChips(r.flags)}</div>` },
         // the verdict is not the tester's business — see stateForLab
@@ -619,9 +642,12 @@
         + `<th class="num">Lab${r.labBy ? ` <span class="muted" style="font-weight:400">· ${esc(r.labBy)}</span>` : ""}</th></tr>`
       : `<tr><th style="text-align:left">Parameter</th><th class="num">Measured</th></tr>`;
     const body = h("div", {}, [
-      h("div", { class: "flex between aic", style: "margin-bottom:12px" }, [
-        h("div", {}, [h("div", { style: "font-weight:700;font-size:15px", text: r.productCode + " · " + r.productName }),
-          h("div", { class: "muted", style: "font-size:12px", text: refLabel(r.refMode) + " " + (r.refNo || "—") + " · " + r.reportDate + " · " + r.id })]),
+      /* the name is as long as the product is, and the verdict is the one thing
+         on this card that must never be pushed off the edge of it — so the two
+         wrap apart instead of competing for a single line */
+      h("div", { class: "flex between aic gap wrap", style: "margin-bottom:12px" }, [
+        h("div", { style: "flex:1 1 220px;min-width:0" }, [h("div", { style: "font-weight:700;font-size:15px;overflow-wrap:anywhere", text: r.productCode + " · " + r.productName }),
+          h("div", { class: "muted", style: "font-size:12px;overflow-wrap:anywhere", text: refLabel(r.refMode) + " " + (r.refNo || "—") + " · " + r.reportDate + " · " + r.id })]),
         bare ? h("div", { class: "chip", style: "font-size:11px", text: hasLab ? "Reading filed" : "Awaiting your reading" })
           : h("div", { html: resultBadge(r.result) }),
       ]),
@@ -733,15 +759,37 @@
     const vals = Object.assign({}, mine());
     const woId = edit ? (existing.woId || "") : (seed.woId || "");
 
-    const prodOpts = list.map((p) => ({ v: p.id, l: U.trim((p.code || p.name) + " — " + p.name + " (" + (p.thickness || "—") + ")", 60) }));
+    const prodOpts = list.map((p) => ({ v: p.id, l: (p.code || p.name) + " — " + p.name + " (" + (p.thickness || "—") + ")" }));
     const refSeed = edit ? (existing.refNo || "") : (seed.refNo || "");
     const lockRef = !edit && !!seed.refNo;   // the batch came from a work order
+    /* THE PRODUCT IS NOT A CHOICE ON THIS FORM. A certificate is only ever
+       raised against a real batch — the work order says what was made, and the
+       readings below are graded against THAT product's TDS spec. Offering a
+       searchable list of every product invited the one mistake this form must
+       not allow: a batch's measurements filed against a different product's
+       limits, passing or failing on a spec it was never made to. Editing a
+       filed certificate is the same case, only later. So the product is shown,
+       not asked for, wherever it is already decided — which, since there is no
+       blank New Report anywhere, is always. */
+    const lockProd = edit || !!seed.productId || !!seed.woId;
+    /* not an <input>: a readonly box scrolls a long name out of sight, which is
+       the same loss as trimming it. The product is a fact here, not a field, so
+       it is printed — code above, name below, wrapping as far as it needs. */
+    const prodField = lockProd
+      ? U.field("Product",
+        `<div class="input" style="height:auto;min-height:38px;padding:8px 12px;line-height:1.45">`
+        + `<div style="font-weight:700;overflow-wrap:anywhere">${esc(prod.code || prod.name)}</div>`
+        + `<div class="muted" style="font-size:12px;overflow-wrap:anywhere">${esc(prod.name)}${prod.thickness ? " · " + esc(prod.thickness) + " mm" : ""}</div></div>`
+        + `<div class="muted" style="font-size:11px;margin-top:3px">${esc(edit && !seed.woId
+          ? "The certificate was raised against this product — it is what the readings were graded on."
+          : "Decided by the work order — the batch was made to this product, and is graded on its spec.")}</div>`, "full")
+      : U.field("Product", U.searchSelect("lr_prod", prodOpts, prod.id, "Search product…"), "full");
 
     const body = h("div", {}, [
       seed.woId ? h("div", { class: "muted", style: "font-size:12px;margin-bottom:10px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2)",
         html: `Work order <b>${esc(seed.woId)}</b> · batch <b>${esc(refSeed)}</b> — the readings below are graded against this product's TDS spec.` }) : null,
       h("div", { class: "form-grid" }, [
-        U.field("Product", U.searchSelect("lr_prod", prodOpts, prod.id, "Search product…"), "full"),
+        prodField,
         U.field("Reference No. *",
           `<input class="input" id="lr_ref" value="${esc(refSeed)}"${lockRef ? " readonly" : ""} placeholder="e.g. B-2026-0142"><div class="muted" id="lr_refmode" style="font-size:11px;margin-top:3px">${refLabel(prod.refMode)}</div>`),
         U.field("Report Date", `<input class="input" id="lr_date" type="date" value="${edit ? esc(existing.reportDate) : DB.helpers.iso(DB.helpers.today())}">`),
@@ -785,13 +833,14 @@
     rebuildParams();
 
     // product change → adopt its flags, parameters + ref label, keep entered values
-    UI.$("#lr_prod").addEventListener("change", (e) => {
+    // only a form that offers the choice has one to listen to
+    { const sel = UI.$("#lr_prod"); if (sel) sel.addEventListener("change", (e) => {
       captureValues();
       prod = prodById(e.target.value) || prod;
       flags = Object.assign({ mica: false, waterBlocking: false, semiConductive: false }, prod.flags);
       const lbl = UI.$("#lr_refmode"); if (lbl) lbl.textContent = refLabel(prod.refMode);
       rebuildParams();
-    });
+    }); }
 
     function doSave() {
       captureValues();
@@ -819,20 +868,97 @@
   }
 
   /* ============================================================
-     PRODUCTS (lab master)
+     PRODUCTS — EVERYTHING THE LAB TESTS, NOT THE FINISHED GOODS ALONE
+     The lab measures three things and this tab listed one of them. A
+     finished good is a LAB PRODUCT, with a master of its own and a TDS
+     spec; a raw material and a work-in-process are STOCK ITEMS, and
+     what the lab measures on those was defined on the item itself
+     (qcParams / qcSpec) over in Inventory. So the one page meant to
+     answer "what does the lab test, and on what" answered a third of
+     it, and the other two thirds were reachable only through the stock
+     list — which is not where anybody looks for a test parameter.
+     All three are listed here now, in one table, each row opening the
+     editor that OWNS it: the lab product form for a finished good, the
+     QC parameters dialog for a material. Nothing was moved to do it —
+     a lab product is still a lab product and an item is still an item;
+     this is the one place that reads both.
      ============================================================ */
+  const items = () => ENG.data.items || [];
+  const KIND = {
+    fg:  { short: "FG",  ic: "🎁", plural: "Finished Goods" },
+    rm:  { short: "RM",  ic: "🧱", plural: "Raw Materials" },
+    wip: { short: "WIP", ic: "⚙️", plural: "Work in Process" },
+  };
+  /* ONE ROW SHAPE FOR BOTH MASTERS, so the table, the filters, the search
+     and the division rules do not have to know which of the two a row came
+     from. `src` is the record itself, kept for whatever opens it. */
+  function fgRow(p) {
+    const keys = specKeysOf(p);
+    return { kind: "fg", name: p.name || "", flags: p.flags || {},
+      code: p.code || p.id, thickness: p.thickness || "", series: p.series || "",
+      ref: refLabel(p.refMode).replace(" No.", ""),
+      /* catalogue keys only, plus the product's own — an own parameter that
+         carries a limit is in both lists and was being counted twice */
+      params: PARAMS.filter((x) => keys.indexOf(x.key) >= 0).length + customOf(p).length,
+      specSet: !!(p.specSet || keys.length), src: p };
+  }
+  /* A WIP IS A STAGE OF A FINISHED GOOD, AND IS MEASURED ON WHAT THAT
+     FINISHED GOOD IS MEASURED ON. The coated jumbo IS the tape before it is
+     slit — its thickness, its GSM, its BDV are the tape's, and the reading the
+     coating floor files against a batch is already graded on the product's TDS
+     spec. So a WIP carries no spec of its own here: it inherits the lab product
+     of the finished good it is a stage of (`stageOf` → the FG item → the lab
+     product raised against it), and opening the row opens that product. One set
+     of limits, edited in one place, and the two cannot drift apart. */
+  const lpForItem = (itemId) => (itemId ? products().find((p) => p.itemId === itemId) : null) || null;
+  function itemRow(i) {
+    const lp = i.cat === "WIP" ? lpForItem(i.stageOf) : null;
+    if (lp) {
+      const keys = specKeysOf(lp);
+      return { kind: "wip", name: i.name || i.id, flags: lp.flags || {},
+        code: i.id,
+        thickness: i.thicknessMM != null ? String(i.thicknessMM) : (lp.thickness || ""),
+        series: lp.series || i.grp || "",
+        ref: "of " + (lp.code || lp.id),
+        params: PARAMS.filter((x) => keys.indexOf(x.key) >= 0).length + customOf(lp).length,
+        specSet: !!(lp.specSet || keys.length),
+        inherits: lp, src: i };
+    }
+    const spec = i.qcSpec || {};
+    const listed = Array.isArray(i.qcParams) ? i.qcParams.length : 0;
+    const own = Array.isArray(i.testParams) ? i.testParams.length : 0;
+    return { kind: i.cat === "WIP" ? "wip" : "rm", name: i.name || i.material || i.id, flags: {},
+      code: i.id, thickness: i.thicknessMM != null ? String(i.thicknessMM) : "",
+      series: i.grade || i.grp || "", ref: "—",
+      params: listed || own,
+      /* the limits themselves are withheld from everyone but admin, exactly as
+         a lab product's are — `qcSpecSet` is what says they exist */
+      specSet: !!(i.qcSpecSet || Object.keys(spec).some((k) => hasLimit(spec[k]))), src: i };
+  }
+  const allRows = () => products().map(fgRow)
+    .concat(items().filter((i) => i.cat === "RM" || i.cat === "WIP").map(itemRow));
+
   function renderProducts(root) {
-    const filter = App.viewState("labProductsFilter", () => ({ q: "", qRaw: "", series: "all", type: "all" }));   // survives a quiet refresh
-    const ps = products();
+    const labOnly = App.isLab();
+    const isOffice = !isAdmin() && !labOnly;   // only these three roles reach this module
+    const filter = App.viewState("labProductsFilter", () => ({ q: "", qRaw: "", kind: "all", series: "all", type: "all" }));   // survives a quiet refresh
+    if (!filter.kind) filter.kind = "all";   // a filter kept from before this tab held materials
+    const ps = allRows();
+    const nOf = (k) => ps.filter((r) => r.kind === k).length;
     root.appendChild(h("div", { class: "grid kpi-grid", style: "margin-bottom:16px" }, [
-      kpi({ icon: "📦", label: "Products", value: ENG.num(ps.length) }),
-      kpi({ icon: "💧", label: "Water-blocking", value: ENG.num(ps.filter((p) => p.flags && p.flags.waterBlocking).length) }),
-      kpi({ icon: "⚡", label: "Semi-conductive", value: ENG.num(ps.filter((p) => p.flags && p.flags.semiConductive).length) }),
-      kpi({ icon: "🔬", label: "Mica (BDV)", value: ENG.num(ps.filter((p) => p.flags && p.flags.mica).length) }),
+      kpi({ icon: KIND.fg.ic,  label: "Finished goods",   value: ENG.num(nOf("fg")) }),
+      kpi({ icon: KIND.rm.ic,  label: "Raw materials",    value: ENG.num(nOf("rm")) }),
+      kpi({ icon: KIND.wip.ic, label: "Work in process",  value: ENG.num(nOf("wip")) }),
+      kpi({ icon: "🎯", label: "Limits set", value: ENG.num(ps.filter((r) => r.specSet).length) }),
     ]));
-    const seriesList = [...new Set(ps.map((p) => p.series).filter(Boolean))].sort();
+    const seriesList = [...new Set(ps.map((r) => r.series).filter(Boolean))].sort();
     root.appendChild(h("div", { class: "toolbar" }, [
-      searchInput("Search product, code or division…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
+      searchInput("Search product, material, code or division…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
+      /* what kind of thing it is comes first — it is the axis the tab just
+         grew, and the one anybody arriving here is dividing the list by */
+      select([{ value: "all", label: "Everything (" + ps.length + ")" }]
+        .concat(["fg", "rm", "wip"].filter((k) => nOf(k)).map((k) => ({ value: k, label: KIND[k].plural + " (" + nOf(k) + ")" }))),
+        (v) => { filter.kind = v; draw(); }, filter.kind),
       select([{ value: "all", label: "All Series" }, ...seriesList.map((s) => ({ value: s, label: s }))], (v) => { filter.series = v; draw(); }, filter.series),
       typeFilter(),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "lpCount" })),
@@ -841,9 +967,10 @@
 
     /* THE TYPE FILTER SPANS BOTH AXES. "Tested as" is the three toggles, which
        decide a certificate's parameters; "Made of" is the division the name
-       puts the product in. Only the entries the master actually holds are
-       offered — each with its count — so the list is as short as the catalogue
-       makes it, and a division nobody uses never appears. */
+       puts the row in — and a name divides a raw material exactly as it
+       divides a tape, so a material answers this filter too. Only the entries
+       the list actually holds are offered, each with its count, so the filter
+       is as short as the catalogue makes it. */
     function typeFilter() {
       const counts = {};
       ps.forEach((x) => { const d = divisionOf(x.name); if (d) counts[d.key] = (counts[d.key] || 0) + 1; });
@@ -870,42 +997,410 @@
     }
 
     function rows() {
-      return products().filter((p) => {
-        if (filter.series !== "all" && p.series !== filter.series) return false;
+      return ps.filter((r) => {
+        if (filter.kind !== "all" && r.kind !== filter.kind) return false;
+        if (filter.series !== "all" && r.series !== filter.series) return false;
         if (filter.type !== "all") {
           if (filter.type.indexOf("div:") === 0) {
-            const d = divisionOf(p.name);
+            const d = divisionOf(r.name);
             if (!d || d.key !== filter.type.slice(4)) return false;
-          } else if (!(p.flags && p.flags[filter.type])) return false;
+          } else if (!(r.flags && r.flags[filter.type])) return false;
         }
         // the division is searchable too, so "cotton" finds them however they are named
-        if (filter.q) { const s = (p.name + " " + (p.code || "") + " " + (p.series || "") + " " + divisionLabel(p)).toLowerCase(); if (!s.includes(filter.q)) return false; }
+        if (filter.q) { const s = (r.name + " " + (r.code || "") + " " + (r.series || "") + " " + divisionLabel(r)).toLowerCase(); if (!s.includes(filter.q)) return false; }
         return true;
-      }).sort((a, b) => (a.series + a.code).localeCompare(b.series + b.code));
+      }).sort((a, b) => (a.kind + a.series + a.code).localeCompare(b.kind + b.series + b.code));
     }
+
+    /* WHICH EDITOR A ROW OPENS — the one that owns the record. A finished
+       good's parameters and limits live on the lab product; a material's live
+       on the stock item, and the QC dialog that edits them is lent whole by
+       mod-inventory, so there is one editor for them and not a second one
+       here that could drift from it.
+       WHO MAY OPEN WHICH is not this table's invention — it is the split the
+       server already enforces. Deciding which readings a MATERIAL needs is the
+       incharge's trade as much as admin's (PUT /items/:id/qc takes admin and
+       lab, and drops a non-admin's limits), while office books goods in and
+       does not define how they are checked. A LAB PRODUCT is the master's.
+       So the rows a role cannot edit open read-only rather than opening an
+       editor whose Save would come back 403. */
+    function openRow(r) {
+      /* a WIP has no spec of its own — it opens the finished good's, which is
+         the spec its batch is actually graded on */
+      if (r.inherits) return mayEdit(r) ? productForm(r.inherits, r.src) : productDetail(r.inherits, r.src);
+      if (r.kind === "fg") return mayEdit(r) ? productForm(r.src) : productDetail(r.src);
+      return mayEdit(r) ? materialForm(r.src) : materialDetail(r.src);
+    }
+    // a WIP row edits the lab product behind it, so it follows the product rule
+    const mayEdit = (r) => ((r.kind === "fg" || r.inherits) ? !labOnly : !isOffice);
+
     function draw() {
       const data = rows(); const c = UI.$("#lpCount");
       // how many divisions the filtered list spans — the heap has a shape now
       const nd = new Set(data.map((x) => divisionLabel(x))).size;
-      if (c) c.textContent = data.length + " products · " + nd + " division" + (nd === 1 ? "" : "s");
+      if (c) c.textContent = data.length + " item" + (data.length === 1 ? "" : "s") + " · " + nd + " division" + (nd === 1 ? "" : "s");
       host.innerHTML = "";
       host.appendChild(table(data, [
-        { key: "code", label: "Code / Type", width: "170px", render: (p) => `<span style="font-weight:600">${esc(p.code || "—")}</span>` },
-        { key: "name", label: "Product", cls: "nm", render: (p) => esc(U.trim(p.name, 46)) },
-        { key: "thickness", label: "Thk (mm)", width: "90px", render: (p) => esc(p.thickness || "—") },
-        { key: "series", label: "Series", width: "130px", render: (p) => esc(p.series || "—") },
-        { key: "type", label: "Type", render: (p) => `<div class="flex gap wrap">${typeCell(p)}</div>`, sort: (p) => divisionLabel(p) },
-        { key: "ref", label: "Ref", width: "84px", render: (p) => refLabel(p.refMode).replace(" No.", ""), sort: (p) => p.refMode },
-        // `specSet` is what non-admins receive — the limits themselves are
-        // withheld so a tester cannot grade against them by eye.
-        { key: "spec", label: "Spec", width: "70px", noSort: true, render: (p) => (p.specSet || (p.spec && Object.keys(p.spec).length)) ? badge("ok", "set") : badge("mut", "—") },
-        { key: "act", label: "", noSort: true, width: "80px", render: (p) => actionCell([["Edit", () => productForm(p)]]) },
-      ], { onRow: (p) => productForm(p), empty: "No products match your filters" }));
+        { key: "code", label: "Code / Type", width: "170px", render: (r) => `<span style="font-weight:600">${esc(r.code || "—")}</span>` },
+        { key: "name", label: "Product / Material", cls: "nm", render: (r) => `<div style="overflow-wrap:anywhere">${esc(r.name)}</div>` },
+        /* what the row IS, and — for a finished good — what its certificate is
+           raised against, which is a property of the product and of nothing else */
+        /* what the row IS, and — for a finished good — what its certificate is
+           raised against, which is a property of the product and of nothing
+           else. Two facts, one column: the tab grew an axis and the table did
+           not need to grow a column for it. */
+        { key: "kind", label: "Kind", width: "112px", sort: (r) => r.kind,
+          render: (r) => badge(r.kind === "fg" ? "ok" : r.kind === "rm" ? "info" : "mut", KIND[r.kind].ic + " " + KIND[r.kind].short)
+            + (r.ref && r.ref !== "—" ? `<div class="muted" style="font-size:11px;margin-top:3px">${esc(r.ref)}</div>` : "") },
+        { key: "thickness", label: "Thk (mm)", width: "86px", render: (r) => esc(r.thickness || "—") },
+        { key: "series", label: "Series / Grade", width: "128px", render: (r) => esc(r.series || "—") },
+        { key: "type", label: "Type", render: (r) => `<div class="flex gap wrap">${typeCell(r)}</div>`, sort: (r) => divisionLabel(r) },
+        /* HOW MANY PARAMETERS, AND WHETHER THEY GRADE — one column, because
+           they are one question. A material nobody has configured is still
+           tested, on the list its own record implies, so "derived" is the
+           honest word for none set; and `specSet` is what non-admins receive,
+           the limits themselves withheld so a tester cannot grade by eye. */
+        { key: "params", label: "Tested on", width: "116px", sort: (r) => r.params,
+          render: (r) => (r.params ? `${ENG.num(r.params)} param${r.params === 1 ? "" : "s"}`
+            : `<span class="muted">derived</span>`)
+            + `<div class="muted" style="font-size:11px;margin-top:3px">${r.specSet ? "limits set" : "no limits"}</div>` },
+        { key: "act", label: "", noSort: true, width: "78px", render: (r) => actionCell([[mayEdit(r) ? "Edit" : "View", () => openRow(r)]]) },
+      ], { onRow: openRow, empty: "Nothing matches your filters",
+        /* the phone card, said outright rather than guessed from the column
+           labels: the code heads it, the name identifies it, and the two facts
+           worth a chip are what the row IS and what it is measured on */
+        cardCols: ["kind", "params"], cardSubKey: "name" }));
     }
     draw();
   }
 
-  function productForm(existing) {
+  /* A MATERIAL'S CARD, for the role that may read it and not change it.
+     The parameter LABELS live in the incoming-test catalogue rather than in
+     this module, so they are fetched once and remembered; until they arrive
+     (and for a key the catalogue does not know) the key itself is shown, which
+     is still the name of the reading and not a blank. */
+  let GT_PARAMS = null;
+  async function gtCatalogue() {
+    if (GT_PARAMS) return GT_PARAMS;
+    GT_PARAMS = (((await DB.grnTests.catalogue()) || {}).params) || [];
+    return GT_PARAMS;
+  }
+  function materialDetail(i) {
+    const own = Array.isArray(i.testParams) ? i.testParams : [];
+    const keys = Array.isArray(i.qcParams) ? i.qcParams : [];
+    const listHost = h("div");
+    const label = (k) => {
+      const c = (GT_PARAMS || []).find((q) => q.key === k) || own.find((q) => q.key === k);
+      return c ? c.label + (c.unit ? " (" + c.unit + ")" : "") : k;
+    };
+    function drawList() {
+      listHost.innerHTML = "";
+      listHost.appendChild(keys.length
+        ? h("div", { class: "flex gap wrap" }, keys.map((k) => h("span", { class: "chip", text: label(k) })))
+        : h("div", { class: "muted", style: "font-size:12px", text: "No list set, so a receipt is checked on what the item master itself records — thickness, GSM, width — plus a visual check." }));
+    }
+    if (!GT_PARAMS) DB.grnTests.catalogue()
+      .then((r) => { GT_PARAMS = (r && r.params) || []; if (listHost.isConnected) drawList(); })
+      .catch(() => { GT_PARAMS = []; });
+    drawList();
+    const d = divisionOf(i.name);
+    const cell = (k, v) => h("div", {}, [
+      h("div", { class: "muted", style: "font-size:11px", text: k }),
+      h("div", { style: "font-weight:600;margin-top:2px", html: v }),
+    ]);
+    const mo = modal({ title: i.name || i.id, sub: i.id + " · " + (i.cat === "WIP" ? "work in process" : "raw material"), wide: true,
+      body: h("div", {}, [
+        h("div", { class: "form-grid" }, [
+          cell("Material", esc(i.name || "—")),
+          cell("Item code", esc(i.id)),
+          cell("Grade / Group", esc(i.grade || i.grp || "—")),
+          cell("Thickness (mm)", esc(i.thicknessMM != null ? String(i.thicknessMM) : "—")),
+          cell("GSM (g/m²)", esc(i.gsm != null ? String(i.gsm) : "—")),
+          cell("Stocked in", esc(i.uom || "—")),
+          cell("Division — read off the name", d ? badge("info", d.label) : `<span class="muted">General</span>`),
+        ]),
+        h("h3", { style: "margin:16px 0 6px;font-size:13px", text: "What the lab measures on every receipt" }),
+        listHost,
+        h("div", { class: "muted", style: "font-size:12px;margin-top:16px;line-height:1.6",
+          text: "🔒 The parameter list is set by the admin or the lab incharge, and the pass/fail limits behind it are the admin's — they are not shown here." }),
+      ]),
+      foot: [h("button", { class: "btn primary", onclick: () => mo.close(), text: "Close" })] });
+  }
+
+  /* ============================================================
+     THE ONE WAY A PARAMETER IS ADDED, wherever it is added from
+     This was two bare rows of controls stacked on each other — a select and
+     a button, then two boxes and another button — with the placeholder text
+     carrying the whole meaning of each, and the product form and the material
+     form each keeping their own copy. Nothing said that the first row picks
+     something the catalogue already knows while the second invents something
+     this product alone is tested on, which is the only thing about them worth
+     knowing.
+     So: one panel, set apart from the rows above it because adding is a
+     different act from editing; a line of prose that draws the distinction
+     once; and two labelled lines, each with the verb that fits it. Both forms
+     call this, so the product's parameters and the material's are added the
+     same way and cannot drift into two designs.
+     ============================================================ */
+  function addParamPanel(o) {
+    const box = h("div", { style: "border:1px solid var(--line);border-radius:10px;padding:12px 13px;background:var(--panel-2)" }, [
+      h("div", { style: "font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim)", text: "Add a parameter" }),
+      h("div", { class: "muted", style: "font-size:11px;margin-top:3px;line-height:1.5", text: o.hint }),
+    ]);
+    const line = (label, controls) => h("div", { style: "margin-top:11px" }, [
+      h("div", { style: "font-size:11px;font-weight:700;color:var(--text-dim);margin-bottom:5px", text: label }),
+      h("div", { class: "flex gap aic wrap" }, controls),
+    ]);
+    if (o.options.length) {
+      const sel = h("select", { class: "select", style: "flex:1 1 220px;min-width:0" },
+        o.options.map((x) => h("option", { value: x.v, text: x.l })));
+      box.appendChild(line("Pick a parameter", [sel,
+        h("button", { class: "btn sm", html: "＋ Add", onclick: (e) => { e.preventDefault(); if (sel.value) o.onAdd(sel.value); } })]));
+    } else {
+      box.appendChild(line("Pick a parameter", [h("div", { class: "muted", style: "font-size:12px", text: o.allUsed })]));
+    }
+    const nameEl = h("input", { class: "input", placeholder: "Parameter name", style: "flex:1 1 190px;min-width:0", "data-enter": "ignore" });
+    const unitEl = h("input", { class: "input", placeholder: "Unit", style: "flex:0 1 100px;width:100px;min-width:72px", "data-enter": "ignore" });
+    // the boxes clear only when the parameter was actually made — a rejected
+    // name stays put to be corrected rather than retyped
+    const create = (e) => {
+      if (e) e.preventDefault();
+      if (o.onCreate((nameEl.value || "").trim(), (unitEl.value || "").trim())) { nameEl.value = ""; unitEl.value = ""; }
+    };
+    [nameEl, unitEl].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); create(); } }));
+    box.appendChild(line(o.createLabel || "Or name a new one", [nameEl, unitEl,
+      h("button", { class: "btn sm", html: "＋ Create", onclick: create })]));
+    return box;
+  }
+
+  /* ============================================================
+     A MATERIAL'S EDIT DIALOG, IN THE SHAPE OF THE PRODUCT ONE
+     A raw material opened from this tab used to raise the stock module's QC
+     dialog — a tick-list of checkboxes, laid out nothing like the product
+     sitting beside it in the same table. One page, one table, and two
+     different forms answering the same question: what is this tested on, and
+     what counts as a pass.
+     This is the product form's layout over the material's own data. What the
+     ITEM MASTER owns — the name, the code, the thickness, the GSM — is shown
+     and not editable here; changing those is Stock Items' business, and a lab
+     screen is no place to rename a material. What the LAB owns — the
+     parameters and their limits — is the editable half, laid out row for row
+     exactly as a product's spec is.
+     It writes through the same endpoint the stock dialog does
+     (grnTests.setItemQc), so the two can never disagree, and it keeps that
+     endpoint's division: which readings a material needs is the incharge's
+     trade as much as admin's, while the limits are admin's alone.
+     ============================================================ */
+  async function materialForm(it) {
+    const admin = isAdmin();
+    let cat = [];
+    try { cat = await gtCatalogue(); }
+    catch (e) { toast(e.message || "Could not load the parameter catalogue", { type: "danger" }); return; }
+
+    const spec = (it.qcSpec && typeof it.qcSpec === "object") ? it.qcSpec : {};
+    const listed = Array.isArray(it.qcParams) ? it.qcParams : [];
+    const own0 = Array.isArray(it.testParams) ? it.testParams : [];
+    const ownKeys = new Set(own0.map((q) => q.key));
+    const bounds = (sp) => {
+      const extra = {};
+      ["nominal", "tol", "unparsed"].forEach((k) => { if (sp && sp[k] != null) extra[k] = sp[k]; });
+      return { min: sp && sp.min != null ? sn(sp.min) : "", max: sp && sp.max != null ? sn(sp.max) : "", extra };
+    };
+    /* the catalogue rows this material is tested on, then its own. A material
+       carries a parameter whether or not a limit grades it — unlike a lab
+       product, whose spec IS its list — so a row with empty boxes is a real
+       row here: the reading is recorded, and the form says so. */
+    let rows = cat.filter((c) => listed.indexOf(c.key) >= 0 && !ownKeys.has(c.key))
+      .map((c) => Object.assign({ key: c.key, label: c.label, unit: c.unit || "", type: c.type || "num" }, bounds(spec[c.key])));
+    let ownRows = own0.filter((q) => q && q.key && q.label)
+      .map((q) => Object.assign({ key: q.key, label: q.label, unit: q.unit || "", type: "num" }, bounds(spec[q.key])));
+
+    const CUSTOM_KEY_RE = /^[a-z][a-zA-Z0-9_]{0,39}$/;
+    const slugKey = (label) => { const t = String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); return t ? ("c_" + t).slice(0, 40) : ""; };
+    const ro = (label, value) => U.field(label, `<input class="input" value="${esc(value == null || value === "" ? "—" : String(value))}" readonly>`);
+    const d = divisionOf(it.name);
+
+    const body = h("div", {}, [
+      h("div", { class: "form-grid" }, [
+        ro("Material Name", it.name || it.material || it.id),
+        ro("Item Code", it.id),
+        ro("Thickness (mm)", it.thicknessMM),
+        ro("GSM (g/m²)", it.gsm),
+        ro("Grade / Group", it.grade || it.grp),
+        ro("Stocked in", it.uom),
+      ]),
+      h("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: "The item master owns these — change them under Stock Items. What the lab measures on it is set below." }),
+      h("div", { class: "flex aic", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, [
+        h("span", { class: "muted", style: "font-size:11px", text: "Division — read off the name:" }),
+        d ? h("span", { html: badge("info", d.label) }) : h("span", { class: "muted", style: "font-size:11px", text: "General — no material word in the name" }),
+      ]),
+      h("div", { style: "margin-top:16px" }, [
+        h("h3", { style: "margin:6px 0 4px;font-size:13px", text: "QC Spec (backend only — hidden from data entry)" }),
+        h("div", { class: "muted", style: "font-size:11px;margin-bottom:8px",
+          text: admin
+            ? "The parameters asked for on every receipt of this material. A min or a max grades the reading pass or fail; leave both blank and it is recorded, not graded. ✕ takes the parameter off."
+            : "The parameters you will be asked to measure when this material is received. You may change that list; the pass/fail limits stay with the admin, so a reading cannot be graded against a limit the person measuring it chose." }),
+        h("div", { id: "lp_qc" }),
+        h("div", { id: "lp_qcadd", style: "margin-top:10px" }),
+      ]),
+    ]);
+
+    const mo = modal({ title: "Edit Material", sub: it.id + " · what the lab measures on it", wide: true, body,
+      foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+        h("button", { class: "btn primary", onclick: doSave, text: "Save Changes" })] });
+
+    function capture() {
+      rows.concat(ownRows).forEach((r) => {
+        const mn = UI.$("#qs_min_" + r.key), mx = UI.$("#qs_max_" + r.key);
+        if (mn) r.min = mn.value.trim();
+        if (mx) r.max = mx.value.trim();
+      });
+    }
+    function qcRow(r, onX, xTitle) {
+      const note = r.extra.unparsed != null ? "TDS: " + r.extra.unparsed
+        : r.extra.nominal != null ? "TDS target " + sn(r.extra.nominal) + (r.extra.tol != null ? " ± " + sn(r.extra.tol) : "")
+        : "";
+      /* a visual check has no min and no max to give it — it is recorded, and
+         the row says so rather than offering two boxes that mean nothing */
+      const boxes = r.type === "text"
+        ? [h("div", { class: "muted", style: "flex:0 1 230px;font-size:12px", text: "recorded, not graded" })]
+        : admin
+          ? [h("input", { class: "input", id: "qs_min_" + r.key, type: "number", step: "any", placeholder: "min", style: "flex:0 1 110px;width:110px;min-width:76px", value: r.min }),
+             h("input", { class: "input", id: "qs_max_" + r.key, type: "number", step: "any", placeholder: "max", style: "flex:0 1 110px;width:110px;min-width:76px", value: r.max })]
+          : [h("div", { class: "muted", style: "flex:0 1 230px;font-size:12px", text: it.qcSpecSet ? "graded against a limit admin has set" : "limits set by admin" })];
+      return h("div", { class: "flex gap aic wrap", style: "margin-bottom:6px" }, [
+        h("div", { style: "flex:1 1 150px;min-width:0;font-size:13px",
+          html: `${esc(r.label)} <span class="muted">(${esc(r.unit || "—")})</span>` + (note ? `<div class="muted" style="font-size:11px">${esc(note)}</div>` : "") }),
+      ].concat(boxes, [
+        h("button", { class: "icon-btn", title: xTitle, text: "✕",
+          onclick: (e) => { e.preventDefault(); capture(); onX(); drawQc(); } }),
+      ]));
+    }
+    function drawQc() {
+      const host = UI.$("#lp_qc"); if (!host) return;
+      host.innerHTML = "";
+      if (!rows.length && !ownRows.length) {
+        host.appendChild(h("div", { class: "muted", style: "font-size:12px;padding:6px 0",
+          text: "No list set yet, so a receipt is checked on whatever the item master records — thickness, GSM, width — plus a visual check. Add a parameter below and it becomes explicit." }));
+      }
+      rows.forEach((r) => host.appendChild(qcRow(r, () => { rows = rows.filter((x) => x !== r); }, "Stop measuring " + r.label)));
+      if (ownRows.length) {
+        host.appendChild(h("div", { class: "cg-sec" }, [h("span", { text: "Its own parameters" }), h("span", { class: "sp" })]));
+        ownRows.forEach((r) => host.appendChild(qcRow(r, () => { ownRows = ownRows.filter((x) => x !== r); }, "Remove " + r.label + " from this material")));
+      }
+      drawQcAdd();
+    }
+    function drawQcAdd() {
+      const host = UI.$("#lp_qcadd"); if (!host) return;
+      const used = rows.map((r) => r.key);
+      const left = cat.filter((c) => used.indexOf(c.key) < 0 && !ownKeys.has(c.key));
+      host.innerHTML = "";
+      host.appendChild(addParamPanel({
+        hint: "A catalogue parameter is one every material shares. One of its own belongs to this material alone — it is asked for on every receipt of it, and a limit grades it like any other.",
+        options: left.map((c) => ({ v: c.key, l: c.label + (c.unit ? " (" + c.unit + ")" : "") })),
+        allUsed: "Every catalogue parameter is already on this material's list.",
+        onAdd(k) {
+          const c = cat.find((x) => x.key === k); if (!c) return;
+          capture();
+          rows.push(Object.assign({ key: c.key, label: c.label, unit: c.unit || "", type: c.type || "num" }, bounds(spec[c.key])));
+          rows.sort((a, b) => cat.findIndex((x) => x.key === a.key) - cat.findIndex((x) => x.key === b.key));
+          drawQc();
+          const box = UI.$("#qs_min_" + c.key); if (box) { try { box.focus(); } catch { /* not focusable yet */ } }
+        },
+        onCreate(label, unit) {
+          if (!label) { toast("Give the parameter a name", { type: "warn" }); return false; }
+          const key = slugKey(label);
+          if (!key || !CUSTOM_KEY_RE.test(key)) { toast("The name " + label + " needs a letter or a digit", { type: "warn" }); return false; }
+          const taken = cat.some((x) => x.key === key || String(x.label).toLowerCase() === label.toLowerCase())
+            || ownRows.some((x) => x.key === key || x.label.toLowerCase() === label.toLowerCase());
+          if (taken) { toast("That parameter is already on the list", { type: "warn" }); return false; }
+          capture();
+          ownKeys.add(key);
+          ownRows.push({ key, label, unit, type: "num", min: "", max: "", extra: {} });
+          drawQc();
+          const box = UI.$("#qs_min_" + key); if (box) { try { box.focus(); } catch { /* not focusable yet */ } }
+          return true;
+        },
+      }));
+    }
+    drawQc();
+
+    function doSave() {
+      capture();
+      const params = rows.map((r) => r.key).concat(ownRows.map((r) => r.key));
+      if (!params.length) { toast("Add at least one parameter, or cancel to keep the derived defaults", { type: "warn" }); return; }
+      const out = {};
+      if (admin) {
+        for (const r of rows.concat(ownRows)) {
+          if (r.type === "text") continue;
+          const o = Object.assign({}, r.extra); delete o.min; delete o.max;
+          if (String(r.min || "").trim() !== "") o.min = +r.min;
+          if (String(r.max || "").trim() !== "") o.max = +r.max;
+          if (o.min != null && o.max != null && o.min > o.max) { toast("Minimum cannot exceed maximum for " + r.label, { type: "warn" }); return; }
+          // a parameter with no limit still belongs on the list above; it simply
+          // has no entry in the spec, which is what "recorded, not graded" means
+          if (o.min != null || o.max != null || o.nominal != null) out[r.key] = o;
+        }
+      }
+      const custom = ownRows.map((r) => ({ key: r.key, label: r.label, unit: r.unit || "" }));
+      mo.close();
+      commit(() => DB.grnTests.setItemQc(it.id, params, out, custom), (res) => {
+        /* Say when reports were re-graded. Changing a limit silently re-scores
+           lots that were already signed off, and that is exactly the kind of
+           change nobody should discover by accident. */
+        toast(res && res.regraded
+          ? "Parameters saved — " + res.regraded + " existing test report" + (res.regraded === 1 ? "" : "s") + " re-graded against the new limits"
+          : "Parameters saved for " + (it.name || it.id), { type: "ok", title: "QC parameters" });
+        if (admin && !Object.keys(out).length) toast("No limit is set, so readings on " + (it.name || it.id) + " are recorded, not graded pass or fail", { type: "warn", dur: 6000 });
+      });
+    }
+  }
+
+  /* THE INCHARGE'S VIEW OF A PRODUCT — everything about it but the numbers.
+     The limits never reach his browser (viewService withholds them), so this is
+     not a form with its fields disabled: there is nothing behind it to disable.
+     He gets the product as it is defined and the parameters his certificate
+     will ask him for, which is what working the batch in front of him takes —
+     and no yardstick to tune a reading against by eye. */
+  function productDetail(p, viaWip) {
+    const par = paramsFor(p);
+    const d = divisionOf(p.name);
+    const cell = (k, v) => h("div", {}, [
+      h("div", { class: "muted", style: "font-size:11px", text: k }),
+      h("div", { style: "font-weight:600;margin-top:2px", html: v }),
+    ]);
+    const flagged = TYPE_TOGGLES.filter((t) => p.flags && p.flags[t.key]);
+    const mo = modal({ title: p.code || p.name, sub: p.id + " · lab product", wide: true,
+      body: h("div", {}, [
+        viaWip ? h("div", { class: "muted", style: "font-size:12px;margin-bottom:12px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2)",
+          html: `<b>${esc(viaWip.id)}</b> is a stage of this product, so it is measured on exactly these parameters — the spec below is the one its batch is graded against.` }) : null,
+        h("div", { class: "form-grid" }, [
+          cell("Product", esc(p.name || "—")),
+          cell("Code / Type", esc(p.code || "—")),
+          cell("Thickness (mm)", esc(p.thickness || "—")),
+          cell("Series", esc(p.series || "—")),
+          cell("Certificate raised against", esc(refLabel(p.refMode))),
+          cell("Division — read off the name", d ? badge("info", d.label) : `<span class="muted">General</span>`),
+        ]),
+        h("h3", { style: "margin:16px 0 6px;font-size:13px", text: "Material type" }),
+        h("div", { class: "flex gap wrap" }, flagged.length
+          ? flagged.map((t) => h("span", { class: "chip", text: t.label }))
+          : [h("span", { class: "muted", style: "font-size:12px", text: "General tape — the common parameters only" })]),
+        h("h3", { style: "margin:16px 0 6px;font-size:13px", text: "What its certificate asks you for" }),
+        par.length
+          ? h("div", { class: "flex gap wrap" }, par.map((q) => h("span", { class: "chip", text: q.label + (q.unit ? " (" + q.unit + ")" : "") })))
+          : h("div", { class: "muted", style: "font-size:12px", text: "No parameters set yet — its material type decides the list." }),
+        h("div", { class: "muted", style: "font-size:12px;margin-top:16px;line-height:1.6",
+          text: specKeysOf(p).length
+            ? "🔒 The pass/fail limits behind these parameters are the admin's and are not shown here. Every reading you file is graded against them on the server."
+            : "🔒 No limits are set on this product yet, so a reading is recorded rather than graded Pass or Fail." }),
+      ].filter(Boolean)),
+      foot: [h("button", { class: "btn primary", onclick: () => mo.close(), text: "Close" })] });
+  }
+
+  /* `viaWip` — the work-in-process row this was opened from, when it was: a
+     stage has no product of its own to edit, so it edits the finished good's. */
+  function productForm(existing, viaWip) {
     const edit = !!existing;
     const p = existing || { refMode: "batch", flags: {}, series: "Other", active: true };
     const f = (k, d) => (p[k] != null ? p[k] : (d == null ? "" : d));
@@ -920,7 +1415,7 @@
         U.field("Series", `<input class="input" id="lp_series" value="${esc(f("series", "Other"))}">`),
         U.field("Reference Mode", U.selectHTML("lp_ref", [{ v: "batch", l: "Batch No. (stocked / repeat orders)" }, { v: "lot", l: "Lot / W.O. No. (made-to-order)" }], f("refMode", "batch"))),
       ]),
-      h("h3", { style: "margin:14px 0 8px;font-size:13px", text: "Material Type (drives which test parameters apply)" }),
+      h("h3", { style: "margin:14px 0 8px;font-size:13px", text: "Material Type (recorded on the certificate; the fallback list until a spec is set)" }),
       h("div", { class: "flex gap wrap", id: "lp_flags" }, TYPE_TOGGLES.map((t) => h("label", { class: "chip", style: "cursor:pointer" }, [
         h("input", { type: "checkbox", "data-flag": t.key, checked: flags[t.key] ? "checked" : null }), " " + t.label]))),
       h("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: "Tip: leave all unticked for a general tape (common parameters only)." }),
@@ -935,7 +1430,8 @@
       specSection(),
     ]);
 
-    const mo = modal({ title: edit ? "Edit Product" : "New Lab Product", sub: edit ? p.id : "Add to the lab product master", wide: true, body,
+    const mo = modal({ title: edit ? "Edit Product" : "New Lab Product",
+      sub: viaWip ? p.id + " · the spec behind " + viaWip.id : (edit ? p.id : "Add to the lab product master"), wide: true, body,
       foot: [
         edit ? h("button", { class: "btn danger", onclick: () => delProduct(p, mo), text: "🗑 Delete" }) : null,
         h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
@@ -945,29 +1441,169 @@
     function readFlags() { const o = {}; UI.$("#lp_flags").querySelectorAll("input[data-flag]").forEach((cb) => { o[cb.getAttribute("data-flag")] = cb.checked; }); return o; }
 
     // Admin-only spec editor (hidden from the report entry form entirely).
+    /* ============================================================
+       THE SPEC IS THE PARAMETERS SOMEBODY WROTE A NUMBER AGAINST
+       This editor used to print a row for every parameter the material type
+       allows, blank boxes and all. So a mica tape with limits on four things
+       showed five rows, and the fifth — Elongation, with nothing in either
+       box — read as a spec that had merely not been filled in yet. It is not
+       a spec at all: it states no requirement, it grades nothing, and stored
+       that way it would put a row on every certificate that could only ever
+       read "no spec".
+       So the list IS the spec. A parameter is added from the picker beneath
+       it, clearing both bounds takes it out again on save, and ✕ removes it
+       outright. What is on screen is what the product is graded on.
+       ============================================================ */
     function specSection() {
       if (!admin) return h("div", { class: "muted", style: "font-size:12px;margin-top:14px", text: "🔒 Lab spec (min/max limits) is managed by admin and used to grade reports Pass/Fail." });
       return h("div", { style: "margin-top:16px" }, [
         h("h3", { style: "margin:6px 0 4px;font-size:13px", text: "Lab Spec (backend only — hidden from data entry)" }),
-        h("div", { class: "muted", style: "font-size:11px;margin-bottom:8px", text: "Min/Max limits per parameter. Leave blank to skip a bound. Reports grade Pass/Fail against these." }),
+        h("div", { class: "muted", style: "font-size:11px;margin-bottom:8px", text: "The parameters this product is graded on. One bound is enough; clear both and the parameter comes off the spec. Add one from the list below." }),
         h("div", { id: "lp_spec" }),
+        h("div", { id: "lp_specadd", style: "margin-top:10px" }),
       ]);
     }
-    function rebuildSpec() {
-      if (!admin) return;
-      const host = UI.$("#lp_spec"); if (!host) return;
-      const fl = readFlags(); const spec = p.spec || {};
-      host.innerHTML = "";
-      applicable(fl).forEach((par) => {
-        const sp = spec[par.key] || {};
-        host.insertAdjacentHTML("beforeend",
-          `<div class="flex gap aic" style="margin-bottom:6px"><div style="flex:1;font-size:13px">${esc(par.label)} <span class="muted">(${par.unit})</span></div>` +
-          `<input class="input" id="sp_min_${par.key}" type="number" step="any" placeholder="min" style="width:110px" value="${sp.min != null ? esc(sn(sp.min)) : ""}">` +
-          `<input class="input" id="sp_max_${par.key}" type="number" step="any" placeholder="max" style="width:110px" value="${sp.max != null ? esc(sn(sp.max)) : ""}"></div>`);
+
+    /* [{ key, min, max, extra }] — `extra` carries the TDS's own figures (the
+       static target and the tolerance it was worked out from, or the source
+       text that could not be parsed). They have no box here, and rebuilding an
+       entry from the two boxes alone dropped them on every save; they ride
+       along untouched instead. */
+    let specRows = [];      // catalogue parameters that carry a limit
+    /* THE PRODUCT'S OWN PARAMETERS. The catalogue is ten readings and no more,
+       and a product is sometimes tested on something that is not among them.
+       The lab product has carried `params` for this since 2026-09-02 — they go
+       on every certificate of the product — but there was nowhere to put one
+       in: they could only arrive with the material through the New Item form.
+       They are edited here now, beside the limits, because a parameter and the
+       limit it is graded by are one thought. Unlike a catalogue row, an own
+       parameter is listed whether or not it has a limit — it is on the
+       certificate either way — so its ✕ takes the parameter off the product,
+       not merely its limit. */
+    let ownRows = [];
+    const CUSTOM_KEY_RE = /^[a-z][a-zA-Z0-9_]{0,39}$/;
+    /* keyed exactly as labService.slugKey keys it, so the limit typed beside a
+       new parameter is filed under the key the server will keep */
+    const slugKey = (label) => { const t = String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); return t ? ("c_" + t).slice(0, 40) : ""; };
+    const parByKey = (k) => PARAMS.find((x) => x.key === k) || ownRows.find((x) => x.key === k) || { key: k, label: k, unit: "" };
+    const extraOf = (sp) => { const o = {}; ["nominal", "tol", "unparsed"].forEach((k) => { if (sp && sp[k] != null) o[k] = sp[k]; }); return o; };
+    const boundsOf = (sp) => ({ min: sp && sp.min != null ? sn(sp.min) : "", max: sp && sp.max != null ? sn(sp.max) : "", extra: extraOf(sp) });
+    /* THE WHOLE CATALOGUE IS ON OFFER, not the material type's slice of it.
+       The picker used to show only the parameters the three toggles allow, so
+       a mica tape with four limits already set offered exactly one more — one
+       line in a dropdown, and the other five readings of the catalogue simply
+       unreachable. The toggles were never the authority here anyway: since the
+       spec became the certificate's parameter list, what a product is tested
+       on is what somebody wrote a limit against, and a tape can perfectly well
+       be held to a swell figure without being filed as water-blocking.
+       So nothing is filtered out — not from the picker, not on seeding, and not
+       on save, where a limit whose toggle happened to be off used to be dropped
+       without a word. The toggles keep the two jobs that are really theirs:
+       they are recorded on the certificate, and they decide the fallback list
+       for a product whose spec is still empty. */
+    function seedSpec() {
+      const spec = p.spec || {};
+      specRows = PARAMS.filter((par) => hasLimit(spec[par.key]))
+        .map((par) => Object.assign({ key: par.key }, boundsOf(spec[par.key])));
+      ownRows = customOf(p).map((q) => Object.assign({ key: q.key, label: q.label, unit: q.unit || "" }, boundsOf(spec[q.key])));
+    }
+    // read the boxes back before anything redraws them, so a half-typed limit
+    // survives adding a parameter or ticking a material type
+    function captureSpec() {
+      specRows.concat(ownRows).forEach((r) => {
+        const mn = UI.$("#sp_min_" + r.key), mx = UI.$("#sp_max_" + r.key);
+        if (mn) r.min = mn.value.trim();
+        if (mx) r.max = mx.value.trim();
       });
     }
-    rebuildSpec();
-    UI.$("#lp_flags").addEventListener("change", rebuildSpec);
+    /* one row, whichever list it came from. `onX` is what ✕ means here: a
+       catalogue row loses its limit, an own parameter leaves the product. */
+    function specRow(r, label, unit, note, onX, xTitle) {
+      return h("div", { class: "flex gap aic wrap", style: "margin-bottom:6px" }, [
+        h("div", { style: "flex:1 1 150px;min-width:0;font-size:13px",
+          html: `${esc(label)} <span class="muted">(${esc(unit || "—")})</span>` + (note ? `<div class="muted" style="font-size:11px">${esc(note)}</div>` : "") }),
+        h("input", { class: "input", id: "sp_min_" + r.key, type: "number", step: "any", placeholder: "min",
+          style: "flex:0 1 110px;width:110px;min-width:76px", value: r.min }),
+        h("input", { class: "input", id: "sp_max_" + r.key, type: "number", step: "any", placeholder: "max",
+          style: "flex:0 1 110px;width:110px;min-width:76px", value: r.max }),
+        h("button", { class: "icon-btn", title: xTitle, text: "✕",
+          onclick: (e) => { e.preventDefault(); captureSpec(); onX(); drawSpec(); } }),
+      ]);
+    }
+    /* the TDS's own words, shown rather than hidden: the admin can see what the
+       sheet said even though there is no box to edit it in */
+    const tdsNote = (r) => r.extra.unparsed != null ? "TDS: " + r.extra.unparsed
+      : r.extra.nominal != null ? "TDS target " + sn(r.extra.nominal) + (r.extra.tol != null ? " ± " + sn(r.extra.tol) : "")
+      : "";
+    function drawSpec() {
+      if (!admin) return;
+      const host = UI.$("#lp_spec"); if (!host) return;
+      host.innerHTML = "";
+      if (!specRows.length && !ownRows.length) {
+        host.appendChild(h("div", { class: "muted", style: "font-size:12px;padding:6px 0", text: "No limits set — readings are recorded, not graded. Add a parameter below." }));
+      }
+      specRows.forEach((r) => {
+        const par = parByKey(r.key);
+        host.appendChild(specRow(r, par.label, par.unit, tdsNote(r),
+          () => { specRows = specRows.filter((x) => x !== r); }, "Take " + par.label + " off the spec"));
+      });
+      if (ownRows.length) {
+        host.appendChild(h("div", { class: "cg-sec" }, [h("span", { text: "Its own parameters" }), h("span", { class: "sp" })]));
+        host.appendChild(h("div", { class: "muted", style: "font-size:11px;margin-bottom:6px", text: "Asked for on every certificate of this product. A limit grades one like any other; without a limit the reading is recorded." }));
+        ownRows.forEach((r) => {
+          host.appendChild(specRow(r, r.label, r.unit, tdsNote(r),
+            () => { ownRows = ownRows.filter((x) => x !== r); }, "Remove " + r.label + " from this product"));
+        });
+      }
+      drawSpecAdd();
+    }
+    function drawSpecAdd() {
+      const host = UI.$("#lp_specadd"); if (!host) return;
+      const used = specRows.map((r) => r.key);
+      const left = PARAMS.filter((par) => used.indexOf(par.key) < 0);
+      const fl = readFlags();
+      host.innerHTML = "";
+      host.appendChild(addParamPanel({
+        hint: "A catalogue parameter is one the whole master shares. One of its own belongs to this product alone — it goes on every certificate of it, and a limit grades it like any other.",
+        /* the whole catalogue, with the ones outside this product's material
+           type marked rather than withheld — they are unusual on such a tape,
+           not forbidden on it */
+        options: left.map((par) => ({ v: par.key,
+          l: par.label + (par.unit ? " (" + par.unit + ")" : "")
+            + (par.group !== "common" && !fl[par.group] ? "  — " + (TYPE_TOGGLES.find((t) => t.key === par.group) || {}).label : "") })),
+        allUsed: "Every parameter in the catalogue already has a limit.",
+        onAdd(k) {
+          captureSpec();
+          specRows.push(Object.assign({ key: k }, boundsOf((p.spec || {})[k])));
+          // the catalogue's own order, so the list reads the same however it was built
+          specRows.sort((a, b) => PARAMS.findIndex((x) => x.key === a.key) - PARAMS.findIndex((x) => x.key === b.key));
+          drawSpec();
+          const box = UI.$("#sp_min_" + k); if (box) { try { box.focus(); } catch { /* not focusable yet */ } }
+        },
+        onCreate(label, unit) {
+          if (!label) { toast("Give the parameter a name", { type: "warn" }); return false; }
+          const key = slugKey(label);
+          if (!key || !CUSTOM_KEY_RE.test(key)) { toast("The name " + label + " needs a letter or a digit", { type: "warn" }); return false; }
+          const taken = PARAMS.some((x) => x.key === key || x.label.toLowerCase() === label.toLowerCase())
+            || ownRows.some((x) => x.key === key || x.label.toLowerCase() === label.toLowerCase());
+          if (taken) { toast("That parameter is already on the list", { type: "warn" }); return false; }
+          captureSpec();
+          ownRows.push({ key, label, unit, min: "", max: "", extra: {} });
+          drawSpec();
+          const box = UI.$("#sp_min_" + key); if (box) { try { box.focus(); } catch { /* not focusable yet */ } }
+          return true;
+        },
+      }));
+    }
+    seedSpec();
+    drawSpec();
+    /* Ticking a type no longer takes anybody's limits away — it only re-marks
+       the picker, since a parameter outside the type is offered all the same. */
+    UI.$("#lp_flags").addEventListener("change", () => {
+      if (!admin) return;
+      captureSpec();
+      drawSpec();
+    });
     function showDivision() {
       const host = UI.$("#lp_div"); if (!host) return;
       const nm = (UI.$("#lp_name") || {}).value || "";
@@ -978,16 +1614,27 @@
     showDivision();
     { const nm = UI.$("#lp_name"); if (nm) nm.addEventListener("input", showDivision); }
 
+    // the product's own parameters, as the server wants them
+    const collectParams = () => (admin ? ownRows.map((r) => ({ key: r.key, label: r.label, unit: r.unit || "" })) : (p.params || []));
+    /* null, having said what is wrong, rather than a spec that grades backwards */
     function collectSpec() {
       if (!admin) return p.spec || {};
-      const fl = readFlags(); const spec = {};
-      applicable(fl).forEach((par) => {
-        const mn = UI.$("#sp_min_" + par.key), mx = UI.$("#sp_max_" + par.key);
-        const o = {};
-        if (mn && mn.value.trim() !== "") o.min = +mn.value;
-        if (mx && mx.value.trim() !== "") o.max = +mx.value;
-        if (o.min != null || o.max != null) spec[par.key] = o;
-      });
+      captureSpec();
+      const spec = {};
+      for (const r of specRows.concat(ownRows)) {
+        const o = Object.assign({}, r.extra);
+        delete o.min; delete o.max;
+        if (String(r.min || "").trim() !== "") o.min = +r.min;
+        if (String(r.max || "").trim() !== "") o.max = +r.max;
+        if (o.min != null && o.max != null && o.min > o.max) {
+          toast("Minimum cannot exceed maximum for " + parByKey(r.key).label, { type: "warn" });
+          return null;
+        }
+        /* A ROW STATING NOTHING IS NOT A SPEC. Cleared of both bounds, with no
+           figure from the TDS behind it, it comes off rather than being stored
+           blank — the same rule the server keeps (labService.cleanSpec). */
+        if (hasLimit(o)) spec[r.key] = o;
+      }
       return spec;
     }
 
@@ -997,8 +1644,19 @@
       const payload = {
         name, code: (UI.$("#lp_code").value || "").trim(), thickness: (UI.$("#lp_thk").value || "").trim(),
         series: (UI.$("#lp_series").value || "").trim() || "Other", refMode: UI.$("#lp_ref").value,
-        flags: readFlags(), spec: collectSpec(),
+        flags: readFlags(), params: collectParams(),
       };
+      /* THE LIMITS ARE ADMIN'S, AND ARE NOT SENT BY ANYONE ELSE. Office never
+         received them — viewService hands it an empty spec so a reading cannot
+         be graded by eye — and that empty object was being written straight
+         back, so an office edit of a product's name silently erased its whole
+         TDS spec. Leaving the key off the payload lets the server's own merge
+         keep what is stored. */
+      if (admin) {
+        const spec = collectSpec();
+        if (spec === null) return;                     // collectSpec has already said why
+        payload.spec = spec;
+      }
       mo.close();
       commit(() => edit ? DB.labProducts.update(p.id, payload) : DB.labProducts.create(payload),
         () => toast(name + (edit ? " updated" : " added"), { type: "ok" }));

@@ -41,7 +41,10 @@ async function fullState() {
 function redactSpec(p) {
   return Object.assign({}, p, {
     spec: {},
-    specSet: !!(p.spec && Object.keys(p.spec).length),
+    /* a parameter with neither a min nor a max states no requirement, so it
+       is not a spec being set — counting the keys called such a product
+       "set" and graded nothing */
+    specSet: LAB.specKeys(p).length > 0,
     specKeys: LAB.specKeys(p),
   });
 }

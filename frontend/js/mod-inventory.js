@@ -516,6 +516,14 @@
       ]),
       h("h3",{style:"margin:16px 0 8px;font-size:13px",text:"Lines to receive (edit qty; rejected goes back to the supplier)"}),
       h("div",{id:"r_lines"}),
+      /* A MATERIAL ARRIVING FOR THE FIRST TIME IS DEFINED HERE, at the gate.
+         Until it has a parameter list the lab has nothing to ask a reading
+         against, so the first drum comes in unchecked and the material gets
+         defined later, by hand, if anybody remembers. The receipt is the one
+         moment somebody is certainly looking at it. Only materials on this
+         order that carry no parameters yet appear — an established one has
+         both on file already and this section stays out of the way. */
+      h("div",{id:"r_newmat"}),
       h("div",{class:"form-grid",style:"margin-top:10px"},[
         field("Remarks / QC note",`<textarea class="input" id="r_rem" rows="2" placeholder="e.g. reason a quantity was rejected — quoted on the debit note"></textarea>`,"full"),
       ]),
@@ -567,7 +575,100 @@
         ]));
       });
     }
-    poSel.onchange=renderLines; renderLines();
+    /* The very editors the New Item form and Add Stock are built from, lent
+       whole by mod-catalogue, so a material defined at the gate is defined
+       exactly as one defined anywhere else and the forms cannot drift apart.
+       One block per undefined material on the order, each keyed by the item id
+       so two of them on one receipt keep their fields apart. */
+    const CATED=(window.CAT && CAT.testParamsEditor && CAT.bomEditor)?CAT:null;
+    let newMat=[];              // [{ it, tp, bom }]
+    const bare=(it)=>!!it && !(Array.isArray(it.qcParams)&&it.qcParams.length)
+      && !(Array.isArray(it.testParams)&&it.testParams.length);
+    function renderNewMat(){
+      const host=UI.$("#r_newmat"); if(!host) return;
+      host.innerHTML=""; newMat=[];
+      if(!CATED) return;
+      const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
+      const seen=new Set();
+      (po.lines||[]).forEach(l=>{
+        const it=ENG.item(l.itemId);
+        if(!bare(it)||seen.has(it.id)) return;
+        seen.add(it.id);
+        const pfx="nm_"+it.id.replace(/[^A-Za-z0-9]+/g,"_");
+        const tp=CATED.testParamsEditor(pfx);
+        const bomEd=CATED.bomEditor(pfx,()=>it.cat||"RM");
+        newMat.push({it,tp,bom:bomEd});
+        host.appendChild(h("div",{style:"margin-top:18px;padding:12px 13px;border:1px solid var(--accent);border-radius:10px;background:var(--bg-soft,rgba(127,127,127,.06))"},[
+          h("div",{style:"font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent)",
+            text:"First delivery — "+trim(it.name||it.id,42)}),
+          h("div",{class:"muted",style:"font-size:11px;margin-top:3px",
+            text:it.id+" has no testing parameters on file yet. Set them now and this receipt can be tested; leave it blank and the lab falls back to what the item master records."}),
+          h("div",{class:"cg-sec"},[h("span",{text:"Testing parameters"}),h("span",{class:"sp"})]),
+          h("p",{class:"dim",style:"font-size:12px;margin:0 0 8px;line-height:1.5",
+            text:"What the lab measures on it — on every receipt of a material, on every batch certificate of a product. Search a parameter already in use, or add a new one with its unit. A range grades the reading pass or fail; a static figure is the target printed beside it."}),
+          tp.node,
+          h("div",{class:"cg-sec"},[h("span",{text:"Recipe (BOM)"}),h("span",{class:"sp"})]),
+          bomEd.node,
+        ]));
+      });
+      // built, then mounted, then drawn — the search boxes hang their
+      // listeners off ids, so they have to be in the document first
+      newMat.forEach(n=>{ n.tp.draw(); n.bom.draw(); });
+    }
+    poSel.onchange=()=>{ renderLines(); renderNewMat(); };
+    renderLines(); renderNewMat();
+
+    /* WHAT WAS DEFINED AT THE GATE, WRITTEN AFTER THE RECEIPT IS POSTED. The
+       stock is the thing that must not fail; a parameter list that cannot be
+       saved is worth a warning, not a lost delivery. */
+    async function applyNewMat(){
+      for(const n of newMat){
+        const cat=n.it.cat||"RM";
+        if(!n.tp.count() && !n.bom.active()) continue;
+        const tests=n.tp.collect(cat), bomOut=n.bom.collect(cat);
+        if(!tests||!bomOut) continue;                 // the editor has said why
+        if(n.tp.count()){
+          try{
+            const keys=tests.params.concat(tests.custom.map(c=>c.key));
+            await DB.grnTests.setItemQc(n.it.id, keys, tests.spec, tests.custom);
+            toast("Testing parameters saved for "+(n.it.name||n.it.id),{type:"ok",title:"Material defined"});
+          }catch(e){ toast("Could not save the parameters for "+(n.it.id)+" — "+(e.message||e),{type:"danger"}); }
+        }
+        if(bomOut.mode==="append"){
+          try{ await joinRecipe(n.it, bomOut); toast((n.it.name||n.it.id)+" added to the recipe of "+bomOut.productId,{type:"ok"}); }
+          catch(e){ toast("Could not add "+(n.it.id)+" to that recipe — "+(e.message||e),{type:"danger"}); }
+        }
+      }
+    }
+    /* A LINE ON SOMEBODY ELSE'S RECIPE. Mirrors catalogueService's own append:
+       replacing keeps the line WHERE IT STOOD, since a line's position is its
+       layer and a coating line moved to the end would compute as a different
+       product; the layer and the pickup belong to that position, so they stay
+       with it unless the new material brought its own. */
+    async function joinRecipe(it, out){
+      const b=(ENG.data.boms||{})[out.productId];
+      if(!b) throw new Error(out.productId+" has no recipe to add this material to");
+      const lines=(b.lines||[]).slice();
+      const line={ id:it.id, rm:it.name, qty:out.qty, unit:out.unit,
+        pickupPct:out.pickupPct==null?null:out.pickupPct };
+      let at=-1;
+      if(out.replaceId){
+        for(let i=0;i<lines.length;i++){
+          const n=(window.BOMCALC?BOMCALC.normalize([lines[i]])[0]:lines[i])||{};
+          if(n.id===out.replaceId){ at=i; break; }
+        }
+        if(at<0) throw new Error(out.replaceId+" is not on that recipe any more");
+      }
+      if(at>=0){
+        const old=(window.BOMCALC?BOMCALC.normalize([lines[at]])[0]:lines[at])||{};
+        if(line.pickupPct==null) line.pickupPct=old.pickupPct==null?null:old.pickupPct;
+        if(old.layer!=null) line.layer=old.layer;
+        if(old.optional) line.optional=true;
+        lines[at]=line;
+      } else lines.push(line);
+      await DB.boms.save(out.productId, Object.assign({},b,{lines}));
+    }
+
     function save(){
       const po=ENG.data.purchaseorders.find(p=>p.id===poSel.value);
       const wh=UI.$("#r_wh").value, date=DB.helpers.iso(DB.helpers.today());
@@ -599,6 +700,7 @@
         vehicle:UI.$("#r_veh").value.trim(), lrNo:UI.$("#r_lr").value.trim(),
         remarks:UI.$("#r_rem").value.trim() };
       mo.close();
+      const defining=newMat.some(n=>n.tp.count()||n.bom.active());
       App.saveDelta(async()=>{
         const r=await DB.purchase.receive(po.id, head);
         if(r&&r.grn){
@@ -606,7 +708,12 @@
           toast(`${r.grn.id} issued — reprint it any time from ${po.id}`,{type:"ok",title:"GRN posted"});
           if(over>0) toast(`${ENG.num(over)} received over ${po.id} — the extra is in stock and noted on the GRN`,{type:"warn",title:"Over-receipt"});
         }
-      });
+        // the material's own definition, once the goods it came in on are in
+        await applyNewMat();
+      /* the parameters and the recipe are the server's to write, so the state
+         is pulled back rather than patched — the lab's worklist for this very
+         receipt is computed from them */
+      }).then(()=>{ if(defining) return App.reloadState(); }).catch(()=>{});
     }
   }
 

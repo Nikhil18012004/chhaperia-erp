@@ -89,6 +89,19 @@ function specKeys(product) {
   const spec = (product || {}).spec || {};
   return Object.keys(spec).filter((k) => hasLimit(spec[k]));
 }
+/* A PARAMETER WITH NEITHER A MIN NOR A MAX IS NOT A SPEC. An entry left blank
+   on both bounds states no requirement, grades nothing, and puts a parameter
+   on the certificate that can only ever read "no spec" — while still counting
+   the product as having limits set. So a blank pair is dropped rather than
+   stored: the spec map holds only the parameters somebody actually wrote a
+   number against. */
+function cleanSpec(spec) {
+  const out = {};
+  if (spec && typeof spec === "object") {
+    Object.keys(spec).forEach((k) => { if (hasLimit(spec[k])) out[k] = spec[k]; });
+  }
+  return out;
+}
 /* A PRODUCT'S OWN PARAMETERS (since 2026-09-02). Beyond the catalogue, a
    product may carry parameters added one by one with a unit when it was
    created — `params` on the lab product. They are asked for on every
@@ -184,7 +197,7 @@ function normalizeProduct(p) {
   p = p || {};
   if (!p.name) throw err("Product needs a name", 400);
   const flags = p.flags && typeof p.flags === "object" ? p.flags : deriveFlags(p.name);
-  const spec = p.spec && typeof p.spec === "object" ? p.spec : {};
+  const spec = cleanSpec(p.spec);
   return {
     id: p.id,
     name: String(p.name).trim(),
@@ -222,11 +235,29 @@ async function deleteProduct(id) {
   if (!await repo.getLabProduct(id)) throw err("Product not found", 404);
   return await repo.deleteLabProduct(id);
 }
+/** Drop the spec entries that state no limit at all — a parameter left blank
+    on both min and max. Written before cleanSpec existed, they still counted a
+    product as having its spec set and put a parameter on the certificate that
+    could only ever read "no spec". Runs at boot; idempotent, so it costs
+    nothing on every boot after the first. */
+async function pruneEmptySpecs() {
+  const list = await listProducts();
+  let products = 0, dropped = 0;
+  for (const p of list) {
+    const spec = (p && p.spec) || {};
+    const blank = Object.keys(spec).filter((k) => !hasLimit(spec[k]));
+    if (!blank.length) continue;
+    p.spec = cleanSpec(spec);
+    await repo.putLabProduct(p);
+    products++; dropped += blank.length;
+  }
+  return { changed: products > 0, products, dropped };
+}
 /** Set only the (hidden) spec for a product — admin flow, kept out of report entry. */
 async function setProductSpec(id, spec) {
   const existing = await repo.getLabProduct(id);
   if (!existing) throw err("Product not found", 404);
-  existing.spec = spec && typeof spec === "object" ? spec : {};
+  existing.spec = cleanSpec(spec);
   return await repo.putLabProduct(existing);
 }
 
@@ -820,7 +851,7 @@ async function ensureLab() {
 module.exports = {
   PARAMS, deriveFlags, applicableParams, evaluate,
   specKeys, paramsForProduct, setComplete, missingParams, normalizeParams, customParamsOf,
-  listProducts, createProduct, updateProduct, deleteProduct, setProductSpec,
+  listProducts, createProduct, updateProduct, deleteProduct, setProductSpec, pruneEmptySpecs,
   listReports, createReport, updateReport, deleteReport,
   batchNoOf, productForItem, reportForWO, hasCoatingStage, findByRef,
   labStatusForWO, coatingGate, finishedStockGate, pendingLabWork,

@@ -190,6 +190,14 @@ async function boot() {
   try { const lp = await labService.ensureLab(); if (lp.changed) console.log("  ├─ Lab      : seeded " + lp.products + " lab products"); }
   catch (e) { console.error("[lab seed]", e.message); }
 
+  /* A parameter left blank on BOTH min and max states no requirement: it grades
+     nothing, yet it counted the product as having its spec set and put a row on
+     every certificate that could only ever read "no spec". Dropped here, once,
+     for the products written before the rule — idempotent, so every boot after
+     the first costs a read and nothing else. */
+  try { const sp = await labService.pruneEmptySpecs(); if (sp.changed) console.log("  ├─ Lab      : dropped " + sp.dropped + " blank spec limit(s) from " + sp.products + " product(s)"); }
+  catch (e) { console.error("[lab spec prune]", e.message); }
+
   /* Give every purchasable material a real incoming-test parameter list, worked
      out from what the material is (grnTestService.classify). Non-destructive —
      a material somebody has already configured is skipped — so it can run on
