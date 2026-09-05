@@ -3055,7 +3055,8 @@ recalc(); },50);
          ⌘K action) the form opens straight on the new-product fields — that is
          what the button is for; writing a recipe for something already in the
          catalogue is the exception, and it is one click away on
-         "↩ Pick an existing product".
+         the product's own row on the BOM page (which opens this form with the
+         product locked).
          Opened WITH a product (`fgId` — a catalogue row that has no recipe yet,
          or Edit BOM) it stays on that product: the operator already said which
          one they meant. */
@@ -3104,7 +3105,7 @@ recalc(); },50);
          to. Its recipe is parked, so switching over to it costs nothing. */
       /* A copy is the exception: arriving with the source's components already
          on the table is the whole point, so they are NOT cleared. Parking a
-         duplicate means "↩ Pick an existing product" keeps the recipe too. */
+         duplicate keeps the catalogue product's own recipe intact behind it. */
       if(newMode && copying) parkedLines = lines.map(l=>Object.assign({},l,{_k:++seq}));
       else if(newMode){ parkedLines = lines; lines = [blank()]; }
 
@@ -3127,6 +3128,23 @@ recalc(); },50);
          it would otherwise stack a fresh listener on every toggle. GSM and
          thickness feed the roll-up, so the totals follow what is typed. */
       prodHost.addEventListener("input",()=>{ if(newMode){ syncDraft(); draw(); } });
+      /* ---- WHAT THE LAB MEASURES ON THE PRODUCT, DEFINED WITH ITS RECIPE ----
+         A recipe and the parameters its certificate asks for were two trips:
+         the BOM here, the parameters over in Lab Reports ▸ Products, if
+         anybody remembered — and a product made from a brand-new recipe
+         reached the lab with nothing to measure it on. This is the very editor
+         the New Item form and Add Stock are built from, lent by mod-catalogue,
+         so a product defined here carries the same lab product as one defined
+         anywhere else. Opened on a product that already has one, it opens on
+         what is there. Optional: a recipe edited on its own still saves. */
+      const CATED=(window.CAT && CAT.testParamsEditor)?CAT:null;
+      const tpEd=CATED?CATED.testParamsEditor("bm"):null;
+      const testsSec = tpEd ? h("div",{id:"bm_tests"},[
+        h("div",{class:"cg-sec",style:"margin-top:18px"},[h("span",{text:"Testing parameters"}),h("span",{class:"sp"})]),
+        h("p",{class:"dim",style:"font-size:12px;margin:0 0 8px;line-height:1.5",
+          text:"What the lab measures on it — on every receipt of a material, on every batch certificate of a product. Search a parameter already in use, or add a new one with its unit. A range grades the reading pass or fail; a static figure is the target printed beside it."}),
+        tpEd.node,
+      ]) : h("div",{hidden:true});
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           prodHost,
@@ -3135,8 +3153,25 @@ recalc(); },50);
         basisHost, altHost,
         h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
         tblHost,
-        h("button",{class:"btn sm",style:"margin-top:8px",onclick:()=>{lines.push(blank());draw();},html:"＋ Add component"}),
+        h("div",{class:"flex gap wrap",style:"margin-top:8px"},[
+          h("button",{class:"btn sm",onclick:()=>{lines.push(blank());draw();},html:"＋ Add component"}),
+          /* a new LAYER is a new component row that opens the next layer: it
+             carries the next free label, and whatever is added after it
+             belongs to that layer until another label starts the one after */
+          h("button",{class:"btn sm",title:"Start the next layer of the product — the components you add after it belong to that layer",
+            onclick:()=>{
+              const used=new Set(lines.map(l=>l.layer).filter(Boolean));
+              let n=used.size+1, label="LAYER "+n;
+              while(used.has(label)) label="LAYER "+(++n);
+              const nl=blank(); nl.layer=label;
+              // a first layer label on a recipe that had none names the rows above it too
+              if(!used.size && lines.some(l=>l.id||l.qty)) lines.forEach(l=>{ if(!l.layer) l.layer="LAYER 1"; });
+              if(!used.size && !lines.some(l=>l.id||l.qty)) { lines=[]; nl.layer="LAYER 1"; }
+              lines.push(nl); draw();
+            },html:"＋ Add layer"}),
+        ]),
         totHost,
+        testsSec,
       ]);
 
       const foot=[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"})];
@@ -3151,6 +3186,26 @@ recalc(); },50);
           : "Material recipe, pickup % and production roll-up",
         xwide:true, body, foot});
       drawProduct();
+      /* built, then mounted, then drawn — the search box hangs its listeners
+         off ids, so the editor has to be in the document first. A product that
+         already has a lab product opens on its parameters: the catalogue ones
+         its spec names and its own, with the limits where this login is sent
+         them (admin) and the names alone where it is not. */
+      if(tpEd){
+        const lp=(!newMode&&curFg)?(ENG.data.labProducts||[]).find(p=>p.itemId===curFg||("FG-"+p.code)===curFg):null;
+        if(lp){
+          const spec=lp.spec||{}, keys=Array.isArray(lp.specKeys)?lp.specKeys:Object.keys(spec);
+          const cat=(U.labParams||[]);
+          const rowOf=(key,label,unit,std)=>{ const sp=spec[key]||{};
+            const stat=sp.nominal!=null&&sp.min==null&&sp.max==null;
+            return {key,label,unit,std,mode:stat?"static":"range",v1:stat?sp.nominal:(sp.min!=null?sp.min:""),v2:sp.max!=null?sp.max:""}; };
+          const rows=[];
+          cat.forEach(c=>{ if(keys.indexOf(c.key)>=0) rows.push(rowOf(c.key,c.label,c.unit,true)); });
+          (lp.params||[]).forEach(q=>{ if(q&&q.key&&q.label) rows.push(rowOf(q.key,q.label,q.unit||"",false)); });
+          tpEd.seed(rows);
+        }
+        tpEd.draw();
+      }
 
       /* The product row: a locked label when editing, otherwise either the
          catalogue picker or the fields that define a product that does not
@@ -3184,17 +3239,15 @@ recalc(); },50);
             `<input class="input" id="bm_np_price" type="number" step="0.01" min="0" value="${draft.price||0}">`));
           prodHost.appendChild(U.field("HSN",
             `<input class="input" id="bm_np_hsn" value="${esc(draft.hsn)}" placeholder="optional">`));
+          /* No "↩ Pick an existing product" here any more (removed 2026-09-05
+             at the user's ask). Create BOM MEANS a new product; a recipe for a
+             product already in the catalogue is opened from its own row on the
+             BOM page, which lands here with the product locked. One door each. */
           prodHost.appendChild(h("div",{class:"field full"},[
-            h("div",{class:"flex aic gap"},[
-              h("span",{class:"muted",style:"font-size:12px",
-                text: copying
-                  ? ("Give it a code of its own — everything else came from "+copyName+" and is yours to change. Create BOM adds it to the catalogue with this recipe.")
-                  : "The product is created with this recipe when you press Create BOM."}),
-              h("button",{class:"btn sm ghost",style:"margin-left:auto",
-                onclick:()=>{ newMode=false;
-                  if(parkedLines){ lines=parkedLines; parkedLines=null; } else loadLines();
-                  drawProduct(); draw(); },
-                text:"↩ Pick an existing product"})])]));
+            h("span",{class:"muted",style:"font-size:12px",
+              text: copying
+                ? ("Give it a code of its own — everything else came from "+copyName+" and is yours to change. Create BOM adds it to the catalogue with this recipe.")
+                : "The product is created with this recipe when you press Create BOM."})]));
           return;
         }
         prodHost.appendChild(fgPicker("bm_fg", fgs, curFg));
@@ -3258,11 +3311,22 @@ recalc(); },50);
 
         /* ---- component rows ---- */
         tblHost.innerHTML="";
-        const head=["Raw material","Qty / batch","Opt?","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm",""];
+        /* LAYER is a column of its own (2026-09-05). The recipe always carried a
+           layer on each line — the sheet's "TOP LAYER" / "DIP COAT" — and the
+           job sheet groups by it, but nothing in this form let anybody set
+           one, so a recipe written here was flat however many webs it stacked.
+           Lines with the same label, one after another, make that layer. */
+        const head=["Layer","Raw material","Qty / batch","Opt?","Unit","GSM (g/m²)","Pickup %","Consumption / kg","Consumption / sqm",""];
         const tbl=h("table",{class:"tbl bom-edit-tbl"});
         tbl.appendChild(h("thead",{},[h("tr",{},head.map((t,i)=>
-          h("th",{style:"font-size:11px;"+(i>=1&&i<=7?"text-align:right":""),text:t,
-            title:t==="Opt?"?"Optional — each work order chooses whether to use this line":null})))]));
+          h("th",{style:"font-size:11px;"+(i>=2&&i<=8?"text-align:right":""),text:t,
+            title:t==="Opt?"?"Optional — each work order chooses whether to use this line"
+              :t==="Layer"?"Which layer of the product this component builds — lines with the same label, one after another, form that layer":null})))]));
+        // every layer label already in use on any recipe, offered as you type
+        const layerNames=[...new Set(["TOP LAYER","BOTTOM LAYER","DIP COAT","COATING"]
+          .concat(...Object.values(ENG.data.boms||{}).map(b=>BOMCALC.normalize(b.lines||[]).map(l=>l.layer).filter(Boolean)))
+          .concat(lines.map(l=>l.layer).filter(Boolean)))];
+        tblHost.appendChild(h("datalist",{id:"bm_layers"},layerNames.map(nm=>h("option",{value:nm}))));
         const tb=h("tbody");
         /* layer names render as heading rows inside the editable table; a
            single-layer product gets the same heading so it reads like a
@@ -3272,7 +3336,7 @@ recalc(); },50);
         grpIdx.forEach((g,gi)=>{ if(g.lines.length) heads[g.lines[0]._i]=g.label||(grpIdx.length>1?"LAYER "+(gi+1):"LAYER 1"); });
         c.lines.forEach((cl,i)=>{
           const l=lines[i];
-          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"9",
+          if(heads[i]!=null) tb.appendChild(h("tr",{},[h("td",{colspan:"10",
             style:"font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--accent);padding:11px 8px 4px",
             text:heads[i]})]));
           const nameCell=h("td",{class:"nm bom-nm"});
@@ -3327,7 +3391,14 @@ recalc(); },50);
 
           const cKg=h("td",{class:"mono",style:"text-align:right"});
           const cSq=h("td",{class:"mono",style:"text-align:right"});
+          /* the layer this line builds; committed on change (not per keystroke)
+             because the heading rows above depend on it and redrawing mid-word
+             would take the caret away */
+          const layerIn=h("input",{class:"input",id:"bl_layer_"+l._k,list:"bm_layers",value:l.layer||"",
+            placeholder:"e.g. TOP LAYER",style:"width:118px;text-transform:uppercase",
+            onchange:e=>{ const v=e.target.value.replace(/\s+/g," ").trim().toUpperCase(); l.layer=v||null; draw(); }});
           tb.appendChild(h("tr",{},[
+            h("td",{},[layerIn]),
             nameCell,
             h("td",{style:"text-align:right"},[qtyIn]),
             h("td",{style:"text-align:right",title:"Optional per order"},[optIn]),
@@ -3485,14 +3556,41 @@ recalc(); },50);
         /* THE LAB PROPOSES. Nothing of theirs lands until an admin approves
            (ruled 2026-09-02): the same recipe — and the new product, when it
            is one — goes to the approval queue instead of the catalogue. */
+        /* THE TEST PARAMETERS GO WITH THE RECIPE. Read back before either
+           path leaves; null means the editor has already said what is wrong. */
+        const tests = tpEd ? tpEd.collect("FG") : null;
+        if(tpEd && !tests) return;
+        const hasTests = !!(tpEd && tpEd.count());
         if(opts.propose || (App.isLab&&App.isLab())){
           const payload={ itemId:fg2, bom:next };
           if(newMode) payload.newItem={ name:draft.name, productName:draft.name, uom:draft.uom||"KG", group:draft.group||null,
             typeCode:fg2.replace(/^FG-/,""), thicknessMM:draft.thicknessMM, gsm:draft.gsm, cost:draft.cost, price:draft.price, hsn:draft.hsn };
+          if(hasTests) payload.tests=tests;
           mo.close();
           DB.approvals.propose("bom", payload)
             .then(async ap=>{ toast("Sent to the admin for approval — "+ap.id, {type:"ok",title:"Proposal sent",dur:6000}); await App.reloadState(); })
             .catch(e=>toast(e.message||"Could not send the proposal",{type:"danger"}));
+          return;
+        }
+        /* WITH PARAMETERS, THE SERVER WRITES EVERYTHING. It keys a new
+           parameter the way every other one is keyed, raises or updates the lab
+           product the finished good is certified against, and saves the recipe
+           — none of which pushing rows into the local dataset can do. So the
+           moment the section holds anything the whole form goes through the
+           one-shot catalogue endpoint; with it empty the old path stands. */
+        if(hasTests){
+          const payload={ itemId:fg2, bom:next, tests };
+          if(newMode) payload.newItem={ name:draft.name, productName:draft.name, uom:draft.uom||"KG", group:draft.group||null,
+            typeCode:fg2.replace(/^FG-/,""), thicknessMM:draft.thicknessMM, gsm:draft.gsm, cost:draft.cost, price:draft.price, hsn:draft.hsn };
+          mo.close();
+          DB.catalogue.bom(payload)
+            .then(async r=>{
+              const n=tests.params.length+tests.custom.length;
+              toast((editing?"BOM updated for ":newMode?(draft.name+" created with its BOM and "):"BOM created for ")+(newMode?"":fg2)
+                +(newMode?"":" — ")+n+" test parameter"+(n===1?"":"s")+" on its lab product",{type:"ok",title:newMode?"New product":undefined,dur:6000});
+              await App.reloadState();
+            })
+            .catch(e=>toast(e.message||"Could not save the recipe",{type:"danger"}));
           return;
         }
         /* The product is written BEFORE its recipe — a BOM whose finished good

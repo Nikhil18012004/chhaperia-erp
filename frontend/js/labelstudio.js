@@ -527,6 +527,15 @@
     {v:"calibri", l:"Calibri",         css:"Calibri,Candara,Segoe,sans-serif"},
     {v:"courier", l:"Courier New",     css:"'Courier New',Courier,monospace"},
     {v:"impact",  l:"Impact",          css:"Impact,'Arial Black',sans-serif"},
+    /* HINDI. Every stack above is Latin, and Devanagari set in "Arial" is
+       whatever face the machine happens to fall back to — one thing on the
+       screen, another in the print window, a third on the tablet. The plant's
+       instruction sheets are written in Hindi, so Hindi gets a face of its own:
+       Nirmala UI is on every Windows since 8, Mangal on the older ones, Noto on
+       Android and Linux, Kohinoor on a Mac. Same glyphs everywhere the label
+       is looked at or printed. Latin inside the same run (CHN-TDM, MEK, 10kg)
+       is set by the same faces, which carry a matching Latin. */
+    {v:"hindi",   l:"Hindi (Devanagari)", css:"'Nirmala UI',Mangal,'Noto Sans Devanagari','Kohinoor Devanagari','Devanagari Sangam MN',sans-serif"},
   ];
   const fontCss=(v)=>(FONTS.find(f=>f.v===v)||FONTS[0]).css;
   const PAGES=[
@@ -753,6 +762,77 @@
   const str=(v,d,max)=>String(v==null?d:v).slice(0,max);
   const hex=(v,d)=>/^#[0-9a-fA-F]{6}$/.test(String(v||""))?String(v).toLowerCase():d;
   const IMG_RE=/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+
+  /* ============================================================
+     TAKING A PICTURE IN — shrunk to fit, not turned away
+
+     Both pickers used to refuse any file over about 600 KB with "keep it
+     under 600 KB". The plant's own artwork is nothing like that: the
+     resin-mixing instruction sheet is a 1482 × 2048 PNG of 5.9 MB, and at
+     that gate the one poster this studio exists to print could not be
+     placed at all — somebody had to shrink it by hand first, every time,
+     and guess a size that would pass.
+
+     So the file is read, decoded, and DRAWN DOWN until it fits: the long
+     edge capped at PIC_EDGE (2200 px is ~265 dpi across A4, more than any
+     office printer resolves), then JPEG at falling quality, then a smaller
+     canvas, until the data URL is under MAX_IMG. A PNG that already fits
+     is kept exactly as it is, transparency and all; only what would not
+     fit is re-encoded. The old refusal remains for the one case the shrink
+     cannot help — a browser with no canvas — and for a file that is not a
+     picture at all.
+     ============================================================ */
+  const PIC_EDGE=2200;
+  function readPicture(file,onOk){
+    if(!file) return;
+    const okType=/^image\/(png|jpeg|webp|gif)$/.test(file.type||"");
+    if(!okType) return toast("That is not a picture the label can hold — use PNG, JPEG, WebP or GIF",{type:"warn"});
+    const rd=new FileReader();
+    rd.onload=()=>{
+      const s=String(rd.result||"");
+      if(!IMG_RE.test(s)) return toast("That image type cannot be stored on a label",{type:"warn"});
+      if(s.length<=MAX_IMG) return onOk(s,null);          // fits as it is — untouched
+      shrinkPicture(s,(out,info)=>{
+        if(!out) return toast("That picture is too large and could not be shrunk here — keep it under about 600 KB",{type:"warn"});
+        onOk(out,info);
+      });
+    };
+    rd.readAsDataURL(file);
+  }
+  function shrinkPicture(dataUrl,done){
+    const img=new Image();
+    img.onerror=()=>done(null);
+    img.onload=()=>{
+      let w=img.naturalWidth||img.width, hh=img.naturalHeight||img.height;
+      if(!w||!hh) return done(null);
+      const long=Math.max(w,hh);
+      let scale=long>PIC_EDGE?PIC_EDGE/long:1;
+      const cv=document.createElement("canvas");
+      const ctx=cv.getContext&&cv.getContext("2d");
+      if(!ctx) return done(null);
+      /* quality first, size second: a sharp picture at 70% JPEG beats a soft
+         one at 90, and only when even 50% will not fit does the canvas shrink */
+      for(let pass=0;pass<8;pass++){
+        cv.width=Math.max(1,Math.round(w*scale)); cv.height=Math.max(1,Math.round(hh*scale));
+        ctx.fillStyle="#fff"; ctx.fillRect(0,0,cv.width,cv.height);   // JPEG has no alpha
+        ctx.drawImage(img,0,0,cv.width,cv.height);
+        for(const q of [0.9,0.82,0.74,0.66,0.58,0.5]){
+          let out=""; try{ out=cv.toDataURL("image/jpeg",q); }catch(e){ return done(null); }
+          if(IMG_RE.test(out)&&out.length<=MAX_IMG)
+            return done(out,{w:cv.width,h:cv.height,q,from:[w,hh]});
+        }
+        scale*=0.85;
+      }
+      done(null);
+    };
+    img.src=dataUrl;
+  }
+  /* what the toast says once a picture has landed: untouched, re-compressed at
+     the same size, or drawn smaller — three different things, said as such */
+  const placedMsg=(info)=>!info ? "Picture placed"
+    : (info.w===info.from[0]&&info.h===info.from[1])
+      ? "Picture placed — compressed to fit the label ("+info.w+" × "+info.h+", "+Math.round(info.q*100)+"% quality)"
+      : "Picture placed — shrunk from "+info.from[0]+" × "+info.from[1]+" to "+info.w+" × "+info.h+" to fit the label";
   const uid=(p)=>p+Math.random().toString(36).slice(2,9);
 
   /* WHERE A FIELD GETS ITS WORDS.
@@ -4255,16 +4335,7 @@
         accept:"image/png,image/jpeg,image/webp,image/gif"});
       file.addEventListener("change",()=>{
         const f=file.files&&file.files[0]; if(!f) return;
-        if(f.size>MAX_IMG*0.7)
-          return toast("That picture is too large — keep it under about 600 KB",{type:"warn"});
-        const rd=new FileReader();
-        rd.onload=()=>{
-          const s=String(rd.result||"");
-          if(!IMG_RE.test(s)||s.length>MAX_IMG)
-            return toast("That image type cannot be stored on a label",{type:"warn"});
-          onSet(s); touch(); paint(); toast("Picture placed",{type:"ok"});
-        };
-        rd.readAsDataURL(f);
+        readPicture(f,(s,info)=>{ onSet(s); touch(); paint(); toast(placedMsg(info),{type:"ok",dur:info?6000:3200}); });
       });
       const thumb=cur
         ? h("div",{class:"ls-pic-th",style:"background-image:url('"+cur+"')"})
@@ -4924,12 +4995,7 @@
         const file=h("input",{class:"input",type:"file",accept:"image/png,image/jpeg,image/webp,image/gif"});
         file.addEventListener("change",()=>{
           const f=file.files&&file.files[0]; if(!f) return;
-          if(f.size>MAX_IMG*0.7) return toast("That picture is too large — keep it under about 600 KB",{type:"warn"});
-          const rd=new FileReader();
-          rd.onload=()=>{ const s=String(rd.result||"");
-            if(!IMG_RE.test(s)||s.length>MAX_IMG) return toast("That image type cannot be stored on a label",{type:"warn"});
-            o.data=s; live(true); drawPanel(); toast("Picture placed",{type:"ok"}); };
-          rd.readAsDataURL(f);
+          readPicture(f,(s,info)=>{ o.data=s; live(true); drawPanel(); toast(placedMsg(info),{type:"ok",dur:info?6000:3200}); });
         });
         panel.appendChild(fld("Choose a picture",file,
           "Stored inside the template on the server — nothing is written to this computer."));
@@ -5085,7 +5151,14 @@
                   +(d.autoFit?"":" — tick auto-fit above if that looks low.")
                 : "✕ Bigger than the printable area — reduce the size, or tick auto-fit above.");
         };
-        const wI=nInput(d.w,v=>{d.w=clamp(v);refresh();},1,5,1000);
+        /* A roll's web can never be narrower than the label cut from it. The
+           printer already knew that — rollGrid takes the wider of the two — but
+           the Roll tab went on showing the old 100 mm web under a 300 mm label,
+           and the status line here said 300: two screens disagreeing about the
+           same roll. The web follows the label up, and only up; a narrower
+           label leaves a wider web alone, since that is a real multi-up roll. */
+        const widen=()=>{ if(d.mode==="roll"&&(+d.rollW||0)<d.w) d.rollW=d.w; };
+        const wI=nInput(d.w,v=>{d.w=clamp(v);widen();refresh();},1,5,1000);
         const hI=nInput(d.h,v=>{d.h=clamp(v);refresh();},1,5,1000);
         pane.appendChild(row(2,[fld("Width (mm)",wI),fld("Height (mm)",hI)]));
         pane.appendChild(h("div",{class:"ls-lay-swap"},[
@@ -5102,6 +5175,10 @@
                layout happened to leave behind is how you get one label per page
                and no idea why. Auto-fit solves them from the size instead. */
             if(v==="sheet"){ d.autoFit=true; applyAutoFit(d); }
+            /* …and a size typed BEFORE the switch to roll — the usual order on
+               this pane — has to widen the web now, or the Roll tab inherits a
+               100 mm web under a 300 mm label. */
+            widen();
             refresh(); })));
         pane.appendChild(afRow);
         pane.appendChild(out);
@@ -5131,8 +5208,10 @@
         };
         pane.appendChild(h("div",{class:"wz-sec",text:"The roll"}));
         pane.appendChild(row(2,[
-          fld("Web width (mm)",nInput(d.rollW,v=>{d.rollW=Math.max(5,v);refresh();},1,5,1000),
-            "The roll as bought."),
+          /* never narrower than the label cut from it — the printer already
+             takes the wider of the two (rollGrid), so the box says the same */
+          fld("Web width (mm)",nInput(Math.max(d.rollW,d.w),v=>{d.rollW=Math.max(5,v,d.w);refresh();},1,5,1000),
+            "The roll as bought. At least as wide as the label."),
           fld("Across",nInput(d.across||0,v=>{d.across=Math.max(0,Math.round(v));refresh();},1,0,50),
             "0 = fit as many as the web takes."),
         ]));

@@ -951,61 +951,34 @@
       kpi({ icon: KIND.wip.ic, label: "Work in process",  value: ENG.num(nOf("wip")) }),
       kpi({ icon: "🎯", label: "Limits set", value: ENG.num(ps.filter((r) => r.specSet).length) }),
     ]));
-    const seriesList = [...new Set(ps.map((r) => r.series).filter(Boolean))].sort();
+    /* THE SERIES ARE THE PLANT'S THREE, not every group name a stock item
+       happens to carry. Built from the rows, the box offered "11013", "180N"
+       and forty other material grades beside the tape series, and the one
+       filter meant to divide the master into its families listed every
+       family a raw material was ever filed under. The three lab series are
+       the axis; a material row answers to none of them and shows under All. */
+    const SERIES = [
+      { value: "MICA SERIES",           label: "Mica series" },
+      { value: "WATER BLOCKING SERIES", label: "Water blocking tapes" },
+      { value: "OTHER TAPE SERIES",     label: "Other tapes" },
+    ];
     root.appendChild(h("div", { class: "toolbar" }, [
       searchInput("Search product, material, code or division…", (v) => { filter.qRaw = v; filter.q = v.toLowerCase(); draw(); }, filter.qRaw),
       /* what kind of thing it is comes first — it is the axis the tab just
          grew, and the one anybody arriving here is dividing the list by */
-      select([{ value: "all", label: "Everything (" + ps.length + ")" }]
+      select([{ value: "all", label: "All kinds (" + ps.length + ")" }]
         .concat(["fg", "rm", "wip"].filter((k) => nOf(k)).map((k) => ({ value: k, label: KIND[k].plural + " (" + nOf(k) + ")" }))),
         (v) => { filter.kind = v; draw(); }, filter.kind),
-      select([{ value: "all", label: "All Series" }, ...seriesList.map((s) => ({ value: s, label: s }))], (v) => { filter.series = v; draw(); }, filter.series),
-      typeFilter(),
+      select([{ value: "all", label: "All series" }].concat(SERIES.map((x) => ({ value: x.value, label: x.label + " (" + ps.filter((r) => r.series === x.value).length + ")" }))),
+        (v) => { filter.series = v; draw(); }, SERIES.some((x) => x.value === filter.series) ? filter.series : "all"),
       h("div", { style: "margin-left:auto" }, h("span", { class: "chip", id: "lpCount" })),
     ]));
     const host = h("div"); root.appendChild(host);
 
-    /* THE TYPE FILTER SPANS BOTH AXES. "Tested as" is the three toggles, which
-       decide a certificate's parameters; "Made of" is the division the name
-       puts the row in — and a name divides a raw material exactly as it
-       divides a tape, so a material answers this filter too. Only the entries
-       the list actually holds are offered, each with its count, so the filter
-       is as short as the catalogue makes it. */
-    function typeFilter() {
-      const counts = {};
-      ps.forEach((x) => { const d = divisionOf(x.name); if (d) counts[d.key] = (counts[d.key] || 0) + 1; });
-      const sel = h("select", { class: "select", title: "Filter by what a product is tested on, or by what its name says it is made of",
-        onchange: (e) => { filter.type = e.target.value; draw(); } }, [h("option", { value: "all", text: "All Types" })]);
-      const group = (label, opts) => {
-        if (!opts.length) return;
-        const g = h("optgroup", { label });
-        opts.forEach((o) => g.appendChild(h("option", { value: o.v, text: o.l })));
-        sel.appendChild(g);
-      };
-      group("Tested as", TYPE_TOGGLES
-        .filter((t) => ps.some((x) => x.flags && x.flags[t.key]))
-        .map((t) => ({ v: t.key, l: t.label + " (" + ps.filter((x) => x.flags && x.flags[t.key]).length + ")" })));
-      group("Made of", DIVISIONS
-        .filter((d) => counts[d.key])
-        .map((d) => ({ v: "div:" + d.key, l: d.label + " (" + counts[d.key] + ")" })));
-      /* the kept filter may name something the master no longer holds — the
-         last cotton tape deleted, say. Rather than show "All Types" over an
-         empty table, fall back to all of them for real. */
-      if (filter.type !== "all" && !sel.querySelector('option[value="' + filter.type + '"]')) filter.type = "all";
-      sel.value = filter.type;
-      return sel;
-    }
-
     function rows() {
       return ps.filter((r) => {
         if (filter.kind !== "all" && r.kind !== filter.kind) return false;
-        if (filter.series !== "all" && r.series !== filter.series) return false;
-        if (filter.type !== "all") {
-          if (filter.type.indexOf("div:") === 0) {
-            const d = divisionOf(r.name);
-            if (!d || d.key !== filter.type.slice(4)) return false;
-          } else if (!(r.flags && r.flags[filter.type])) return false;
-        }
+        if (filter.series !== "all" && SERIES.some((x) => x.value === filter.series) && r.series !== filter.series) return false;
         // the division is searchable too, so "cotton" finds them however they are named
         if (filter.q) { const s = (r.name + " " + (r.code || "") + " " + (r.series || "") + " " + divisionLabel(r)).toLowerCase(); if (!s.includes(filter.q)) return false; }
         return true;
@@ -1036,9 +1009,7 @@
 
     function draw() {
       const data = rows(); const c = UI.$("#lpCount");
-      // how many divisions the filtered list spans — the heap has a shape now
-      const nd = new Set(data.map((x) => divisionLabel(x))).size;
-      if (c) c.textContent = data.length + " item" + (data.length === 1 ? "" : "s") + " · " + nd + " division" + (nd === 1 ? "" : "s");
+      if (c) c.textContent = data.length + " item" + (data.length === 1 ? "" : "s");
       host.innerHTML = "";
       host.appendChild(table(data, [
         { key: "code", label: "Code / Type", width: "170px", render: (r) => `<span style="font-weight:600">${esc(r.code || "—")}</span>` },
@@ -1054,7 +1025,6 @@
             + (r.ref && r.ref !== "—" ? `<div class="muted" style="font-size:11px;margin-top:3px">${esc(r.ref)}</div>` : "") },
         { key: "thickness", label: "Thk (mm)", width: "86px", render: (r) => esc(r.thickness || "—") },
         { key: "series", label: "Series / Grade", width: "128px", render: (r) => esc(r.series || "—") },
-        { key: "type", label: "Type", render: (r) => `<div class="flex gap wrap">${typeCell(r)}</div>`, sort: (r) => divisionLabel(r) },
         /* HOW MANY PARAMETERS, AND WHETHER THEY GRADE — one column, because
            they are one question. A material nobody has configured is still
            tested, on the list its own record implies, so "derived" is the
@@ -1415,10 +1385,12 @@
         U.field("Series", `<input class="input" id="lp_series" value="${esc(f("series", "Other"))}">`),
         U.field("Reference Mode", U.selectHTML("lp_ref", [{ v: "batch", l: "Batch No. (stocked / repeat orders)" }, { v: "lot", l: "Lot / W.O. No. (made-to-order)" }], f("refMode", "batch"))),
       ]),
-      h("h3", { style: "margin:14px 0 8px;font-size:13px", text: "Material Type (recorded on the certificate; the fallback list until a spec is set)" }),
-      h("div", { class: "flex gap wrap", id: "lp_flags" }, TYPE_TOGGLES.map((t) => h("label", { class: "chip", style: "cursor:pointer" }, [
-        h("input", { type: "checkbox", "data-flag": t.key, checked: flags[t.key] ? "checked" : null }), " " + t.label]))),
-      h("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: "Tip: leave all unticked for a general tape (common parameters only)." }),
+      /* NO MATERIAL-TYPE TOGGLES (removed 2026-09-05 at the user's ask). The
+         three flags were what a product was tested on before its spec became
+         the certificate's list; since then they only marked the picker and
+         rode along on the certificate. They are still derived from the name
+         on the server (labService.deriveFlags) and still stored, so nothing
+         downstream loses them — there is simply no box to tick any more. */
       /* THE DIVISION IS NOT A FIELD — it is read off the name, so it is shown
          rather than asked for, and it moves as the name is typed. Seeing it
          here is what tells the operator that "RUBBERISED COTTON TAPE" files
@@ -1438,7 +1410,8 @@
         h("button", { class: "btn primary", onclick: doSave, text: edit ? "Save Changes" : "Create Product" }),
       ].filter(Boolean) });
 
-    function readFlags() { const o = {}; UI.$("#lp_flags").querySelectorAll("input[data-flag]").forEach((cb) => { o[cb.getAttribute("data-flag")] = cb.checked; }); return o; }
+    // the product's own flags, as stored — there are no toggles to read any more
+    function readFlags() { return Object.assign({}, flags); }
 
     // Admin-only spec editor (hidden from the report entry form entirely).
     /* ============================================================
@@ -1597,13 +1570,6 @@
     }
     seedSpec();
     drawSpec();
-    /* Ticking a type no longer takes anybody's limits away — it only re-marks
-       the picker, since a parameter outside the type is offered all the same. */
-    UI.$("#lp_flags").addEventListener("change", () => {
-      if (!admin) return;
-      captureSpec();
-      drawSpec();
-    });
     function showDivision() {
       const host = UI.$("#lp_div"); if (!host) return;
       const nm = (UI.$("#lp_name") || {}).value || "";
@@ -1644,7 +1610,7 @@
       const payload = {
         name, code: (UI.$("#lp_code").value || "").trim(), thickness: (UI.$("#lp_thk").value || "").trim(),
         series: (UI.$("#lp_series").value || "").trim() || "Other", refMode: UI.$("#lp_ref").value,
-        flags: readFlags(), params: collectParams(),
+        params: collectParams(),
       };
       /* THE LIMITS ARE ADMIN'S, AND ARE NOT SENT BY ANYONE ELSE. Office never
          received them — viewService hands it an empty spec so a reading cannot

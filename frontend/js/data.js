@@ -266,6 +266,8 @@
   const catalogue = {
     // { item:{…}, tests:{ params:[keys], custom:[{key,label,unit}], spec:{key:{min,max,nominal}} }, bom:{ mode:"none"|"create"|"append", … } }
     newItem(payload) { return http("POST", "/catalogue/new-item", payload); },
+    // { itemId, bom:{yield,lines,alternates?}, newItem?:{…}, tests?:{ params, custom, spec } } — the lab's becomes a proposal (202)
+    bom(payload) { return http("POST", "/catalogue/bom", payload); },
   };
   const approvals = {
     list() { return http("GET", "/approvals"); },

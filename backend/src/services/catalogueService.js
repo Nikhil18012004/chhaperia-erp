@@ -234,7 +234,40 @@ async function validateBom(payload) {
   }
   const bom = { yield: cleanYield(raw.yield), lines };
   if (Array.isArray(raw.alternates) && raw.alternates.length) bom.alternates = raw.alternates;
-  return { itemId, bom, newItem };
+  /* WHAT THE LAB MEASURES ON IT, defined with the recipe (2026-09-05). A
+     product's recipe and its test parameters were two trips — the BOM here,
+     the parameters over in Lab Reports, if anybody remembered — and the
+     certificate for a product made from a brand-new recipe asked for nothing.
+     Optional: a recipe edited on its own still comes through without them. */
+  const tests = payload.tests ? cleanTests(payload.tests) : null;
+  return { itemId, bom, newItem, tests };
+}
+/* THE LAB PRODUCT A FINISHED GOOD IS CERTIFIED AGAINST, raised or brought up
+   to date from a set of test parameters. One routine for the New Item form
+   and the BOM form, so a product defined either way carries the same lab
+   product. Both the product's OWN parameters and its limits MERGE over what
+   is stored — a parameter the request names is added or brought up to date,
+   one it does not name is left exactly as it was. The BOM form ADDS what the
+   lab measures; taking a parameter off a certificate is a decision made in
+   Lab Reports ▸ Products, with the product in front of you, never a side
+   effect of a request that happened not to mention it. */
+async function labProductFrom(item, tests, lab) {
+  const custom = (tests && tests.custom) || [], params = (tests && tests.params) || [], spec0 = (tests && tests.spec) || {};
+  if (!(custom.length || params.length || lab)) return null;
+  const spec = {};
+  params.filter((k) => LAB.PARAMS.some((q) => q.key === k)).concat(custom.map((c) => c.key))
+    .forEach((k) => { if (spec0[k]) spec[k] = spec0[k]; });
+  if (lab && lab.spec && typeof lab.spec === "object") Object.assign(spec, lab.spec);
+  const existing = await LAB.productForItem(item.id);
+  if (existing) {
+    const own = (existing.params || []).filter((p) => p && p.key && !custom.some((c) => c.key === p.key)).concat(custom);
+    return await LAB.updateProduct(existing.id, { params: own, spec: Object.assign({}, existing.spec || {}, spec),
+      thickness: item.thicknessMM != null ? String(item.thicknessMM) : existing.thickness, gsm: item.gsm != null ? item.gsm : existing.gsm });
+  }
+  const lp = Object.assign({ name: item.name, code: item.typeCode || item.id.replace(/^FG-/, ""),
+    thickness: item.thicknessMM != null ? String(item.thicknessMM) : "", series: item.group || item.series || "", gsm: item.gsm },
+    lab || {}, { itemId: item.id, params: custom, spec });
+  return await LAB.createProduct(lp);
 }
 async function applyBom(payload, user) {
   const p = await validateBom(payload);
@@ -244,7 +277,17 @@ async function applyBom(payload, user) {
     await openingMovement(item, user, "Product created with its BOM");
   }
   const bom = await erp.saveBom(p.itemId, p.bom);
-  return { ok: true, itemId: p.itemId, bom };
+  let labProduct = null;
+  if (p.tests) {
+    const item = await repo.getItem(p.itemId);
+    if (item && item.cat === "FG") labProduct = await labProductFrom(item, p.tests, null);
+  }
+  return { ok: true, itemId: p.itemId, bom, labProduct };
+}
+/* the one entry point the BOM form calls: the lab proposes, everyone else applies */
+async function submitBom(payload, user) {
+  if (user && user.role === "lab") return { ok: true, proposed: true, proposal: await propose("bom", payload, user) };
+  return await applyBom(payload, user);
 }
 
 /* ============================================================
@@ -265,7 +308,9 @@ function summaryOf(kind, p) {
       : "joins the recipe of " + p.bom.productId);
     return bits.join(" · ");
   }
-  return "Recipe for " + p.itemId + (p.newItem ? " (new product " + p.newItem.name + ")" : "") + " · " + p.bom.lines.length + " component" + (p.bom.lines.length === 1 ? "" : "s");
+  const nt = p.tests ? p.tests.params.length + p.tests.custom.length : 0;
+  return "Recipe for " + p.itemId + (p.newItem ? " (new product " + p.newItem.name + ")" : "") + " · " + p.bom.lines.length + " component" + (p.bom.lines.length === 1 ? "" : "s")
+    + (nt ? " · " + nt + " test parameter" + (nt === 1 ? "" : "s") : "");
 }
 async function propose(kind, payload, user) {
   const K = KINDS[kind];
@@ -319,4 +364,4 @@ async function submitNewItem(payload, user) {
   return await applyNewItem(payload, user);
 }
 
-module.exports = { validateNewItem, applyNewItem, validateBom, applyBom, propose, list, decide, remove, submitNewItem, KINDS };
+module.exports = { validateNewItem, applyNewItem, validateBom, applyBom, submitBom, propose, list, decide, remove, submitNewItem, KINDS };

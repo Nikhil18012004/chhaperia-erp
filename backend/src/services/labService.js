@@ -253,6 +253,45 @@ async function pruneEmptySpecs() {
   }
   return { changed: products > 0, products, dropped };
 }
+/* ============================================================
+   EVERY FINISHED GOOD HAS A LAB PRODUCT
+   The Products tab lists finished goods FROM the lab product master, and
+   the master was only ever fed by the import and by the two forms that
+   happen to send test parameters. A finished good made any other way — the
+   BOM form with the parameters left empty, Stock Items, a plain item PATCH
+   — existed in the catalogue, had a recipe, could be scheduled and made,
+   and was simply not there when the lab looked for it. The rule is now
+   held on the model instead of on the forms: writing an FG item raises its
+   lab product if it has none (erpService.upsertItem), and a boot sweep
+   raises the ones already missing. Idempotent both ways: a product that is
+   there is left exactly as it is.
+   ============================================================ */
+function productFromItem(item) {
+  const name = String(item.productName || item.name || item.id).trim();
+  return {
+    name, code: String(item.typeCode || String(item.id).replace(/^FG-/, "")).trim(),
+    thickness: item.thicknessMM != null && item.thicknessMM !== "" ? String(item.thicknessMM) : "",
+    series: item.group || item.series || "Other",
+    gsm: item.gsm != null && item.gsm !== "" && !isNaN(+item.gsm) ? +item.gsm : null,
+    itemId: item.id, flags: deriveFlags(name), refMode: "batch", spec: {}, active: item.active !== false,
+  };
+}
+async function ensureProductForItem(item) {
+  if (!item || item.cat !== "FG" || !item.id) return null;
+  if (await productForItem(item.id)) return null;
+  return await createProduct(productFromItem(item));
+}
+async function ensureProductsForItems() {
+  const st = await repo.getState();
+  const products = st.labProducts || [];
+  let made = 0;
+  for (const item of (st.items || []).filter((i) => i && i.cat === "FG" && i.active !== false)) {
+    if (await productForItem(item.id, products)) continue;
+    const p = await createProduct(productFromItem(item));
+    products.push(p); made++;
+  }
+  return { changed: made > 0, made };
+}
 /** Set only the (hidden) spec for a product — admin flow, kept out of report entry. */
 async function setProductSpec(id, spec) {
   const existing = await repo.getLabProduct(id);
@@ -852,6 +891,7 @@ module.exports = {
   PARAMS, deriveFlags, applicableParams, evaluate,
   specKeys, paramsForProduct, setComplete, missingParams, normalizeParams, customParamsOf,
   listProducts, createProduct, updateProduct, deleteProduct, setProductSpec, pruneEmptySpecs,
+  ensureProductForItem, ensureProductsForItems,
   listReports, createReport, updateReport, deleteReport,
   batchNoOf, productForItem, reportForWO, hasCoatingStage, findByRef,
   labStatusForWO, coatingGate, finishedStockGate, pendingLabWork,

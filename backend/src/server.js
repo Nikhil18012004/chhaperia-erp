@@ -198,6 +198,16 @@ async function boot() {
   try { const sp = await labService.pruneEmptySpecs(); if (sp.changed) console.log("  ├─ Lab      : dropped " + sp.dropped + " blank spec limit(s) from " + sp.products + " product(s)"); }
   catch (e) { console.error("[lab spec prune]", e.message); }
 
+  /* Every finished good has a lab product. The ones made through a path that
+     never raised one (the BOM form without parameters, Stock Items, a plain
+     item write) are raised here, once — the write path does it from now on. */
+  try { const lp2 = await labService.ensureProductsForItems(); if (lp2.changed) console.log("  ├─ Lab      : raised a lab product for " + lp2.made + " finished good(s) that had none"); }
+  catch (e) { console.error("[lab products for items]", e.message); }
+
+  // a recipe of two or more raw materials has a coated-jumbo WIP stage — raise the missing ones
+  try { const wp = await erpService.ensureWipsForBoms(); if (wp.changed) console.log("  ├─ WIP      : raised a coated-jumbo item for " + wp.made + " recipe(s) of two or more materials"); }
+  catch (e) { console.error("[wip for boms]", e.message); }
+
   /* Give every purchasable material a real incoming-test parameter list, worked
      out from what the material is (grnTestService.classify). Non-destructive —
      a material somebody has already configured is skipped — so it can run on

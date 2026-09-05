@@ -144,7 +144,19 @@
       }
       return { params, custom, spec };
     }
-    return { node, count: () => tp.length, collect, draw() { drawPick(); drawTp(); } };
+    /* ROWS THAT ARE ALREADY ON FILE. A form that edits something existing —
+       the BOM form on a product that already has a lab product — opens on
+       what is there, so a parameter is not typed twice or, worse, replaced by
+       an empty list on save. Each row arrives the way collect() emits it. */
+    function seed(rows) {
+      (Array.isArray(rows) ? rows : []).forEach((r) => {
+        if (!r || !r.label) return;
+        tp.push({ _k: ++seq, label: String(r.label), unit: String(r.unit || ""), std: !!r.std, key: r.key || "",
+          mode: r.mode === "static" ? "static" : "range", v1: r.v1 == null ? "" : String(r.v1), v2: r.v2 == null ? "" : String(r.v2) });
+      });
+      if (node.isConnected) { drawPick(); drawTp(); }
+    }
+    return { node, count: () => tp.length, collect, seed, draw() { drawPick(); drawTp(); } };
   }
 
   /* ---- 3 · the recipe: created for a product, joined for a material ---- */

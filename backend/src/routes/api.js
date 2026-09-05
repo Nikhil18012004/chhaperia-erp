@@ -435,6 +435,12 @@ router.patch("/settings", requireAuth, requireRole("admin", "office"), async (re
 router.post("/catalogue/new-item", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
   try { const r = await catalogue.submitNewItem(req.body || {}, req.user); res.status(r.proposed ? 202 : 201).json(r); } catch (e) { next(e); }
 });
+/* A recipe with the product's test parameters in the same request — the BOM
+   form's one shot, the way /catalogue/new-item is the New Item form's. The
+   lab's becomes a proposal; admin and office get it applied. */
+router.post("/catalogue/bom", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
+  try { const r = await catalogue.submitBom(req.body || {}, req.user); res.status(r.proposed ? 202 : 201).json(r); } catch (e) { next(e); }
+});
 router.get("/approvals", requireAuth, requireRole("admin", "office", "lab"), async (req, res, next) => {
   try { res.json({ approvals: await catalogue.list() }); } catch (e) { next(e); }
 });

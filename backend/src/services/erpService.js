@@ -412,7 +412,17 @@ async function upsertItem(item) {
   });
   // fail fast on a bad category instead of leaking a raw FK-violation 500
   if (merged.cat && !await repo.categoryExists(merged.cat)) throw err("Unknown category " + merged.cat, 400);
-  return await repo.putItem(merged);
+  const saved = await repo.putItem(merged);
+  /* A FINISHED GOOD ALWAYS HAS A LAB PRODUCT — raised here, on the one path
+     every item write goes through, so it cannot depend on which form the item
+     came from. Required lazily: labService is loaded after this module. A
+     failure here is logged and never fails the item write; the boot sweep
+     (labService.ensureProductsForItems) catches up. */
+  if (saved && saved.cat === "FG" && saved.active !== false) {
+    try { await require("./labService").ensureProductForItem(saved); }
+    catch (e) { console.error("[lab product for " + saved.id + "]", e.message); }
+  }
+  return saved;
 }
 
 const MOVE_TYPES = ["OPEN", "GRN", "ISSUE", "PROD", "SALE", "ADJ", "RET", "SCRAP", "XFER"];
@@ -939,7 +949,55 @@ async function saveBom(itemId, bom) {
       lines: BC.normalize(a.lines).filter((l) => (l.id || (l.options && l.options.length)) && l.qty > 0),
     })).filter((a) => a.lines.length);
   }
-  return await repo.putBom(itemId, out);
+  const saved = await repo.putBom(itemId, out);
+  /* A RECIPE OF TWO OR MORE RAW MATERIALS HAS A WORK-IN-PROCESS STAGE. Two
+     materials are combined before the product is slit — coated, laminated,
+     dipped — and what comes off that step is the coated jumbo: the WIP item
+     the floor books, issues and tests between coating and slitting. Every
+     imported product has one (WIP-<code>-J); a product recipe written here
+     did not, so its jumbo had nowhere to be booked. Raised with the recipe,
+     once, and never touched again if it is already there. */
+  try { await ensureWipFor(itemId, out); }
+  catch (e) { console.error("[wip for " + itemId + "]", e.message); }
+  return saved;
+}
+/* how many DIFFERENT raw materials a recipe draws on — a ranged line counts
+   once, by whichever option resolves, and packaging and consumables do not
+   count: they are not combined into the product */
+async function rmCountOf(lines, itemsById) {
+  const seen = new Set();
+  for (const l of lines || []) {
+    const ids = l.id ? [l.id] : (l.options || []);
+    const rm = ids.find((id) => (itemsById[id] || {}).cat === "RM");
+    if (rm) seen.add(rm);
+  }
+  return seen.size;
+}
+async function ensureWipFor(fgId, bom) {
+  const st = await repo.getState();
+  const byId = {}; (st.items || []).forEach((i) => { byId[i.id] = i; });
+  const fg = byId[fgId];
+  if (!fg || fg.cat !== "FG" || fg.active === false) return null;
+  if ((st.items || []).some((i) => i.cat === "WIP" && i.stageOf === fgId)) return null;
+  if (await rmCountOf((bom && bom.lines) || [], byId) < 2) return null;
+  if (!await repo.categoryExists("WIP")) return null;
+  const code = String(fg.typeCode || String(fg.id).replace(/^FG-/, "")).trim();
+  let id = "WIP-" + code + "-J";
+  for (let n = 2; byId[id] && n < 50; n++) id = "WIP-" + code + "-J" + n;   // a jumbo of another product already has the plain id
+  const name = String(fg.productName || fg.name || fg.id).replace(/\s*—\s*Coated Jumbo\s*\(WIP\)\s*$/i, "") + " — Coated Jumbo (WIP)";
+  return await upsertItem({ id, name, cat: "WIP", stageOf: fg.id, uom: fg.uom || "KG", group: fg.group || null,
+    thicknessMM: fg.thicknessMM != null ? fg.thicknessMM : null, gsm: fg.gsm != null ? fg.gsm : null,
+    cost: 0, price: 0, reorder: 0, safety: 0, lead: 7, abc: "C", moq: 0, active: true, barcode: "" });
+}
+/* the recipes already on file, brought under the same rule at boot */
+async function ensureWipsForBoms() {
+  const st = await repo.getState();
+  let made = 0;
+  for (const fgId of Object.keys(st.boms || {})) {
+    const w = await ensureWipFor(fgId, st.boms[fgId]);
+    if (w) made++;
+  }
+  return { changed: made > 0, made };
 }
 async function deleteBom(itemId) {
   if (!await repo.getBom(itemId)) throw err("No BOM for " + itemId, 404);
@@ -1526,7 +1584,7 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   upsertItem, addMovement, receivePurchaseOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createSalesOrder, updateSalesOrder, deleteSalesOrder, dispatchSalesOrder,
-  saveBom, deleteBom, createLead, updateLead, deleteLead,
+  saveBom, deleteBom, ensureWipsForBoms, createLead, updateLead, deleteLead,
   upsertCustomer, updateCustomer, deleteCustomer,
   createSupplier, updateSupplier, deleteSupplier, updateOrg, ensureCompanies,
   deleteItem, deleteWorkOrder, nextId, updateWarehouse,
