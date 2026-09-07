@@ -263,7 +263,37 @@ async function updateSettings(doc) {
     const IMG = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
     const LS_TYPES = ["text", "barcode", "qr", "image", "box", "ellipse", "line"];
     const LS_SYMS = ["code128", "code39", "ean13", "itf", "qr"];
-    const LS_FONTS = ["arial", "times", "georgia", "calibri", "courier", "impact"];
+    // MUST stay in step with FONTS in frontend/js/labelstudio.js. A face
+    // missing from here is silently swapped for Arial on save — which is
+    // exactly what happened to every Hindi label until "hindi" was added.
+    const LS_FONTS = ["arial", "times", "georgia", "calibri", "courier", "impact", "hindi"];
+    /* CHARACTER RUNS — Word's "select a word and make just that bold".
+       A run is {n: how many characters, …overrides}. The overrides are the
+       same fields the object carries (b/i/u/k for bold/italic/underline/
+       strike, v for super/subscript, c colour, h highlight, z size in mm,
+       f font) and each is only present where it differs from the object.
+       Runs must cover the text exactly, or they are dropped whole: a run
+       list that disagrees with its text would format the wrong letters. */
+    const cleanRuns = (runs, len) => {
+      if (!Array.isArray(runs) || !runs.length || runs.length > 200) return null;
+      const out = [];
+      let total = 0;
+      for (const r of runs) {
+        if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+        const n = Math.round(+r.n);
+        if (!(n > 0)) return null;
+        const c = { n };
+        ["b", "i", "u", "k"].forEach((k) => { if (typeof r[k] === "boolean") c[k] = r[k]; });
+        if (r.v === "sup" || r.v === "sub") c.v = r.v;
+        if (hx(r.c, "")) c.c = hx(r.c, "");
+        if (hx(r.h, "")) c.h = hx(r.h, "");
+        if (isFinite(+r.z) && +r.z >= 0.6 && +r.z <= 120) c.z = +r.z;
+        if (LS_FONTS.indexOf(r.f) >= 0) c.f = r.f;
+        out.push(c);
+        total += n;
+      }
+      return total === len ? out : null;
+    };
     const LS_PAGES = ["A4", "A5", "A6", "A3", "Letter", "Legal", "custom"];
     // where a field gets its words. "field" reads it out of the ERP at print
     // time — MUST stay in step with SRC_KINDS in frontend/js/labelstudio.js,
@@ -314,6 +344,12 @@ async function updateSettings(doc) {
         // shading is written straight into a background:, so only a hex literal
         r.shade = hx(o.shade, "");
         r.indentL = dim(o.indentL, 0, 0, 200); r.indentR = dim(o.indentR, 0, 0, 200);
+        // only fixed text can carry runs — a serial or a date is produced at
+        // print time and has no characters to format until then
+        if (r.src.kind === "fixed") {
+          const runs = cleanRuns(o.runs, r.text.length);
+          if (runs) r.runs = runs;
+        }
       }
       if (t === "barcode" || t === "qr") {
         r.sym = t === "qr" ? "qr" : one(LS_SYMS, o.sym, "code128");

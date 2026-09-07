@@ -346,8 +346,13 @@
     remove(woId) { return http("DELETE", "/production/wo/" + enc(woId)); },
   };
 
+  /* the whole store, read-only and money-free — the floor's Stock Items and
+     Stock Ledger pages read this rather than the board payload, which is
+     scoped to the supervisor's own jobs on purpose */
+  const store = () => http("GET", "/store");
+
   global.DB = {
-    loadAsync, save, saveSettings, reset, auth, users, production,
+    loadAsync, save, saveSettings, reset, auth, users, production, store,
     items, movements, purchase, sales, boms, leads, appointments, complaints, quotations, customers, suppliers, org, transporters, warehouses, hr,
     labProducts, labReports, grnTests, tds, catalogue, approvals,
     helpers: { daysAgo, daysAhead, iso, today: () => today, DAY },

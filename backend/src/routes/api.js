@@ -32,6 +32,13 @@ router.get("/state", requireAuth, async (req, res, next) => {
   try { res.json(await view.stateForUser(req.user, { slim: req.query.slim === "1" })); } catch (e) { next(e); }
 });
 
+// The whole store — every material, store and movement — read-only and
+// money-free, for the floor's and the lab's Stock Items / Stock Ledger pages.
+// Any signed-in role may read it; nothing about the store can be changed here.
+router.get("/store", requireAuth, async (req, res, next) => {
+  try { res.json(await view.storeForUser(req.user)); } catch (e) { next(e); }
+});
+
 // Supervisor (or office/admin) advances a work order's CURRENT stage.
 // action: start | pause | complete | dispatch  — area-scoped, money-free.
 // Stage transitions are driven by supervisors (their area) + admin; office

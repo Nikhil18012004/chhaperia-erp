@@ -95,8 +95,12 @@
 .icon-btn:hover{color:var(--text);border-color:var(--accent-line);background:var(--panel-3);transform:translateY(-1px)}
 .icon-btn:active{transform:translateY(0) scale(.95)}
 .menu-toggle{font-size:17px}
-.crumbs{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-mut);font-weight:600}
-.crumbs .cur{color:var(--text);font-weight:700}
+/* min-width:0 and an ellipsis on the page name: a long crumb ("Label Studio")
+   could not shrink, and on a phone held sideways (821–900px, the desktop
+   shell) it pushed the top bar 40px past the edge — which a mobile browser
+   answers by widening the whole layout viewport, clipping every screen. */
+.crumbs{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-mut);font-weight:600;min-width:0}
+.crumbs .cur{color:var(--text);font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumbs .sep{opacity:.5}
 /* the way back to the tab you came from, ahead of the crumbs */
 .crumb-back{display:inline-flex;align-items:center;gap:6px;margin-right:4px;
@@ -1694,6 +1698,11 @@ canvas{display:block;width:100%}
 .dp-cols{max-height:280px;overflow:auto;min-width:210px;padding:4px}
 .dp-col{display:flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap}
 .dp-col-all{font-weight:700;border-bottom:1px solid var(--line);margin-bottom:2px}
+/* the row ticks, and the typed row count, on the report preview */
+.dp-pick,.dp-pick-all{width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer;vertical-align:middle}
+.tbl th:has(.dp-pick-all){text-align:center}
+.dp-limitwrap{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.dp-limit{width:92px;height:34px;padding:0 8px}
 @media(max-width:640px){
   /* on a phone the count sits under the controls instead of being pushed off */
   .dp-bar>div[style*="margin-left:auto"]{margin-left:0 !important;width:100%}
@@ -2171,10 +2180,14 @@ canvas{display:block;width:100%}
 /* ============================================================
    THE RIBBON
    ============================================================ */
+/* The groups scroll in a strip of their own; the size block beside it never
+   leaves the screen — it carries the way back to the library. */
 .ls-ribbon{display:flex;align-items:stretch;flex:0 0 auto;
   padding:3px 6px 0;border-bottom:1px solid var(--lsline);
   background:linear-gradient(180deg,#fdfdfe,var(--lsbar));
-  overflow-x:auto;overflow-y:hidden}
+  overflow:hidden}
+.ls-rscroll{display:flex;align-items:stretch;flex:1 1 auto;min-width:0;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
 .ls-rg{display:flex;flex-direction:column;justify-content:space-between;
   padding:0 10px;border-right:1px solid var(--lsline2);flex:0 0 auto}
 .ls-rgc{display:flex;align-items:flex-start;padding:3px 0 2px}
@@ -2624,6 +2637,14 @@ select.ls-in{padding-left:3px;cursor:pointer}
 .ls-vb.on{background:var(--lssoft);border-color:var(--lssoft2);color:var(--lsblue)}
 .ls-zpc{min-width:34px;text-align:right;font-variant-numeric:tabular-nums;color:var(--lstx)}
 .ls-zsl{width:110px;flex:0 0 auto;accent-color:var(--lsblue);cursor:pointer;margin:0}
+/* ⚠ THE BAR MUST NEVER BE WIDER THAN THE STUDIO. Its prose did not shrink,
+   so on a phone held sideways (844px) the bar ran 40px past the edge — and a
+   mobile browser answers an overflowing page by widening the layout viewport
+   to fit it, which clipped the right edge of EVERY row of the studio, the
+   way out of the designer included. The prose gives way; the controls stay. */
+.ls-status{overflow:hidden;min-width:0}
+.ls-st-i{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ls-read{flex:1 1 auto;min-width:0;white-space:nowrap;text-overflow:ellipsis}
 
 /* ============================================================
    THE CONTEXT MENU
@@ -2673,9 +2694,27 @@ select.ls-in{padding-left:3px;cursor:pointer}
 /* what the keys do — a sibling of the frame, so the frame can clip */
 .ls-edittip{position:absolute;z-index:7;padding:2px 7px;border-radius:0 0 4px 4px;
   background:var(--lsblue);color:#fff;font-size:9.5px;font-weight:600;line-height:1.6;
-  white-space:nowrap;pointer-events:none;
+  white-space:normal;max-width:min(70vw,560px);pointer-events:none;
   font-family:'Segoe UI',system-ui,sans-serif;letter-spacing:.01em}
 .ls-edittip.data{background:#e8710a}
+/* ---- WORD'S WAY: the text box is contenteditable, drawn from the field's
+   runs, one span per run. It fills the frame; the frame clips and scrolls. */
+.ls-edit.ls-rich{width:100%;min-height:1em;cursor:text;overflow-y:auto;
+  -webkit-user-select:text;user-select:text;caret-color:var(--lsblue);
+  overflow-wrap:anywhere;word-break:normal}
+.ls-edit.ls-rich:focus{outline:none}
+.ls-edit.ls-rich span{white-space:inherit}
+/* the four letter buttons Word has that this ribbon did not: S, x², x₂ */
+.ls-fx-s .ls-bt{text-decoration:line-through;font-weight:600;
+  font-family:Georgia,'Times New Roman',serif}
+.ls-fx-v .ls-bt{font-weight:600;font-family:Georgia,'Times New Roman',serif;align-items:flex-start}
+.ls-fx-v .ls-bt sup,.ls-fx-v .ls-bt sub{font-size:7.5px;line-height:0;font-weight:700;
+  position:relative}
+.ls-fx-v .ls-bt sup{top:-2px}
+.ls-fx-v .ls-bt sub{top:4px}
+/* Format Painter is loaded: the pointer says so over every object */
+.ls-canvas.ls-painting,.ls-canvas.ls-painting .ls-hit{cursor:copy}
+.ls-bb.on .ls-bbl{color:var(--lsblue)}
 /* the text does not fit its box — said on the object, while there is still
    time to do something about it */
 .ls-over{position:absolute;z-index:5;pointer-events:none;
@@ -3064,6 +3103,21 @@ select.ls-in{padding-left:3px;cursor:pointer}
    canvas is the thing you came for, and both panels are a button
    on the status bar away.
    ============================================================ */
+/* The four ribbon groups and the size block together need about 1270px.
+   Below a 1600px window they do not have it, so the size block takes a row
+   of its own above the groups — the size at the left, the full-screen switch
+   and the way out at the right — rather than fighting the groups for the
+   same row and losing (which is how the door out of the designer went off
+   the edge of every laptop). The groups then have the whole width and fit
+   without scrolling down to about 1180px. */
+@media (max-width:1600px){
+  .ls-ribbon{flex-direction:column}
+  .ls-docbox{order:-1;align-self:stretch;min-width:0;margin:2px 2px 4px;padding:2px 4px}
+  .ls-docbox .ls-rfs{margin-left:auto}
+}
+@media (max-width:1500px){
+  .ls-dsl{display:none}          /* "46.0 mm x 11.0 mm" is the part that is read */
+}
 @media (max-width:1240px){
   .ls{--ls-rightw:196px}
 }
@@ -3071,7 +3125,6 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .ls{--ls-toolsw:126px;--ls-rightw:0px}
   .ls-right{display:none}
   .ls-bb{width:50px}
-  .ls-docbox{max-width:42vw}
   .ls-tabn{max-width:110px}
 }
 @media (max-width:780px){
@@ -3079,14 +3132,26 @@ select.ls-in{padding-left:3px;cursor:pointer}
   .ls-tools{display:none}
   .ls-rgl{display:none}
   .ls-stage{padding:14px}
-  .ls-docbox{margin-left:6px;padding:4px}
+  /* the Font group leads on a phone: it is what a thumb goes to the ribbon
+     for while typing; the clipboard waits at the end of the strip */
+  .ls-rg-font{order:0}.ls-rg-para{order:1}.ls-rg-space{order:2}.ls-rg-clip{order:3}
   .ls-dmode{display:none}
+  .ls-rscroll{-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .ls-rscroll::-webkit-scrollbar{display:none}
+  /* the keyboard hint means nothing to a thumb */
+  .ls-edittip{display:none}
 }
 @media (max-width:760px){
   .ls-pp-prevrow{grid-template-columns:1fr}
 }
 @media (max-width:900px){
-  .ls-props-dlg,.ls-setup2{grid-template-columns:1fr;gap:14px}
+  /* minmax(0,…), not 1fr: a bare 1fr cannot shrink below its widest control,
+     and the stock select's longest name is wider than a phone — so the whole
+     column, and every field in it, ran off the sheet's right edge */
+  .ls-props-dlg,.ls-setup2{grid-template-columns:minmax(0,1fr);gap:14px}
+  .ls-setup2 .select,.ls-setup2 .input,.ls-props-dlg .select,.ls-props-dlg .input,
+  .ls-lay .select,.ls-lay .input{width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+  .ls-setup2 .ls-chk{margin-bottom:10px}
   .ls-pcats{flex-direction:row;flex-wrap:wrap}
 }
 

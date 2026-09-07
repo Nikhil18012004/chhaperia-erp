@@ -2749,6 +2749,36 @@ async function run() {
     const noDots = await put([obj({ kind: "field", field: "product" })]);
     ok("a binding with no field on it is dropped",
       noDots.objects[0].src.field === "", JSON.stringify(noDots.objects[0].src.field));
+
+    /* Word-style character runs: "PVC Tape" with only "Tape" bold, red and
+       set larger. Everything a run can carry, in one round trip. */
+    const rich = await put([Object.assign(obj({ kind: "fixed" }), { text: "PVC Tape",
+      runs: [{ n: 4 }, { n: 4, b: true, i: false, u: true, k: true, v: "sup",
+               c: "#B02A2A", h: "#ffff00", z: 6, f: "hindi" }] })]);
+    const rr = rich && rich.objects[0].runs;
+    ok("character runs survive the save", Array.isArray(rr) && rr.length === 2, JSON.stringify(rr));
+    ok("…with every override intact",
+      !!rr && rr[1].n === 4 && rr[1].b === true && rr[1].i === false && rr[1].u === true
+      && rr[1].k === true && rr[1].v === "sup" && rr[1].c === "#b02a2a" && rr[1].h === "#ffff00"
+      && rr[1].z === 6 && rr[1].f === "hindi", JSON.stringify(rr && rr[1]));
+    const offRuns = await put([Object.assign(obj({ kind: "fixed" }), { text: "PVC Tape",
+      runs: [{ n: 4, b: true }, { n: 3 }] })]);
+    ok("runs that do not cover the text are dropped whole",
+      offRuns.objects[0].runs === undefined, JSON.stringify(offRuns.objects[0].runs));
+    const junkRuns = await put([Object.assign(obj({ kind: "fixed" }), { text: "PVC Tape",
+      runs: [{ n: 8, b: "yes", c: "red", z: 999, f: "wingdings", v: "up", evil: 1 }] })]);
+    const jr = junkRuns.objects[0].runs;
+    ok("a run keeps only well-formed overrides",
+      !!jr && jr.length === 1 && JSON.stringify(jr[0]) === JSON.stringify({ n: 8 }), JSON.stringify(jr));
+    const serialRuns = await put([Object.assign(obj({ kind: "serial" }), { text: "12345678",
+      runs: [{ n: 8, b: true }] })]);
+    ok("a serial field cannot carry runs — its characters do not exist until print",
+      serialRuns.objects[0].runs === undefined);
+
+    /* the Hindi face was silently swapped for Arial on save until the server
+       learned it existed */
+    const hindi = await put([Object.assign(obj({ kind: "fixed" }), { text: "सावधान", font: "hindi" })]);
+    ok("the Hindi font survives the save", hindi.objects[0].font === "hindi", hindi.objects[0].font);
   }
 
   section("Validation rejects bad input");

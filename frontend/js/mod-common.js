@@ -307,45 +307,78 @@
     }
     // qRaw keeps the operator's own typing for the printed masthead; q is the
     // folded copy the matching runs on
-    const state={ q:"", qRaw:"", range:{from:"",to:""}, limit:0, cols:head.map(()=>true) };
+    /* `picked` is the rows the operator TICKED. With any ticked, print and
+       the download carry those rows alone; the table keeps showing every
+       row that matches, ticked or not, so more can be ticked. */
+    const state={ q:"", qRaw:"", range:{from:"",to:""}, limit:0, cols:head.map(()=>true), picked:new Set() };
+    const idxOf=new Map(rows.map((r,i)=>[r,i]));
 
     const countChip=h("span",{class:"chip"});
+    const clearBtn=h("button",{class:"btn sm ghost",hidden:true,title:"Untick every row",text:"Clear ticks",
+      onclick:()=>{ state.picked.clear(); draw(); }});
     const tableHost=h("div");
     let colChip=null;
-    const LIMITS=[{value:"0",label:"All rows"},{value:"25",label:"First 25"},{value:"50",label:"First 50"},
-      {value:"100",label:"First 100"},{value:"250",label:"First 250"},{value:"500",label:"First 500"},
-      {value:"1000",label:"First 1000"}];
+    const LIMITS=[25,50,100,250,500,1000];
 
     /* The rows this export will actually carry, in this order: text, then date,
-       then the row cap. Columns are dropped last, so a column can be kept out of
-       the sheet while still being searched on. */
-    function scoped(){
+       then the ticks, then the row cap. Columns are dropped last, so a column
+       can be kept out of the sheet while still being searched on. The table
+       itself asks without the ticks (withPicks=false), or a ticked row could
+       never be unticked and an unticked one never found. */
+    function scoped(withPicks){
       let out=rows;
       if(state.q){ const q=state.q;
         out=out.filter(r=>r.some(v=>String(v==null?"":v).toLowerCase().includes(q))); }
       if(dateIdx>=0 && (state.range.from||state.range.to))
         out=out.filter(r=>inDateRange(r[dateIdx], state.range));
+      if(withPicks && state.picked.size) out=out.filter(r=>state.picked.has(r));
       if(state.limit>0) out=out.slice(0,state.limit);
       return out;
     }
     const keptIdx=()=>head.map((_,i)=>i).filter(i=>state.cols[i]);
     const outHead=()=>keptIdx().map(i=>head[i]);
-    const outRows=()=>{ const k=keptIdx(); return scoped().map(r=>k.map(i=>r[i])); };
+    const outRows=()=>{ const k=keptIdx(); return scoped(true).map(r=>k.map(i=>r[i])); };
 
     function draw(){
-      const k=keptIdx(), body=scoped();
+      const k=keptIdx(), body=scoped(false);
       const cols=k.map(i=>({key:"c"+i,label:head[i],
         num:i>0&&!isNaN(parseFloat(rows[0]&&rows[0][i])),
         render:r=>UI.esc(String(r["c"+i]==null||r["c"+i]===""?"—":r["c"+i])),sort:r=>r["c"+i]}));
-      const data=body.map(r=>{const o={};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
+      /* the tick, first in every row: pick the rows to print or download */
+      cols.unshift({key:"_pick",label:"",noSort:true,width:"30px",
+        render:r=>'<input type="checkbox" class="dp-pick" data-i="'+r._i+'"'+
+          (state.picked.has(rows[r._i])?" checked":"")+' aria-label="Tick this row">'});
+      const data=body.map(r=>{const o={_i:idxOf.get(r)};head.forEach((_,i)=>o["c"+i]=r[i]);return o;});
       tableHost.innerHTML="";
-      tableHost.appendChild(UI.table(data,cols,{empty:"Nothing matches this selection"}));
-      countChip.textContent = body.length===rows.length
+      tableHost.appendChild(UI.table(data,cols,{empty:"Nothing matches this selection",mobileCards:false}));
+      /* the head of the tick column ticks or unticks everything showing */
+      const th=tableHost.querySelector("thead th");
+      if(th){
+        const allOn=body.length>0&&body.every(r=>state.picked.has(r));
+        const all=h("input",{type:"checkbox",class:"dp-pick-all",title:allOn?"Untick every row showing":"Tick every row showing",
+          "aria-label":"Tick every row showing"});
+        all.checked=allOn;
+        all.addEventListener("change",()=>{ body.forEach(r=>{ if(all.checked) state.picked.add(r); else state.picked.delete(r); }); draw(); });
+        th.replaceChildren(all);
+      }
+      const n=state.picked.size, going=scoped(true).length;
+      countChip.textContent = (body.length===rows.length
         ? rows.length+" row"+(rows.length===1?"":"s")
-        : body.length+" of "+rows.length+" rows";
+        : body.length+" of "+rows.length+" rows")
+        + (n?"  ·  "+n+" ticked":"")
+        + ((n||state.limit>0)?"  ·  "+going+" will print / download":"");
+      clearBtn.hidden=!n;
       if(colChip) colChip.textContent = k.length===head.length
         ? "All "+head.length+" columns" : k.length+" of "+head.length+" columns";
     }
+    /* one listener for every tick, however often the table is redrawn */
+    tableHost.addEventListener("change",(e)=>{
+      const b=e.target;
+      if(!b||!b.classList||!b.classList.contains("dp-pick")) return;
+      const r=rows[+b.getAttribute("data-i")]; if(!r) return;
+      if(b.checked) state.picked.add(r); else state.picked.delete(r);
+      draw();
+    });
 
     /* the columns picker: one tick per column, in a small popover */
     function columnsControl(){
@@ -374,12 +407,24 @@
       return wrap;
     }
 
+    /* HOW MANY ROWS: typed, not picked from a ladder — "the first 37" is a
+       real request on a sheet of 40. The ladder is still there as suggestions
+       under the box; blank means all of them. */
+    const limitId="dp-lim-"+Math.random().toString(36).slice(2,8);
+    const limitIn=h("input",{class:"input sm dp-limit",type:"number",min:"1",step:"1",placeholder:"All rows",
+      list:limitId,title:"How many rows to print or download — blank for all of them","aria-label":"How many rows"});
+    limitIn.addEventListener("input",()=>{ const v=parseInt(limitIn.value,10); state.limit=v>0?v:0; draw(); });
+    const limitList=h("datalist",{id:limitId},LIMITS.map(n=>h("option",{value:String(n)})));
+    const limitWrap=h("label",{class:"dp-limitwrap",title:"Rows to print or download"},[
+      h("span",{class:"muted",text:"Rows"}),limitIn,limitList]);
+
     const bar=h("div",{class:"dp-bar"},[
       searchInput("Filter rows…", v=>{ state.qRaw=String(v||"").trim();
         state.q=state.qRaw.toLowerCase(); draw(); }),
       dateIdx>=0 ? dateRange(state.range, ()=>draw(), {label:head[dateIdx]||"Date"}) : null,
-      select(LIMITS, v=>{ state.limit=+v||0; draw(); }, "0"),
+      limitWrap,
       columnsControl(),
+      clearBtn,
       h("div",{style:"margin-left:auto"},countChip),
     ].filter(Boolean));
 

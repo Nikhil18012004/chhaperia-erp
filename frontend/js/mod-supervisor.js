@@ -109,6 +109,8 @@
         { ic: "⏳", label: "Coming Up", tag: "Page", act: () => this.show("incoming") },
         { ic: "✅", label: "Completed", tag: "Page", act: () => this.show("done") },
         { ic: "📋", label: "All Jobs", tag: "Page", act: () => this.show("all") },
+        { ic: "📦", label: "Stock Items", tag: "Page", act: () => this.show("items") },
+        { ic: "📒", label: "Stock Ledger", tag: "Page", act: () => this.show("ledger") },
         { ic: "🏬", label: "Warehouses", tag: "Page", act: () => this.show("warehouses") },
         { ic: "📘", label: "TDS — Technical Data Sheets (product brochure)", tag: "Action", act: () => this.show("tds") },
       ];
@@ -198,7 +200,12 @@
       if (g.incoming.length) items.push({ id: "incoming", ic: "⏳", label: "Coming Up", pill: g.incoming.length });
       items.push({ id: "done", ic: "✅", label: "Completed" });
       items.push({ id: "all", ic: "📋", label: "All Jobs" });
+      /* THE WHOLE STORE, VIEW ONLY (ruled 2026-09-07): every material, every
+         movement and every store — the same three pages the office has,
+         minus the money and minus every button that changes anything */
       items.push({ sec: "Store" });
+      items.push({ id: "items", ic: "📦", label: "Stock Items" });
+      items.push({ id: "ledger", ic: "📒", label: "Stock Ledger" });
       items.push({ id: "warehouses", ic: "🏬", label: "Warehouses" });
       // the TDS booklet is NOT listed — like every other login, the floor
       // reaches it by searching (the ⌘K box above)
@@ -228,6 +235,8 @@
       const settle = () => { view.scrollTop = top; };
 
       if (this.filter === "tds") { this.renderTds(view); settle(); return; }
+      if (this.filter === "items") { this.renderItems(view); settle(); return; }
+      if (this.filter === "ledger") { this.renderLedger(view); settle(); return; }
       if (this.filter === "warehouses") { this.renderWarehouses(view); settle(); return; }
 
       const g = this.buckets();
@@ -304,6 +313,220 @@
        server never sends costs/values to supervisors) and no
        actions — no move, adjust or receive from here.
        ============================================================ */
+    /* ============================================================
+       THE STORE — Stock Items and the Stock Ledger, view only.
+
+       The board's own payload is scoped to this area's jobs, on
+       purpose, and stays that way. The store is the one thing the
+       floor may see WHOLE: every material, where it sits, and every
+       movement in and out — quantities only, never a cost or a
+       price. GET /api/store is built money-free on the server
+       (viewService.storeForUser); nothing on these pages writes,
+       and the routes that do stay closed to this role as before.
+       Fetched when a store page is opened and kept for a minute;
+       ↻ Refresh fetches it again.
+       ============================================================ */
+    async loadStore(force) {
+      const stale = !this.store || force || (Date.now() - (this.storeAt || 0)) > 60000;
+      if (!stale) return this.store;
+      this.store = await DB.store();
+      this.storeAt = Date.now();
+      return this.store;
+    },
+    storeHelpers() {
+      const s = this.store || { items: [], movements: [], warehouses: [], categories: [] };
+      const whName = (id) => ((s.warehouses || []).find((w) => w.id === id) || {}).name || id || "—";
+      const catName = (id) => ((s.categories || []).find((c) => c.id === id) || {}).name || id || "—";
+      const itemOf = (id) => (s.items || []).find((i) => i.id === id) || null;
+      const qty = (n) => (+n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+      const TYPE = { OPEN: "Opening", GRN: "Receipt", ISSUE: "Issue", PROD: "Production", SALE: "Sale", ADJ: "Adjust", RET: "Return", SCRAP: "Scrap", XFER: "Transfer" };
+      /* the same reading the office's Stock Items gives: out, or at or under
+         the reorder point, or fine */
+      const status = (it) => it.onHand <= 0.0001 ? { k: "out", l: "Out of stock" }
+        : (it.reorder > 0 && it.onHand <= it.reorder) ? { k: "low", l: "Low" } : { k: "ok", l: "OK" };
+      return { s, whName, catName, itemOf, qty, TYPE, status };
+    },
+    async storePage(view, what, draw) {
+      view.innerHTML = '<div class="sup-loading">Loading the store…</div>';
+      try { await this.loadStore(); }
+      catch (err) {
+        view.innerHTML = "";
+        view.appendChild(MW.loadError ? MW.loadError(what, err, () => this.render())
+          : H("div", { class: "sup-loading", text: "⚠ " + err.message }));
+        return;
+      }
+      view.innerHTML = "";
+      draw();
+    },
+    renderItems(view) {
+      UI.$("#crumbs").innerHTML = '<span>Chhaperia</span><span class="sep">/</span><span class="cur">Stock Items</span>';
+      this.storePage(view, "the store", () => {
+        const { s, whName, catName, qty, status } = this.storeHelpers();
+        const st = this.storeItemsState || (this.storeItemsState = { q: "", cat: "all", state: "all" });
+        view.appendChild(pageHead("📦 Stock Items",
+          "Every material in the store and where it sits — view only. Tap a material for its stores and its last movements.",
+          [H("button", { class: "btn", onclick: () => { this.loadStore(true).then(() => this.render()); }, html: "↻ Refresh" })]));
+        const items = s.items || [];
+        const low = items.filter((i) => status(i).k === "low").length;
+        const out = items.filter((i) => status(i).k === "out").length;
+        view.appendChild(H("div", { class: "grid kpi-grid", style: "margin-bottom:18px" }, [
+          kpi({ icon: "📦", label: "Materials", value: items.length, deltaType: "flat", delta: "in the store" }),
+          kpi({ icon: "🏬", label: "Stores", value: (s.warehouses || []).length, deltaType: "flat", delta: "warehouses" }),
+          kpi({ icon: "⚠️", label: "Low stock", value: low, deltaType: low ? "down" : "flat", delta: "at or under the reorder point", onClick: () => { st.state = "low"; draw(); } }),
+          kpi({ icon: "⛔", label: "Out of stock", value: out, deltaType: out ? "down" : "flat", delta: "nothing on hand", onClick: () => { st.state = "out"; draw(); } }),
+        ]));
+        const countChip = H("span", { class: "chip" });
+        const host = H("div");
+        const cats = [{ value: "all", label: "All categories" }].concat((s.categories || []).map((c) => ({ value: c.id, label: c.name })));
+        view.appendChild(H("div", { class: "toolbar", style: "margin-bottom:12px" }, [
+          MW.searchInput("Search material, code, grade…", (v) => { st.q = String(v || "").toLowerCase(); draw(); }, st.q),
+          MW.select(cats, (v) => { st.cat = v; draw(); }, st.cat),
+          MW.select([{ value: "all", label: "All stock" }, { value: "in", label: "In stock" }, { value: "low", label: "Low stock" }, { value: "out", label: "Out of stock" }],
+            (v) => { st.state = v; draw(); }, st.state),
+          H("div", { style: "margin-left:auto" }, countChip),
+        ]));
+        view.appendChild(host);
+        const self = this;
+        function draw() {
+          const data = items.filter((i) => {
+            if (st.cat !== "all" && i.cat !== st.cat) return false;
+            const k = status(i).k;
+            if (st.state === "low" && k !== "low") return false;
+            if (st.state === "out" && k !== "out") return false;
+            if (st.state === "in" && k === "out") return false;
+            if (st.q && !(i.name + " " + i.id + " " + (i.grade || "") + " " + catName(i.cat)).toLowerCase().includes(st.q)) return false;
+            return true;
+          });
+          countChip.textContent = data.length + " material" + (data.length === 1 ? "" : "s");
+          host.innerHTML = "";
+          host.appendChild(UI.table(data, [
+            { key: "item", label: "Material", render: (r) => `<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${esc(r.id)}${r.grade ? " · " + esc(r.grade) : ""}</div>`, sort: (r) => r.name },
+            { key: "cat", label: "Category", render: (r) => `<span class="muted">${esc(catName(r.cat))}</span>`, sort: (r) => r.cat },
+            { key: "onHand", label: "On hand", num: true, render: (r) => `<span style="font-weight:700">${esc(qty(r.onHand))}</span> <span class="muted">${esc(r.uom)}</span>`, sort: (r) => r.onHand },
+            { key: "where", label: "Where", render: (r) => {
+                const w = Object.keys(r.stock || {}).sort((a, b) => r.stock[b] - r.stock[a]);
+                return w.length ? esc(w.slice(0, 2).map((id) => whName(id) + " " + qty(r.stock[id])).join(" · "))
+                  + (w.length > 2 ? ` <span class="muted">+${w.length - 2} more</span>` : "") : '<span class="muted">—</span>';
+              }, noSort: true },
+            { key: "reorder", label: "Reorder at", num: true, render: (r) => r.reorder > 0 ? esc(qty(r.reorder)) : '<span class="muted">—</span>', sort: (r) => r.reorder },
+            { key: "st", label: "Status", render: (r) => { const k = status(r);
+                return `<span class="chip" style="color:${k.k === "out" ? "var(--danger)" : k.k === "low" ? "var(--warn)" : "var(--ok)"}">${esc(k.l)}</span>`; },
+              sort: (r) => ({ out: 0, low: 1, ok: 2 })[status(r).k] },
+          ], { empty: "No material matches", sort: "item", onRow: (r) => self.storeItemDetail(r) }));
+        }
+        draw();
+      });
+    },
+    /* one material: its stores, and its last twenty movements */
+    storeItemDetail(r) {
+      const { s, whName, catName, qty, TYPE, status } = this.storeHelpers();
+      const moves = (s.movements || []).filter((m) => m.itemId === r.id).slice(-20).reverse();
+      const stores = Object.keys(r.stock || {}).sort((a, b) => r.stock[b] - r.stock[a]);
+      const k = status(r);
+      const sec = (t, top) => H("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin:" + (top ? "16px" : "0") + " 0 8px", text: t });
+      const body = H("div", {}, [
+        H("div", { class: "flex between", style: "margin:0 0 14px;padding:12px 0;border-bottom:1px solid var(--line)" }, [
+          stat("On hand", qty(r.onHand) + " " + r.uom),
+          stat("Reorder at", r.reorder > 0 ? qty(r.reorder) : "—"),
+          stat("Status", k.l),
+          stat("Access", "👁 View only"),
+        ]),
+        sec("Where it sits"),
+        stores.length ? UI.table(stores.map((id) => ({ id, name: whName(id), qty: r.stock[id] })), [
+          { key: "name", label: "Store", render: (x) => esc(x.name), sort: (x) => x.name },
+          { key: "qty", label: "Quantity", num: true, render: (x) => `<span style="font-weight:700">${esc(qty(x.qty))}</span> <span class="muted">${esc(r.uom)}</span>`, sort: (x) => x.qty },
+        ], { mobileCards: false, sort: "qty", dir: -1 }) : H("div", { class: "muted", text: "Nothing on hand in any store." }),
+        sec("Last movements", true),
+        moves.length ? UI.table(moves, [
+          { key: "date", label: "Date", render: (m) => `<span class="mono">${esc(m.date || "")}</span>`, sort: (m) => m.date },
+          { key: "type", label: "Type", render: (m) => esc(TYPE[m.type] || m.type), sort: (m) => m.type },
+          { key: "qty", label: "Qty", num: true, render: (m) => `<span class="mono" style="font-weight:700;color:${m.qty < 0 ? "var(--danger)" : "var(--ok)"}">${m.qty > 0 ? "+" : ""}${esc(qty(m.qty))}</span>`, sort: (m) => m.qty },
+          { key: "wh", label: "Store", render: (m) => esc(whName(m.wh)), sort: (m) => whName(m.wh) },
+          { key: "ref", label: "Reference", render: (m) => esc(m.ref || "—"), sort: (m) => m.ref },
+        ], { mobileCards: false }) : H("div", { class: "muted", text: "No movements yet." }),
+      ]);
+      UI.modal({ title: r.name, sub: r.id + " · " + catName(r.cat), wide: true, body,
+        foot: [
+          H("button", { class: "btn", text: "📒 Full ledger", onclick: () => {
+            UI.$("#modalHost").hidden = true;
+            this.storeLedgerState = Object.assign(this.storeLedgerState || {}, { item: r.id, shown: 150, q: "", type: "all", wh: "all" });
+            this.show("ledger");
+          } }),
+          H("button", { class: "btn primary", text: "Close", onclick: () => { UI.$("#modalHost").hidden = true; } }),
+        ] });
+    },
+    renderLedger(view) {
+      UI.$("#crumbs").innerHTML = '<span>Chhaperia</span><span class="sep">/</span><span class="cur">Stock Ledger</span>';
+      this.storePage(view, "the ledger", () => {
+        const { s, whName, itemOf, qty, TYPE } = this.storeHelpers();
+        const st = this.storeLedgerState || (this.storeLedgerState = { q: "", type: "all", wh: "all", item: "", shown: 150 });
+        view.appendChild(pageHead("📒 Stock Ledger",
+          "Every movement in and out of the store, newest first — view only.",
+          [H("button", { class: "btn", onclick: () => { this.loadStore(true).then(() => this.render()); }, html: "↻ Refresh" })]));
+        const countChip = H("span", { class: "chip" });
+        const host = H("div");
+        /* pinned to one material (from its details): a chip says so, × lets
+           every material back in — the office ledger's own idiom */
+        const itemChip = H("span", { class: "chip", style: "gap:8px" });
+        const syncChip = () => {
+          itemChip.replaceChildren();
+          if (!st.item) { itemChip.hidden = true; return; }
+          const it = itemOf(st.item) || { name: st.item, id: st.item };
+          itemChip.append(H("span", { text: "📦 " + it.name }), H("span", { class: "mono muted", text: it.id }),
+            H("button", { class: "btn sm ghost", style: "padding:0 6px;line-height:1.4;font-size:13px", title: "Show every material",
+              onclick: () => { st.item = ""; st.shown = 150; syncChip(); draw(); }, text: "×" }));
+          itemChip.hidden = false;
+        };
+        const types = [{ value: "all", label: "All types" }].concat(Object.keys(TYPE).map((t) => ({ value: t, label: TYPE[t] })));
+        const whs = [{ value: "all", label: "All stores" }].concat((s.warehouses || []).map((w) => ({ value: w.id, label: w.name })));
+        view.appendChild(H("div", { class: "toolbar", style: "margin-bottom:12px" }, [
+          MW.searchInput("Search material, code, reference, who…", (v) => { st.q = String(v || "").toLowerCase(); st.shown = 150; draw(); }, st.q),
+          itemChip,
+          MW.select(types, (v) => { st.type = v; st.shown = 150; draw(); }, st.type),
+          MW.select(whs, (v) => { st.wh = v; st.shown = 150; draw(); }, st.wh),
+          H("div", { style: "margin-left:auto" }, countChip),
+        ]));
+        view.appendChild(host);
+        syncChip();
+        const all = s.movements || [];
+        function draw() {
+          const data = all.filter((m) => {
+            if (st.item && m.itemId !== st.item) return false;
+            if (st.type !== "all" && m.type !== st.type) return false;
+            if (st.wh !== "all" && m.wh !== st.wh && m.whTo !== st.wh) return false;
+            if (st.q) { const it = itemOf(m.itemId) || {};
+              if (!(m.itemId + " " + (it.name || "") + " " + (m.ref || "") + " " + (m.by || "") + " " + (m.note || "")).toLowerCase().includes(st.q)) return false; }
+            return true;
+          });
+          /* a running balance only means something for ONE material */
+          const bal = {};
+          if (st.item) { let b = 0; data.forEach((m) => { b += m.qty; bal[m.id] = b; }); }
+          const newest = data.slice().reverse();
+          const page = newest.slice(0, st.shown);
+          countChip.textContent = (page.length < newest.length ? page.length + " of " : "") + newest.length + " movement" + (newest.length === 1 ? "" : "s");
+          host.innerHTML = "";
+          const cols = [
+            { key: "date", label: "Date", render: (m) => `<span class="mono">${esc(m.date || "")}</span>`, sort: (m) => m.date },
+            { key: "type", label: "Type", render: (m) => `<span class="chip">${esc(TYPE[m.type] || m.type)}</span>`, sort: (m) => m.type },
+            { key: "item", label: "Material", render: (m) => { const it = itemOf(m.itemId) || {};
+                return `<div class="cell-main">${esc(it.name || m.itemId)}</div><div class="cell-sub">${esc(m.itemId)}</div>`; },
+              sort: (m) => (itemOf(m.itemId) || {}).name || m.itemId },
+            { key: "qty", label: "Qty", num: true, render: (m) => { const it = itemOf(m.itemId) || {};
+                return `<span class="mono" style="font-weight:700;color:${m.qty < 0 ? "var(--danger)" : "var(--ok)"}">${m.qty > 0 ? "+" : ""}${esc(qty(m.qty))}</span> <span class="muted">${esc(it.uom || "")}</span>`; },
+              sort: (m) => m.qty },
+            { key: "wh", label: "Store", render: (m) => esc(whName(m.wh)) + (m.whTo ? ` <span class="muted">→ ${esc(whName(m.whTo))}</span>` : ""), sort: (m) => whName(m.wh) },
+            { key: "ref", label: "Reference", render: (m) => m.ref ? esc(m.ref) : '<span class="muted">—</span>', sort: (m) => m.ref },
+            { key: "by", label: "By", render: (m) => m.by ? esc(m.by) : '<span class="muted">—</span>', sort: (m) => m.by },
+          ];
+          if (st.item) cols.push({ key: "bal", label: "Balance", num: true, noSort: true,
+            render: (m) => `<span class="mono" style="font-weight:700">${esc(qty(bal[m.id]))}</span>` });
+          host.appendChild(UI.table(page, cols, { empty: "No movement matches", mobileCards: false }));
+          if (page.length < newest.length) host.appendChild(H("div", { style: "text-align:center;margin:12px 0" },
+            H("button", { class: "btn", onclick: () => { st.shown += 150; draw(); }, text: "Show 150 more" })));
+        }
+        draw();
+      });
+    },
     renderWarehouses(view) {
       UI.$("#crumbs").innerHTML = '<span>Chhaperia</span><span class="sep">/</span><span class="cur">Warehouses</span>';
 

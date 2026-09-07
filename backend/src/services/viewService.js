@@ -528,6 +528,57 @@ async function stateForLab() {
 }
 
 /** Top-level dispatcher by user. */
+/* ============================================================
+   THE STORE, WHOLE AND READ-ONLY — for the floor and the lab.
+
+   Every material, every store and every movement, with the money
+   taken out: quantities, dates, references and names only. A
+   supervisor's board payload is scoped to their own jobs on
+   purpose, and that stays; this is the one place they see the
+   whole store. Nothing here can be changed by them — every write
+   route keeps the roles it had — so the feed is safe to hand to
+   any login that can sign in. Built as an ALLOWLIST of fields,
+   the same way stateForLab is: a cost that is merely "deleted"
+   from a copied record is a cost that comes back the day someone
+   renames the field.
+   ============================================================ */
+async function storeForUser(user) {
+  if (!user) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
+  const d = await fullState();
+  const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+  const itemById = Object.fromEntries((d.items || []).map((i) => [i.id, i]));
+  const onHand = {}; // itemId -> { total, wh: { whId -> qty } }
+  (d.movements || []).forEach((m) => {
+    if (!itemById[m.itemId]) return;
+    const o = onHand[m.itemId] || (onHand[m.itemId] = { total: 0, wh: {} });
+    const q = +m.qty || 0;
+    o.total += q;
+    if (m.wh) o.wh[m.wh] = (o.wh[m.wh] || 0) + q;
+  });
+  const items = (d.items || []).filter((i) => i.active !== false).map((i) => {
+    const o = onHand[i.id] || { total: 0, wh: {} };
+    const stock = {};
+    Object.keys(o.wh).forEach((w) => { if (Math.abs(o.wh[w]) > 0.0001) stock[w] = r2(o.wh[w]); });
+    return {
+      id: i.id, name: i.name, cat: i.cat, uom: i.uom || "", grade: i.grade || "",
+      location: i.location || "", reorder: +i.reorder || 0, safety: +i.safety || 0,
+      onHand: r2(o.total), stock,
+    };
+  });
+  const movements = (d.movements || []).map((m) => ({
+    id: m.id, date: m.date, type: m.type, itemId: m.itemId, qty: +m.qty || 0,
+    wh: m.wh || null, whTo: m.whTo || null, ref: m.ref || "", by: m.by || "", note: m.note || "",
+  }));
+  return {
+    role: user.role,
+    warehouses: (d.warehouses || []).map((w) => ({ id: w.id, name: w.name, type: w.type || null, city: w.city || null })),
+    categories: (d.categories || []).map((c) => ({ id: c.id, name: c.name })),
+    items,
+    movements,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function stateForUser(user, opts) {
   if (!user) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
   if (user.role === "supervisor") return await stateForSupervisor(user.area || "all", user.username, opts);
@@ -535,4 +586,4 @@ async function stateForUser(user, opts) {
   return await stateForOfficer(user); // admin + office (office gets no lab spec values)
 }
 
-module.exports = { stateForUser, stateForSupervisor, stateForOfficer, stateForLab, lineToArea };
+module.exports = { stateForUser, stateForSupervisor, stateForOfficer, stateForLab, storeForUser, lineToArea };

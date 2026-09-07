@@ -910,6 +910,8 @@
     print:'<path d="M7 9.4V4h10v5.4"/><path d="M5.6 9.4h12.8a2 2 0 012 2v5h-3.8v3.6H7.4V16.4H3.6v-5a2 2 0 012-2z"/><path d="M7.4 16.4h9.2"/>',
     undo:'<path d="M4.2 10.4h9.6a5.6 5.6 0 110 11.2H8.6"/><path d="M8.2 5.8L3.6 10.4l4.6 4.6"/>',
     redo:'<path d="M19.8 10.4h-9.6a5.6 5.6 0 100 11.2h5.2"/><path d="M15.8 5.8l4.6 4.6-4.6 4.6"/>',
+    /* Word's Format Painter: a brush */
+    painter:'<path d="M4.6 4.2h10.8a1 1 0 011 1v3.4a1 1 0 01-1 1H4.6a1 1 0 01-1-1V5.2a1 1 0 011-1z"/><path d="M16.4 6.6h2.4a1.4 1.4 0 011.4 1.4v3.4a1.4 1.4 0 01-1.4 1.4h-6.6a1 1 0 00-1 1v1.4"/><path d="M9.7 15.2h3.2v5.2H9.7z"/>',
     zoomin:'<circle cx="10.4" cy="10.4" r="6.6"/><path d="M15.2 15.2L20.6 20.6M7.6 10.4h5.6M10.4 7.6v5.6"/>',
     zoomout:'<circle cx="10.4" cy="10.4" r="6.6"/><path d="M15.2 15.2L20.6 20.6M7.6 10.4h5.6"/>',
     fit:'<path d="M4 9.2V4.4h4.8M15.2 4.4H20v4.8M20 14.8v4.8h-4.8M8.8 19.6H4v-4.8"/>',
@@ -1053,6 +1055,13 @@
          white — a white band on a white label is invisible but still prints. */
       r.shade=hex(o.shade,"");
       r.indentL=num(o.indentL,0,0,200); r.indentR=num(o.indentR,0,0,200);
+      /* Word's character runs (CHARACTER RUNS, below). Only fixed text has
+         letters to dress; a serial or a date is made at print time. */
+      if(r.src.kind==="fixed"){
+        const rr=cleanRuns(o.runs,r.text.length);
+        const nn=rr&&normRuns(r,rr);
+        if(nn) r.runs=nn;
+      }
     }
     if(t==="barcode"||t==="qr"){
       r.sym=SYMS.some(x=>x.v===o.sym)?o.sym:(t==="qr"?"qr":"code128");
@@ -1070,6 +1079,234 @@
       r.strokeW=num(o.strokeW,.4,0,20); r.radius=num(o.radius,0,0,100);
     }
     return r;
+  }
+
+  /* ============================================================
+     CHARACTER RUNS — Word's most basic move, on a label.
+
+     In Word you drag across a word and press Bold, and that word
+     alone goes bold. The studio could not do that: bold, size,
+     colour and the rest lived on the OBJECT, so a caption was all
+     bold or none of it, and "PVC Tape · 18 mm" with only the width
+     in red meant two fields lined up by hand.
+
+     A text object may now carry `runs`: a list of {n, …overrides}
+     that walks its text from the first character to the last. `n`
+     is how many characters the run covers; the overrides are the
+     same things the object has — b i u k (bold, italic, underline,
+     strike), v (sup / sub), c colour, h highlight, z size in mm,
+     f font — and each is present ONLY where it differs from the
+     object. So an object whose letters are all plain has no runs
+     at all, exactly as before, and every saved design is untouched.
+
+     ⚠ THE RUNS MUST COVER THE TEXT EXACTLY. A list that adds up to
+     the wrong length would dress the wrong letters, so it is
+     dropped whole rather than trusted — on load, on import and on
+     the server. Nothing in the studio can produce one; a file can
+     say anything.
+     ============================================================ */
+  const RUN_BOOL=["b","i","u","k"];
+  const RUN_BASE={b:"bold",i:"italic",u:"underline",k:"strike"};
+  function cleanRuns(runs,len){
+    if(!Array.isArray(runs)||!runs.length||runs.length>200) return null;
+    const out=[]; let total=0;
+    for(const r of runs){
+      if(!r||typeof r!=="object"||Array.isArray(r)) return null;
+      const n=Math.round(+r.n); if(!(n>0)) return null;
+      const c={n};
+      RUN_BOOL.forEach(k=>{ if(typeof r[k]==="boolean") c[k]=r[k]; });
+      if(r.v==="sup"||r.v==="sub") c.v=r.v;
+      if(hex(r.c,"")) c.c=hex(r.c,"");
+      if(hex(r.h,"")) c.h=hex(r.h,"");
+      if(isFinite(+r.z)&&+r.z>=.6&&+r.z<=120) c.z=+r.z;
+      if(FONTS.some(f=>f.v===r.f)) c.f=r.f;
+      out.push(c); total+=n;
+    }
+    return total===len?out:null;
+  }
+  /* What a run's letters actually look like: its overrides over the object. */
+  function runFmt(o,r){
+    r=r||{};
+    return {bold:r.b!=null?r.b:!!o.bold, italic:r.i!=null?r.i:!!o.italic,
+      underline:r.u!=null?r.u:!!o.underline, strike:r.k!=null?r.k:!!o.strike,
+      vert:r.v||"", color:r.c||o.color, hi:r.h||"", size:r.z||o.size, font:r.f||o.font};
+  }
+  const runKey=(r)=>JSON.stringify([r.b,r.i,r.u,r.k,r.v,r.c,r.h,r.z,r.f].map(x=>x==null?null:x));
+  /* Strip every override that only repeats the object, merge neighbours that
+     agree, and answer null when nothing is left — so "all plain" is no runs. */
+  function normRuns(o,runs){
+    const out=[];
+    (runs||[]).forEach(r=>{
+      if(!(r.n>0)) return;
+      const c={n:r.n};
+      RUN_BOOL.forEach(k=>{ if(typeof r[k]==="boolean"&&r[k]!==!!o[RUN_BASE[k]]) c[k]=r[k]; });
+      if(r.v==="sup"||r.v==="sub") c.v=r.v;
+      if(r.c&&r.c!==o.color) c.c=r.c;
+      if(r.h) c.h=r.h;
+      if(r.z&&Math.abs(r.z-o.size)>1e-9) c.z=r.z;
+      if(r.f&&r.f!==o.font) c.f=r.f;
+      const last=out[out.length-1];
+      if(last&&runKey(last)===runKey(c)) last.n+=c.n; else out.push(c);
+    });
+    if(!out.length||out.every(r=>Object.keys(r).length===1)) return null;
+    return out;
+  }
+  /* A working copy of the runs that is guaranteed to cover the text. */
+  function runsCover(o){
+    const len=(o.text||"").length;
+    const rs=(o.runs&&o.runs.length)?o.runs.map(r=>Object.assign({},r)):[];
+    return (len>0&&rs.reduce((s,r)=>s+r.n,0)===len)?rs:[{n:len}];
+  }
+  /* Put a boundary at `at`, so a range can start or end there. */
+  function splitAt(rs,at){
+    let pos=0;
+    for(let i=0;i<rs.length;i++){
+      const r=rs[i];
+      if(at>pos&&at<pos+r.n){
+        rs.splice(i,1,Object.assign({},r,{n:at-pos}),Object.assign({},r,{n:pos+r.n-at}));
+        return;
+      }
+      pos+=r.n;
+    }
+  }
+  const putRuns=(o,rs)=>{ const nn=normRuns(o,rs); if(nn) o.runs=nn; else o.runs=undefined; };
+  /* Dress the letters in [a,b) in `patch`: the overrides to set — {b:true},
+     {z:6}, {c:"#b02a2a"} — or a function of the run's resolved format that
+     returns them, for "one size up" and the like. A key set to null takes the
+     override off, which is how "like the object again" is said. */
+  function runsApply(o,a,b,patch){
+    const len=(o.text||"").length;
+    a=Math.max(0,Math.min(a,len)); b=Math.max(a,Math.min(b,len));
+    if(a===b) return false;
+    const rs=runsCover(o);
+    splitAt(rs,a); splitAt(rs,b);
+    let pos=0;
+    rs.forEach(r=>{
+      if(pos>=a&&pos+r.n<=b){
+        const p=typeof patch==="function"?patch(runFmt(o,r),r):patch;
+        Object.keys(p||{}).forEach(k=>{ if(p[k]==null) delete r[k]; else r[k]=p[k]; });
+      }
+      pos+=r.n;
+    });
+    putRuns(o,rs);
+    return true;
+  }
+  /* Take one override off every letter — "size 6, all of it" clears the sizes
+     the letters carried on their own, the way Word does when the whole box
+     is selected. */
+  function runsClear(o,key){
+    if(!o.runs||!o.runs.length) return;
+    putRuns(o,runsCover(o).map(r=>{ const c=Object.assign({},r); delete c[key]; return c; }));
+  }
+  /* The letters in [a,b) as one reading: true when every letter has it, false
+     when none does, null when they disagree (the ribbon shows that as a button
+     neither lit nor dark; the size box shows it empty). A caret reads the
+     letter before it — what the next thing typed will look like — or the
+     first letter at the very start. */
+  const FMT_KEYS=["bold","italic","underline","strike","vert","color","hi","size","font"];
+  function runsRange(o,a,b){
+    const len=(o.text||"").length;
+    a=Math.max(0,Math.min(a,len)); b=Math.max(a,Math.min(b,len));
+    if(!len) return runFmt(o,{});
+    if(a===b){ a=Math.max(0,a-1); b=a+1; }
+    const rs=runsCover(o);
+    let pos=0, out=null;
+    rs.forEach(r=>{
+      if(pos<b&&pos+r.n>a){
+        const f=runFmt(o,r);
+        if(!out) out=f;
+        else FMT_KEYS.forEach(k=>{ if(out[k]!==f[k]) out[k]=null; });
+      }
+      pos+=r.n;
+    });
+    return out||runFmt(o,{});
+  }
+  /* The text changed under the runs: [a,a+del) is gone and `ins` arrives in
+     its place, dressed in `fmt` — or, with no fmt given, in whatever the
+     letter before the join was wearing, which is what typing into the middle
+     of a bold word does in Word. */
+  function runsSplice(o,a,del,ins,fmt){
+    const text=o.text||"", len=text.length;
+    ins=String(ins==null?"":ins);
+    a=Math.max(0,Math.min(a,len)); del=Math.max(0,Math.min(del,len-a));
+    const rs=runsCover(o);
+    splitAt(rs,a); splitAt(rs,a+del);
+    let pos=0, before=null, after=null;
+    rs.forEach(r=>{ if(pos+r.n===a&&r.n>0) before=r; if(pos===a+del&&!after) after=r; pos+=r.n; });
+    const like=before||after||{};
+    const out=[]; pos=0;
+    rs.forEach(r=>{ if(!(pos>=a&&pos+r.n<=a+del)) out.push(r); pos+=r.n; });
+    if(ins.length){
+      const nr=Object.assign({},like,{n:ins.length});
+      Object.keys(fmt||{}).forEach(k=>{ if(fmt[k]==null) delete nr[k]; else nr[k]=fmt[k]; });
+      let i=0, p=0;
+      while(i<out.length&&p+out[i].n<=a){ p+=out[i].n; i++; }
+      out.splice(i,0,nr);
+    }
+    o.text=text.slice(0,a)+ins+text.slice(a+del);
+    putRuns(o,out);
+  }
+  /* Replace the whole text and keep the runs where the letters stayed — the
+     properties panel edits text as a plain box, and a plain box must not
+     undress the bold word two lines down. Common head and tail are kept; the
+     middle is the edit. */
+  function setText(o,v){
+    v=String(v==null?"":v);
+    const old=o.text||"";
+    if(v===old) return;
+    if(!o.runs||!o.runs.length){ o.text=v; return; }
+    const n=Math.min(old.length,v.length);
+    let p=0; while(p<n&&old[p]===v[p]) p++;
+    let s=0; while(s<n-p&&old[old.length-1-s]===v[v.length-1-s]) s++;
+    runsSplice(o,p,old.length-p-s,v.slice(p,v.length-s));
+  }
+  /* The word a caret sits in, as [start,end) — Word's Ctrl+B with nothing
+     selected makes the word under the caret bold. Only when the caret is
+     BETWEEN two letters of it: at either edge of a word there is nothing
+     to catch, and the format waits for the next thing typed instead — which
+     is how "type a sentence, press Ctrl+B, carry on in bold" works in Word
+     without the last word going bold behind you. */
+  const WORD_CH=/[^\s.,;:!?()[\]{}"'\/\\|<>—–·-]/;
+  function wordAt(text,i){
+    text=text||"";
+    if(i<=0||i>=text.length||!WORD_CH.test(text[i-1])||!WORD_CH.test(text[i])) return null;
+    let a=i, b=i;
+    while(a>0&&WORD_CH.test(text[a-1])) a--;
+    while(b<text.length&&WORD_CH.test(text[b])) b++;
+    return [a,b];
+  }
+  /* The style a run's <span> needs over its box. Only what the run CHANGES is
+     written, so a plain run costs the printed sheet nothing. The decoration
+     is the exception: a child cannot take one off, so a box with runs carries
+     none itself and every span states its own. Sizes are in mm on the label;
+     the editor sits outside the label's scale, so it asks for px with `k`. */
+  function runStyle(o,r,k){
+    const f=runFmt(o,r);
+    let s="";
+    if(f.bold!==!!o.bold) s+="font-weight:"+(f.bold?700:400)+";";
+    if(f.italic!==!!o.italic) s+="font-style:"+(f.italic?"italic":"normal")+";";
+    const deco=[f.underline?"underline":"",f.strike?"line-through":""].filter(Boolean).join(" ");
+    if(deco) s+="text-decoration:"+deco+";";
+    if(f.color!==o.color) s+="color:"+f.color+";";
+    if(f.hi) s+="background:"+f.hi+";";
+    if(f.font!==o.font) s+="font-family:"+fontCss(f.font)+";";
+    let size=+f.size||o.size;
+    if(f.vert){ size=size*0.65; s+="vertical-align:"+(f.vert==="sup"?"super":"sub")+";"; }
+    const sized=Math.abs(size-o.size)>1e-9;
+    if(sized) s+="font-size:"+(k?(size*k).toFixed(2)+"px":size.toFixed(2)+"mm")+";";
+    return {style:s,size:sized?size:0};
+  }
+  /* The letters as HTML, one <span> per run — the printed sheet and the
+     canvas both come from here. */
+  function runsHtml(o){
+    const text=o.text||"";
+    let pos=0;
+    return runsCover(o).map(r=>{
+      const t=text.slice(pos,pos+r.n); pos+=r.n;
+      const st=runStyle(o,r);
+      return "<span"+(st.style?' style="'+st.style+'"':"")+
+        (st.size?' data-z="'+st.size.toFixed(2)+'"':"")+">"+esc(t)+"</span>";
+    }).join("");
   }
 
   function newDoc(name){
@@ -1267,16 +1504,25 @@
       const shade=o.shade?`background:${o.shade};`:"";
       const pad=(o.indentL||o.indentR)
         ? `padding-left:${mm(o.indentL||0)};padding-right:${mm(o.indentR||0)};` : "";
+      /* Word's runs: with any, the letters are spans of their own and the box
+         states no decoration (a span could not take one off). The prefix and
+         the suffix belong to the object and are dressed like it. */
+      const rich=!!(o.runs&&o.runs.length)&&(!o.src||o.src.kind==="fixed");
+      const wrapS=deco?` style="text-decoration:${deco}"`:"";
+      const body=rich
+        ? (o.src&&o.src.prefix?`<span${wrapS}>${esc(o.src.prefix)}</span>`:"")+runsHtml(o)+
+          (o.src&&o.src.suffix?`<span${wrapS}>${esc(o.src.suffix)}</span>`:"")
+        : esc(val);
       /* data-i lets the designer find this object's RENDERED node and measure
          it — which is the only honest way to answer "does this text fit". It
          is an attribute on a div, so it costs the printed sheet nothing. */
       return `<div${tag} style="${box}display:flex;align-items:${o.valign==="start"?"flex-start":o.valign==="end"?"flex-end":"center"};`+
         `justify-content:${just};${shade}overflow:hidden">`+
         `<div style="width:100%;text-align:${o.align};font:${fi} ${fw} ${mm(o.size)}/${o.lineH} ${fontCss(o.font)};`+
-        `color:${o.color};${tc}${pad}${deco?"text-decoration:"+deco+";":""}`+
+        `color:${o.color};${tc}${pad}${deco&&!rich?"text-decoration:"+deco+";":""}`+
         (o.wrap===false?`white-space:pre;overflow-wrap:normal`
                        :`white-space:pre-wrap;overflow-wrap:anywhere`)+
-        `">${esc(val)}</div></div>`;
+        `">${body}</div></div>`;
     }
     if(o.type==="barcode"||o.type==="qr"){
       const is2d=o.type==="qr"||o.sym==="qr";
@@ -1661,6 +1907,9 @@
     composeHtml, sameStock, labelSkinCss,
     SYMS, FONTS, PAGES, OBJ_TYPES, qrEncode, encodeBar, sheetGrid, promptsOf,
     STOCKS, applyStock, stockOf, stockLabel, perPageOf, sizeS, autoFitOf, applyAutoFit,
+    /* the character-run model, for the tests (backend/test/label-runs.js) */
+    runs:{clean:cleanRuns, norm:normRuns, apply:runsApply, clear:runsClear, range:runsRange,
+          splice:runsSplice, setText, wordAt, html:runsHtml, fmt:runFmt},
   };
 
   /* ============================================================
@@ -1783,6 +2032,10 @@
     let showTools=global.innerWidth>780;   // the Tools panel, down the left
     let showProps=global.innerWidth>1040;  // Object Properties and Object Layers, down the right
     let clip=null;                   // the clipboard — one object, cut or copied
+    let clipText="";                 // what the studio itself last put on the system clipboard
+    let copyArmed=0, pasteTimer=null;
+    let editor=null;                 // the open text editor (TYPING ON THE LABEL), or null
+    let painter=null;                // the look Format Painter picked up, waiting for its click
     /* Adjusting the background picture is a MODE, entered and left on purpose.
        It used to be inferred from the fit being "custom", which meant the
        amber handles never went away again — the screen sat there saying you
@@ -1891,7 +2144,11 @@
     }
 
     /* ---- saving: to the ERP's settings, for everyone, on the server ---- */
+    /* An open edit is handed back to the label before anything READS the
+       label — Save, Print, a dialog — so what was typed is what is saved. */
+    const settle=()=>{ if(editor){ editor.commit(); paint(); } };
     function save(){
+      settle();
       doc().updated=new Date().toISOString().slice(0,10);
       stampUsed(doc());
       docs=saveDocs(docs);
@@ -1906,6 +2163,7 @@
        gone with it. This throws when the write fails, and leaves the dirty
        flag standing so the guard still bites on the next attempt. */
     async function saveAndWait(){
+      settle();
       const name=doc().name;
       doc().updated=new Date().toISOString().slice(0,10);
       stampUsed(doc());
@@ -1972,6 +2230,12 @@
        that has since been deleted. */
     function onSel(fn){
       return (...a)=>{
+        /* While the text editor is open the ribbon acts on the field being
+           typed in, and the editor STAYS OPEN — Word's ribbon does not throw
+           you out of the paragraph. Paragraph-level changes (alignment,
+           spacing, direction) go onto the object at once; the letters
+           themselves belong to the editor until it commits. */
+        if(editor){ fn(editor.o,...a); touch(); editor.restyle(); ribbonPaint(); return; }
         /* EVERY selected object, not just the primary. Picking three captions
            and pressing Bold should make three captions bold — going back to
            the ribbon once per object is the thing a selection is FOR. */
@@ -1992,6 +2256,7 @@
          to go back to the canvas. Clearing it HERE rather than trusting every
          caller means an object can never be left invisible because one path
          out of the editor forgot. */
+      if(editor) editor.commit();
       editingId=null;
       if(screen!=="gallery"&&(!opened||!docs.length)) screen="gallery";
       if(screen==="gallery"){
@@ -2057,7 +2322,23 @@
          Below 820px, where the shell moves the nav to the bottom, it drops
          to a height a phone actually has. Wider than that, nothing moves. */
       const floor=global.innerWidth<=820?300:520;
-      root.style.height=Math.max(floor,Math.round(global.innerHeight-top-18))+"px";
+      /* ⚠ THE BOTTOM NAV. Below 820px the ERP's sidebar is a bar FIXED to
+         the foot of the window, 70px tall, drawn over whatever is under it.
+         "The rest of the window" used to run right down behind it, so the
+         studio's last 70px — the document tabs and the status bar, which is
+         where the panel toggles and the zoom live — were under the nav on
+         every phone and tablet. The usable bottom is the nav's top edge. */
+      const nav=document.querySelector(".sidebar");
+      let bottom=global.innerHeight;
+      if(nav){
+        try{
+          if(getComputedStyle(nav).position==="fixed"){
+            const nr=nav.getBoundingClientRect();
+            if(nr.height>0&&nr.top<global.innerHeight) bottom=nr.top;
+          }
+        }catch(e){}
+      }
+      root.style.height=Math.max(floor,Math.round(bottom-top-(bottom<global.innerHeight?10:18)))+"px";
     }
     /* ---- WHICH BAND THE WINDOW IS IN ----
        Above 1040 both panels are columns; between 780 and 1040 the rail is a
@@ -2082,6 +2363,8 @@
     const panelPaint=()=>{ paint(); if(global.innerWidth<=780) fitOnce(); };
     const onResize=()=>{
       if(!root.isConnected){ global.removeEventListener("resize",onResize); return; }
+      /* turned on its side while designing: the same short window */
+      if(shortWindow()&&!full&&screen==="design"&&opened){ full=true; paint(); return; }
       const now=bandOf(global.innerWidth);
       if(now!==band){
         band=now;
@@ -2181,9 +2464,18 @@
     /* Opening a template, from wherever — the gallery, a document tab, the
        Recent list. One route, so the Recent stamp cannot be forgotten on one
        of them and the history cannot be left pointing at the last design. */
+    /* A SHORT WINDOW — a phone on its side — has about 390px from top to
+       bottom. The ERP's top bar, the page title and the ribbon take more
+       than that between them, so the label itself was a strip along the
+       bottom edge or off it altogether. The designer takes the whole
+       screen there, the way any phone app does in landscape; the ⛶ in the
+       size block, or Escape, gives the page back. */
+    const SHORT=560;
+    const shortWindow=()=>global.innerHeight<=SHORT&&global.innerWidth>global.innerHeight;
     function openDoc(i){
       if(i<0||i>=docs.length) return;
       di=i; selIds=[]; tool=null; bgEdit=false; opened=true; screen="design";
+      if(shortWindow()) full=true;
       stampUsed(docs[i]);
       resetHistory(); paint(); fitOnce();
     }
@@ -2672,7 +2964,7 @@
       items.forEach(it=>{
         if(it.sep) return box.appendChild(h("div",{class:"ls-ctx-sep"}));
         const el=h("button",{class:"ls-ctx-i"+(it.disabled?" off":"")+(it.danger?" danger":""),
-          type:"button",
+          type:"button",onpointerdown:keepEditor,
           onclick:(e)=>{ e.stopPropagation(); closeCtx();
             if(!it.disabled&&it.onclick) it.onclick(); }},[
           h("span",{class:"ls-ctx-m",text:it.check?"✓":""}),
@@ -2685,8 +2977,12 @@
       root.appendChild(box);
       ctxEl=box;
       /* Placed AFTER it is in the document, so the size that keeps it on screen
-         is its measured size rather than a guess at it. */
-      const rr=root.getBoundingClientRect(), bb=box.getBoundingClientRect();
+         is its measured size rather than a guess at it. Never taller than the
+         studio: on a phone the full menu is taller than the screen, and a
+         menu whose last third is off the bottom cannot be scrolled to. */
+      const rr=root.getBoundingClientRect();
+      box.style.maxHeight=Math.max(140,Math.floor(rr.height-12))+"px";
+      const bb=box.getBoundingClientRect();
       box.style.left=Math.max(4,Math.min(x-rr.left,rr.width -bb.width -6))+"px";
       box.style.top =Math.max(4,Math.min(y-rr.top ,rr.height-bb.height-6))+"px";
       return box;
@@ -2761,15 +3057,25 @@
        symbology and a position in millimetres, and none of that
        survives a round trip through text/plain.
        ============================================================ */
-    function copySel(){
+    /* what the object SAYS — the part of it that can travel as text */
+    const textOf=(o)=>!o?"":(o.type==="text"||o.type==="barcode"||o.type==="qr")
+      ?(o.src&&o.src.kind==="fixed"?String(o.text||""):srcValue(o,canvasCtx())):"";
+    function copySel(quiet){
       const o=selObj(); if(!o) return;
       clip=JSON.parse(JSON.stringify(o));
-      toast("Copied",{type:"ok"});
+      clipText=textOf(o);
+      /* …and the system clipboard, where the browser allows it — so a caption
+         copied here can be pasted into Word, a mail, or the ERP's own fields.
+         Over plain HTTP this API does not exist; the copy EVENT (below, with
+         the keyboard) carries the words out instead. */
+      if(clipText&&global.navigator&&navigator.clipboard&&navigator.clipboard.writeText)
+        try{ navigator.clipboard.writeText(clipText).catch(()=>{}); }catch(e){}
+      if(!quiet) toast("Copied",{type:"ok"});
       paint();
     }
     function cutSel(){
       const o=selObj(); if(!o) return;
-      clip=JSON.parse(JSON.stringify(o));
+      copySel(true);
       delSel();
     }
     function pasteClip(){
@@ -2782,6 +3088,20 @@
       if(!c) return;
       c.id=uid("o_"); c.x=+(c.x+3).toFixed(1); c.y=+(c.y+3).toFixed(1);
       doc().objects.push(c); setSel(c.id); touch(); paint();
+    }
+    /* Text from OUTSIDE — a line copied in Word, a cell in Excel — lands as a
+       new text field, the way pasting onto a slide does. */
+    function pasteText(t){
+      t=String(t||"").replace(/\r\n?/g,"\n").replace(/\n+$/,"");
+      if(!t.trim()) return false;
+      if(doc().objects.length>=MAX_OBJ){
+        toast("That is the "+MAX_OBJ+"-object limit",{type:"warn"}); return true; }
+      const o=newObject("text",doc());
+      o.text=t.slice(0,600);
+      const lines=o.text.split("\n").length;
+      o.h=+Math.min(Math.max(2,doc().h-2),Math.max(8,lines*o.size*o.lineH+2)).toFixed(1);
+      doc().objects.push(o); setSel(o.id); touch(); paint();
+      return true;
     }
 
     /* ============================================================
@@ -2806,10 +3126,18 @@
     };
     const LINEHS=["1","1.15","1.25","1.5","2","2.5","3"];
 
+    /* A ribbon button pressed while the text editor is open must not take the
+       keyboard away from it — the letters you picked out are what the button
+       is FOR. Stopping the pointer's default keeps focus where it is; the
+       click still arrives. (A select or a typed box still takes focus; the
+       editor waits for those and takes it back.) */
+    const keepEditor=(e)=>{ if(editor) e.preventDefault(); };
     const rbtn=(opt)=>{
+      /* the handler is always attached; a disabled button fires no click, and
+         one the editor re-enables (Undo, Redo) must still know what to do */
       const b=h("button",{class:"ls-b"+(opt.on?" on":"")+(opt.cls?" "+opt.cls:""),
-        type:"button",title:opt.title||opt.label||"",
-        onclick:opt.off?null:opt.onclick});
+        type:"button",title:opt.title||opt.label||"","data-fx":opt.fx||null,
+        "data-act":opt.act||null,onpointerdown:keepEditor,onclick:opt.onclick||null});
       if(opt.icon) b.appendChild(ico(opt.icon,opt.size||16));
       if(opt.html) b.appendChild(h("span",{class:"ls-bt",html:opt.html}));
       else if(opt.text) b.appendChild(h("span",{class:"ls-bt",text:opt.text}));
@@ -2819,7 +3147,8 @@
     /* the tall buttons: an icon over its caption */
     const rbig=(opt)=>{
       const b=h("button",{class:"ls-bb"+(opt.on?" on":""),type:"button",
-        title:opt.title||opt.label.replace(/\n/g," "),onclick:opt.off?null:opt.onclick},[
+        title:opt.title||opt.label.replace(/\n/g," "),onpointerdown:keepEditor,
+        onclick:opt.off?null:opt.onclick},[
         ico(opt.icon,opt.size||22),
         h("span",{class:"ls-bbl",text:opt.label}),
       ]);
@@ -2829,7 +3158,8 @@
     /* the small labelled rows stacked beside Paste */
     const rsm=(opt)=>{
       const b=h("button",{class:"ls-bs",type:"button",title:opt.title||opt.label,
-        onclick:opt.off?null:opt.onclick},[ico(opt.icon,13),h("span",{text:opt.label})]);
+        onpointerdown:keepEditor,onclick:opt.off?null:opt.onclick},
+        [ico(opt.icon,13),h("span",{text:opt.label})]);
       if(opt.off){ b.disabled=true; b.classList.add("off"); }
       return b;
     };
@@ -2877,11 +3207,11 @@
       const ab=anchor.getBoundingClientRect();
       const box=h("div",{class:"ls-cpop"});
       const take=(v)=>{ pushRecent(v); closeCtx(); onPick(v); };
-      const swat=(v)=>h("button",{type:"button",title:String(v).toUpperCase(),
+      const swat=(v)=>h("button",{type:"button",title:String(v).toUpperCase(),onpointerdown:keepEditor,
         class:"ls-cs"+(String(cur||"").toLowerCase()===String(v).toLowerCase()?" on":""),
         style:"background:"+v,onclick:(e)=>{ e.stopPropagation(); take(v); }});
 
-      if(allowNone) box.appendChild(h("button",{class:"ls-cnone",type:"button",
+      if(allowNone) box.appendChild(h("button",{class:"ls-cnone",type:"button",onpointerdown:keepEditor,
         title:"Leave it clear — not white, but nothing at all",
         onclick:(e)=>{ e.stopPropagation(); closeCtx(); onPick(""); }},[
         h("i",{class:"ls-swc none"}), h("span",{text:"No colour"})]));
@@ -2938,7 +3268,7 @@
         text:cur?String(cur).toUpperCase():"None"}));
       kids.push(ico("chev",11));
       const b=h("button",{type:"button",title:title||"",
-        class:"ls-swatch"+(off?" off":"")+(opts.full?" ls-swfull":""),
+        class:"ls-swatch"+(off?" off":"")+(opts.full?" ls-swfull":""),onpointerdown:keepEditor,
         onclick:off?null:(e)=>{ e.stopPropagation(); colorPop(b,cur,onPick,opts.allowNone); }},kids);
       if(off) b.disabled=true;
       return b;
@@ -2956,7 +3286,9 @@
       const wrap=h("div",{class:"ls-combo"+(off?" off":""),style:w?("width:"+w+"px"):""});
       const inp=h("input",{class:"ls-cin",type:"text",inputmode:"decimal",
         spellcheck:"false",title:title||"","aria-label":title||""});
-      inp.value=String(+val);
+      /* empty means MIXED — letters picked out at two sizes — and Word shows
+         exactly that: an empty box, not a number that is true of half of them */
+      inp.value=(val===""||val==null)?"":String(+val);
       inp.disabled=!!off;
       const take=()=>onCommit(parseFloat(String(inp.value).replace(",",".")));
       inp.addEventListener("change",take);
@@ -2983,7 +3315,7 @@
     const caseMenu=(e,o)=>{
       e.stopPropagation();
       const b=e.currentTarget.getBoundingClientRect();
-      const set=(v)=>onSel((s)=>{s.tcase=v;})();
+      const set=(v)=>fmtCase(v);
       ctxMenu(b.left,b.bottom+2,[
         {label:"Aa   As typed",             check:o.tcase==="none",  onclick:()=>set("none")},
         {label:"AA   UPPERCASE",            check:o.tcase==="upper", onclick:()=>set("upper")},
@@ -2999,11 +3331,6 @@
       /* Colour means the ink of whatever is selected: the type of a text field,
          the bars of a barcode, the stroke of a shape or a rule. */
       const inkOf=(s)=>(s.type==="line"||s.type==="box"||s.type==="ellipse")?s.stroke:s.color;
-      const setInk=(v)=>{
-        const s=selObj(); if(!s) return;
-        if(s.type==="line"||s.type==="box"||s.type==="ellipse") s.stroke=v; else s.color=v;
-        touch(); paint();
-      };
 
       /* ---- Clipboard ---- */
       const gClip=h("div",{class:"ls-rgb"},[
@@ -3014,48 +3341,68 @@
           rsm({icon:"copy", label:"Copy",  off:!o, onclick:copySel,title:"Copy  (Ctrl+C)"}),
           rsm({icon:"trash",label:"Delete",off:!o, onclick:delSel, title:"Delete  (Del)"}),
         ]),
+        /* Word's brush: pick up how this text looks, put it on another */
+        rbig({icon:"painter",label:"Format\nPainter",off:!isText&&!painter,on:!!painter,
+          title:"Format Painter — copy how this text looks, then click the text that "+
+                "should look the same  (Ctrl+Shift+C picks up, Ctrl+Shift+V puts down)",
+          onclick:()=>{ if(painter){ painter=null; if(editor){ ribbonPaint(); painterCue(); } else paint(); }
+                        else painterCopy(); }}),
       ]);
 
-      /* ---- Font ---- */
+      /* ---- Font ----
+         `f` is the look of WHAT IS PICKED OUT: the letters selected in the
+         editor, the word under its caret, or the whole field. A reading of
+         null on any of it means the letters disagree — Word shows that as a
+         button neither lit nor dark and an empty size box, and so does this. */
+      const f=isText?curFmt():null;
+      const fontOpts=FONTS.map(x=>({v:x.v,l:x.l}));
+      if(f&&f.font==null) fontOpts.unshift({v:"",l:""});
       const gFont=h("div",{class:"ls-rgb"},[h("div",{class:"ls-rcol"},[
         h("div",{class:"ls-rrow"},[
-          rsel(canType?o.font:"times",FONTS.map(f=>({v:f.v,l:f.l})),
-            onSel((s,v)=>{s.font=v;}),150,"Font",!canType),
+          rsel(isText?(f.font==null?"":f.font):(canType?o.font:"times"),fontOpts,
+            (v)=>{ if(!v) return; if(isText) fmtFont(v); else onSel((s)=>{s.font=v;})(); },
+            150,"Font",!canType),
           /* TYPE ANY SIZE. This was a drop-down of the common sizes and
              nothing else, so a field that needed 4.2 mm could not be set at
              all. The list is still one click away on the caret. */
-          combo(canType?o.size:4,SIZES,(v)=>setSize(v),66,
+          combo(isText?(f.size==null?"":f.size):(canType?o.size:4),SIZES,(v)=>setSize(v),66,
             o&&o.type!=="text"?"Size of the printed caption, in millimetres — type any value"
                               :"Type size in millimetres — type any value, or pick one",
             !canType,"mm"),
           h("span",{class:"ls-unit",text:"mm"}),
         ]),
         h("div",{class:"ls-rrow"},[
-          rbtn({text:"B",cls:"ls-fx-b",title:"Bold",off:!isText,on:isText&&o.bold,
-            onclick:onSel(s=>{s.bold=!s.bold;})}),
-          rbtn({text:"I",cls:"ls-fx-i",title:"Italic",off:!isText,on:isText&&o.italic,
-            onclick:onSel(s=>{s.italic=!s.italic;})}),
-          rbtn({text:"U",cls:"ls-fx-u",title:"Underline",off:!isText,on:isText&&o.underline,
-            onclick:onSel(s=>{s.underline=!s.underline;})}),
-          rbtn({html:'A<i>▲</i>',cls:"ls-fx-a",title:"Grow the type one step",off:!canType,
-            onclick:()=>stepSize(1)}),
-          rbtn({html:'A<i>▼</i>',cls:"ls-fx-a",title:"Shrink the type one step",off:!canType,
-            onclick:()=>stepSize(-1)}),
+          rbtn({text:"B",cls:"ls-fx-b",fx:"bold",title:"Bold  (Ctrl+B)",off:!isText,
+            on:!!f&&f.bold===true,onclick:()=>fmtToggle("b")}),
+          rbtn({text:"I",cls:"ls-fx-i",fx:"italic",title:"Italic  (Ctrl+I)",off:!isText,
+            on:!!f&&f.italic===true,onclick:()=>fmtToggle("i")}),
+          rbtn({text:"U",cls:"ls-fx-u",fx:"underline",title:"Underline  (Ctrl+U)",off:!isText,
+            on:!!f&&f.underline===true,onclick:()=>fmtToggle("u")}),
+          rbtn({text:"S",cls:"ls-fx-s",fx:"strike",title:"Strikethrough",off:!isText,
+            on:!!f&&f.strike===true,onclick:()=>fmtToggle("k")}),
+          rbtn({html:'x<sup>2</sup>',cls:"ls-fx-v",fx:"sup",title:"Superscript  (Ctrl+Shift++)",
+            off:!isText,on:!!f&&f.vert==="sup",onclick:()=>fmtVert("sup")}),
+          rbtn({html:'x<sub>2</sub>',cls:"ls-fx-v",fx:"sub",title:"Subscript  (Ctrl+=)",
+            off:!isText,on:!!f&&f.vert==="sub",onclick:()=>fmtVert("sub")}),
           h("div",{class:"ls-rsep"}),
+          rbtn({html:'A<i>▲</i>',cls:"ls-fx-a",title:"Grow the type one step  (Ctrl+])",off:!canType,
+            onclick:()=>stepSize(1)}),
+          rbtn({html:'A<i>▼</i>',cls:"ls-fx-a",title:"Shrink the type one step  (Ctrl+[)",off:!canType,
+            onclick:()=>stepSize(-1)}),
           rbtn({html:'A<i>▾</i>',cls:"ls-fx-a",title:"Change case",off:!isText,
             onclick:(e)=>caseMenu(e,o)}),
-          colorBtn(o?inkOf(o):"#000000",
+          colorBtn(isText?(f.color==null?"":f.color):(o?inkOf(o):"#000000"),
             o&&o.type!=="text"?"Colour — the ink this prints in"
                               :"Text colour — the ink the type prints in",
-            setInk,!o,{glyph:"A"}),
-          /* WORD'S HIGHLIGHTER. The block of colour BEHIND the text, which is
-             what gives you white type in a solid black band — the clearest
-             thing you can put on a carton, and the model has always carried
-             it. It had no control on this screen until now. */
-          colorBtn(isText?(o.shade||""):"",
-            "Text background — the block of colour behind the type",
-            (v)=>{ const s=selObj(); if(!s) return; s.shade=v; touch(); paint(); },
-            !isText,{glyph:"▙",allowNone:true}),
+            fmtColor,!o,{glyph:"A"}),
+          /* WORD'S HIGHLIGHTER. On letters picked out in the editor, those
+             letters; otherwise the block of colour BEHIND the whole field,
+             which is what gives you white type in a solid black band — the
+             clearest thing you can put on a carton. */
+          colorBtn(isText?(editor&&editor.hasSel()?(f.hi||""):(o.shade||"")):"",
+            editor&&editor.hasSel()?"Highlight the selected letters"
+              :"Text background — the block of colour behind the type",
+            fmtHighlight,!isText,{glyph:"▙",allowNone:true}),
         ]),
       ])]);
 
@@ -3108,23 +3455,39 @@
             onclick:onSel(s=>{s.indentL=Math.max(0,+(s.indentL-1).toFixed(1));})}),
           rbtn({icon:"indentmore",title:"More indent",off:!isText,
             onclick:onSel(s=>{s.indentL=Math.min(200,+(s.indentL+1).toFixed(1));})}),
-          rbtn({icon:"spacingclear",title:"Back to plain text at the default spacing",
-            off:!isText,onclick:onSel(s=>{ s.bold=false; s.italic=false; s.underline=false;
-              s.strike=false; s.tcase="none"; s.shade=""; s.lineH=1.25;
-              s.indentL=0; s.indentR=0; s.align="left"; s.valign="middle"; })}),
+          rbtn({icon:"spacingclear",title:"Clear all formatting — back to plain text at the "+
+              "default spacing  (Ctrl+Space clears the letters alone)",
+            off:!isText,onclick:()=>{
+              onSel(s=>{ s.bold=false; s.italic=false; s.underline=false;
+                s.strike=false; s.tcase="none"; s.shade=""; s.lineH=1.25;
+                s.indentL=0; s.indentR=0; s.align="left"; s.valign="middle";
+                if(!editor) s.runs=undefined; })();
+              if(editor) fmtClear();
+            }}),
         ]),
       ])]);
 
-      const grp=(name,content)=>h("div",{class:"ls-rg"},[
+      const grp=(name,content,cls)=>h("div",{class:"ls-rg "+cls},[
         h("div",{class:"ls-rgc"},content),
         h("div",{class:"ls-rgl",text:name}),
       ]);
+      /* THE GROUPS SCROLL, THE SIZE BLOCK DOES NOT. The block carries the
+         way back to the library and the full-screen switch, and on any
+         screen narrower than about 1600px the four groups alone are wider
+         than the ribbon — so when the whole ribbon scrolled, the door out
+         of the designer was the first thing to go off the edge. The groups
+         have a strip of their own to scroll in; the block stays put, and on
+         a tablet or a phone it takes a row of its own above them (CSS). On
+         a phone the Font group leads: it is what a thumb goes to the
+         ribbon for while typing, and the clipboard can wait behind it. */
       return h("div",{class:"ls-ribbon"},[
-        grp("Clipboard",gClip),
-        grp("Font",gFont),
-        grp("Paragraph",gPara),
-        grp("Spacing",gSpace),
-        h("div",{class:"sp"}),
+        h("div",{class:"ls-rscroll"},[
+          grp("Clipboard",gClip,"ls-rg-clip"),
+          grp("Font",gFont,"ls-rg-font"),
+          grp("Paragraph",gPara,"ls-rg-para"),
+          grp("Spacing",gSpace,"ls-rg-space"),
+          h("div",{class:"sp"}),
+        ]),
         docBox(),
       ]);
     }
@@ -3144,9 +3507,13 @@
     function docBox(){
       const d=doc();
       return h("div",{class:"ls-docbox"},[
+        /* the words "Label Size" go first when the ribbon is short of room;
+           the numbers and the unit are the part that is read */
         h("button",{class:"ls-dsize",type:"button",onclick:()=>layoutDialog(),
-          title:"Label size and stock — click to change",text:
-            "Label Size: "+(+d.w).toFixed(1)+" mm x "+(+d.h).toFixed(1)+" mm"}),
+          title:"Label size and stock — click to change"},[
+          h("span",{class:"ls-dsl",text:"Label Size: "}),
+          h("span",{text:(+d.w).toFixed(1)+" mm x "+(+d.h).toFixed(1)+" mm"}),
+        ]),
         h("span",{class:"ls-dmode",
           text:d.mode==="roll"?"roll":(sheetGrid(d).perPage||"—")+"-up A4"}),
         h("button",{class:"ls-rfs",type:"button",
@@ -3234,22 +3601,169 @@
     /* Any size that can be typed, held to what a label can actually print.
        Gibberish repaints rather than throwing a number away silently: the box
        goes back to the size the object really is. */
-    function setSize(v){
-      const s=selObj(); if(!s) return;
-      if(!isFinite(v)) return paint();
-      s.size=Math.round(Math.min(120,Math.max(.6,v))*100)/100;
+    /* ============================================================
+       FORMATTING, WHEREVER IT IS ASKED FOR
+
+       The ribbon, the properties panel, the keyboard and Format
+       Painter all land here. Each verb asks the same question
+       first: is the text editor open? If it is, the format goes on
+       the SELECTED LETTERS — or the word under the caret, or the
+       next thing typed: Word's three cases, and the editor decides
+       which. If not, it goes on every selected text field whole,
+       and any letters that had a say of their own are brought into
+       line, which is what Word does when the box itself is picked.
+       ============================================================ */
+    function curFmt(){
+      if(editor) return editor.fmt();
+      const o=selObj();
+      if(!o||o.type!=="text") return null;
+      return runsRange(o,0,(o.text||"").length);
+    }
+    const fmtEach=(fn)=>{
+      const list=selObjs().filter(s=>s.type==="text");
+      if(!list.length) return;
+      list.forEach(fn); touch(); paint();
+    };
+    /* bold, italic, underline, strike: b i u k */
+    function fmtToggle(key){
+      const base=RUN_BASE[key];
+      if(editor){ const f=editor.fmt(); editor.apply({[key]:f[base]!==true}); return; }
+      const f=curFmt(); if(!f) return;
+      const on=f[base]!==true;                 // Word: not all of it → all of it
+      fmtEach(s=>{ s[base]=on; runsClear(s,key); });
+    }
+    function fmtVert(v){
+      if(editor){ const f=editor.fmt(); editor.apply({v:f.vert===v?null:v}); return; }
+      const f=curFmt(); if(!f) return;
+      const on=f.vert!==v;
+      fmtEach(s=>runsApply(s,0,(s.text||"").length,{v:on?v:null}));
+    }
+    function fmtFont(v){
+      if(editor){ editor.apply({f:v}); editor.focus(); return; }
+      fmtEach(s=>{ s.font=v; runsClear(s,"f"); });
+    }
+    function fmtColor(v){
+      if(editor){ editor.apply({c:v||null}); editor.focus(); return; }
+      const list=selObjs(); if(!list.length) return;
+      list.forEach(s=>{
+        if(s.type==="line"||s.type==="box"||s.type==="ellipse") s.stroke=v;
+        else { s.color=v; runsClear(s,"c"); }
+      });
       touch(); paint();
     }
+    /* Word's highlighter on picked-out letters; the field's own shading otherwise */
+    function fmtHighlight(v){
+      if(editor&&editor.hasSel()){ editor.apply({h:v||null}); editor.focus(); return; }
+      if(editor){ editor.o.shade=v; touch(); editor.restyle(); ribbonPaint(); editor.focus(); return; }
+      fmtEach(s=>{ s.shade=v; });
+    }
+    function fmtAlign(v){ onSel(s=>{ if(s.type==="text") s.align=v; })(); }
+    /* Ctrl+Space: the letters back to the way the field is set */
+    function fmtClear(){
+      if(editor){ editor.apply({b:null,i:null,u:null,k:null,v:null,c:null,h:null,z:null,f:null}); return; }
+      fmtEach(s=>{ s.runs=undefined; });
+    }
+    /* Change Case on picked-out letters REWRITES them, as Word does; on a
+       field it is a transform, so a serial still counts. */
+    function fmtCase(v){
+      if(editor&&editor.hasSel()){ editor.setCase(v); return; }
+      onSel(s=>{ s.tcase=v; })();
+    }
     /* Stepping the type by the sizes people actually set, not by ±1 mm. */
-    function stepSize(dir){
-      const s=selObj(); if(!s) return;
-      const cur=+s.size||4;
+    const nextSize=(cur,dir)=>{
+      cur=+cur||4;
       let i=SIZES.findIndex(x=>+x>=cur-0.001);
       if(i<0) i=SIZES.length-1;
       if(dir>0) i=Math.min(SIZES.length-1,i+(+SIZES[i]===cur?1:0));
       else      i=Math.max(0,i-1);
-      s.size=Math.min(120,Math.max(.6,+SIZES[i]||cur));
+      return Math.min(120,Math.max(.6,+SIZES[i]||cur));
+    };
+    function setSize(v){
+      if(!isFinite(v)){ if(editor) ribbonPaint(); else paint(); return; }
+      v=Math.round(Math.min(120,Math.max(.6,v))*100)/100;
+      if(editor){ editor.apply({z:v}); editor.focus(); return; }
+      const s=selObj(); if(!s) return;
+      s.size=v; runsClear(s,"z");
       touch(); paint();
+    }
+    /* Letters set at a size of their own step from THAT size, as Word's Grow
+       Font does — a 6 mm word in a 4 mm line goes to 7, not to 4.5. */
+    function stepSize(dir){
+      if(editor){ editor.apply((f)=>({z:nextSize(f.size,dir)})); return; }
+      const s=selObj(); if(!s) return;
+      s.size=nextSize(s.size,dir);
+      if(s.runs&&s.runs.length)
+        putRuns(s,runsCover(s).map(r=>r.z?Object.assign({},r,{z:nextSize(r.z,dir)}):r));
+      touch(); paint();
+    }
+
+    /* ============================================================
+       FORMAT PAINTER — Word's brush. Pick up how one field looks,
+       click another, and it looks the same. Ctrl+Shift+C picks up,
+       Ctrl+Shift+V puts down; Escape puts the brush away.
+       ============================================================ */
+    const PAINT_PARA=["font","size","bold","italic","underline","strike","color","shade",
+      "align","valign","lineH","indentL","indentR","tcase","wrap"];
+    function painterCopy(){
+      const o=editor?editor.o:selObj();
+      if(!o||o.type!=="text")
+        return toast("Select a text field to copy the formatting from",{type:"warn"});
+      const p={para:{}};
+      PAINT_PARA.forEach(k=>{ p.para[k]=o[k]; });
+      /* letters picked out in the editor: their look, where it is one look */
+      if(editor&&editor.hasSel()){
+        const f=editor.fmt(); p.char={};
+        FMT_KEYS.forEach(k=>{ if(f[k]!=null) p.char[k]=f[k]; });
+      }
+      painter=p;
+      toast("Now click the text that should look the same",{type:"ok",title:"Format Painter"});
+      if(editor){ ribbonPaint(); painterCue(); } else paint();
+    }
+    /* the brush shows on the pointer and in the status bar without a repaint,
+       which would close an open editor */
+    function painterCue(){
+      const cv=root.querySelector(".ls-canvas");
+      if(cv) cv.classList.toggle("ls-painting",!!painter);
+      const rd=root.querySelector(".ls-read");
+      if(rd&&painter) rd.textContent=
+        "Format Painter — click the text that should look the same  ·  Esc puts the brush away";
+    }
+    function painterApply(o){
+      const p=painter; painter=null; painterCue();
+      if(!p) return;
+      if(editor&&editor.hasSel()){
+        const c=p.char||{bold:p.para.bold,italic:p.para.italic,underline:p.para.underline,
+          strike:p.para.strike,color:p.para.color,size:p.para.size,font:p.para.font,vert:"",hi:""};
+        editor.apply({b:c.bold,i:c.italic,u:c.underline,k:c.strike,v:c.vert||null,
+          c:c.color||null,h:c.hi||null,z:c.size||null,f:c.font||null});
+        return;
+      }
+      const list=o?[o]:selObjs();
+      list.filter(s=>s.type==="text").forEach(s=>{
+        PAINT_PARA.forEach(k=>{ if(p.para[k]!==undefined) s[k]=p.para[k]; });
+        if(p.char) ["bold","italic","underline","strike","color","size","font"]
+          .forEach(k=>{ if(p.char[k]!=null) s[k]=p.char[k]; });
+        s.runs=undefined;
+      });
+      touch(); paint();
+    }
+
+    /* The ribbon alone, redrawn — while the editor is open a full paint would
+       throw the editor away, and the ribbon is the part that has to follow
+       the caret from a bold word to a plain one. */
+    function ribbonPaint(){
+      const old=root.querySelector(".ls-ribbon");
+      if(old) old.replaceWith(ribbon());
+      syncFx();
+    }
+    /* every Bold / Italic / … button anywhere on the screen, lit to match */
+    function syncFx(){
+      const f=curFmt();
+      root.querySelectorAll("[data-fx]").forEach(b=>{
+        const key=b.getAttribute("data-fx");
+        const on=!!f&&((key==="sup"||key==="sub")?f.vert===key:f[key]===true);
+        b.classList.toggle("on",on);
+      });
     }
 
     /* ============================================================
@@ -3284,8 +3798,13 @@
         rbtn({icon:"save",  title:"Save  (Ctrl+S)",onclick:save}),
         rbtn({icon:"print", title:"Print…  (Ctrl+P)",onclick:printDialog}),
         h("div",{class:"ls-ctbsep"}),
-        rbtn({icon:"undo",  title:"Undo  (Ctrl+Z)",off:!undoS.length,onclick:undo}),
-        rbtn({icon:"redo",  title:"Redo  (Ctrl+Y)",off:!redoS.length,onclick:redo}),
+        /* while a text field is being typed on these are the editor's own
+           undo and redo — a burst of typing, a paste, a format at a time —
+           and the editor switches them on the moment it opens */
+        rbtn({icon:"undo",  title:"Undo  (Ctrl+Z)",off:!undoS.length,act:"undo",
+          onclick:()=>editor?editor.undo():undo()}),
+        rbtn({icon:"redo",  title:"Redo  (Ctrl+Y)",off:!redoS.length,act:"redo",
+          onclick:()=>editor?editor.redo():redo()}),
         h("div",{class:"ls-ctbsep"}),
         rbtn({icon:"zoomout",title:"Zoom out",onclick:()=>step(-.1)}),
         rsel(zpc,list.map(x=>({v:x,l:x+"%"})),
@@ -3473,6 +3992,7 @@
       touch(); paint();
     }
     function duplicateDoc(){
+      settle();
       if(docs.length>=MAX_DOCS) return toast("That is the "+MAX_DOCS+"-template limit",{type:"warn"});
       const c=cleanDoc(JSON.parse(JSON.stringify(doc())));
       c.id=uid("d_"); c.name=(doc().name+" copy").slice(0,60);
@@ -3543,7 +4063,7 @@
       const k=PX_MM*zoom;
 
       const stage=h("div",{class:"ls-stage"});
-      const cv=h("div",{class:"ls-canvas"+(tool?" arm":""),tabindex:"0",
+      const cv=h("div",{class:"ls-canvas"+(tool?" arm":"")+(painter?" ls-painting":""),tabindex:"0",
         style:`width:${(d.w*k).toFixed(1)}px;height:${(d.h*k).toFixed(1)}px;background:${d.bg};`+
           (d.shape==="ellipse"?"border-radius:50%;":d.shape==="round"?`border-radius:${d.radius*k}px;`:"")+
           (d.border?`box-shadow:inset 0 0 0 ${Math.max(1,d.borderW*k)}px ${d.borderC};`:"")});
@@ -3652,6 +4172,8 @@
         el.addEventListener("pointerdown",(e)=>{
           if(tool) return;                       // a tool is armed: draw, don't drag
           e.preventDefault();
+          /* Format Painter is loaded: this click PAINTS rather than picks. */
+          if(painter){ if(editor) editor.commit(); painterApply(o); return; }
           /* Taking hold of an object ends any background adjusting — you have
              plainly moved on to something else. */
           bgEdit=false;
@@ -3682,7 +4204,7 @@
            still opens its properties, because that is all there is to do. */
         el.addEventListener("dblclick",(e)=>{ e.preventDefault(); e.stopPropagation();
           setSel(o.id);
-          if(textEditable(o)) editText(o,cv,k);
+          if(textEditable(o)) editText(o,cv,k,{x:e.clientX,y:e.clientY,word:true});
           else propsDialog(); });
         el.addEventListener("contextmenu",(e)=>objectMenu(e,o));
         /* Handles only on a SINGLE selection. Eight grips on each of six
@@ -3844,17 +4366,18 @@
           }
           quickPaint(movers);
         };
-        const up=()=>{
+        const up=(ev)=>{
           document.removeEventListener("pointermove",move);
           document.removeEventListener("pointerup",up);
           document.removeEventListener("pointercancel",up);
           guides.innerHTML="";
           /* A click that moved nothing on an already-selected text field puts
-             the caret in it, right there on the label. */
+             the caret in it, right there on the label — where the click was. */
           if(!moved&&clickToType&&textEditable(o)){
             paint();
             const c=root.querySelector(".ls-canvas");
-            if(c) editText(o,c,PX_MM*zoom);
+            if(c) editText(o,c,PX_MM*zoom,
+              (ev&&ev.clientX!=null)?{x:ev.clientX,y:ev.clientY}:null);
             return;
           }
           /* Only bank an undo step if something actually moved — selecting an
@@ -3924,7 +4447,7 @@
             document.removeEventListener("pointerup",bup);
             document.removeEventListener("pointercancel",bup);
             band.remove();
-            if(!dragged) selIds=keep.length?keep:[];   // a bare click clears
+            if(!dragged){ selIds=keep.length?keep:[]; painter=null; }   // a bare click clears
             paint();
           };
           document.addEventListener("pointermove",bmove);
@@ -4026,12 +4549,11 @@
     }
 
     /* ============================================================
-       TYPING ON THE LABEL
-       A textarea laid exactly over the object, in the object's own font
-       at the object's own size, so what is being typed sits where it
-       will print rather than in a box somewhere else. Enter makes a new
-       line (a label field is often two or three); Escape abandons the
-       edit; clicking away or Ctrl+Enter commits it.
+       TYPING ON THE LABEL — the box is laid exactly over the object,
+       in the object's own font at the object's own size, so what is
+       being typed sits where it will print rather than in a box
+       somewhere else. Text is edited Word's way (TYPING ON THE
+       LABEL — WORD'S WAY, below); barcode data keeps a plain box.
 
        Only FIXED text can be typed on. A serial, a date or a prompt is
        not text — it is a rule that produces text at print time, and
@@ -4073,11 +4595,15 @@
       const n=objNode(o);
       const inner=n&&(n.firstElementChild||n.firstChild);
       if(!inner) return toast("Open the label first",{type:"warn"});
+      const was=o.size;
+      /* letters set at a size of their own scale with the rest — the probe
+         has to move them too, or it measures a box that will never exist */
+      const own=[].slice.call(inner.querySelectorAll("[data-z]"));
       const fits=(sz)=>{
         inner.style.fontSize=sz+"mm";
+        own.forEach(sp=>{ sp.style.fontSize=((+sp.getAttribute("data-z"))*sz/was).toFixed(3)+"mm"; });
         return inner.scrollHeight<=n.clientHeight+1&&inner.scrollWidth<=inner.clientWidth+1;
       };
-      const was=o.size;
       if(fits(was)){ inner.style.fontSize=""; return toast("It already fits",{type:"ok"}); }
       let lo=.6, hi=Math.max(.6,was), best=null;
       for(let i=0;i<18;i++){
@@ -4088,6 +4614,11 @@
       if(best==null)
         return toast("Even the smallest type will not fit — make the box bigger",{type:"warn"});
       o.size=Math.max(.6,Math.floor(best*10)/10);
+      if(o.runs&&o.runs.length){
+        const ratio=o.size/was;
+        putRuns(o,runsCover(o).map(r=>r.z
+          ?Object.assign({},r,{z:Math.max(.6,Math.round(r.z*ratio*100)/100)}):r));
+      }
       touch(); paint();
       toast("Type brought down to "+o.size+" mm to fit",{type:"ok"});
     }
@@ -4108,7 +4639,449 @@
        and never a value the operator has actually written */
     const BORN=["Text","Rich Text","12345678","https://www.chhaperiatapes.com"];
 
-    function editText(o,cv,k){
+    /* ============================================================
+       TYPING ON THE LABEL — WORD'S WAY
+
+       A text field is edited IN PLACE, in its own font at its own
+       size, exactly where it prints — and while it is open the
+       ribbon works on the letters you have picked out, not on the
+       whole field. Drag across a word and press Bold: that word is
+       bold. Put the caret in a word and press Ctrl+I: that word is
+       italic. Press Ctrl+U with the caret between words and carry
+       on typing: what you type is underlined. Those are Word's three
+       rules, and they are the whole of what this editor adds.
+
+       HOW IT IS BUILT. The box is a contenteditable div drawn from
+       the field's runs — one <span> per run — so the browser does
+       the typing, the caret, the selection, the touch handles and
+       the IME (Hindi is composed by the system's own keyboard).
+       After every keystroke the spans are read straight back into
+       runs, so a letter the browser put into a bold span is bold.
+       The two things the browser is NOT allowed to do are make a new
+       line (it would wrap it in a <div>) and paste (it would paste
+       HTML): both are taken over and written through the runs.
+
+       The text and its runs live in a working copy until the edit
+       is committed — clicking away, Tab, Ctrl+Enter, a repaint — so
+       Escape can still walk out with nothing changed, and one edit
+       is one undo step on the label. Inside the editor Ctrl+Z is
+       its own, Word-style: a burst of typing, a paste, a format at
+       a time.
+
+       Barcode and QR data is one line that has to scan, so it keeps
+       the plain box (editData, below).
+       ============================================================ */
+    function editText(o,cv,k,at){
+      if(o&&o.type==="text") return editRich(o,cv,k,at);
+      return editData(o,cv,k);
+    }
+    function editRich(o,cv,k,at){
+      if(cv.querySelector(".ls-editbox")) return;               // already editing
+      if(!textEditable(o)) return;
+      /* THE WORKING COPY. It reads the field's look — bold, colour, size, the
+         alignment — live off the object, so the ribbon's paragraph changes
+         show at once; the letters and their runs are its own until commit. */
+      const w=Object.create(o);
+      w.text=String(o.text||"");
+      w.runs=(o.runs&&o.runs.length)?JSON.parse(JSON.stringify(o.runs)):undefined;
+
+      const box=h("div",{class:"ls-editbox"});
+      const ed=h("div",{class:"ls-edit ls-rich",contenteditable:"true",spellcheck:"false",
+        tabindex:"0",role:"textbox","aria-multiline":"true","aria-label":"Text on the label"});
+      box.appendChild(ed);
+      const tip=h("div",{class:"ls-edittip",
+        text:"Select letters, then Bold / Italic / colour · Enter = new line · Tab = next field · Esc = cancel"});
+
+      let rendered=[];             // the runs the spans on screen were drawn from
+      let lastSel=null;            // {a,b}: the caret, as offsets into w.text
+      let pend=null, pendAt=-1;    // a look chosen with nothing selected, for the next letters typed
+      let composing=false;         // an IME (Hindi) is mid-word: leave the DOM alone
+      let done=false;
+      const eh=[], er=[];          // the editor's own undo and redo
+      let burst=0, lastKind="";    // typing is banked a burst at a time, as Word does
+      let rafR=0;
+
+      /* ---- the DOM, read the way the model reads it ----
+         Text nodes as they are; a <br> the browser made is a new line; a block
+         it slipped in is a line of its own. Each piece knows its run. */
+      const runOfNode=(n)=>{
+        for(let e=n.parentNode;e&&e!==ed;e=e.parentNode)
+          if(e.nodeType===1&&e.hasAttribute("data-k")) return rendered[+e.getAttribute("data-k")]||null;
+        return null;
+      };
+      const pieces=()=>{
+        const out=[];
+        const rec=(n,first)=>{
+          if(n.nodeType===3){ out.push({node:n,text:n.nodeValue,run:runOfNode(n)}); return; }
+          if(n.nodeType!==1) return;
+          if(n.nodeName==="BR"){
+            if(!n.hasAttribute("data-e")) out.push({node:n,text:"\n",foreign:true});
+            return;
+          }
+          if(n!==ed&&/^(DIV|P|LI)$/.test(n.nodeName)&&!first) out.push({node:n,text:"\n",foreign:true});
+          let f=true;
+          for(let c=n.firstChild;c;c=c.nextSibling){ rec(c,f); f=false; }
+        };
+        rec(ed,true);
+        return out;
+      };
+      /* where a DOM point (node, offset) falls in w.text */
+      const offsetAt=(node,off)=>{
+        const R=document.createRange();
+        try{ R.setStart(ed,0); R.setEnd(node,off); }catch(e){ return w.text.length; }
+        let pos=0;
+        for(const p of pieces()){
+          if(p.node.nodeType===3){
+            if(R.comparePoint(p.node,p.text.length)<=0) pos+=p.text.length;
+            else { if(R.comparePoint(p.node,0)<=0&&R.endContainer===p.node) pos+=R.endOffset; break; }
+          } else {
+            if(R.comparePoint(p.node,0)<=0) pos+=1; else break;
+          }
+        }
+        return pos;
+      };
+      const idxOf=(n)=>Array.prototype.indexOf.call(n.parentNode.childNodes,n);
+      /* the DOM point for an offset into w.text */
+      const pointAt=(off)=>{
+        let pos=0, last=null;
+        for(const p of pieces()){
+          if(p.node.nodeType===3){
+            if(off<=pos+p.text.length) return {node:p.node,off:off-pos};
+            pos+=p.text.length;
+          } else {
+            if(off<=pos) return {node:p.node.parentNode,off:idxOf(p.node)};
+            pos+=1;
+            if(off<=pos) return {node:p.node.parentNode,off:idxOf(p.node)+1};
+          }
+          last=p;
+        }
+        if(last&&last.node.nodeType===3) return {node:last.node,off:last.text.length};
+        return {node:ed,off:0};
+      };
+      const selOffsets=()=>{
+        const sel=document.getSelection();
+        if(!sel||!sel.rangeCount) return null;
+        const r=sel.getRangeAt(0);
+        if(!ed.contains(r.startContainer)||!ed.contains(r.endContainer)) return null;
+        const a=offsetAt(r.startContainer,r.startOffset), b=offsetAt(r.endContainer,r.endOffset);
+        return {a:Math.min(a,b),b:Math.max(a,b)};
+      };
+      const setSelection=(s)=>{
+        if(!s) return;
+        const sel=document.getSelection(); if(!sel) return;
+        const len=w.text.length;
+        const a=Math.max(0,Math.min(Math.min(s.a,s.b),len));
+        const b=Math.max(0,Math.min(Math.max(s.a,s.b),len));
+        const A=pointAt(a), B=pointAt(b);
+        try{
+          const r=document.createRange();
+          r.setStart(A.node,A.off); r.setEnd(B.node,B.off);
+          sel.removeAllRanges(); sel.addRange(r);
+        }catch(e){}
+        lastSel={a,b};
+      };
+      const curSel=()=>selOffsets()||lastSel||{a:w.text.length,b:w.text.length};
+
+      /* ---- drawing: one <span> per run ----
+         Sized in px, because the editor sits outside the label's mm scale. A
+         trailing <br> gives an empty last line its height — the browser would
+         add one of its own otherwise, and the read-back would count it. */
+      const render=(keepSel)=>{
+        const s=keepSel?selOffsets():null;
+        ed.innerHTML="";
+        rendered=runsCover(w);
+        let pos=0;
+        rendered.forEach((r,i)=>{
+          const t=w.text.slice(pos,pos+r.n); pos+=r.n;
+          const sp=h("span",{"data-k":String(i)});
+          const st=runStyle(w,r,PX_MM*zoom);
+          if(st.style) sp.style.cssText=st.style;
+          sp.textContent=t;
+          ed.appendChild(sp);
+        });
+        if(!w.text||/\n$/.test(w.text)) ed.appendChild(h("br",{"data-e":"1"}));
+        if(s) setSelection(s);
+      };
+      /* the frame and the box take the field's own look, and take it again
+         whenever the ribbon changes it */
+      const restyle=()=>{
+        const px=o.size*PX_MM*zoom;
+        box.style.cssText=`left:${(o.x*k).toFixed(1)}px;top:${(o.y*k).toFixed(1)}px;`+
+          `width:${Math.max(16,o.w*k).toFixed(1)}px;height:${Math.max(12,o.h*k).toFixed(1)}px;`+
+          `align-items:${o.valign==="start"?"flex-start":o.valign==="end"?"flex-end":"center"};`+
+          (o.shade?`background:${o.shade};`:"");
+        tip.style.cssText=`left:${(o.x*k).toFixed(1)}px;`+
+          `top:${(o.y*k+Math.max(12,o.h*k)+3).toFixed(1)}px`;
+        /* the hint wraps before it runs off the stage — on a phone the label
+           starts near the left edge and the one-line hint is wider than the
+           screen */
+        const st=cv.closest(".ls-stage");
+        if(st){
+          const sr=st.getBoundingClientRect(), cr=cv.getBoundingClientRect();
+          tip.style.maxWidth=Math.max(150,Math.floor(sr.right-(cr.left+o.x*k)-12))+"px";
+        }
+        ed.style.cssText=`font:${o.italic?"italic":"normal"} ${o.bold?700:400} `+
+          `${px.toFixed(2)}px/${o.lineH} ${fontCss(o.font)};`+
+          `color:${o.color};text-align:${o.align==="justify"?"justify":o.align};`+
+          (o.indentL?`padding-left:${(o.indentL*k).toFixed(1)}px;`:"")+
+          (o.indentR?`padding-right:${(o.indentR*k).toFixed(1)}px;`:"")+
+          (o.wrap===false?"white-space:pre;overflow-x:auto;":"white-space:pre-wrap;")+
+          (o.tcase&&o.tcase!=="none"
+            ? "text-transform:"+(o.tcase==="upper"?"uppercase":o.tcase==="lower"?"lowercase":"capitalize")+";"
+            : "")+
+          `max-height:${Math.max(12,o.h*k).toFixed(1)}px;`;
+        render(true);
+      };
+
+      /* ---- the browser typed; read what it did straight back into runs ---- */
+      const readBack=()=>{
+        let text="", rs=[], prev=null, foreign=false;
+        pieces().forEach(p=>{
+          text+=p.text;
+          let r=p.run;
+          /* a letter the browser put nowhere in particular (it does, after
+             everything was selected and typed over) wears what the letter
+             before it wore — Word's rule for new letters */
+          if(!r){ foreign=true; r=prev||rendered[0]||{}; }
+          rs.push(Object.assign({},r,{n:p.text.length}));
+          prev=r;
+          if(p.foreign) foreign=true;
+        });
+        const old=w.text;
+        w.text=text;
+        putRuns(w,rs);
+        return {old,foreign};
+      };
+      const diff=(a,b)=>{
+        const n=Math.min(a.length,b.length);
+        let p=0; while(p<n&&a[p]===b[p]) p++;
+        let s=0; while(s<n-p&&a[a.length-1-s]===b[b.length-1-s]) s++;
+        return {at:p,del:a.length-p-s,ins:b.length-p-s};
+      };
+      const syncRibbon=()=>{
+        if(rafR) return;
+        rafR=requestAnimationFrame(()=>{ rafR=0; if(!done) ribbonPaint(); });
+      };
+
+      /* ---- the editor's own undo ---- */
+      const snap=()=>({text:w.text,runs:w.runs?JSON.parse(JSON.stringify(w.runs)):undefined,
+        sel:lastSel||{a:w.text.length,b:w.text.length}});
+      const pushHist=()=>{ eh.push(snap()); if(eh.length>120) eh.shift(); er.length=0; burst=0; };
+      const restore=(s)=>{
+        w.text=s.text; w.runs=s.runs; pend=null;
+        render(false); setSelection(s.sel); syncRibbon();
+      };
+      const edUndo=()=>{
+        /* nothing of the editor's own left to undo: hand the key to the label,
+           the way Word carries on back past the typing */
+        if(!eh.length){ finish(true); paint(); undo(); return; }
+        er.push(snap()); restore(eh.pop());
+      };
+      const edRedo=()=>{ if(!er.length) return; eh.push(snap()); restore(er.pop()); };
+      const afterInput=(e)=>{
+        const kind=/delete/i.test((e&&e.inputType)||"")?"del":"ins";
+        const now=Date.now();
+        const before=snap();
+        const {old,foreign}=readBack();
+        if(now-burst>800||kind!==lastKind){ eh.push(before); if(eh.length>120) eh.shift(); er.length=0; }
+        burst=now; lastKind=kind;
+        let redraw=foreign;
+        /* a look chosen with nothing selected dresses the letters typed next */
+        if(pend&&kind==="ins"){
+          const d=diff(old,w.text);
+          if(d.ins>0){ runsApply(w,d.at,d.at+d.ins,pend); pend=null; redraw=true; }
+        }
+        if(redraw) render(true);
+        lastSel=selOffsets()||lastSel;
+        syncRibbon();
+      };
+
+      /* ---- what the ribbon and the keys ask of the editor ---- */
+      const PK={b:"bold",i:"italic",u:"underline",k:"strike",v:"vert",c:"color",h:"hi",z:"size",f:"font"};
+      const baseOf=(kk)=>({b:!!o.bold,i:!!o.italic,u:!!o.underline,k:!!o.strike,v:"",
+        c:o.color,h:"",z:o.size,f:o.font})[kk];
+      const withPend=(f)=>{
+        if(!pend) return f;
+        f=Object.assign({},f);
+        Object.keys(pend).forEach(kk=>{ f[PK[kk]]=pend[kk]==null?baseOf(kk):pend[kk]; });
+        return f;
+      };
+      const fmt=()=>{
+        const s=curSel();
+        const f=runsRange(w,s.a,s.b);
+        return s.a===s.b?withPend(f):f;
+      };
+      const hasSel=()=>{ const s=curSel(); return s.a<s.b; };
+      const focusEd=()=>{
+        if(done) return;
+        if(document.activeElement!==ed){
+          try{ ed.focus({preventScroll:true}); }catch(e){ ed.focus(); }
+          if(lastSel) setSelection(lastSel);
+        }
+      };
+      /* Word's three cases: the letters picked out; the word under the caret;
+         or, with neither, the next thing typed. */
+      const apply=(patch)=>{
+        const s=curSel();
+        const range=s.a<s.b?[s.a,s.b]:wordAt(w.text,s.a);
+        if(range){
+          pushHist();
+          runsApply(w,range[0],range[1],patch);
+          render(false); setSelection(s); focusEd(); syncRibbon();
+          return;
+        }
+        const p=typeof patch==="function"?patch(withPend(runsRange(w,s.a,s.a))):patch;
+        pend=Object.assign({},pend||{},p);
+        pendAt=s.a;
+        focusEd(); syncRibbon();
+      };
+      const insert=(str)=>{
+        const s=curSel();
+        pushHist();
+        runsSplice(w,s.a,s.b-s.a,str,pend); pend=null;
+        render(false);
+        setSelection({a:s.a+str.length,b:s.a+str.length});
+        syncRibbon();
+      };
+      /* Change Case rewrites the letters picked out — one for one, so the runs
+         under them stay true; a letter that would become two (ß → SS) stays. */
+      const setCase=(v)=>{
+        const s=curSel(); if(s.a>=s.b||v==="none") return;
+        const one=(ch,up)=>{ const t=up?ch.toUpperCase():ch.toLowerCase(); return t.length===ch.length?t:ch; };
+        const mid=Array.from(w.text.slice(s.a,s.b));
+        let ws=true;
+        const out=mid.map(c=>{
+          const r=v==="upper"?one(c,true):v==="lower"?one(c,false):(ws?one(c,true):one(c,false));
+          ws=!WORD_CH.test(c);
+          return r;
+        }).join("");
+        if(out.length!==s.b-s.a) return;
+        pushHist();
+        w.text=w.text.slice(0,s.a)+out+w.text.slice(s.b);
+        render(false); setSelection(s); focusEd(); syncRibbon();
+      };
+      /* the caret lands where the click was — or, from a double-click, on
+         the word there, as Word selects it */
+      const caretFrom=(pt)=>{
+        if(!pt||typeof document.caretRangeFromPoint!=="function") return false;
+        let r=null;
+        try{ r=document.caretRangeFromPoint(pt.x,pt.y); }catch(e){ r=null; }
+        if(!r||!ed.contains(r.startContainer)) return false;
+        const i=offsetAt(r.startContainer,r.startOffset);
+        const wd=pt.word?(wordAt(w.text,i)||wordAt(w.text,i+1)):null;
+        setSelection(wd?{a:wd[0],b:wd[1]}:{a:i,b:i});
+        return true;
+      };
+
+      /* ---- leaving ---- */
+      const finish=(keep)=>{
+        if(done) return; done=true;
+        document.removeEventListener("selectionchange",onSelCh);
+        ed.removeEventListener("blur",onBlur);
+        if(rafR){ cancelAnimationFrame(rafR); rafR=0; }
+        box.remove(); tip.remove();
+        editor=null; editingId=null;
+        if(!keep) return;
+        const was=JSON.stringify([String(o.text||""),o.runs||null]);
+        const now=JSON.stringify([w.text,w.runs||null]);
+        if(was===now) return;
+        o.text=w.text;
+        if(w.runs&&w.runs.length) o.runs=w.runs; else delete o.runs;
+        touch();
+      };
+      /* TAB WALKS THE FIELDS. Filling in a label is filling in a form, and a
+         form you have to aim at with a mouse between every entry is the slow
+         way to do it. Commits what is there and opens the next one. */
+      const step=(dir)=>{
+        const list=doc().objects.filter(textEditable);
+        const i=list.indexOf(o);
+        finish(true);
+        if(list.length<2||i<0){ paint(); return; }
+        const nxt=list[(i+dir+list.length)%list.length];
+        setSel(nxt.id); paint();
+        const c=root.querySelector(".ls-canvas");
+        if(c) editText(nxt,c,PX_MM*zoom);
+      };
+      const onSelCh=()=>{
+        if(done||document.activeElement!==ed) return;
+        const s=selOffsets(); if(!s) return;
+        if(lastSel&&s.a===lastSel.a&&s.b===lastSel.b) return;
+        lastSel=s;
+        if(pend&&s.a!==pendAt) pend=null;     // Word drops a pending look once the caret moves
+        syncRibbon();
+      };
+      /* Clicking away commits. A control of the studio's own — the ribbon,
+         the panel, a palette — takes the keyboard for a moment and hands it
+         back, so the edit stays open under it, the way Word's ribbon does
+         not throw you out of the paragraph. */
+      const onBlur=()=>{
+        setTimeout(()=>{
+          if(done) return;
+          const ae=document.activeElement;
+          if(ae===ed) return;
+          if(ae&&ae!==document.body&&root.contains(ae)&&!ae.closest(".ls-canvas")) return;
+          finish(true); paint();
+        },0);
+      };
+
+      /* ---- the keys ---- */
+      ed.addEventListener("keydown",(e)=>{
+        e.stopPropagation();                       // the document's shortcuts are handled here
+        const mod=e.ctrlKey||e.metaKey, kk=(e.key||"").toLowerCase();
+        if(e.key==="Escape"){ e.preventDefault(); finish(false); paint(); return; }
+        if(e.key==="Tab"){ e.preventDefault(); step(e.shiftKey?-1:1); return; }
+        if(e.key==="Enter"){ e.preventDefault(); if(mod){ finish(true); paint(); } else insert("\n"); return; }
+        if(!mod) return;
+        if(kk==="s"){ e.preventDefault(); finish(true); paint(); save(); return; }
+        if(kk==="p"){ e.preventDefault(); finish(true); paint(); printDialog(); return; }
+        if(kk==="z"&&!e.shiftKey){ e.preventDefault(); edUndo(); return; }
+        if(kk==="y"||(kk==="z"&&e.shiftKey)){ e.preventDefault(); edRedo(); return; }
+        if(wordKey(e)) e.preventDefault();
+      });
+      /* Enter from a soft keyboard that sends no key at all */
+      ed.addEventListener("beforeinput",(e)=>{
+        if(e.inputType==="insertParagraph"||e.inputType==="insertLineBreak"){
+          e.preventDefault(); insert("\n"); }
+      });
+      ed.addEventListener("input",(e)=>{ if(composing||(e&&e.isComposing)) return; afterInput(e); });
+      ed.addEventListener("compositionstart",()=>{ composing=true; });
+      ed.addEventListener("compositionend",()=>{ composing=false; afterInput({inputType:"insertCompositionText"}); });
+      /* pasted words arrive as words, in the look at the caret — never as HTML */
+      ed.addEventListener("paste",(e)=>{
+        e.preventDefault(); e.stopPropagation();
+        const t=e.clipboardData?String(e.clipboardData.getData("text/plain")||""):"";
+        if(t) insert(t.replace(/\r\n?/g,"\n"));
+      });
+      ed.addEventListener("drop",(e)=>e.preventDefault());
+      ed.addEventListener("copy",(e)=>e.stopPropagation());
+      ed.addEventListener("cut",(e)=>e.stopPropagation());
+
+      /* ---- open ---- */
+      editingId=o.id;                 // the canvas stops drawing it; the editor draws it
+      refreshCanvas();
+      cv.appendChild(box);
+      cv.appendChild(tip);
+      restyle();
+      try{ ed.focus({preventScroll:true}); }catch(e){ ed.focus(); }
+      /* A field still holding the words it was born with is a placeholder, and
+         typing should replace it outright. Anything actually written gets the
+         caret where the click was, or at the end. */
+      if(BORN.indexOf(w.text)>=0) setSelection({a:0,b:w.text.length});
+      else if(!caretFrom(at)) setSelection({a:w.text.length,b:w.text.length});
+      lastSel=selOffsets()||lastSel;
+      document.addEventListener("selectionchange",onSelCh);
+      ed.addEventListener("blur",onBlur);
+      editor={o,ed,fmt,apply,setCase,restyle,hasSel,focus:focusEd,undo:edUndo,redo:edRedo,
+        commit:()=>finish(true),cancel:()=>finish(false),text:()=>w.text};
+      /* the toolbar's Undo and Redo are the editor's now, whatever the label's
+         own history says */
+      root.querySelectorAll('[data-act="undo"],[data-act="redo"]').forEach(b=>{
+        b.disabled=false; b.classList.remove("off"); });
+      syncRibbon();
+    }
+
+    /* The plain box: a barcode's or a QR code's data, one line that must scan. */
+    function editData(o,cv,k){
       if(cv.querySelector(".ls-editbox")) return;               // already editing
       if(!textEditable(o)) return;
       const before=o.text;
@@ -4552,7 +5525,7 @@
       if(canType){
         if(o.src.kind==="fixed")
           b.appendChild(fL(isText?"Content":"Data",
-            pta(o.text,v=>{o.text=v;},isText?"Text":"e.g. CHH-001234")));
+            pta(o.text,v=>{setText(o,v);},isText?"Text":"e.g. CHH-001234")));
         else
           b.appendChild(fL("Content",h("button",{class:"ls-plink",type:"button",
             title:"Open the data source",onclick:()=>propsDialog(),
@@ -4564,6 +5537,7 @@
 
       /* ---- text ---- */
       if(isText){
+        const pf=curFmt();
         b.appendChild(fL("Font",psel(o.font,FONTS.map(f=>({v:f.v,l:f.l})),v=>{o.font=v;})));
         b.appendChild(h("div",{class:"ls-f"},[
           h("span",{class:"ls-fl",text:"Size"}),
@@ -4573,12 +5547,14 @@
                that was right on one screen and overflowed the next */
             combo(o.size,SIZES,(v)=>setSize(v),0,
               "Type size in millimetres — type any value, or pick one",false,"mm"),
-            rbtn({text:"B",cls:"ls-fx-b",title:"Bold",on:o.bold,
-              onclick:onSel(s=>{s.bold=!s.bold;})}),
-            rbtn({text:"I",cls:"ls-fx-i",title:"Italic",on:o.italic,
-              onclick:onSel(s=>{s.italic=!s.italic;})}),
-            rbtn({text:"U",cls:"ls-fx-u",title:"Underline",on:o.underline,
-              onclick:onSel(s=>{s.underline=!s.underline;})}),
+            /* the same verbs as the ribbon: on the letters picked out, the
+               word under the caret, or the field — Word's three cases */
+            rbtn({text:"B",cls:"ls-fx-b",fx:"bold",title:"Bold  (Ctrl+B)",
+              on:!!pf&&pf.bold===true,onclick:()=>fmtToggle("b")}),
+            rbtn({text:"I",cls:"ls-fx-i",fx:"italic",title:"Italic  (Ctrl+I)",
+              on:!!pf&&pf.italic===true,onclick:()=>fmtToggle("i")}),
+            rbtn({text:"U",cls:"ls-fx-u",fx:"underline",title:"Underline  (Ctrl+U)",
+              on:!!pf&&pf.underline===true,onclick:()=>fmtToggle("u")}),
             rbtn({html:'A<i>▾</i>',cls:"ls-fx-a",title:"Change case",
               onclick:(e)=>caseMenu(e,o)}),
           ]),
@@ -4745,7 +5721,8 @@
                        :"Does not fit the page")}),
         h("div",{class:"sp"}),
         h("span",{class:"ls-read",
-          text:selIds.length>1
+          text:painter?"Format Painter — click the text that should look the same  ·  Esc puts the brush away"
+            :selIds.length>1
             ? selIds.length+" selected  ·  drag to move them together, or right-click to align"
             : (o?`X ${o.x.toFixed(1)}  Y ${o.y.toFixed(1)}  W ${o.w.toFixed(1)}  H ${o.h.toFixed(1)} mm`
                 :(tool?"Draw the new object on the label"
@@ -4779,6 +5756,7 @@
        nowhere else.
        ============================================================ */
     function propsDialog(){
+      settle();
       const o=selObj();
       if(!o) return toast("Select an object first",{type:"warn"});
       const t=OBJ_TYPES.find(x=>x.v===o.type)||OBJ_TYPES[0];
@@ -4855,7 +5833,7 @@
         if(o.src.kind==="field") panelBind();
         if(o.src.kind==="fixed")
           panel.appendChild(fld(o.type==="text"?"Text":"Barcode value",
-            taInput(o.text,v=>{o.text=v;live(false);},
+            taInput(o.text,v=>{setText(o,v);live(false);},
               o.type==="text"?"Type the text — Enter starts a new line":"e.g. CHH-001234"),
             o.type==="text"?"Enter starts a new line.":null));
         if(o.src.kind==="date")
@@ -5065,6 +6043,7 @@
        and nobody picks the wrong one twice.
        ============================================================ */
     function layoutDialog(opts){
+      settle();
       opts=opts||{};
       const isNew=!!opts.isNew;
       const body=h("div",{class:"ls-lay"});
@@ -5322,6 +6301,7 @@
        PAGE SETUP — the label and the stock it prints on, once.
        ============================================================ */
     function pageSetupDialog(){
+      settle();
       const d=doc();
       const body=h("div",{class:"ls-setup2"});
       const left=h("div",{}), right=h("div",{});
@@ -5647,6 +6627,7 @@
        click, and it went.
        ============================================================ */
     function printDialog(){
+      settle();
       const d=doc();
       const body=h("div",{class:"ls-pp"});
       let addOpen=false;   // the "add another label" chooser, unfolded
@@ -6312,15 +7293,49 @@
        done nothing but look at the label. It takes itself off the
        moment the studio leaves the document.
        ============================================================ */
+    const isTyping=(t)=>!!t&&t.nodeType===1&&
+      (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||"")||!!t.isContentEditable||
+       (t.getAttribute&&t.getAttribute("contenteditable")==="true"));
+    /* ============================================================
+       WORD'S KEYS, in one table for the editor and the canvas alike.
+       Ctrl+B / I / U; Ctrl+] and Ctrl+[ (a size step either way —
+       also Ctrl+Shift+> and <); Ctrl+L / E / R / J for the
+       alignments; Ctrl+= and Ctrl+Shift++ for sub- and superscript;
+       Ctrl+Space to clear the letters; Ctrl+Shift+C and V for
+       Format Painter. Answers true when the key was one of these,
+       whether or not there was anything to act on — a key the
+       studio owns must not fall through to the browser (Ctrl+U is
+       View Source there).
+       ============================================================ */
+    function wordKey(e){
+      if(!(e.ctrlKey||e.metaKey)||e.altKey) return false;
+      const k=(e.key||"").toLowerCase(), sh=e.shiftKey;
+      const o=editor?editor.o:selObj();
+      const isT=!!o&&o.type==="text";
+      if(!sh&&k==="b"){ if(isT) fmtToggle("b"); return true; }
+      if(!sh&&k==="i"){ if(isT) fmtToggle("i"); return true; }
+      if(!sh&&k==="u"){ if(isT) fmtToggle("u"); return true; }
+      if(k==="]"||(sh&&(k===">"||e.code==="Period"))){ if(o) stepSize(1); return true; }
+      if(k==="["||(sh&&(k==="<"||e.code==="Comma"))){ if(o) stepSize(-1); return true; }
+      if(!sh&&k==="="){ if(isT) fmtVert("sub"); return true; }
+      if(sh&&(k==="+"||k==="="||e.code==="Equal")){ if(isT) fmtVert("sup"); return true; }
+      if(!sh&&k===" "){ if(isT) fmtClear(); return true; }
+      if(!sh&&(k==="l"||k==="e"||k==="r"||k==="j")){
+        if(isT) fmtAlign({l:"left",e:"center",r:"right",j:"justify"}[k]); return true; }
+      if(sh&&k==="c"){ painterCopy(); return true; }
+      if(sh&&k==="v"){ if(painter) painterApply(null); return true; }
+      return false;
+    }
     const onKey=(e)=>{
       if(!root.isConnected){ document.removeEventListener("keydown",onKey); return; }
       const t=e.target;
-      const typing=t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName);
+      const typing=isTyping(t);
       const k=(e.key||"").toLowerCase();
       /* Escape unwinds one thing at a time, innermost first — and full screen
          is now ours to leave, since the browser is no longer holding it. */
       if(e.key==="Escape"){
         if(ctxEl){ closeCtx(); return; }
+        if(painter){ painter=null; paint(); return; }
         if(bgEdit){ bgEdit=false; paint(); return; }
         if(tool){ tool=null; paint(); return; }
         if(full){ full=false; paint(); return; }
@@ -6347,14 +7362,58 @@
       if(k==="s"){ e.preventDefault(); save(); return; }
       if(k==="p"){ e.preventDefault(); printDialog(); return; }
       if(typing) return;                       // the rest belong to the field
+      if(wordKey(e)){ e.preventDefault(); return; }
       if(k==="z"&&!e.shiftKey){ e.preventDefault(); undo(); return; }
       if(k==="y"||(k==="z"&&e.shiftKey)){ e.preventDefault(); redo(); return; }
       if(k==="d"){ e.preventDefault(); dupSel(); return; }
-      if(k==="x"){ e.preventDefault(); cutSel(); return; }
-      if(k==="c"){ e.preventDefault(); copySel(); return; }
-      if(k==="v"){ e.preventDefault(); pasteClip(); return; }
+      /* Cut, copy and paste are NOT prevented: the browser's own clipboard
+         events follow, and they are where the words go out and come in. */
+      if(k==="x"){ if(selObj()){ copyArmed=Date.now(); cutSel(); } return; }
+      if(k==="c"){ if(selObj()){ copyArmed=Date.now(); copySel(); } return; }
+      if(k==="v"){
+        /* the paste event decides what comes in; if none arrives (a browser
+           that fires none with nothing focused), the studio's own clipboard */
+        if(pasteTimer) clearTimeout(pasteTimer);
+        pasteTimer=setTimeout(()=>{ pasteTimer=null; pasteClip(); },120);
+        return;
+      }
     };
     document.addEventListener("keydown",onKey);
+
+    /* ============================================================
+       THE SYSTEM CLIPBOARD
+       Ctrl+C on an object keeps the object (the studio's own
+       clipboard) AND puts its words on the system clipboard; Ctrl+V
+       brings back whichever is newer — the object, or text copied
+       somewhere else since: a line from Word, a cell from Excel,
+       which lands as a new text field. The decision is made in the
+       paste event, because that is the only place a page served
+       over plain HTTP is allowed to read the clipboard at all.
+       ============================================================ */
+    const onCopy=(e)=>{
+      if(!root.isConnected){ document.removeEventListener("copy",onCopy); return; }
+      if(screen!=="design"||isTyping(e.target)) return;
+      if(Date.now()-copyArmed>400){ if(!selObj()) return; copySel(); }
+      if(clipText&&e.clipboardData){ e.clipboardData.setData("text/plain",clipText); e.preventDefault(); }
+    };
+    const onCut=(e)=>{
+      if(!root.isConnected){ document.removeEventListener("cut",onCut); return; }
+      if(screen!=="design"||isTyping(e.target)) return;
+      if(Date.now()-copyArmed>400){ if(!selObj()) return; cutSel(); }
+      if(clipText&&e.clipboardData){ e.clipboardData.setData("text/plain",clipText); e.preventDefault(); }
+    };
+    const onPaste=(e)=>{
+      if(!root.isConnected){ document.removeEventListener("paste",onPaste); return; }
+      if(screen!=="design"||isTyping(e.target)) return;
+      if(pasteTimer){ clearTimeout(pasteTimer); pasteTimer=null; }
+      const t=e.clipboardData?String(e.clipboardData.getData("text/plain")||""):"";
+      e.preventDefault();
+      if(t&&(t!==clipText||!clip)&&pasteText(t)) return;
+      pasteClip();
+    };
+    document.addEventListener("copy",onCopy);
+    document.addEventListener("cut",onCut);
+    document.addEventListener("paste",onPaste);
 
     paint();
   }

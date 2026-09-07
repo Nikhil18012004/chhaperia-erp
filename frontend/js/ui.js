@@ -329,7 +329,11 @@
     {id:"analytics", icon:"📈", label:"Analytics", accent:"violet", adminOnly:true},
     {sec:"Inventory", labOk:true},
     {id:"inventory", icon:"📦", label:"Stock Items", accent:"blue", labOk:true},
-    {id:"ledger", icon:"📒", label:"Stock Ledger", accent:"teal"},
+    /* The lab incharge sees the WHOLE store (ruled 2026-09-07): Stock Items,
+       the Stock Ledger and Warehouses, all view-only — labOk without labWrite,
+       so the page carries the VIEW ONLY chip and hides every action. The
+       ledger was the one of the three they could not open. */
+    {id:"ledger", icon:"📒", label:"Stock Ledger", accent:"teal", labOk:true},
     {id:"warehouses", icon:"🏬", label:"Warehouses", accent:"teal", labOk:true},
     /* The label designer — text, barcodes, QR codes, pictures — and the print
        run for whatever it draws. Deliberately NOT labOk: it was reached from a
