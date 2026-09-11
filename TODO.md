@@ -1,6 +1,21 @@
 # Chhaperia ERP — pending work
 
-Kept up to date at the end of each working session. Last update: 2026-09-07 (Label Studio types Word's way).
+Kept up to date at the end of each working session. Last update: 2026-09-11 (full system test — `TEST-REPORT-2026-09-11.pdf`).
+
+## 0. From the 11 Sep full system test — do first
+
+Every item below is reproduced by a check in `backend/test/http-audit-routes.js`, `http-audit-rules.js` or `unit-core.js` (run with `npm run test:audit-routes` / `test:audit-rules` / `test:unit`). Those suites state the correct behaviour, so they fail until the fix lands; add each to `npm test` as it turns green.
+
+- **Two critical security items** (the report's C1 and C2 — not the C1/C2 rows in section 1): the local install's session and account setup, and HTML escaping in the screens. Details are in the 11 Sep report, which is kept out of this repository while it is public.
+- **H12:** `mod-crm.js` has two `quoteForm` functions (1045 and 1361) — "＋ New quotation" throws, quotation "Edit" saves to `/leads/<id>` and fails. **M15:** HR · Payroll has no Run button (only the advance dialog starts a run).
+- **LR-0011** (floor Fail, CCM25GE-13) is filed against deleted **WO-0031**; the next WO-0031 (7 orders from now) inherits it and can close coating unmeasured. Delete or re-point it.
+- H1 simultaneous creates share a number and one is silently overwritten (upsert on a `max+1` id) — work orders also leave their material issued.
+- H2 stock below zero: per-store floor missing on ADJ/ISSUE/dispatch; no check at all on Add to Finished Stock and ad-hoc runs; PO delete after use; quarantine after use; concurrent issues.
+- H3/H4 work-order numbers reused after delete (certificate inherited); renumbering loses the certificate and strands the SO batch.
+- H5 New Item form's "Qty per kg" recipes are read per 1000 m² batch when the FG has a GSM (150× under-issue); a GSM typed on Add to Finished Stock switches the basis.
+- H6 ad-hoc run issues its materials twice; H7 a dispatched SO can be set back and shipped again / marked Dispatched by edit / cancelled SO dispatched; H8 Excel import = `PUT /api/state` of the browser's copy (erases concurrent work; omitted collections wiped); H9 quarantine moves the order-unit quantity and ignores what is used; H10 floor "return" is unbounded and skips the lab gate; H11 rejected/deleted approved leave stays "L" on the muster (paid).
+- Medium: last admin can demote/deactivate itself; office can write spec limits via `PATCH /lab/products`; second lab product per configured item accepted; lab `/api/state` carries costs/prices; Label Studio last-save-wins; client `value` overrides SO lines, negative rates; impossible dates/quantities accepted (GRN/NaN-NaN/0001); orphaning deletes; GST CGST+SGST paisa split + "undefined Paise"; payroll day-rate rounding (₹14,999.92); tools (export/import `approvals`, demo-data, catalogue CSV); server keeps running on EADDRINUSE; customer POST overwrites; supervisor area / 4-char admin passwords.
+- Tests: `http.js:169` uses a `PUT /purchase-orders/:id` route that does not exist; `ui-boot.js:54` regex `/s+/`; 15 stale `chh_smoke_*` databases on the MySQL server.
 
 ## 1. Waiting on the user — data and decisions
 
@@ -35,12 +50,12 @@ Nothing below can be built without these; they are not software tasks.
 - Lab Reports → Products form: offer "add a parameter of its own" there too. Today a product's own parameters are defined only when the product is created through Stock Items → New Item (or on a material through the QC dialog).
 - Work orders: the production line of a released order cannot be changed (every stage's stock is issued at release). Allowing it needs a rollback-of-postings design.
 - Lab Reports: the incoming-material tab's Pending / Completed sub-tab resets on the 15-second refresh (the search and the result/series selects are kept).
-- Test suite: `chh_smoke_disp` scratch database is left behind by `backend/test/smoke.js`.
-- Test suite: `backend/test/http.js` fails 5 checks in the lab / work-order QC section on main ("the floor is given the parameter list" … `UNCAUGHT: … reading 'prodResult'`), and the uncaught error ends the run — every section after it never executes. Verified on untouched `3485ff8`. Until it is fixed, `node backend/test/http-labels.js` is the label round-trip.
 - Label Studio: a table object (Word's Insert ▸ Table) is the one thing the plant's Word labels still have that the designer does not; bullets and numbering likewise.
 - Label Studio: a saved Hindi label from before 2026-09-07 was silently saved as Arial by the server (the font was missing from the whitelist) — reopen and set the font once; it holds now.
 
 ## 4. Recently closed (for reference)
+
+2026-09-10: The test suite runs end to end again — `npm test` is 1144 checks, 0 failed, in 64 s, and `http.js` alone is 923 across all 53 sections (it used to stop dead at section 23 with "376 passed, 5 failed"). Two things were wrong. **One item, one lab product:** since 3485ff8 every finished good is given a placeholder lab product, and configuring a real one for the same item made a SECOND link — `productForItem` then returned whichever the list held first, so the floor sheet and the coating gate read the placeholder's empty spec instead of the spec the lab had just written. `createProduct` now hands the placeholder's place to the configured product (in place when no id is asked for, otherwise the placeholder is dropped), and it refuses to do so if the placeholder has a spec, parameters of its own, or a certificate against it. **The gate itself was ruled correct:** a finished good the lab has never configured IS held at the store door and measured on what its material type implies. Three sections were written against the older rule and now state the new one — "a product with no lab parameters books freely" became "a product the lab never configured is held all the same", and the two sections whose subject is the raw draw rather than the gate measure their batch once and book against it. The live database was checked: 103 lab products, no item with two. The `chh_smoke_disp` note above was stale — `smoke.js` names its scratch database `chh_smoke_<pid>_<ts>` and drops it, and nothing was left behind by a full run.
 
 2026-09-07 (later): Label Studio checked at nine screen sizes with headless Chrome (360 to 1600 wide, phone/tablet/laptop, both orientations) — the studio no longer runs under the phone's bottom nav, the ribbon's size block and the way back to the library stay on screen at every width (own row below 1600px), the Font group leads on phones, a phone on its side gets the designer full-screen, the right-click menu and Page setup fit a phone. Supervisors and the lab incharge see the WHOLE store view-only — Stock Items, Stock Ledger, Warehouses — through the money-free `GET /api/store` feed (floor panel pages in mod-supervisor.js; the lab gets the ledger menu entry); neither sees Label Studio. The report preview (every Reports export) has row ticks and a typed row count; print and download carry exactly those rows. Tests: `backend/test/http-store.js`.
 
