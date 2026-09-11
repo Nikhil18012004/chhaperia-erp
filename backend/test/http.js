@@ -1728,7 +1728,13 @@ async function run() {
     // put the master back as it was — a later section asserts no WIP item exists
     await call("DELETE", "/items/WIP-LABGATE", A);
 
-    /* a product the lab does not test is not held up */
+    /* A PRODUCT NOBODY HAS CONFIGURED IS MEASURED ALL THE SAME (ruled
+       2026-09-10). Writing a finished good raises its lab product, and a
+       product with no spec of its own is measured on what its material type
+       implies — so a tape the lab has never been near is not waved through
+       the store door, it is measured on the four common parameters. Until
+       this ruling it booked untouched, which is how a batch nobody had put a
+       gauge on could reach a customer. */
     await call("POST", "/items", A, { id: "RM-FREE", name: "Untested resin", cat: "RM", uom: "KG", cost: 5 });
     await call("POST", "/items", A, { id: "FG-FREE", name: "Untested tape", cat: "FG", uom: "KG",
       typeCode: "CH-FREE", group: "OTHER TAPE SERIES", cost: 10, price: 20 });
@@ -1737,8 +1743,41 @@ async function run() {
       wh: "WH-PNY", date: "2026-01-01", manual: true });
     const free = await call("POST", "/production/finished", C,
       { itemId: "FG-FREE", qty: 5, wh: "WH-FG", tapeWidthMM: 25, gsm: 100 });
-    ok("a product with no lab parameters books freely", free.status === 201,
-      free.status + " " + JSON.stringify(free.d).slice(0, 90));
+    ok("a product the lab never configured is held all the same (409)", free.status === 409,
+      free.status + " " + JSON.stringify(free.d).slice(0, 110));
+    ok("…and the batch number is what it is asked for first",
+      String(free.d.error || "").includes("batch / lot number"), JSON.stringify(free.d).slice(0, 130));
+    /* ONE lab product stands against the item — the placeholder. Two would
+       leave productForItem picking whichever came first. */
+    const freeProds = ((await call("GET", "/state", A)).d.labProducts || [])
+      .filter((p) => p.itemId === "FG-FREE");
+    ok("one lab product stands against it, raised by the model",
+      freeProds.length === 1 && freeProds[0].auto === true
+        && !Object.keys(freeProds[0].spec || {}).length,
+      JSON.stringify(freeProds.map((p) => p.id + "/auto=" + p.auto)));
+    const freeSheet = await call("GET", "/production/finished/FG-FREE/lab", C);
+    ok("the sheet it is given is the one its material type implies",
+      freeSheet.status === 200 && freeSheet.d.required === true
+        && (freeSheet.d.params || []).map((p) => p.key).sort().join(",")
+           === "elongation,massPerArea,tensile,thickness",
+      JSON.stringify((freeSheet.d.params || []).map((p) => p.key)));
+    const freeHalf = await call("POST", "/production/finished", C,
+      { itemId: "FG-FREE", qty: 5, wh: "WH-FG", tapeWidthMM: 25, gsm: 100,
+        refNo: "LOT-FREE", labValues: { thickness: 0.1 } });
+    ok("a half-filled sheet is refused for it too", freeHalf.status === 409,
+      freeHalf.status + " " + JSON.stringify(freeHalf.d).slice(0, 130));
+    const freeOk = await call("POST", "/production/finished", C,
+      { itemId: "FG-FREE", qty: 5, wh: "WH-FG", tapeWidthMM: 25, gsm: 100, refNo: "LOT-FREE",
+        labValues: { thickness: 0.1, tensile: 40, elongation: 5, massPerArea: 100 } });
+    ok("measured against a batch, it books", freeOk.status === 201,
+      freeOk.status + " " + JSON.stringify(freeOk.d).slice(0, 110));
+    ok("a certificate was raised for it",
+      !!(freeOk.d.labReport && freeOk.d.labReport.id) && freeOk.d.batchNo === "LOT-FREE",
+      JSON.stringify(freeOk.d.labReport));
+    /* nothing to grade against: the readings are on file and the verdict
+       waits for the day the lab writes a spec */
+    ok("…and with no spec to grade against it reads Pending",
+      freeOk.d.labReport.result === "Pending", String(freeOk.d.labReport.result));
   }
 
   section("A job that never touches coating is not held up by QC");
@@ -2568,6 +2607,13 @@ async function run() {
     await call("PUT", "/boms/" + bfg, A, { yield: 1, lines: [[brm, 1]] });
     await call("POST", "/movements", A, { itemId: brm, type: "GRN", qty: 100000, wh: "WH-PNY", rate: 0, manual: true });
     await call("POST", "/movements", A, { itemId: bwip, type: "GRN", qty: 40, wh: "WH-WIP", rate: 0, manual: true });
+    /* Every finished good is measured before it lands in store, so this
+       section's subject — where the 100 came FROM — is reached through the
+       gate rather than around it: one spec parameter, measured once against
+       batch BLOT, and every later booking rides the same batch. */
+    const BLOT = "LOT-BOOK";
+    await call("POST", "/lab/products", A, { id: "LP-BOOK-TEST", name: "BOOK TEST TAPE",
+      code: "CHN-BOOK-05", itemId: bfg, spec: { thickness: { min: 0.04, max: 0.06 } } });
 
     /* CONTROL: book 100 the ordinary way and measure the raw draw, so the
        sourced run below is compared against a real figure rather than a
@@ -2575,7 +2621,8 @@ async function run() {
     const rawOf = (st) => (st.movements || []).filter((m) => m.itemId === brm)
       .reduce((n, m) => n + (+m.qty || 0), 0);
     const ctlBefore = rawOf((await call("GET", "/state", A)).d);
-    await call("POST", "/production/finished", A, { itemId: bfg, qty: 100, wh: "WH-FG", tapeWidthMM: 25 });
+    await call("POST", "/production/finished", A, { itemId: bfg, qty: 100, wh: "WH-FG", tapeWidthMM: 25,
+      refNo: BLOT, labValues: { thickness: 0.05 } });
     const ctlDraw = ctlBefore - rawOf((await call("GET", "/state", A)).d);
     ok("the control booking drew raw material for all 100", ctlDraw > 0, "drew " + ctlDraw);
 
@@ -2584,7 +2631,7 @@ async function run() {
 
     // book 100, of which 30 comes off the half-made shelf
     const r = await call("POST", "/production/finished", A,
-      { itemId: bfg, qty: 100, wh: "WH-FG", tapeWidthMM: 25, wipQty: 30 });
+      { itemId: bfg, qty: 100, wh: "WH-FG", tapeWidthMM: 25, wipQty: 30, refNo: BLOT });
     ok("an admin can book part of a run from half-made stock", r.status < 300,
       "status " + r.status + " " + JSON.stringify(r.d).slice(0, 160));
     ok("it reports what came off the shelf", r.d && r.d.fromStock && r.d.fromStock.wipQty === 30,
@@ -2610,7 +2657,7 @@ async function run() {
     const wipBefore2 = (before2.movements || []).filter((m) => m.itemId === bwip)
       .reduce((n, m) => n + (+m.qty || 0), 0);
     const r2s = await call("POST", "/production/finished", S1,
-      { itemId: bfg, qty: 5, wh: "WH-FG", tapeWidthMM: 25, wipQty: 5 });
+      { itemId: bfg, qty: 5, wh: "WH-FG", tapeWidthMM: 25, wipQty: 5, refNo: BLOT });
     ok("a supervisor can still book stock normally", r2s.status < 300, "status " + r2s.status);
     ok("but cannot source it from half-made stock",
       r2s.status >= 300 || (r2s.d.fromStock && r2s.d.fromStock.wipQty === 0),
@@ -3592,6 +3639,12 @@ async function run() {
     await call("POST", "/items", A, { id: "RM-FSSPREAD", name: "Two-store resin", cat: "RM", uom: "KG", cost: 20 });
     await call("POST", "/items", A, { id: "FG-FSSPREAD", name: "Two-store tape", cat: "FG", uom: "KG", cost: 90, gsm: 100, thicknessMM: 0.1 });
     await call("PUT", "/boms/FG-FSSPREAD", A, { yield: 1, lines: [{ id: "RM-FSSPREAD", qty: 1, unit: "KG" }] });
+    /* the store door asks for a reading before it lets anything in, so this
+       section — whose subject is which SHELF the raw came off — measures its
+       batch once and books every run against it */
+    const FLOT = "LOT-FSSPREAD";
+    await call("POST", "/lab/products", A, { id: "LP-FSSPREAD", name: "Two-store tape",
+      itemId: "FG-FSSPREAD", spec: { thickness: { min: 0.05, max: 0.15 } } });
     const put = (wh, qty) => call("POST", "/movements", A, { date: "2026-09-04", itemId: "RM-FSSPREAD", wh,
       type: "GRN", qty, rate: 20, ref: "OPEN-FSSPREAD", note: "seed" });
     const drewOn = async (ref) => ((await state()).movements || [])
@@ -3603,7 +3656,8 @@ async function run() {
        in here — the stores are then sized against it and the test says what it
        means whatever the arithmetic upstream does. */
     await put("WH-PNY", 1000);
-    const warm = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG" });
+    const warm = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG",
+      refNo: FLOT, labValues: { thickness: 0.1 } });
     ok("a booking against a single store goes through (201)", warm.status === 201, warm.status + " " + JSON.stringify(warm.d).slice(0, 160));
     const need = ((warm.d.consumed || []).find((c) => c.id === "RM-FSSPREAD") || {}).qty || 0;
     ok("...and reports what it consumed", need > 0, String(need));
@@ -3624,7 +3678,8 @@ async function run() {
     await call("POST", "/movements", A, { date: "2026-09-04", itemId: "RM-FSSPREAD", wh: "WH-PNY",
       type: "ADJ", qty: -(rest - need * 0.4), rate: 20, manual: true, note: "leave four tenths of a run" });
     await put(wh2, need * 0.7);
-    const prod = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG" });
+    const prod = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG",
+      refNo: FLOT });
     ok("the booking goes through (201)", prod.status === 201, prod.status + " " + JSON.stringify(prod.d).slice(0, 200));
     const mv = await drewOn(prod.d.ref);
     const byWh = perWh(mv);
@@ -3649,7 +3704,7 @@ async function run() {
     await put("WH-PNY", need * 10);
     await put(wh2, need * 2);
     const pick = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 20, wh: "WH-FG",
-      materialWarehouses: { "RM-FSSPREAD": wh2 } });
+      refNo: FLOT, materialWarehouses: { "RM-FSSPREAD": wh2 } });
     const mv2 = await drewOn(pick.d.ref);
     ok("the store named on the booking is the one it draws from",
       pick.status === 201 && mv2.length === 1 && mv2[0].wh === wh2 && Math.abs(Math.abs(mv2[0].qty) - need) < 1e-6,
@@ -3658,11 +3713,11 @@ async function run() {
       Math.abs((await drewOn(pick.d.ref)).filter((m) => m.wh === "WH-PNY").length) === 0);
 
     const bad = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 1, wh: "WH-FG",
-      materialWarehouses: { "RM-FSSPREAD": "WH-NOPE" } });
+      refNo: FLOT, materialWarehouses: { "RM-FSSPREAD": "WH-NOPE" } });
     ok("...an unknown store on a booking is refused (400)", bad.status === 400 && /Unknown warehouse/.test(bad.d.error || ""),
       bad.status + " " + JSON.stringify(bad.d).slice(0, 140));
     const held = await call("POST", "/production/finished", A, { itemId: "FG-FSSPREAD", qty: 1, wh: "WH-FG",
-      materialWarehouses: { "RM-FSSPREAD": "WH-QC" } });
+      refNo: FLOT, materialWarehouses: { "RM-FSSPREAD": "WH-QC" } });
     ok("...and a quarantine store is refused outright (400)", held.status === 400 && /quarantin/i.test(held.d.error || ""),
       held.status + " " + JSON.stringify(held.d).slice(0, 140));
 

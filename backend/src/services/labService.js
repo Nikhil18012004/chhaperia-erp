@@ -216,13 +216,40 @@ function normalizeProduct(p) {
     params: normalizeParams(p.params),   // the product's own parameters, beyond the catalogue
     notes: p.notes || "",
     active: p.active !== false,
+    /* Raised by the model rather than by a person — erpService.upsertItem on
+       every FG write, and the boot sweep. It is a placeholder until somebody
+       configures it, and createProduct hands its place to the first
+       configured product for the same item. */
+    auto: !!p.auto,
   };
+}
+
+/** The placeholder standing in for this item, when that is all it is: no
+    spec, no parameters of its own, and no certificate written against it.
+    TWO lab products linked to one item leaves productForItem picking whichever
+    the list happens to hold first, so the floor sheet and the coating gate read
+    the placeholder empty spec instead of the one the lab just wrote. */
+async function placeholderForItem(itemId, exceptId) {
+  const existing = await productForItem(itemId);
+  if (!existing || (exceptId && existing.id === exceptId)) return null;
+  if (specKeys(existing).length || customParamsOf(existing).length) return null;
+  /* configured or not, a product a certificate points at is not scrap */
+  const reports = await listReports();
+  if (reports.some((r) => String(r.productId || "") === String(existing.id))) return null;
+  return existing;
 }
 
 async function createProduct(p) {
   const prod = normalizeProduct(p);
-  if (!prod.id) prod.id = nextId(await listProducts(), "LP-");
-  else if (await repo.getLabProduct(prod.id)) throw err("Product " + prod.id + " already exists", 409);
+  /* the placeholder every finished good is given makes way for the real thing */
+  const stub = prod.itemId && !prod.auto ? await placeholderForItem(prod.itemId, prod.id) : null;
+  if (!prod.id) {
+    /* no id asked for — configure the placeholder where it stands, so nothing
+       already pointing at it has to be re-pointed */
+    if (stub) return await repo.putLabProduct(Object.assign({}, prod, { id: stub.id, auto: false }));
+    prod.id = nextId(await listProducts(), "LP-");
+  } else if (await repo.getLabProduct(prod.id)) throw err("Product " + prod.id + " already exists", 409);
+  else if (stub) await repo.deleteLabProduct(stub.id);
   return await repo.putLabProduct(prod);
 }
 async function updateProduct(id, patch) {
@@ -274,6 +301,7 @@ function productFromItem(item) {
     series: item.group || item.series || "Other",
     gsm: item.gsm != null && item.gsm !== "" && !isNaN(+item.gsm) ? +item.gsm : null,
     itemId: item.id, flags: deriveFlags(name), refMode: "batch", spec: {}, active: item.active !== false,
+    auto: true,
   };
 }
 async function ensureProductForItem(item) {
