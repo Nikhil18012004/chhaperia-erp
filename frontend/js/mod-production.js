@@ -722,6 +722,14 @@
       return `<span style="width:8px;height:8px;border-radius:50%;background:${c};display:inline-block"></span>`; }).join(" ");
     return `<div class="cell-main">${esc(label)}</div><div class="cell-sub" style="display:flex;align-items:center;gap:4px">${dots}<span class="muted" style="margin-left:4px">${doneN}/${rt.length}</span></div>`;
   }
+  /* the Stage column as words, for a sheet — the same reading stageCell gives */
+  function stageText(w){
+    if(w.dispatched) return "Dispatched"+(w.dispatchedTo?" · "+w.dispatchedTo:"");
+    const rt=w.route||[]; if(!rt.length) return "";
+    const cur=curStage(w)||{};
+    const label = w.status==="Completed" ? "Packed" : (STAGE_LABEL[cur.key]||cur.name||"");
+    return label+" ("+rt.filter(s=>s.status==="Completed").length+"/"+rt.length+")";
+  }
   async function reloadState(){ const fresh=await DB.loadAsync(); ENG.init(fresh); App.buildNav(); App.refreshAlerts(); }
   function stageTimeline(wo){
     const rt=wo.route||[];
@@ -840,6 +848,9 @@
     let tab=App.viewState("tab",()=>(params&&params.tab)||"active");
     let filter=App.viewState("filter",()=>({from:"", to:"", q:"", qRaw:""}));
     root.appendChild(pageHead("Production Control","Each stage consumes its materials and hands the job to the next stage; nothing is booked into store on the way",[
+      /* Export only — no Import beside it. A work order written in from a
+         sheet would skip the material issue its release posts. */
+      h("button",{class:"btn",onclick:()=>exportWOs(),title:"Download or print the work orders this tab is showing",html:"🗎 Export"}),
       // the floor has this in its own panel — office/admin get it here too
       h("button",{class:"btn",onclick:()=>finishedStockForm(),html:"➕ Add to Finished Stock"}),
       h("button",{class:"btn primary",onclick:()=>woForm(),html:"＋ New Work Order"})
@@ -917,10 +928,46 @@
       const routeDone=(w.route||[]).length>0 && (w.route||[]).every(s=>s.status==="Completed");
       return (+w.completedQty||0) + (routeDone ? (+w.runQty||0) : 0);
     }
+    /* what this tab shows: its list, narrowed by the search and the date
+       range, newest first — the board and the export read the same rows */
+    function shownWOs(){
+      return listFor().filter(w=>woMatch(w)&&MW.inDateRange(w.date, filter))
+        .sort((a,b)=>a.date<b.date?1:-1);
+    }
+    /* EXPORT — the rows this tab is showing, with the columns the board
+       reads, into the preview every export goes through: narrowed further,
+       ticked or trimmed of columns there before the .xlsx is downloaded or
+       the sheet printed. Quantities stay numbers so Excel can sum them. */
+    function exportWOs(){
+      const rows=shownWOs();
+      if(!rows.length){ toast("No work orders to export on this tab",{type:"warn"}); return; }
+      const TAB={active:"Active / Released",pending:"Pending",done:"Completed",all:"All"};
+      const r3=v=>Math.round((+v||0)*1000)/1000;
+      // an order raised before partial runs existed carries none of the split
+      const split=w=>w.runQty!=null||w.completedQty!=null||w.pendingQty!=null;
+      const head=["W.O. No.","Start Date","Product","Code","Item Code","Thickness (mm)","Tape Width (mm)","Customer",
+        "Ordered (kg)","Produced (kg)","On Floor (kg)","Pending (kg)","Dispatched (kg)",
+        "Stage","Line","Due Date","Priority","Status","Progress (%)","Awaiting Material"];
+      const out=rows.map(w=>{
+        const it=ENG.item(w.itemId)||{};
+        const routeDone=(w.route||[]).length>0 && (w.route||[]).every(s=>s.status==="Completed");
+        const produced=split(w) ? madeOf(w) : (isDone(w)||routeDone ? +w.qty||0 : 0);
+        const onFloor=(w.dispatched||routeDone) ? 0 : (split(w) ? +w.runQty||0 : +w.qty||0);
+        const pend=+w.pendingQty||0;
+        return [w.id, w.date||"", it.name||w.itemId,
+          U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||"", w.itemId,
+          it.thicknessMM!=null?+it.thicknessMM:"", w.widthMM!=null?+w.widthMM:"",
+          woCustomerName(w)||"",
+          r3(w.qty), r3(produced), r3(onFloor), r3(pend), r3(w.dispatchedQty),
+          stageText(w), w.line||"", w.due||"", w.priority||"", w.status||"",
+          +w.progress||0,
+          pend>0 ? (w.shortage||[]).map(s=>s.name+" ("+s.id+")").join("; ") : ""];
+      });
+      MW.dataPreview({title:"Work Orders — "+TAB[tab], head, rows:out,
+        name:"chhaperia_work_orders_"+tab+".xlsx", sheet:"Work Orders"});
+    }
     function draw(){
-      let data = listFor();
-      data=data.filter(w=>woMatch(w)&&MW.inDateRange(w.date, filter));
-      data=data.slice().sort((a,b)=>a.date<b.date?1:-1);
+      const data = shownWOs();
       const c=UI.$("#prodCount"); if(c) c.textContent=data.length+" work orders";
       host.innerHTML="";
       if(tab==="pending"){ drawPending(data); return; }
