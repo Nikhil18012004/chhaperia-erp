@@ -107,7 +107,8 @@
     if (curTab === "attendance") return [MW.excelMenu("hrattendance")];
     if (curTab === "leave") return [h("button", { class: "btn primary", onclick: () => leaveForm(), html: "＋ Apply Leave" })];
     if (curTab === "payroll") return [
-      h("button", { class: "btn primary", onclick: () => exportPayroll(), html: "🗎 Export" })];
+      h("button", { class: "btn", onclick: () => exportPayroll(), html: "🗎 Export" }),
+      h("button", { class: "btn primary", onclick: () => runPayrollForm(), html: "▶ Run Payroll" })];
     if (curTab === "settings") return [h("button", { class: "btn", onclick: () => leaveTypeForm(), html: "＋ Leave Type" })];
     return [];
   }
@@ -256,13 +257,13 @@
       U.field("Full Name *", `<input class="input" id="w_name" value="${esc(f("name"))}" placeholder="e.g. Ramesh Kumar">`),
       U.field("Department", U.selectHTML("w_dept", DEPTS.map((d) => ({ v: d, l: cap(d) })), f("dept", "coating"))),
       U.field("Designation", `<input class="input" id="w_desig" value="${esc(f("designation"))}" placeholder="e.g. Machine Operator">`),
-      U.field("Monthly CTC (₹)", `<input class="input" id="w_ctc" type="number" value="${f("monthlyCtc", 0)}">`),
+      U.field("Monthly CTC (₹)", `<input class="input" id="w_ctc" type="number" value="${esc(f("monthlyCtc", 0))}">`),
       // the plant houses its workers; one who stays elsewhere is paid the no-room allowance
       U.field("Accommodation", U.selectHTML("w_stay", [{ v: "0", l: "Company room" },
         { v: "1", l: "Own accommodation (+" + money(noRoomAllowance()) + "/month)" }], w.ownAccommodation ? "1" : "0")),
       U.field("Biometric Device ID", `<input class="input" id="w_dev" value="${esc(f("deviceUid"))}" placeholder="Punch-machine user id">`),
       U.field("Phone", `<input class="input" id="w_phone" value="${esc(f("phone"))}">`),
-      U.field("Joined On", `<input class="input" id="w_join" type="date" value="${f("joined", iso())}">`),
+      U.field("Joined On", `<input class="input" id="w_join" type="date" value="${esc(f("joined", iso()))}">`),
       U.field("PF Number", `<input class="input" id="w_pf" value="${esc(f("pfNo"))}">`),
       U.field("ESI Number", `<input class="input" id="w_esi" value="${esc(f("esiNo"))}">`),
       U.field("Bank A/C", `<input class="input" id="w_bank" value="${esc(f("bankAcc"))}">`),
@@ -611,9 +612,9 @@
     function dayEntry(w, ds, a) {
       const body = h("div", { class: "form-grid" }, [
         U.field("Status", U.selectHTML("d_status", Object.keys(STATUS_META).map((k) => ({ v: k, l: STATUS_META[k][1] })), a ? a.status : "P")),
-        U.field("In Time", `<input class="input" id="d_in" type="time" value="${a && a.inTime ? a.inTime : "09:00"}">`),
-        U.field("Out Time", `<input class="input" id="d_out" type="time" value="${a && a.outTime ? a.outTime : "17:30"}">`),
-        U.field("OT Hours", `<input class="input" id="d_ot" type="number" step="0.5" value="${a ? a.otHours || 0 : 0}">`),
+        U.field("In Time", `<input class="input" id="d_in" type="time" value="${esc(a && a.inTime ? a.inTime : "09:00")}">`),
+        U.field("Out Time", `<input class="input" id="d_out" type="time" value="${esc(a && a.outTime ? a.outTime : "17:30")}">`),
+        U.field("OT Hours", `<input class="input" id="d_ot" type="number" step="0.5" value="${esc(a ? a.otHours || 0 : 0)}">`),
         U.field("Note", `<input class="input" id="d_note" value="${esc(a && a.note || "")}">`, "full"),
       ]);
       const mo = modal({ title: "Attendance — " + w.name, sub: ds, body,
@@ -690,8 +691,8 @@
     const body = h("div", { class: "form-grid" }, [
       U.field("Worker", U.selectHTML("l_wk", ws.map((w) => ({ v: w.id, l: w.name })), ws[0].id)),
       U.field("Leave Type", U.selectHTML("l_type", lts.map((t) => ({ v: t.id, l: t.name })), lts[0].id)),
-      U.field("From", `<input class="input" id="l_from" type="date" value="${iso()}">`),
-      U.field("To", `<input class="input" id="l_to" type="date" value="${iso()}">`),
+      U.field("From", `<input class="input" id="l_from" type="date" value="${esc(iso())}">`),
+      U.field("To", `<input class="input" id="l_to" type="date" value="${esc(iso())}">`),
       U.field("Reason", `<input class="input" id="l_reason" placeholder="Optional">`, "full"),
       h("div", { id: "l_hint", class: "dim", style: "grid-column:1/-1;font-size:12px;line-height:1.5" }),
     ]);
@@ -736,7 +737,9 @@
     const runs = payruns();
     const now = DB.helpers.today();
     const defPeriod = (params && params.period) || (runs[0] && runs[0].period) || `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
-    if (!runs.length) { host.appendChild(h("div", { class: "empty", style: "margin-top:30px" }, [h("div", { class: "big", text: "💰" }), h("div", { style: "font-weight:700", text: "No pay runs yet" }), h("div", { class: "muted", style: "margin-top:6px", text: "Payslips appear here once a pay run exists for a month." })])); return; }
+    if (params && params.run) { params.run = false; setTimeout(() => runPayrollForm(defPeriod), 50); }
+    if (!runs.length) { host.appendChild(h("div", { class: "empty", style: "margin-top:30px" }, [h("div", { class: "big", text: "💰" }), h("div", { style: "font-weight:700", text: "No pay runs yet" }), h("div", { class: "muted", style: "margin-top:6px", text: "Pick a month and run payroll to build the payslips from attendance." }),
+      h("div", { style: "margin-top:14px" }, h("button", { class: "btn primary", onclick: () => runPayrollForm(defPeriod), html: "▶ Run Payroll" }))])); return; }
     const run = runs.find((r) => r.period === defPeriod) || runs[0];
     const slips = payslips().filter((s) => s.payrunId === run.id);
     payrollCtx = { run, slips };
@@ -837,7 +840,7 @@
           cb.checked = !!paySel[r.workerId];
           cb.onchange = () => { if (cb.checked) paySel[r.workerId] = true; else delete paySel[r.workerId]; syncBar(); };
           return cb; } },
-      { key: "worker", label: "Worker", render: (r) => `<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${cap(r.dept || "")}</div>`, sort: (r) => r.name },
+      { key: "worker", label: "Worker", render: (r) => `<div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${esc(cap(r.dept || ""))}</div>`, sort: (r) => r.name },
       { key: "present", label: "Days", num: true, render: (r) => num(r.payableDays, 1), sort: (r) => r.payableDays },
       { key: "ot", label: "OT h", num: true, render: (r) => r.otHours ? num(r.otHours, 1) : "—", sort: (r) => r.otHours },
       { key: "gross", label: "Gross", num: true, sort: (r) => r.gross,
@@ -865,6 +868,47 @@
      One row per payslip, the same columns as the table on screen. It goes
      through the shared preview first, so the figures can be checked before
      the .xlsx is written. */
+  /* RUN PAYROLL — the one control that creates or tops up a month. A month
+     that already has a run is topped up, never replaced: workers who are in
+     it keep their slips unless they are named again, and a Finalized run is
+     refused by the server outright. Ticked rows on the run on screen narrow
+     the run to those people. */
+  function runPayrollForm(period) {
+    const now = DB.helpers.today();
+    const thisMonth = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+    const run = payrollCtx.run;
+    const ticked = run ? Object.keys(paySel).filter((k) => paySel[k]) : [];
+    const active = workers().filter((w) => w.active !== false);
+    if (!active.length) { toast("No active workers to pay — add workers first", { type: "warn", title: "Payroll" }); return; }
+    const body = h("div", { class: "form-grid" }, [
+      U.field("Pay period (month) *", `<input class="input" id="pr_period" type="month" value="${esc(period || (run && run.period) || thisMonth)}" max="${esc(thisMonth)}">`),
+      U.field("Who", `<select class="input" id="pr_scope">
+          <option value="all">Every active worker (${active.length})</option>
+          ${ticked.length ? `<option value="ticked" selected>Only the ${ticked.length} ticked on screen</option>` : ""}
+        </select>`),
+      h("div", { class: "muted", style: "font-size:12px;line-height:1.55;grid-column:1/-1" ,
+        text: "Payslips are built from the month's attendance, leave and advances. A month that already has a run is topped up — the people you name get a fresh slip, everyone else keeps theirs. A finalized month cannot be rerun; an admin must reopen it first." }),
+    ]);
+    const mo = modal({ title: "Run Payroll", sub: "Build this month's payslips from attendance", body,
+      foot: [h("button", { class: "btn ghost", onclick: () => mo.close(), text: "Cancel" }),
+        h("button", { class: "btn primary", text: "▶ Run payroll", onclick: async (e) => {
+          const p = UI.$("#pr_period").value;
+          if (!/^\d{4}-\d{2}$/.test(p)) { toast("Pick the month to pay", { type: "warn" }); return; }
+          const scope = UI.$("#pr_scope").value;
+          const opts = scope === "ticked" && ticked.length ? { workerIds: ticked } : {};
+          const who = opts.workerIds ? opts.workerIds.length + " ticked worker" + (opts.workerIds.length > 1 ? "s" : "") : "all " + active.length + " active workers";
+          if (!await confirm(`Run payroll for ${periodLabel(p)} — ${who}?`, { title: "Run Payroll" })) return;
+          e.currentTarget.disabled = true;
+          try {
+            const r = await DB.hr.payroll.run(p, opts);
+            mo.close();
+            const n = (r && r.payslips && r.payslips.length) || 0;
+            toast(`${periodLabel(p)} — ${n} payslip${n === 1 ? "" : "s"} in the run`, { type: "ok", title: "Payroll run" });
+            await App.reloadState(); App.go("hr-payroll", { period: p });
+          } catch (err) { e.currentTarget.disabled = false; toast(err.message || "Payroll run failed", { type: "danger", title: "Payroll" }); }
+        } })] });
+  }
+
   function exportPayroll() {
     const run = payrollCtx.run;
     // the ticked payslips, or everything the search is showing
@@ -1318,13 +1362,13 @@
     const body = h("div", {}, [
       h("div", { class: "form-grid" }, [
         U.field("Advance amount (₹)",
-          `<input class="input" id="adv_amt" type="number" min="0" step="1" value="${a ? a.amount : ""}" placeholder="e.g. 20000">
+          `<input class="input" id="adv_amt" type="number" min="0" step="1" value="${esc(a ? a.amount : "")}" placeholder="e.g. 20000">
            <div class="muted" style="font-size:11px;margin-top:3px">The total paid to the worker.</div>`),
         U.field("Monthly deduction (₹)",
-          `<input class="input" id="adv_mon" type="number" min="0" step="1" value="${a ? a.monthly : ""}" placeholder="e.g. 2000">
+          `<input class="input" id="adv_mon" type="number" min="0" step="1" value="${esc(a ? a.monthly : "")}" placeholder="e.g. 2000">
            <div class="muted" style="font-size:11px;margin-top:3px">Taken off each payslip until it is cleared.</div>`),
         U.field("Start recovering from",
-          `<input class="input" id="adv_from" type="month" value="${a && a.startPeriod ? a.startPeriod : (run ? run.period : "")}">`),
+          `<input class="input" id="adv_from" type="month" value="${esc(a && a.startPeriod ? a.startPeriod : (run ? run.period : ""))}">`),
         U.field("Note (optional)", `<input class="input" id="adv_note" value="${esc((a && a.note) || "")}" placeholder="reason / reference">`),
       ]),
     ]);
@@ -1403,9 +1447,9 @@
     grid.appendChild(h("div", { class: "card" }, [
       h("div", { class: "card-head" }, h("h3", { text: "🕒 Attendance & Overtime" })),
       h("div", { class: "form-grid" }, [
-        U.field("Standard Day Hours", `<input class="input" id="c_std" type="number" step="0.5" value="${cfg.standardDayHours}">`),
-        U.field("OT Multiplier", `<input class="input" id="c_otm" type="number" step="0.5" value="${cfg.otMultiplier}">`),
-        U.field("Half-day below (hrs)", `<input class="input" id="c_half" type="number" step="0.5" value="${cfg.halfDayBelowHours}">`),
+        U.field("Standard Day Hours", `<input class="input" id="c_std" type="number" step="0.5" value="${esc(cfg.standardDayHours)}">`),
+        U.field("OT Multiplier", `<input class="input" id="c_otm" type="number" step="0.5" value="${esc(cfg.otMultiplier)}">`),
+        U.field("Half-day below (hrs)", `<input class="input" id="c_half" type="number" step="0.5" value="${esc(cfg.halfDayBelowHours)}">`),
       ]),
       // not a choice any more: Sunday is the weekly off for every worker
       h("div", { style: "margin-top:8px" }, [h("label", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase", text: "Weekly Off" }),
@@ -1445,7 +1489,7 @@
     grid.appendChild(h("div", { class: "card" }, [
       h("div", { class: "card-head" }, [h("h3", { text: "🌴 Leave" }), h("div", { class: "sub", text: "Paid leave, per month" })]),
       h("div", { class: "form-grid" }, [
-        U.field("Paid leave days allowed per month", `<input class="input" id="c_plcap" type="number" step="1" min="0" value="${cfg.paidLeaveMaxPerMonth != null ? cfg.paidLeaveMaxPerMonth : 1}">`),
+        U.field("Paid leave days allowed per month", `<input class="input" id="c_plcap" type="number" step="1" min="0" value="${esc(cfg.paidLeaveMaxPerMonth != null ? cfg.paidLeaveMaxPerMonth : 1)}">`),
       ]),
       h("p", { class: "dim", style: "font-size:12px;line-height:1.6;margin-top:8px",
         text: "Paid Leave accrues one day per month worked (the type below). In any one month only this many of a worker's paid-leave days are paid — the rest go unpaid and do not use the balance. Set 0 for no monthly limit." }),
@@ -1551,7 +1595,7 @@
     const body = h("div", { class: "form-grid" }, [
       U.field("Code *", `<input class="input" id="lt_id" value="${esc(t.id || "")}" ${edit ? "disabled" : ""} placeholder="e.g. EL / CL / SL">`),
       U.field("Name", `<input class="input" id="lt_name" value="${esc(t.name || "")}" placeholder="e.g. Earned Leave">`),
-      U.field("Annual Quota (days)", `<input class="input" id="lt_quota" type="number" step="0.5" value="${t.quota || 0}">`),
+      U.field("Annual Quota (days)", `<input class="input" id="lt_quota" type="number" step="0.5" value="${esc(t.quota || 0)}">`),
       U.field("Accrual", U.selectHTML("lt_accrual", [{ v: "fixed", l: "Fixed (credited yearly)" }, { v: "earned", l: "Earned (1 day per month worked)" }, { v: "none", l: "None (0 balance)" }], t.accrual || "fixed")),
       U.field("Paid?", U.selectHTML("lt_paid", [{ v: "1", l: "Paid leave" }, { v: "0", l: "Unpaid" }], t.paid === false ? "0" : "1")),
     ]);
@@ -1569,6 +1613,6 @@
   window.ERPActions = Object.assign(window.ERPActions || {}, {
     hrWorker:  { ic: "👷", label: "HR: Workers",     run: () => App.go("hr-workers") },
     hrLeave:   { ic: "🌴", label: "HR: Apply Leave", run: () => App.go("hr-leave") },
-    hrPayroll: { ic: "💰", label: "HR: Run Payroll", run: () => App.go("hr-payroll") },
+    hrPayroll: { ic: "💰", label: "HR: Run Payroll", run: () => App.go("hr-payroll", { run: true }) },
   });
 })();

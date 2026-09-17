@@ -500,6 +500,15 @@ async function addMovement(m) {
   if (m.type === "GRN" && mvItem.cat === "WIP" && !m.manual) {
     throw err("Cannot receive stock into a WIP item (" + m.itemId + "). Receive the raw material itself instead.", 400);
   }
+  /* A finished good enters the store through Production → Add to Finished
+     Stock, which takes the batch number and the lab readings and raises the
+     certificate. A plain receipt would put an unmeasured roll on the shelf —
+     the 10 Sep ruling is that nothing enters the finished store unmeasured,
+     and this was the one door left open (7 kg went through it on 11 Sep). */
+  if (m.type === "GRN" && mvItem.cat === "FG" && q > 0) {
+    throw err("Finished goods are booked from Production → Add to Finished Stock, with the batch number "
+      + "and the lab readings, so a certificate is raised. They are not received like a raw material.", 409);
+  }
   /* A transfer is a signed pair, and the SERVER writes the pair. The browser
      used to post the two legs as separate requests and this endpoint accepted
      each leg blind — so a lone XFER row minted (or destroyed) stock, and a

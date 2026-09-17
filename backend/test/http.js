@@ -2426,8 +2426,19 @@ async function run() {
       thicknessMM: 0.05, gsm: 100, tapeWidthMM: 25, typeCode: "NETTEST-05" });
     await call("PUT", "/boms/" + nfg, A, { yield: 100, lines: [[rm, 1]] });
 
-    // 30 kg of it already sits in the finished store, at 25 mm
-    await call("POST", "/movements", A, { itemId: nfg, type: "GRN", qty: 30, wh: "WH-FG", rate: 0, manual: true });
+    /* A finished good cannot be RECEIVED — it enters the store through Add to
+       Finished Stock, with its batch and readings (the 10 Sep lab-gate ruling).
+       Add Stock posts exactly this receipt, so the door is shut on the server. */
+    {
+      const r = await call("POST", "/movements", A, { itemId: nfg, type: "GRN", qty: 7, wh: "WH-FG", rate: 0, manual: true });
+      ok("a plain receipt of a finished good is refused (409)", r.status === 409, "status=" + r.status);
+      const st = (await call("GET", "/state", A)).d;
+      ok("…and nothing lands in the finished store", !(st.movements || []).some((m) => m.itemId === nfg && m.type === "GRN"));
+      const w = await call("POST", "/movements", A, { itemId: rm, type: "GRN", qty: 1, wh: "WH-PNY", rate: 1, manual: true });
+      ok("a raw material is still received as before", w.status < 300, "status=" + w.status);
+    }
+    // 30 kg of it already sits in the finished store, at 25 mm (a counted adjustment)
+    await call("POST", "/movements", A, { itemId: nfg, type: "ADJ", qty: 30, wh: "WH-FG", rate: 0, note: "test shelf" });
 
     const wo1 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 100, widthMM: 25 })).d;
     const p1 = wo1.plan || {};
@@ -2453,7 +2464,7 @@ async function run() {
       .filter((m) => m.itemId === nfg).reduce((n, m) => n + (+m.qty || 0), 0);
     ok("releasing a work order draws its finished stock immediately", leftAfterWo1 === 0,
       "on hand " + leftAfterWo1);
-    await call("POST", "/movements", A, { itemId: nfg, type: "GRN", qty: 30, wh: "WH-FG", rate: 0, manual: true });
+    await call("POST", "/movements", A, { itemId: nfg, type: "ADJ", qty: 30, wh: "WH-FG", rate: 0, note: "test shelf" });
 
     // an order fully covered by stock skips production entirely
     const wo3 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 20, widthMM: 25 })).d;
@@ -2483,7 +2494,7 @@ async function run() {
     await call("POST", "/items", A, { id: sfg, name: "SPLIT TEST TAPE", cat: "FG", uom: "KG",
       thicknessMM: 0.05, gsm: 100, tapeWidthMM: 25, typeCode: "SPLITTEST-05" });
     await call("PUT", "/boms/" + sfg, A, { yield: 1, lines: [[rm, 1]] });
-    await call("POST", "/movements", A, { itemId: sfg, type: "GRN", qty: 50, wh: "WH-FG", rate: 0, manual: true });
+    await call("POST", "/movements", A, { itemId: sfg, type: "ADJ", qty: 50, wh: "WH-FG", rate: 0, note: "test shelf" });
 
     // take only 10 of the 50 available
     const woA = (await call("POST", "/production/wo", A,

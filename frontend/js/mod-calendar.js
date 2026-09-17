@@ -406,9 +406,9 @@
       const body = h("div", { class: "form-grid" }, [
         U.field("Title *", `<input class="input" id="ap_title" value="${esc(f("title", ""))}" placeholder="e.g. Plant visit — KEI Bhiwadi">`, "full"),
         U.field("Type", U.selectHTML("ap_kind", KINDS.map((k) => ({ v: k.v, l: k.ic + " " + k.v })), f("kind", "Meeting"))),
-        U.field("Date *", `<input class="input" id="ap_date" type="date" value="${f("date", presetDate || todayISO())}">`),
-        U.field("From", `<input class="input" id="ap_time" type="time" value="${f("time", "")}">`),
-        U.field("To", `<input class="input" id="ap_end" type="time" value="${f("endTime", "")}">`),
+        U.field("Date *", `<input class="input" id="ap_date" type="date" value="${esc(f("date", presetDate || todayISO()))}">`),
+        U.field("From", `<input class="input" id="ap_time" type="time" value="${esc(f("time", ""))}">`),
+        U.field("To", `<input class="input" id="ap_end" type="time" value="${esc(f("endTime", ""))}">`),
         U.field("Owner", `<input class="input" id="ap_owner" value="${esc(f("owner", (App.user && App.user.username) || "Sales Desk"))}">`),
         U.field("Location", `<input class="input" id="ap_loc" value="${esc(f("location", ""))}" placeholder="Their plant / our works / phone">`),
         /* linking is what makes the diary worth keeping: an appointment tied

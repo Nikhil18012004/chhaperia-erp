@@ -59,6 +59,7 @@
       this.bindChrome();
       this.setUserChip();
       await this.refresh();
+      this.startAutoRefresh();
     },
 
     bindChrome() {
@@ -164,6 +165,42 @@
       }
     },
 
+    /* THE BOARD KEEPS ITSELF CURRENT. It used to reload only after this
+       login's own taps, so a roll coating handed over never reached the
+       slitting board until someone pressed Refresh. Now it asks the server on
+       opening a job list, every 15 s while on screen, and when the phone
+       wakes — quietly and slim, and never under an open form or a field being
+       typed in, so nothing the supervisor is doing is redrawn away. */
+    busy() {
+      const mh = UI.$("#modalHost"); if (mh && !mh.hidden) return true;
+      const ae = document.activeElement;
+      return !!(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName));
+    },
+    freshen(force) {
+      if (document.hidden || this.busy() || this._freshening) return;
+      if (!force && this._freshAt && Date.now() - this._freshAt < 3000) return;
+      if (["items", "ledger", "warehouses", "tds"].includes(this.filter)) return;   // the store pages load their own
+      this._freshAt = Date.now(); this._freshening = true;
+      DB.loadAsync({ slim: true }).then((fresh) => {
+        if (this.busy()) return;                       // a form opened while we were asking
+        const before = JSON.stringify((this.data || {}).workorders || []);
+        this.data = Object.assign({}, this.data, fresh, { finishedProducts: (this.data || {}).finishedProducts || [] });
+        this.refreshBell();
+        if (JSON.stringify(this.data.workorders || []) !== before) { this.buildNav(); this.render(); }
+      }).catch(() => { /* a blip — the next tick tries again */ })
+        .finally(() => { this._freshening = false; });
+    },
+    stopAutoRefresh() { if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; } },
+    startAutoRefresh() {
+      if (this._pollTimer) return;
+      this._pollTimer = setInterval(() => this.freshen(true), 15000);
+      if (!this._wake) {
+        this._wake = () => { if (this._pollTimer && !document.hidden) this.freshen(true); };
+        document.addEventListener("visibilitychange", this._wake);
+        window.addEventListener("focus", this._wake);
+      }
+    },
+
     /* bucket a WO from THIS area's perspective.
        An order still owing quantity is NOT done, however finished this run
        looks — it stays in My Jobs until the whole order has been made. The
@@ -213,7 +250,7 @@
       const nav = UI.$("#nav"); nav.innerHTML = "";
       items.forEach((n) => {
         if (n.sec) { nav.appendChild(H("div", { class: "nav-section", text: n.sec })); return; }
-        const item = H("div", { class: "nav-item" + (n.id === this.filter ? " active" : ""), onclick: () => { this.filter = n.id; this.buildNav(); this.render(); } }, [
+        const item = H("div", { class: "nav-item" + (n.id === this.filter ? " active" : ""), onclick: () => { this.filter = n.id; this.buildNav(); this.render(); this.freshen(); } }, [
           H("span", { class: "ic", text: n.ic }),
           H("span", { class: "lbl", text: n.label }),
         ]);
@@ -1681,7 +1718,7 @@
   function fact(label, val) {
     return UI.h("div", { class: "sup-fact" }, [
       UI.h("div", { class: "sup-fact-l", text: label }),
-      UI.h("div", { class: "sup-fact-v" }, val instanceof Node ? val : UI.h("span", { html: String(val) })),
+      UI.h("div", { class: "sup-fact-v" }, val instanceof Node ? val : UI.h("span", { text: String(val) })),
     ]);
   }
   function fmtQty(n) { n = +n || 0; return n % 1 === 0 ? n.toLocaleString("en-IN") : n.toLocaleString("en-IN", { maximumFractionDigits: 1 }); }

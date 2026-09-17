@@ -422,13 +422,13 @@
          Raw Material. */
       field("Category",selectHTML("f_cat",ENG.data.categories.map(c=>({v:c.id,l:c.name})),it.cat)),
       field("Unit of Measure",`<input class="input" id="f_uom" value="${esc(f('uom','KG'))}">`),
-      field("Reorder Point",`<input class="input" id="f_reorder" type="number" value="${f('reorder',0)}">`),
-      field("Safety Stock",`<input class="input" id="f_safety" type="number" value="${f('safety',0)}">`),
-      field("Lead Time (days)",`<input class="input" id="f_lead" type="number" value="${f('lead',7)}">`),
-      field("Std Cost (₹)",`<input class="input" id="f_cost" type="number" value="${f('cost',0)}">`),
-      field("Selling Price (₹)",`<input class="input" id="f_price" type="number" value="${f('price',0)}">`),
+      field("Reorder Point",`<input class="input" id="f_reorder" type="number" value="${esc(f('reorder',0))}">`),
+      field("Safety Stock",`<input class="input" id="f_safety" type="number" value="${esc(f('safety',0))}">`),
+      field("Lead Time (days)",`<input class="input" id="f_lead" type="number" value="${esc(f('lead',7))}">`),
+      field("Std Cost (₹)",`<input class="input" id="f_cost" type="number" value="${esc(f('cost',0))}">`),
+      field("Selling Price (₹)",`<input class="input" id="f_price" type="number" value="${esc(f('price',0))}">`),
       field("HSN Code",`<input class="input" id="f_hsn" value="${esc(f('hsn',''))}">`),
-      field("GST Rate (%)",`<input class="input" id="f_gst" type="number" step="0.1" value="${f('gstRate',18)}" placeholder="18">`),
+      field("GST Rate (%)",`<input class="input" id="f_gst" type="number" step="0.1" value="${esc(f('gstRate',18))}" placeholder="18">`),
       field("Barcode",`<input class="input" id="f_barcode" value="${esc(f('barcode',''))}" placeholder="Scan/enter, or leave blank to auto-generate">`),
     ]);
     const mo=modal({title:edit?"Edit Item":"New Item", sub:edit?it.id:"Create a stock item", body,
@@ -959,6 +959,21 @@
       let qty=+g("s_qty"); const rate=+g("s_rate")||0, wh=g("s_wh"), qUnit=g("s_uom");
       if(!qty || isNaN(qty) || qty<=0){ toast("Enter a quantity greater than zero",{type:"warn"}); return; }
       if(fgNow && !(+g("s_tapewid")>0)){ toast("Enter the tape width for a finished good",{type:"warn"}); return; }
+      /* A finished good enters the store with its batch number and its lab
+         readings, so a certificate is raised for it. Add to Finished Stock
+         takes both; this form takes neither — so it does not put a roll on
+         the shelf. (The server refuses the receipt too.) */
+      if(fgNow){
+        mo.close();
+        const g2=modal({title:"Finished goods are booked from Production", sub:"Nothing has been posted",
+          body:h("div",{},[
+            h("p",{style:"font-size:13px;line-height:1.6;margin:0",text:"A finished good goes into store with its batch number and its lab readings, and a certificate is raised for it. Production → Add to Finished Stock takes both; Add Stock takes neither."}),
+            h("p",{class:"muted",style:"font-size:13px;line-height:1.6;margin:10px 0 0",text:"To set up a new finished good without stock, use New Item → Create BOM instead."}),
+          ]),
+          foot:[h("button",{class:"btn ghost",onclick:()=>g2.close(),text:"Close"}),
+                h("button",{class:"btn primary",onclick:()=>{ g2.close(); App.go("production",{openFinished:true}); },text:"➕ Add to Finished Stock"})]});
+        return;
+      }
       /* the item's OWN tracking unit is what posts to the ledger — the entry
          unit is only how the storeman happened to count it */
       const postUom=String((sel.value!=="__new"
@@ -1199,7 +1214,7 @@
            date, and the material is already named, coded and sized */
         ...matCols(r=>ENG.item(r.itemId)||{name:r.itemId,id:r.itemId},{cat:false}),
         {key:"type",label:"Type",width:"92px",render:r=>moveBadge(r.type),sort:r=>r.type},
-        {key:"wh",label:"Warehouse",cls:"nm",width:"104px",render:r=>`<span class="muted">${whName(r.wh)}</span>`,sort:r=>r.wh},
+        {key:"wh",label:"Warehouse",cls:"nm",width:"104px",render:r=>`<span class="muted">${esc(whName(r.wh))}</span>`,sort:r=>r.wh},
         /* the reference is the movement's own story — a receipt names its PO,
            an issue its work order, a sale its sales order. Rows that lead to a
            document say so; the row click below takes you there. */

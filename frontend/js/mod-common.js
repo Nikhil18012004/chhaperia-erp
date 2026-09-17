@@ -176,12 +176,15 @@
     ]);
   }
 
-  /* ----- detail row helper ----- */
+  /* ----- detail row helper -----
+     A value is TEXT unless it is a Node: stored fields (names, notes,
+     designations) render literally, never as markup. A caller that wants a
+     badge or a styled note hands in h("span",{html:...}) itself. */
   function dl(pairs){
     return h("div",{class:"grid",style:"grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px"},
       pairs.map(([k,v])=>h("div",{},[
         h("div",{class:"muted",style:"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em",text:k}),
-        h("div",{style:"font-size:14px;font-weight:600;margin-top:3px"}, v instanceof Node?v:h("span",{html:String(v==null?"—":v)}))
+        h("div",{style:"font-size:14px;font-weight:600;margin-top:3px"}, v instanceof Node?v:h("span",{text:String(v==null||v===""?"—":v)}))
       ])));
   }
 

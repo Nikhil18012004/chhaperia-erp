@@ -114,6 +114,14 @@
     startAutoRefresh(ms){
       this.stopAutoRefresh();
       this._pollTimer=setInterval(()=>this.pollState(), ms||15000);
+      /* The poll skips a hidden tab. A supervisor waking the phone, or an
+         operator coming back to this window, should see the board as it is
+         now — not as it was up to a poll before the screen went dark. */
+      if(!this._wakeHook){
+        this._wakeHook=()=>{ if(!document.hidden) this.pollState(); };
+        document.addEventListener("visibilitychange", this._wakeHook);
+        window.addEventListener("focus", this._wakeHook);
+      }
     },
     stopAutoRefresh(){ if(this._pollTimer){ clearInterval(this._pollTimer); this._pollTimer=null; } },
     async pollState(){
@@ -176,6 +184,7 @@
 
     async logout(){
       this.stopAutoRefresh();
+      if(global.SUP && typeof SUP.stopAutoRefresh==="function") SUP.stopAutoRefresh();
       /* The signed-out screen has no module on it, so a guard left behind from
          the last one would stall the next session's first render and its poll. */
       this._leaveGuard=null;
@@ -473,6 +482,13 @@
       }
       this.current=id; this.params=params||null;
       location.hash=id;
+      /* Opening a page asks the server what changed, rather than showing the
+         copy the last 15-second poll left. A supervisor tapping My Jobs must
+         see the roll coating handed over a moment ago. pollState re-renders
+         only when the data really moved and never under an open form. */
+      if(!this._navPollAt || Date.now()-this._navPollAt>3000){
+        this._navPollAt=Date.now(); setTimeout(()=>this.pollState(),0);
+      }
       // nav active state
       $$(".nav-item").forEach(el=>el.classList.toggle("active", el.getAttribute("data-id")===id));
       // navigating opens the destination's own section — the active item is

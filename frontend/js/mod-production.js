@@ -1076,6 +1076,8 @@
     }
     draw();
     if(params&&params.openNew){ params.openNew=false; woForm(); }
+    /* Stock Items sends a finished good here — its receipt needs the batch and the readings */
+    if(params&&params.openFinished){ params.openFinished=false; finishedStockForm(); }
     if(params&&params.open){ const w=(ENG.data.workorders||[]).find(x=>x.id===params.open); params.open=null; if(w) woDetail(w); }
 
     function canPlan(){ return ["admin","office"].includes((App.user&&App.user.role)||""); }
@@ -1138,19 +1140,19 @@
         started?h("p",{class:"dim",style:"margin-bottom:10px",text:"Production has started — product, quantity and line are locked; the W.O. number, due date and priority can still change."}):null,
         h("div",{class:"form-grid"},[
           U.field("W.O. Number",`<input class="input" id="we_id" value="${esc(wo.id)}">`),
-          U.field("Quantity (kg)",`<input class="input" id="we_qty" type="number" min="0" step="0.1" value="${wo.qty}" ${started?"disabled":""}>`),
+          U.field("Quantity (kg)",`<input class="input" id="we_qty" type="number" min="0" step="0.1" value="${esc(wo.qty)}" ${started?"disabled":""}>`),
           started
             ? U.field("Product",`<input type="hidden" id="we_item" value="${esc(wo.itemId)}"><input class="input is-locked" readonly value="${esc(lockedLabel)}">`,"full")
             : fgPicker("we_item", fgs, wo.itemId),
           // width is a slitting parameter, not a material one — it can still be
           // corrected after the run has started, right up to dispatch
-          U.field("Tape Width (mm)",`<input class="input" id="we_width" type="number" min="0" step="0.5" placeholder="e.g. 25" value="${wo.widthMM!=null?wo.widthMM:""}">`),
+          U.field("Tape Width (mm)",`<input class="input" id="we_width" type="number" min="0" step="0.5" placeholder="e.g. 25" value="${esc(wo.widthMM!=null?wo.widthMM:"")}">`),
           /* the line fixes where the job started and what each stage drew, so
              a released order (its stock is issued on release) keeps it */
           started
             ? U.field("Production Line",`<input class="input is-locked" readonly value="${esc(wo.line||"")}">`)
             : U.field("Production Line",U.selectHTML("we_line",LINES,wo.startLine||"")),
-          U.field("Due Date",`<input class="input" id="we_due" type="date" value="${wo.due||""}">`),
+          U.field("Due Date",`<input class="input" id="we_due" type="date" value="${esc(wo.due||"")}">`),
           U.field("Priority",U.selectHTML("we_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],wo.priority||"Normal")),
           /* Who it is for drives labelling, not the route, so it stays editable
              right up to dispatch — including being cleared back to a stock run. */
@@ -1513,7 +1515,7 @@
       // ---- Details pane ----
       const detailsPane=h("div",{},[
         MW.dl([["Product",it.name],["Code",U.familyCode(it.typeCode,it.thicknessMM)||it.typeCode||wo.itemId],
-          ["Customer", woCustomerName(wo)||'<span class="muted">To stock — no customer named</span>'],
+          ["Customer", woCustomerName(wo)||h("span",{class:"muted",text:"To stock — no customer named"})],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
           ...(wo.widthMM?[["Tape Width",wo.widthMM+" mm"]]:[]),
           ...(it.thicknessMM!=null&&wo.widthMM?[["Size",it.thicknessMM+" × "+wo.widthMM+" mm"]]:[]),
@@ -1522,16 +1524,16 @@
              where the job actually stands — what has been made and what is
              still waiting on material belong beside it. */
           ...((+wo.pendingQty||0)>0?[
-            ["Produced",`<span class="strong">${ENG.num((+wo.completedQty||0)+(+wo.runQty||0))}</span> kg`],
-            ["Pending",`<span class="strong" style="color:var(--danger)">${ENG.num(wo.pendingQty)}</span> kg awaiting material`],
+            ["Produced",h("span",{},[h("span",{class:"strong",text:ENG.num((+wo.completedQty||0)+(+wo.runQty||0))})," kg"])],
+            ["Pending",h("span",{},[h("span",{class:"strong",style:"color:var(--danger)",text:ENG.num(wo.pendingQty)})," kg awaiting material"])],
           ]:[]),
           ["Line",wo.line],
           /* The coated jumbo is never booked into a store — so the store the
              coating floor named as it closed the stage is the only record of
              where the roll physically is. The office reads the same fact the
              slitting board is sent to. */
-          ...(coatedRollAt(wo)?[["Coated roll at","🏬 "+esc(whName(coatedRollAt(wo)))]]:[]),
-          ["Status",badge(wo.status==="Completed"||wo.status==="Dispatched"?"ok":wo.status==="Partial"?"danger":"info",wo.status)],
+          ...(coatedRollAt(wo)?[["Coated roll at","🏬 "+whName(coatedRollAt(wo))]]:[]),
+          ["Status",h("span",{html:badge(wo.status==="Completed"||wo.status==="Dispatched"?"ok":wo.status==="Partial"?"danger":"info",wo.status)})],
           ["Start",wo.date],["Due",wo.due],["Yield",bom?(bom.yield*100).toFixed(0)+"%":"—"],["Progress",wo.progress+"%"]]),
         stageTimeline(wo),
         h("div",{style:"margin-top:14px"},[stockPanel,matHost].filter(Boolean)),
@@ -2049,7 +2051,7 @@
            a smaller figure puts that much on the machines now and carries the
            rest as pending, to be resumed batch by batch. */
         U.field("Release Now (kg)",`<input class="input" id="w_release" type="number" min="0" step="any" placeholder="whole quantity"><div class="muted" style="font-size:11px;margin-top:3px">Leave blank to release the whole order</div>`),
-        U.field("Due Date",`<input class="input" id="w_due" type="date" value="${DB.helpers.daysAhead(7)}">`),
+        U.field("Due Date",`<input class="input" id="w_due" type="date" value="${esc(DB.helpers.daysAhead(7))}">`),
         U.field("Priority",U.selectHTML("w_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],"Normal")),
       ]);
       // the form body is a 2-column grid — without an explicit span these
@@ -3195,7 +3197,7 @@ recalc(); },50);
       const body=h("div",{},[
         h("div",{class:"form-grid"},[
           prodHost,
-          U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${initYieldPct}">`),
+          U.field("Yield (%)", `<input class="input" id="bm_yield" type="number" step="1" min="1" max="100" value="${esc(initYieldPct)}">`),
         ]),
         basisHost, altHost,
         h("h3",{style:"margin:14px 0 8px;font-size:13px",text:"Components (quantity per batch)"}),
@@ -3275,15 +3277,15 @@ recalc(); },50);
             `<input class="input" id="bm_np_group" list="bm_np_series" value="${esc(draft.group)}" placeholder="e.g. MICA SERIES">`
             +`<datalist id="bm_np_series">${series.map(s=>`<option value="${esc(s)}"></option>`).join("")}</datalist>`));
           prodHost.appendChild(U.field("Thickness (mm)",
-            `<input class="input" id="bm_np_thk" type="number" step="0.001" min="0" value="${draft.thicknessMM==null?"":draft.thicknessMM}" placeholder="0.100">`));
+            `<input class="input" id="bm_np_thk" type="number" step="0.001" min="0" value="${esc(draft.thicknessMM==null?"":draft.thicknessMM)}" placeholder="0.100">`));
           prodHost.appendChild(U.field("GSM",
-            `<input class="input" id="bm_np_gsm" type="number" step="1" min="0" value="${draft.gsm==null?"":draft.gsm}" placeholder="finished weight per m²">`));
+            `<input class="input" id="bm_np_gsm" type="number" step="1" min="0" value="${esc(draft.gsm==null?"":draft.gsm)}" placeholder="finished weight per m²">`));
           prodHost.appendChild(U.field("Unit", U.selectHTML("bm_np_uom",
             [{v:"KG",l:"Kilogram (kg)"},{v:"SQM",l:"Square Meter (sqm)"},{v:"MTR",l:"Meter (m)"}], draft.uom)));
           prodHost.appendChild(U.field("Cost / unit (₹)",
-            `<input class="input" id="bm_np_cost" type="number" step="0.01" min="0" value="${draft.cost||0}">`));
+            `<input class="input" id="bm_np_cost" type="number" step="0.01" min="0" value="${esc(draft.cost||0)}">`));
           prodHost.appendChild(U.field("Selling Price (₹)",
-            `<input class="input" id="bm_np_price" type="number" step="0.01" min="0" value="${draft.price||0}">`));
+            `<input class="input" id="bm_np_price" type="number" step="0.01" min="0" value="${esc(draft.price||0)}">`));
           prodHost.appendChild(U.field("HSN",
             `<input class="input" id="bm_np_hsn" value="${esc(draft.hsn)}" placeholder="optional">`));
           /* No "↩ Pick an existing product" here any more (removed 2026-09-05

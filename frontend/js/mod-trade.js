@@ -212,10 +212,10 @@
       const poQc=qcForPo(po);
       const body=h("div",{},[
         MW.dl([["Supplier",ENG.sup(po.supplierId)],["Billing Entity",companyByKey(po.company).name],
-          ["Status",badge(po.status==="Received"?"ok":"info",po.status)],["Ordered",po.date],["ETA",po.eta]]
+          ["Status",h("span",{html:badge(po.status==="Received"?"ok":"info",po.status)})],["Ordered",po.date],["ETA",po.eta]]
           .concat(po.refNo?[["Ref / Quote",po.refNo]]:[])
           // the QC verdict belongs with the order's own facts, not buried below
-          .concat(poQc?[["Incoming QC",qcBadge(poQc)]]:[])),
+          .concat(poQc?[["Incoming QC",h("span",{html:qcBadge(poQc)})]]:[])),
         /* A FAILED LOT SAYS SO AT THE TOP. The goods were booked into stock when
            the receipt was posted, so the office has to see this without opening
            anything: it is their decision to raise a debit note or send it back
@@ -1349,8 +1349,8 @@
             {v:"po",l:"Purchase Order"},{v:"proforma",l:"Proforma Invoice"}],
             editPo?(editPo.docType||"po"):"po")),
           U.field("Supplier *",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
-          U.field("PO Date",`<input class="input" id="po_date" type="date" value="${editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
-          U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${editPo?editPo.eta:DB.helpers.daysAhead(14)}">`),
+          U.field("PO Date",`<input class="input" id="po_date" type="date" value="${esc(editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today()))}">`),
+          U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${esc(editPo?editPo.eta:DB.helpers.daysAhead(14))}">`),
           U.field("Valid Upto",`<input class="input" id="po_valid" type="date" value="${ev("validUpto")}">`),
           U.field("Quotation Ref.",`<input class="input" id="po_ref" value="${ev("refNo")}" placeholder="e.g. Verbal / QTN-77">`),
         ]),
@@ -1742,7 +1742,7 @@
     const frVal = keep(opts.freightId)!=null?keep(opts.freightId):(opts.freight||"");
     const insVal= opts.insuranceId ? (keep(opts.insuranceId)!=null?keep(opts.insuranceId):(opts.insurance||"")) : null;
     const row=(l,v,strong)=>`<div style="display:flex;justify-content:space-between;gap:24px;padding:3px 0${strong?";font-weight:800;font-size:15px;border-top:1px solid var(--line);margin-top:4px;padding-top:8px":""}"><span class="${strong?"":"muted"}">${l}</span><span>${v}</span></div>`;
-    const inpRow=(l,id,v)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:3px 0"><span class="muted">${l}</span><input class="input" id="${id}" type="number" step="0.01" style="width:110px;text-align:right;padding:4px 8px" value="${v==null?"":v}"></div>`;
+    const inpRow=(l,id,v)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:3px 0"><span class="muted">${l}</span><input class="input" id="${id}" type="number" step="0.01" style="width:110px;text-align:right;padding:4px 8px" value="${esc(v==null?"":v)}"></div>`;
     if(opts.exportCcy){
       // export supply: line values only — no GST added; IGST note prints on the invoice
       const S=GST.ccySign(opts.exportCcy), f2=v=>S+(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1847,7 +1847,15 @@
     async function dispatchSO(so){
       const fromStock=so.lines.filter(l=>!l.batch&&+l.qty>0);
       const fromBatch=so.lines.filter(l=>l.batch&&+l.qty>0);
-      const short=fromStock.filter(l=>ENG.stock(l.itemId).onHand+1e-6<l.qty).map(l=>{
+      const shortLines=()=>fromStock.filter(l=>ENG.stock(l.itemId).onHand+1e-6<l.qty);
+      if(shortLines().length){
+        /* This screen's copy of the store can be up to a poll behind: the
+           floor may have booked the stock a moment ago from another login.
+           The server is the authority, so ask it before refusing anyone. */
+        await App.reloadState();
+        so=(ENG.data.salesorders||[]).find(x=>x.id===so.id)||so;
+      }
+      const short=shortLines().map(l=>{
         const it=ENG.item(l.itemId)||{};
         return (it.name||l.itemId)+": need "+ENG.qtyText(it,l.qty,0)
              +", in store "+ENG.qtyText(it,ENG.stock(l.itemId).onHand,1);
@@ -1906,7 +1914,7 @@
         {key:"amt",label:"Amount",num:true,render:r=>ENG.money(r.qty*r.rate*(1-(r.discPct||0)/100)),noSort:true});
       const body=h("div",{},[
         MW.dl([["Customer",ENG.custName(so.customerId)],["Billing Entity",companyByKey(so.company).name],
-          ["Status",badge(so.status==="Dispatched"?"ok":"info",so.status)],["Priority",so.priority],
+          ["Status",h("span",{html:badge(so.status==="Dispatched"?"ok":"info",so.status)})],["Priority",so.priority],
           ["Order Date",so.date],["Promised",so.promised]]
           .concat(so.invoiceNo&&so.invoiceNo!==so.id?[["Invoice No.",so.invoiceNo]]:[])
           // only worth a row when it isn't rupees — every domestic order is
@@ -1977,11 +1985,11 @@
             U.searchSelect("so_ccy",CCY.options(),editSo?(editSo.currency||"INR"):custCcy(cust0),"Search currency…")
             +`<div class="muted" id="so_rate" style="font-size:11px;margin-top:5px;line-height:1.4"></div>`),
           U.field("Invoice No.",`<input class="input" id="so_inv" value="${esc(editSo?(editSo.invoiceNo||editSo.id):soId)}">`),
-          U.field("Order Date",`<input class="input" id="so_date" type="date" value="${editSo?(editSo.date||""):DB.helpers.iso(DB.helpers.today())}">`),
-          U.field("Promised / Due Date",`<input class="input" id="so_prom" type="date" value="${editSo?editSo.promised:DB.helpers.daysAhead(10)}">`),
+          U.field("Order Date",`<input class="input" id="so_date" type="date" value="${esc(editSo?(editSo.date||""):DB.helpers.iso(DB.helpers.today()))}">`),
+          U.field("Promised / Due Date",`<input class="input" id="so_prom" type="date" value="${esc(editSo?editSo.promised:DB.helpers.daysAhead(10))}">`),
           U.field("Priority",U.selectHTML("so_prio",[{v:"Normal",l:"Normal"},{v:"High",l:"High"},{v:"Urgent",l:"Urgent"}],editSo?editSo.priority:"Normal")),
           U.field("Customer PO No.",`<input class="input" id="so_cpo" value="${esc(editSo?(editSo.custPoNo||""):"")}" placeholder="optional">`),
-          U.field("Customer PO Date",`<input class="input" id="so_cpod" type="date" value="${editSo?(editSo.custPoDate||""):""}">`),
+          U.field("Customer PO Date",`<input class="input" id="so_cpod" type="date" value="${esc(editSo?(editSo.custPoDate||""):"")}">`),
         ]),
         sec("Transport & Dispatch"),
         h("div",{class:"form-grid g3"},[
@@ -2730,7 +2738,7 @@
     const body=h("div",{class:"form-grid"},[
       U.field("Customer *",U.searchSelect("cm_cust",custs.map(x=>({v:x.id,l:x.name})),cust0,"Search customer…")),
       U.field("Batch (work order)",U.selectHTML("cm_batch",batchOpts(cust0),c.batch||"")),
-      U.field("Raised on",`<input class="input" id="cm_raised" type="date" value="${c.raised||DB.helpers.iso(DB.helpers.today())}">`),
+      U.field("Raised on",`<input class="input" id="cm_raised" type="date" value="${esc(c.raised||DB.helpers.iso(DB.helpers.today()))}">`),
       U.field("Came in via",U.selectHTML("cm_via",CMP_VIA.map(v=>({v,l:v})),c.via||"Phone")),
       U.field("Raised by (their side)",`<input class="input" id="cm_by" value="${esc(c.raisedByName||"")}" placeholder="e.g. G. Rane, QA">`),
       edit?U.field("Status",U.selectHTML("cm_status",CMP_STATUS.map(v=>({v,l:v})),c.status||"Open")):null,

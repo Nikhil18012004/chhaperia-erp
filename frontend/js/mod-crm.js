@@ -667,9 +667,9 @@
   function logActivity(l) {
     const body = h("div", { class: "form-grid" }, [
       field("Type", selectHTML("a_type", ACT_TYPES.map((t) => ({ v: t, l: t })), "Call")),
-      field("Date", `<input class="input" id="a_date" type="date" value="${todayISO()}">`),
+      field("Date", `<input class="input" id="a_date" type="date" value="${esc(todayISO())}">`),
       field("Note", `<textarea class="input" id="a_note" placeholder="What happened on this touchpoint?"></textarea>`, "full"),
-      field("Next follow-up", `<input class="input" id="a_next" type="date" value="${DB.helpers.daysAhead(3)}">`),
+      field("Next follow-up", `<input class="input" id="a_next" type="date" value="${esc(DB.helpers.daysAhead(3))}">`),
     ]);
     const mo = modal({ title: "Log Activity", sub: l.company, body,
       foot: [
@@ -719,13 +719,13 @@
         fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })),
         chosen)),
       field("Batch (work order)", selectHTML("s_batch", batchOpts(chosen), s.batch || "")),
-      field("Quantity", `<div class="flex aic gap"><input class="input" id="s_qty" type="number" step="0.01" min="0" value="${s.qty != null ? s.qty : 1}">`
+      field("Quantity", `<div class="flex aic gap"><input class="input" id="s_qty" type="number" step="0.01" min="0" value="${esc(s.qty != null ? s.qty : 1)}">`
         + `<span class="chip" id="s_uom">${esc(uomOf(chosen))}</span></div>`),
-      field("Sent On", `<input class="input" id="s_sent" type="date" value="${s.sentDate || todayISO()}">`),
+      field("Sent On", `<input class="input" id="s_sent" type="date" value="${esc(s.sentDate || todayISO())}">`),
       field("Courier / Carrier", `<input class="input" id="s_courier" value="${esc(s.courier || "")}" placeholder="e.g. Blue Dart / hand delivered">`),
       field("Docket / AWB No.", `<input class="input" id="s_awb" value="${esc(s.awb || "")}" placeholder="Tracking reference">`),
       field("Verdict", selectHTML("s_verdict", SAMPLE_VERDICTS.map((v) => ({ v, l: v })), s.verdict || "Awaiting feedback")),
-      field("Chase feedback on", `<input class="input" id="s_next" type="date" value="${(already && l.nextFollowUp) || DB.helpers.daysAhead(7)}">`),
+      field("Chase feedback on", `<input class="input" id="s_next" type="date" value="${esc((already && l.nextFollowUp) || DB.helpers.daysAhead(7))}">`),
       field("Remarks", `<textarea class="input" id="s_note" placeholder="Width / thickness asked for, trial line, who is testing it…">${esc(s.note || "")}</textarea>`, "full"),
     ]);
 
@@ -1059,8 +1059,8 @@
       field("Customer", selectHTML("q_cust", custOpts, q0.customerId || seed.customerId || (lead && lead.customerId) || "")),
       field("Product *", selectHTML("q_item", fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })), item0)),
       field("Unit *", selectHTML("q_uom", QTN_UOMS.map((u) => ({ v: u, l: "per " + u.toLowerCase() })), q0.uom || seed.uom || uomOf(item0))),
-      field("Price per unit (₹) *", `<input class="input" id="q_price" type="number" step="0.01" min="0" value="${q0.price != null ? q0.price : (seed.price || "")}" placeholder="the number offered">`),
-      field("Quantity (optional)", `<input class="input" id="q_qty" type="number" step="0.01" min="0" value="${q0.qty || seed.qty || ""}" placeholder="expected order, in the unit above">`),
+      field("Price per unit (₹) *", `<input class="input" id="q_price" type="number" step="0.01" min="0" value="${esc(q0.price != null ? q0.price : (seed.price || ""))}" placeholder="the number offered">`),
+      field("Quantity (optional)", `<input class="input" id="q_qty" type="number" step="0.01" min="0" value="${esc(q0.qty || seed.qty || "")}" placeholder="expected order, in the unit above">`),
       field("Note", `<textarea class="input" id="q_note" placeholder="What was discussed — width, delivery, payment…">${esc(q0.note || "")}</textarea>`, "full"),
     ]);
     const mo = modal({ title: edit ? "Edit " + q0.id : "New quotation", sub: edit ? (q0.company || "") : "The price you are putting on the table", body, foot: [
@@ -1164,8 +1164,8 @@
   /* ---- a new number in the same conversation ---- */
   function repriceForm(q) {
     const body = h("div", { class: "form-grid" }, [
-      field("New price per " + uomOfQuote(q) + " (₹) *", `<input class="input" id="rp_price" type="number" step="0.01" min="0" value="${q.price}">`),
-      field("Quantity (" + uomOfQuote(q) + ")", `<input class="input" id="rp_qty" type="number" step="0.01" min="0" value="${q.qty || ""}">`),
+      field("New price per " + uomOfQuote(q) + " (₹) *", `<input class="input" id="rp_price" type="number" step="0.01" min="0" value="${esc(q.price)}">`),
+      field("Quantity (" + uomOfQuote(q) + ")", `<input class="input" id="rp_qty" type="number" step="0.01" min="0" value="${esc(q.qty || "")}">`),
       field("What moved it", `<textarea class="input" id="rp_note" placeholder="e.g. customer countered at ₹880; matched the competitor on width…"></textarea>`, "full"),
     ]);
     const mo = modal({ title: "↻ Update the price — " + (q.company || ""), sub: q.id + " · now " + priceText(q) + " · round " + (q.rounds || 1), body, foot: [
@@ -1185,8 +1185,8 @@
   /* ---- closing won: the final price, then the order ---- */
   function winForm(q) {
     const body = h("div", { class: "form-grid" }, [
-      field("Final price per " + uomOfQuote(q) + " (₹) *", `<input class="input" id="w_price" type="number" step="0.01" min="0" value="${q.price}">`),
-      field("Quantity (" + uomOfQuote(q) + ")", `<input class="input" id="w_qty" type="number" step="0.01" min="0" value="${q.qty || ""}" placeholder="for the order">`),
+      field("Final price per " + uomOfQuote(q) + " (₹) *", `<input class="input" id="w_price" type="number" step="0.01" min="0" value="${esc(q.price)}">`),
+      field("Quantity (" + uomOfQuote(q) + ")", `<input class="input" id="w_qty" type="number" step="0.01" min="0" value="${esc(q.qty || "")}" placeholder="for the order">`),
       field("Note", `<textarea class="input" id="w_note" placeholder="What closed it — payment terms, delivery…"></textarea>`, "full"),
     ]);
     const mo = modal({ title: "🏆 Won — " + (q.company || ""), sub: q.id + " · " + (q.productName || ""), body, foot: [
@@ -1358,7 +1358,7 @@
       email: org.email || "", website: org.website || "" };
   }
 
-  function quoteForm(l) {
+  function leadQuoteForm(l) {
     const q = l.quote || {};
     const fgs = ENG.data.items.filter((i) => i.cat === "FG");
     if (!fgs.length) { toast("No finished goods defined to quote", { type: "warn" }); return; }
@@ -1448,11 +1448,11 @@
     const body = h("div", {}, [
       h("div", { class: "form-grid" }, [
         field("Quotation No.", `<input class="input" id="q_no" value="${esc(q.no || nextQuoteNo())}">`),
-        field("Date", `<input class="input" id="q_date" type="date" value="${q.date || todayISO()}">`),
-        field("Valid for (days)", `<input class="input" id="q_valid" type="number" min="1" value="${q.validDays || 30}">`),
+        field("Date", `<input class="input" id="q_date" type="date" value="${esc(q.date || todayISO())}">`),
+        field("Valid for (days)", `<input class="input" id="q_valid" type="number" min="1" value="${esc(q.validDays || 30)}">`),
         field("Delivery", `<input class="input" id="q_delivery" value="${esc(q.delivery || "2–3 weeks from confirmed order")}">`),
         field("Payment Terms", `<input class="input" id="q_pay" value="${esc(q.payTerms || "30 days from invoice")}">`),
-        field("Chase reply on", `<input class="input" id="q_next" type="date" value="${l.nextFollowUp || DB.helpers.daysAhead(7)}">`),
+        field("Chase reply on", `<input class="input" id="q_next" type="date" value="${esc(l.nextFollowUp || DB.helpers.daysAhead(7))}">`),
       ]),
       h("h3", { style: "margin:16px 0 8px;font-size:14px", text: "What is being quoted" }),
       rowHost,
@@ -1536,7 +1536,7 @@
         h("div", { class: "flex aic gap" }, [
           h("span", { html: badge(expired ? "danger" : "ok", expired ? "Expired " + expiry : "Valid to " + expiry) }),
           h("button", { class: "btn sm ghost", onclick: () => printQuote(l), html: "🖨 Print" }),
-          h("button", { class: "btn sm ghost", onclick: () => quoteForm(l), text: "✎ Revise" }),
+          h("button", { class: "btn sm ghost", onclick: () => leadQuoteForm(l), text: "✎ Revise" }),
         ]),
       ]),
       h("div", { class: "crm-q-mini" }, (q.lines || []).map((r) => {
@@ -1712,13 +1712,13 @@
       field("Email", `<input class="input" id="l_email" value="${esc(f("email", ""))}">`),
       field("City", `<input class="input" id="l_city" value="${esc(f("city", ""))}">`),
       field("Product Interest", selectHTML("l_product", fgs.map((i) => ({ v: i.id, l: i.name + (i.thicknessMM != null ? " · " + i.thicknessMM + " mm" : "") + " — " + (i.typeCode || i.id) })), f("product", fgs[0] && fgs[0].id))),
-      field("Estimated Value (₹)", `<input class="input" id="l_value" type="number" value="${f("value", 0)}">`),
+      field("Estimated Value (₹)", `<input class="input" id="l_value" type="number" value="${esc(f("value", 0))}">`),
       field("Source", selectHTML("l_source", SOURCES.map((s) => ({ v: s, l: s })), f("source", "Website Enquiry"))),
       field("Owner", `<input class="input" id="l_owner" value="${esc(f("owner", "Sales Desk"))}">`),
-      field("Next Follow-up", `<input class="input" id="l_next" type="date" value="${f("nextFollowUp", DB.helpers.daysAhead(3)) || DB.helpers.daysAhead(3)}">`),
+      field("Next Follow-up", `<input class="input" id="l_next" type="date" value="${esc(f("nextFollowUp", DB.helpers.daysAhead(3)) || DB.helpers.daysAhead(3))}">`),
       /* Without this the forecast has nothing to bucket on — it was already
          shown on the lead drawer but there was never a way to enter it. */
-      field("Expected Close", `<input class="input" id="l_close" type="date" value="${f("expectedClose", "") || ""}">`),
+      field("Expected Close", `<input class="input" id="l_close" type="date" value="${esc(f("expectedClose", "") || "")}">`),
       field("Notes", `<textarea class="input" id="l_notes" placeholder="Requirement, volumes, remarks…">${esc(f("notes", ""))}</textarea>`, "full"),
     ]);
     const dupHost = h("div", { class: "field full" });
