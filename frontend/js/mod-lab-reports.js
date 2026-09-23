@@ -518,6 +518,20 @@
       return ps.length > 0 && ps.every((p) => (r.labValues || {})[p.key] != null);
     }
     function matchesQ(hay) { return !filter.q || hay.toLowerCase().includes(filter.q); }
+    /* Each certificate carries two readings — the supervisor's on the floor
+       and the lab incharge's after slitting — and the list shows both, with
+       who filed each. The incharge's payload has no grades (see stateForLab),
+       so his copy says whether a reading is in, never how it graded. */
+    function stageCell(r, stage) {
+      const vals = stage === "prod" ? r.prodValues : r.labValues;
+      const by = stage === "prod" ? r.prodBy : r.labBy;
+      const complete = stage === "prod" ? r.prodComplete : r.labComplete;
+      if (!vals || !Object.keys(vals).length) return `<span class="muted" style="font-size:12px">not entered</span>`;
+      const grade = labOnly ? (complete === false ? badge("warn", "partial") : badge("ok", "entered"))
+        : complete === false ? badge("warn", "partial") + " " + resultBadge(stage === "prod" ? r.prodResult : r.labResult)
+        : resultBadge(stage === "prod" ? r.prodResult : r.labResult);
+      return `<div>${grade}</div>` + (by ? `<div class="muted" style="font-size:11px">${esc(by)}</div>` : "");
+    }
 
     function rows() {
       return reports().filter((r) => {
@@ -557,6 +571,10 @@
         { key: "ref", label: "Batch / Lot", render: (r) => `<div>${esc(r.refNo || "—")}</div><div class="muted" style="font-size:11px">${refLabel(r.refMode)}</div>`, sort: (r) => r.refNo || "" },
         { key: "type", label: "Type", noSort: true, render: (r) => `<div class="flex gap wrap">${typeChips(r.flags)}</div>` },
         // the verdict is not the tester's business — see stateForLab
+        { key: "prod", label: "Supervisor", width: "116px", render: (r) => stageCell(r, "prod"),
+          sort: (r) => labOnly ? (r.prodBy || "") : (r.prodResult || "") },
+        { key: "lab", label: "Lab incharge", width: "132px", render: (r) => stageCell(r, "lab"),
+          sort: (r) => labOnly ? (r.labBy || "") : (r.labResult || "") },
         { key: "result", label: "Result", width: "92px", hide: labOnly, render: (r) => resultBadge(r.result), sort: (r) => r.result },
         { key: "assignee", label: "Assignee", render: (r) => esc(r.assignee || "Pending"), sort: (r) => r.assignee || "" },
         /* A certificate the incharge has filed is finished as far as he is
