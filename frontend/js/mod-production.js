@@ -2022,7 +2022,7 @@
       const custs=(ENG.data.customers||[]).slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
       const body=h("div",{class:"form-grid"},[
         fgPicker("w_item", fgs, fgs[0]&&fgs[0].id),
-        U.field("Quantity *",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" value="100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
+        U.field("Quantity *",`<div class="flex" style="gap:6px"><input class="input" id="w_qty" type="number" min="0" placeholder="e.g. 100" style="flex:1"><select class="select" id="w_unit" style="width:92px" title="Enter the run size in kilograms or square metres"><option value="KG">kg</option><option value="SQM">sqm</option></select></div><div class="muted" id="w_conv" style="font-size:11px;margin-top:3px"></div>`),
         /* Width is a per-ORDER parameter, not a product one: the same tape is
            slit to whatever width the customer ordered, so it is captured on the
            run and travels with the batch onto the invoice. */
