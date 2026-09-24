@@ -11,6 +11,7 @@
     "export-data": "node tools/erp-export.js",
     "import-data": "node tools/erp-import.js",
     "test": "npm test --prefix backend",
+    "test:ui": "npm run test:ui --prefix backend",
     "postinstall": "npm install --prefix backend --omit=dev"
   }
 }
