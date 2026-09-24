@@ -296,9 +296,11 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
    worth reading — down to 128px and five wrapped lines. */
 .tbl .mono.code{white-space:normal;overflow-wrap:anywhere;line-height:1.35}
 /* Declared column widths are hints under `table-layout:auto`; this keeps the
-   name column from being squeezed below what a name needs to read as one. */
+   name column from being squeezed below what a name needs to read as one.
+   A centred status cell (Production's Stage) uses .cell-main for its label
+   too; the floor is not for it — it pushed the row actions off a 1440 screen. */
 .tbl th[style*="width"]{box-sizing:border-box}
-.tbl tbody td:has(.cell-main){min-width:150px}
+.tbl tbody td:has(.cell-main):not(.ctr){min-width:150px}
 .tbl .strong{font-weight:700}
 .row-click{cursor:pointer}
 .cell-main{font-weight:700}
