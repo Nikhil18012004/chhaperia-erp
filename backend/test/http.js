@@ -108,6 +108,31 @@ async function run() {
   const po = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01", lines: [{ itemId: rm, qty: 100, rate: 20, recd: 0 }] })).d;
   ok("create PO 201", po.id && po.value === 2000);
 
+  /* A signature prints raw into <img src="…"> on a sheet that shares this
+     origin, so the server keeps only a whole raster data URL. A value that
+     merely STARTS like one could close the attribute and add an onerror=. */
+  const GOOD_SIG = "data:image/png;base64,iVBORw0KGgo=";
+  const EVIL_SIG = 'data:image/png;base64,x" onerror="alert(1)';
+  const soSig = (await call("POST", "/sales-orders", A, { customerId: cust, sigImg: EVIL_SIG,
+    lines: [{ itemId: fg, qty: 1, rate: 1 }] })).d;
+  ok("a sales order drops a signature that is not a clean image", soSig && soSig.sigImg === "",
+    JSON.stringify(soSig && soSig.sigImg));
+  ok("…and keeps a clean one",
+    (await call("PATCH", "/sales-orders/" + soSig.id, A, { sigImg: GOOD_SIG })).d.sigImg === GOOD_SIG);
+  ok("…and drops an attribute-breaking one sent on an edit",
+    (await call("PATCH", "/sales-orders/" + soSig.id, A, { sigImg: EVIL_SIG })).d.sigImg === "");
+  const poSig = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01", sigImg: EVIL_SIG,
+    lines: [{ itemId: rm, qty: 1, rate: 1, recd: 0 }] })).d;
+  ok("a purchase order drops a signature that is not a clean image", poSig && poSig.sigImg === "",
+    JSON.stringify(poSig && poSig.sigImg));
+  ok("an SVG signature is not accepted as a company signature",
+    !(((await call("PATCH", "/settings", A, { signatures: { CO: "data:image/svg+xml;base64,PHN2Zz4=" } })).d || {}).signatures || {}).CO);
+  const stSig = (await call("GET", "/state", A)).d;
+  stSig.salesorders.find((x) => x.id === soSig.id).sigImg = EVIL_SIG;
+  await call("PUT", "/state", A, stSig);
+  ok("the bulk save drops an attribute-breaking signature too",
+    (await call("GET", "/state", A)).d.salesorders.find((x) => x.id === soSig.id).sigImg === "");
+
   /* Sheet goods — fabric, film, mica tape — are bought to a THICKNESS, and the
      supplier cannot fill the order without it. It is set per LINE, because the
      thickness this order needs is not always the one the item master carries. */

@@ -6935,6 +6935,7 @@
       const d=doc();
       const body=h("div",{class:"ls-pp"});
       let addOpen=false;   // the "add another label" chooser, unfolded
+      let showData=false;  // the run as a table — what every label will carry
 
       /* A redraw rebuilds every input, so whichever one was being typed in
          would lose focus and take the caret with it. Each carries a stable
@@ -7002,9 +7003,82 @@
           "The label is bigger than the printable area. Fix the size or the "+
           "margins in Page setup — nothing will come out right."));
 
+        if(showData){ body.appendChild(dataPane()); return; }
         const pane=h("div",{class:"ls-pp-pane"});
         buildSetup(pane,g,per,mates,total);
         body.appendChild(pane);
+      }
+
+      /* ============================================================
+         VIEW DATA — the run as a table, one row per label in print
+         order, one column per thing that changes from copy to copy:
+         serials, dates, prompts, fields read from the ERP, and the
+         codes. Read through the same srcValue() the printer uses, so
+         the table cannot say one thing and the sticker another. Word's
+         mail-merge "preview results", for a label run.
+         ============================================================ */
+      function dataPane(){
+        const d0=doc(), g=sheetGrid(d0), slotOf=orderSlot(d0,g);
+        const cells=planCells();
+        const per=Math.max(1,(plan[0]||[]).length||1);
+        const numOf={};                              // physical cell -> print-order number
+        for(let k=0;k<per;k++){ const ix=slotOf(k); numOf[(ix>=0&&ix<per)?ix:k]=k+1; }
+        const keyOf=(o)=>{ const s=o.src||{kind:"fixed"};
+          if(o.type==="barcode"||o.type==="qr") return o.type+":"+o.id;
+          if(s.kind==="field") return "field:"+s.field;
+          if(s.kind==="prompt") return "prompt:"+(s.prompt||"Value");
+          if(s.kind==="serial") return "serial:"+o.id;
+          if(s.kind==="date") return "date:"+(s.fmt||"");
+          return null; };
+        const labelOf=(o)=>{ const s=o.src||{kind:"fixed"};
+          const base=s.kind==="field"?erpFieldLabel(s.field):s.kind==="prompt"?(s.prompt||"Value")
+            :s.kind==="serial"?"Serial":s.kind==="date"?"Date":(o.type==="qr"?"QR code":"Barcode");
+          return (o.type==="barcode"||o.type==="qr")&&s.kind!=="fixed"
+            ? base+" ("+(o.type==="qr"?"QR":"barcode")+")" : base; };
+        const bound=bindRecords();
+        const cols=[], colKey={};
+        runIds.forEach(id=>{ const m=docs.find(x=>x.id===id); if(!m) return;
+          m.objects.forEach(o=>{ if(o.hidden) return; const k=keyOf(o); if(!k||colKey[k]) return;
+            colKey[k]=true;
+            cols.push({key:k,label:labelOf(o),
+              unbound:!!(o.src&&o.src.kind==="field"&&!bound[String(o.src.field||"").split(".")[0]])}); }); });
+        const rows=[];
+        cells.forEach((c,i)=>{ if(!c) return;
+          const page=Math.floor(i/per)+1, ix=i%per, vals={};
+          c.d.objects.forEach(o=>{ if(o.hidden) return; const k=keyOf(o); if(!k||vals[k]!=null) return; vals[k]=srcValue(o,c.ctx); });
+          rows.push({n:rows.length+1,page,pos:numOf[ix]||ix+1,name:c.d.name,vals}); });
+        const many=runIds.length>1;
+        const wrap=h("div",{class:"ls-pp-data"});
+        wrap.appendChild(h("div",{class:"ls-pp-sec"},[h("span",{text:"The data"}),
+          h("span",{class:"ls-pp-h",text:rows.length+" label"+(rows.length===1?"":"s")+
+            " in print order \u2014 exactly what each one will carry"})]));
+        if(!cols.length) wrap.appendChild(h("div",{class:"ls-pp-note"},
+          "Nothing on this label changes from copy to copy \u2014 every one prints the same words. "+
+          "Serials, dates, prompts and fields read from the ERP would be listed here."));
+        cols.filter(c=>c.unbound).forEach(c=>wrap.appendChild(h("div",{class:"ls-pp-warn"},
+          "\u26a0 "+c.label+" has no record chosen \u2014 it will print its example. Choose one under \u201cHow it prints\u201d.")));
+        const tbl=h("table",{class:"ls-pp-tbl"});
+        tbl.appendChild(h("thead",{},[h("tr",{},[h("th",{text:"#"}),h("th",{text:"Page"}),h("th",{text:"Cell"}),
+          many?h("th",{text:"Label"}):null].concat(cols.map(c=>h("th",{class:c.unbound?"bad":"",text:c.label}))).filter(Boolean))]));
+        const tb=h("tbody");
+        rows.forEach(r=>tb.appendChild(h("tr",{},[h("td",{text:String(r.n)}),h("td",{text:String(r.page)}),h("td",{text:String(r.pos)}),
+          many?h("td",{text:r.name}):null].concat(cols.map(c=>h("td",{class:c.unbound?"bad":"",
+            text:r.vals[c.key]!=null?String(r.vals[c.key]):"\u2014"}))).filter(Boolean))));
+        tbl.appendChild(tb);
+        wrap.appendChild(h("div",{class:"ls-pp-tblwrap"},tbl));
+        /* the same table as a file \u2014 the record of what a run carried */
+        wrap.appendChild(h("button",{class:"btn sm",type:"button",style:"margin-top:8px",
+          onclick:()=>{
+            const head=["#","Page","Cell"].concat(many?["Label"]:[]).concat(cols.map(c=>c.label));
+            const q=(v)=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
+            const csv=[head.map(q).join(",")].concat(rows.map(r=>[r.n,r.page,r.pos].concat(many?[r.name]:[])
+              .concat(cols.map(c=>r.vals[c.key]!=null?r.vals[c.key]:"")).map(q).join(","))).join("\r\n");
+            const a=document.createElement("a");
+            a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv"}));
+            a.download=String(d0.name||"labels").replace(/[^\w .()-]+/g,"_")+" - print data.csv";
+            document.body.appendChild(a); a.click(); a.remove();
+          }},"\u2913 Download as CSV"));
+        return wrap;
       }
 
       /* ============================================================
@@ -7541,6 +7615,13 @@
       }
       build();
 
+      /* the run as a table, and back to the layout \u2014 one switch, so the
+         operator can check what every label will say before it prints */
+      const bData=h("button",{class:"btn",type:"button",
+        title:"See exactly what every label in this run will carry, in print order",
+        onclick:()=>{ showData=!showData;
+          bData.textContent=showData?"\u229e  Back to layout":"\u2630  View data"; redraw(); },
+        text:"\u2630  View data"});
       const bCancel=h("button",{class:"btn ghost",
         onclick:()=>{mo.close();paint();},text:"Cancel"});
       /* Straight to the printer. The pages strip in the dialog is drawn by
@@ -7555,7 +7636,7 @@
           if(doPrint()) mo.close();
         },text:"🖨  Print"});
       const mo=modal({title:"Print", sub:doc().name+" — "+sizeS(doc().w,doc().h),
-        wide:true, body, foot:[bCancel,bPrint]});
+        wide:true, body, foot:[bData,h("div",{class:"sp",style:"flex:1"}),bCancel,bPrint]});
     }
 
 
@@ -7580,11 +7661,7 @@
           :"No labels are placed yet — tick a design and give it a number "+
            "of labels to print",{type:"warn"});
         return false; }
-      const w=window.open("","_blank");
-      if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"});
-        return false; }
-      w.document.write(composeHtml(d,cells,{print:true,cut:!!runOpts.cut}));
-      w.document.close();
+      UI.printHtml(composeHtml(d,cells,{print:true,cut:!!runOpts.cut}),{title:"Labels"});
       return true;
     }
 

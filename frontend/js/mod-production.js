@@ -878,7 +878,7 @@
     const pendKg=pendingList.reduce((a,w)=>a+(+w.pendingQty||0),0);
     const out30=ENG.dailySeries(30).prod.reduce((a,b)=>a+b,0);
     // five tiles on this board — a slightly tighter minimum keeps one row
-    root.appendChild(h("div",{class:"grid kpi-grid",style:"margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(196px,1fr))"},[
+    root.appendChild(h("div",{class:"grid kpi-grid kpi-grid-5",style:"margin-bottom:16px"},[
       kpi({icon:"⚙️",label:"Active Work Orders",value:ENG.num(active.length)}),
       kpi({icon:"⏸",label:"Pending Material",value:ENG.num(pendingList.length),
         delta:pendingList.length?ENG.num(pendKg)+" kg waiting":"nothing waiting",
@@ -2522,7 +2522,7 @@ recalc(); },50);
       groups.forEach(g=>{
         const list=match.filter(f=>(f.group||"—")===g.key);
         if(!list.length) return;
-        groupHost.appendChild(h("div",{class:"flex aic gap",style:"margin:20px 0 12px"},[
+        groupHost.appendChild(h("div",{class:"flex aic gap bom-series-head",style:"margin:20px 0 12px"},[
           h("h2",{style:"font-size:17px;font-weight:800",text:g.label}),
           h("span",{class:"muted",style:"font-size:13px",text:"· "+g.sub}),
           h("span",{class:"chip",style:"margin-left:auto",text:list.length+" products"})
@@ -3074,9 +3074,7 @@ recalc(); },50);
         +"<span>"+esc(code)+" · "+esc(today)+"</span></div>"
         +"</body></html>";
 
-      const w=window.open("","_blank");
-      if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-      w.document.write(html); w.document.close();
+      UI.printHtml(html,{title:"Cost of Material"});
     }
 
     /* ----- create / edit / delete a product's BOM -------------------------

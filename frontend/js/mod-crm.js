@@ -1044,6 +1044,12 @@
      product, and the price is the only number the desk has to think about. */
   function quoteForm(edit, seed) {
     seed = seed || {};
+    /* New Quotation is laid out exactly as New Sales Order (2026-09-25): the
+       Tally-style sheet lives with the other documents in mod-trade.js and
+       saves through the CRM's own wrapper, so the record stays the CRM's. */
+    if (window._erpUtil && window._erpUtil.quoteFormTally) {
+      return window._erpUtil.quoteFormTally(edit, seed, { leadById, save: qtnSave });
+    }
     const q0 = edit || {};
     const lead = leadById(q0.leadId || seed.leadId);
     const openLeads = ENG.leads().filter((l) => (l.stage !== "Won" && l.stage !== "Lost") || (lead && l.id === lead.id));
@@ -1124,6 +1130,17 @@
       q.note ? h("div", { class: "card", style: "margin-top:12px;box-shadow:none;background:var(--panel-2)" }, [
         h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px", text: "Note" }),
         h("div", { style: "font-size:13px;line-height:1.5;white-space:pre-wrap", text: q.note })]) : null,
+      /* a quote raised on the sales-order form may carry more than one line;
+         the pipeline reads the first, the sheet shows them all */
+      (q.sheet && Array.isArray(q.sheet.lines) && q.sheet.lines.length > 1) ? h("div", { class: "card", style: "margin-top:12px;box-shadow:none;background:var(--panel-2)" }, [
+        h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px", text: "All " + q.sheet.lines.length + " lines on the quotation" }),
+        table(q.sheet.lines.map((l, i) => Object.assign({ n: i + 1 }, l)), [
+          { key: "n", label: "#", render: (r) => String(r.n) },
+          { key: "item", label: "Product", render: (r) => esc((ENG.item(r.itemId) || {}).name || r.itemId) },
+          { key: "qty", label: "Qty", num: true, render: (r) => r.qty > 0 ? ENG.num(r.qty) : "—" },
+          { key: "rate", label: "Rate", num: true, render: (r) => rs(r.rate) },
+          { key: "gst", label: "GST %", num: true, render: (r) => r.gstPct != null ? String(r.gstPct) : "—" },
+        ], { empty: "" })]) : null,
       h("div", { class: "card", style: "margin-top:14px;box-shadow:none;background:var(--panel-2)" }, [
         h("div", { class: "muted", style: "font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:6px", text: "Price history — " + hist.length + (hist.length === 1 ? " entry" : " entries") }),
         h("div", {}, hist.map((x) => h("div", { class: "flex aic wrap gap", style: "padding:6px 0;border-top:1px solid var(--line);font-size:13px" }, [
@@ -1212,7 +1229,7 @@
       if (!customerId) return;
       const yes = await confirm(`🏆 ${q.company || ENG.custName(customerId)} won at ${priceText(q, finalPrice)}.\n\nRaise a sales order now for ${q.productName || q.itemId}?\nThis pushes the deal into your order book → production → dispatch.`,
         { title: "Raise the order?" });
-      if (yes) await raiseOrderFor({ customerId, itemId: q.itemId, price: finalPrice, qty, uom: q.uom, leadId: q.leadId, quoteId: q.id, value: quoteValueOf(finalPrice, qty) });
+      if (yes) await raiseOrderFor({ customerId, itemId: q.itemId, price: finalPrice, qty, uom: q.uom, leadId: q.leadId, quoteId: q.id, sheet: q.sheet, value: quoteValueOf(finalPrice, qty) });
     }
   }
 
@@ -1251,7 +1268,7 @@
      goes on the line only when it was talked in the product's own unit; a
      sqm price for a kg-stocked tape cannot be typed onto the line honestly,
      so the line takes the list price and the desk is told to correct it. */
-  async function raiseOrderFor({ customerId, itemId, price, qty, uom, leadId, quoteId, value }) {
+  async function raiseOrderFor({ customerId, itemId, price, qty, uom, leadId, quoteId, value, sheet }) {
     const fg = ENG.item(itemId) || {};
     const own = String(fg.uom || "KG").toUpperCase();
     const sameUnit = !uom || String(uom).toUpperCase() === own;
@@ -1263,9 +1280,19 @@
       date: todayISO(), customerId,
       // no invented width: it is set from the work order the line is filled
       // from, and until then the invoice simply prints the thickness
-      lines: [{ itemId, qty: n, rate, width: (fg.widthMM ? fg.widthMM[0] : null) }],
+      /* a quote raised on the sales-order form carries every line and the
+         parties; the first line takes the price it was won at */
+      lines: (sheet && Array.isArray(sheet.lines) && sheet.lines.length)
+        ? sheet.lines.map((l, i) => ({ itemId: l.itemId, qty: i === 0 ? n : (l.qty > 0 ? l.qty : 1), rate: i === 0 ? rate : (+l.rate || 0),
+            discPct: l.discPct || 0, gstPct: l.gstPct, hsn: l.hsn || "", width: null }))
+        : [{ itemId, qty: n, rate, width: (fg.widthMM ? fg.widthMM[0] : null) }],
       status: "Confirmed", promised: DB.helpers.daysAhead(14), priority: "Normal",
-      value: Math.round(n * rate),
+      value: Math.round((sheet && sheet.lines && sheet.lines.length)
+        ? sheet.lines.reduce((s, l, i) => s + (i === 0 ? n * rate : (l.qty > 0 ? l.qty : 1) * (+l.rate || 0)) * (1 - (l.discPct || 0) / 100), 0)
+        : n * rate),
+      ...(sheet ? { company: sheet.company, placeOfSupply: sheet.placeOfSupply, shipTo: sheet.shipTo, currency: sheet.currency,
+                    payTerms: sheet.payTerms, freight: sheet.freight, insurance: sheet.insurance, roundOff: sheet.roundOff,
+                    sigImg: sheet.sigImg } : {}),
       fromLead: leadId || "",     // traceability back to the CRM lead
       fromQuote: quoteId || "",   // …and to the price it was won at
     };
@@ -1691,9 +1718,7 @@
   <div class="foot">This is a computer-generated quotation and is valid without signature.</div>
 </div></body></html>`;
 
-    const w = window.open("", "_blank");
-    if (!w) { toast("Popup blocked — allow popups for this site to print", { type: "warn" }); return; }
-    w.document.write(html); w.document.close();
+    UI.printHtml(html, { title: "Quotation" });
   }
 
   /* ============================================================

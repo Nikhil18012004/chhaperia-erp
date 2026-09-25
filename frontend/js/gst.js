@@ -104,8 +104,10 @@
     if (interState) igst += chargeTax;
     else { cgst += chargeTax / 2; sgst += chargeTax / 2; }
     taxable = r2(taxable); cgst = r2(cgst); sgst = r2(sgst); igst = r2(igst);
-    var raw = taxable + freight + insurance + cgst + sgst + igst;
-    var grand = Math.round(raw);
+    var raw = r2(taxable + freight + insurance + cgst + sgst + igst);
+    /* Rounding to the rupee is the usual thing on a tax invoice, and it is a
+       CHOICE: a document raised with roundOff:false keeps the paise. */
+    var grand = opts.roundOff === false ? raw : Math.round(raw);
     return {
       lines: rows,
       interState: interState,

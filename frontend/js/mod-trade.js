@@ -90,7 +90,8 @@
     const interState = kind==="po" ? !!(partyCode && partyCode!==(co.stateCode||"29"))
                                    : pos!==(co.stateCode||"29");
     return { co, party, pos, interState,
-      calc: GST.calcDoc({lines:gstLinesOf(o), interState, freight:o.freight, insurance:o.insurance}) };
+      calc: GST.calcDoc({lines:gstLinesOf(o), interState, freight:o.freight, insurance:o.insurance,
+        roundOff:o.roundOff!==false}) };
   }
 
   /* ============== PROCUREMENT ============== */
@@ -1385,6 +1386,7 @@
           U.field("Delivery",`<input class="input" id="po_deliv" value="${esc(editPo?(editPo.deliveryNote||""):"immediate")}" placeholder="e.g. immediate / ASAP">`),
           U.field("Destination",`<input class="input" id="po_dest" value="${esc(editPo?(editPo.destination||""):"to our works")}">`),
           U.field("Notes / Instructions",`<textarea class="input" id="po_notes" rows="2" placeholder="e.g. Kindly attach Test Report along with material">${ev("notes")}</textarea>`,"full"),
+          U.field("Signature on the print",sigHtml("po_sig",editPo?(editPo.sigImg||""):null,editPo?editPo.company:companies()[0].key,"po_co"),"full"),
         ]),
         docSec("Materials ordered"),
         h("div",{id:"po_lines",class:"doc-lines"}),
@@ -1425,13 +1427,15 @@
           deliveryNote:UI.$("#po_deliv").value.trim(), destination:UI.$("#po_dest").value.trim(),
           notes:UI.$("#po_notes").value.trim(),
           freight:+UI.$("#po_fr")?.value||0,
+          roundOff:UI.$("#po_ro")?UI.$("#po_ro").checked:(editPo?editPo.roundOff!==false:true),
+          sigImg:sigVal("po_sig"),
           status:editPo?editPo.status:"Draft — not saved", eta:UI.$("#po_eta").value };
         o.value=docCalc("po",o).calc.grandTotal;
         return o;
       }
       function recalc(){
         const o=draft();
-        renderTotals(totBox, docCalc("po",o), {freightId:"po_fr", freight:o.freight});
+        renderTotals(totBox, docCalc("po",o), {freightId:"po_fr", freight:o.freight, roundId:"po_ro", roundOff:o.roundOff});
       }
       function printDraft(){
         const o=draft();
@@ -1679,7 +1683,7 @@
           docType:o.docType,
           validUpto:o.validUpto, vendorCode:o.vendorCode, attn:o.attn, ctcPerson:o.ctcPerson,
           gstMode:o.gstMode, packing:o.packing, deliveryNote:o.deliveryNote, destination:o.destination,
-          notes:o.notes, eta:o.eta, lines:o.lines, freight:o.freight, value:o.value, status:"Open"};
+          notes:o.notes, eta:o.eta, lines:o.lines, freight:o.freight, roundOff:o.roundOff, sigImg:o.sigImg, value:o.value, status:"Open"};
         if(editPo){
           Object.assign(editPo,patch);
           mo.close(); toast(editPo.id+" updated",{type:"ok"});
@@ -1761,6 +1765,10 @@
     const insVal= opts.insuranceId ? (keep(opts.insuranceId)!=null?keep(opts.insuranceId):(opts.insurance||"")) : null;
     const row=(l,v,strong)=>`<div style="display:flex;justify-content:space-between;gap:24px;padding:3px 0${strong?";font-weight:800;font-size:15px;border-top:1px solid var(--line);margin-top:4px;padding-top:8px":""}"><span class="${strong?"":"muted"}">${l}</span><span>${v}</span></div>`;
     const inpRow=(l,id,v)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:3px 0"><span class="muted">${l}</span><input class="input" id="${id}" type="number" step="0.01" style="width:110px;text-align:right;padding:4px 8px" value="${esc(v==null?"":v)}"></div>`;
+    /* ROUND OFF IS A TICK, not a given. The grand total is rounded to the rupee
+       while it is on (the usual invoice), and keeps the paise when it is off. */
+    const roOn=opts.roundOff!==false;
+    const chkRow=(l,id,on)=>`<label style="display:flex;justify-content:space-between;align-items:center;gap:24px;padding:3px 0;cursor:pointer"><span class="muted">${l}</span><input type="checkbox" id="${id}" ${on?"checked":""}></label>`;
     if(opts.exportCcy){
       // export supply: line values only — no GST added; IGST note prints on the invoice
       const S=GST.ccySign(opts.exportCcy), f2=v=>S+(+v||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1784,10 +1792,97 @@
       ${interState?row("IGST",ENG.money(calc.igst)):(row("CGST",ENG.money(calc.cgst))+row("SGST",ENG.money(calc.sgst)))}
       ${inpRow("Freight / Transport (₹)",opts.freightId,frVal)}
       ${opts.insuranceId?inpRow("Insurance (₹)",opts.insuranceId,insVal):""}
-      ${row("Round Off",(calc.roundOff>=0?"+ ":"− ")+Math.abs(calc.roundOff).toFixed(2))}
-      ${row("Grand Total",ENG.money(calc.grandTotal),true)}
+      ${opts.roundId?chkRow("Round off to the nearest rupee",opts.roundId,roOn):""}
+      ${roOn?row("Round Off",(calc.roundOff>=0?"+ ":"− ")+Math.abs(calc.roundOff).toFixed(2)):""}
+      ${row("Grand Total",roOn?ENG.money(calc.grandTotal):"\u20b9"+IN(calc.grandTotal),true)}
     </div>`;
   }
+
+
+  /* ============================================================
+     A SIGNATURE ON THE PRINT. A picture of the signatory's signature,
+     chosen once and remembered per billing company (settings.signatures),
+     printed above "Authorised Signatory" on the purchase order, the sales
+     invoice and the quotation. It is kept ON the document as well, so a
+     sheet reprinted next year carries the signature it went out with.
+     Scaled down before it is kept — a phone photo is megabytes, a
+     signature strip needs a few kilobytes. The buttons work by delegation,
+     so any form can carry the field with one line of markup.
+     ============================================================ */
+  const SIG_HINT_ON="Prints above \u201cAuthorised Signatory\u201d";
+  const SIG_HINT_OFF="Optional \u2014 a PNG or a photo of the signature, printed above \u201cAuthorised Signatory\u201d";
+  function savedSig(coKey){ const s=(ENG.data.settings||{}).signatures||{}; return s[coKey]||""; }
+  // the WHOLE value must be a raster data URL: it is printed raw into src="…",
+  // and a prefix check let a quote (and an onerror=) through
+  const sigOk=(v)=>/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(String(v||""));
+  /* `cur` null = a new document: it starts with the company's remembered
+     signature; "" = a saved document that has none, and keeps none */
+  function sigHtml(id,cur,coKey,coSelId){
+    const v=sigOk(cur!=null?cur:savedSig(coKey))?(cur!=null?cur:savedSig(coKey)):"";
+    return `<div class="sig-pick" data-sig="${esc(id)}" data-cosel="${esc(coSelId||"")}">`
+      +`<input type="hidden" id="${esc(id)}" value="${esc(v)}">`
+      +`<input type="file" accept="image/*" data-sig-file="${esc(id)}" hidden>`
+      +`<div class="sig-prev"${v?"":" hidden"}><img src="${esc(v)}" alt="Signature"></div>`
+      +`<div class="flex aic wrap" style="gap:8px">`
+      +`<button type="button" class="btn sm" data-sig-choose="${esc(id)}">${v?"Change picture\u2026":"Choose picture\u2026"}</button>`
+      +`<button type="button" class="btn sm ghost" data-sig-remove="${esc(id)}"${v?"":" hidden"}>\u2715 Remove</button>`
+      +`<span class="muted sig-hint" style="font-size:11px">${v?SIG_HINT_ON:SIG_HINT_OFF}</span></div></div>`;
+  }
+  const sigVal=(id)=>{ const el=UI.$("#"+id); const v=el?String(el.value||""):""; return sigOk(v)?v:""; };
+  function sigShrink(file){
+    return new Promise((res,rej)=>{
+      const rd=new FileReader();
+      rd.onerror=()=>rej(new Error("read"));
+      rd.onload=()=>{
+        const im=new Image();
+        im.onerror=()=>rej(new Error("image"));
+        im.onload=()=>{
+          const W=600,H=220, k=Math.min(1,W/im.naturalWidth,H/im.naturalHeight);
+          const cv=document.createElement("canvas");
+          cv.width=Math.max(1,Math.round(im.naturalWidth*k)); cv.height=Math.max(1,Math.round(im.naturalHeight*k));
+          cv.getContext("2d").drawImage(im,0,0,cv.width,cv.height);
+          res(cv.toDataURL("image/png"));
+        };
+        im.src=rd.result;
+      };
+      rd.readAsDataURL(file);
+    });
+  }
+  function sigSet(id,v){
+    const box=document.querySelector(`.sig-pick[data-sig="${id}"]`); if(!box) return;
+    v=sigOk(v)?v:"";
+    const hid=box.querySelector("input[type=hidden]"); hid.value=v;
+    const prev=box.querySelector(".sig-prev"); prev.hidden=!v; prev.querySelector("img").src=v;
+    box.querySelector("[data-sig-choose]").textContent=v?"Change picture\u2026":"Choose picture\u2026";
+    box.querySelector("[data-sig-remove]").hidden=!v;
+    box.querySelector(".sig-hint").textContent=v?SIG_HINT_ON:SIG_HINT_OFF;
+    hid.dispatchEvent(new Event("input",{bubbles:true}));
+  }
+  function rememberSig(coKey,v){
+    if(!coKey||!v) return;
+    const s=Object.assign({},(ENG.data.settings||{}).signatures||{}); s[coKey]=v;
+    ENG.data.settings=Object.assign({},ENG.data.settings,{signatures:s});
+    try{ const p=DB.saveSettings({signatures:s}); if(p&&p.catch) p.catch(()=>{}); }catch(e){}
+  }
+  document.addEventListener("click",(e)=>{
+    const t=e.target; if(!t||!t.closest) return;
+    const c=t.closest("[data-sig-choose]");
+    if(c){ const f=document.querySelector(`input[data-sig-file="${c.getAttribute("data-sig-choose")}"]`); if(f) f.click(); return; }
+    const r=t.closest("[data-sig-remove]");
+    if(r) sigSet(r.getAttribute("data-sig-remove"),"");
+  });
+  document.addEventListener("change",async(e)=>{
+    const f=e.target; if(!(f&&f.matches&&f.matches("input[data-sig-file]"))) return;
+    const id=f.getAttribute("data-sig-file"), file=f.files&&f.files[0]; f.value="";
+    if(!file) return;
+    try{
+      const v=await sigShrink(file);
+      sigSet(id,v);
+      const box=f.closest(".sig-pick"), coSel=box&&box.getAttribute("data-cosel")?UI.$("#"+box.getAttribute("data-cosel")):null;
+      rememberSig(coSel?coSel.value:"",v);
+      toast("Signature added \u2014 it prints above \u201cAuthorised Signatory\u201d",{type:"ok"});
+    }catch(err){ toast("Could not read that picture",{type:"warn"}); }
+  });
 
   /* ============== SALES ============== */
   M.sales = { title:"Sales Orders", sub:"Demand & dispatch", render(root, params){
@@ -1950,7 +2045,7 @@
         h("h3",{style:"margin:18px 0 10px;font-size:14px",text:"Tax Summary"}),
         MW.dl([["Taxable",ENG.money(calc.taxable)]].concat(gstPairs).concat([
           ["Freight",ENG.money(calc.freight)],["Insurance",ENG.money(calc.insurance)],
-          ["Round Off",calc.roundOff.toFixed(2)],["Grand Total",ENG.money(calc.grandTotal)]])),
+          ]).concat(so.roundOff===false?[]:[["Round Off",calc.roundOff.toFixed(2)]]).concat([["Grand Total",so.roundOff===false?"\u20b9"+IN(calc.grandTotal):ENG.money(calc.grandTotal)]])),
       ]);
       const foot=[h("button",{class:"btn danger",onclick:()=>deleteSO(so),text:"🗑 Delete"}),
         h("button",{class:"btn",onclick:()=>printDoc("so",so),html:PRINT_IC+" Print Invoice"})];
@@ -2045,6 +2140,7 @@
         h("div",{class:"form-grid g3"},[
           U.field("Payment Terms",`<input class="input" id="so_terms" value="${esc(editSo?(editSo.payTerms||""):(cust0&&cust0.terms||"30 days"))}">`),
           U.field("Notes",`<input class="input" id="so_notes" value="${esc(editSo?(editSo.notes||""):"")}" placeholder="shown on the invoice">`,"full"),
+          U.field("Signature on the print",sigHtml("so_sig",editSo?(editSo.sigImg||""):null,editSo?editSo.company:companies()[0].key,"so_co"),"full"),
         ]),
         h("div",{class:"doc-tot"},totBox),
       ]);
@@ -2193,6 +2289,8 @@
           lines:collect(),
           freight:+(UI.$("#so_fr")&&UI.$("#so_fr").value)||0,
           insurance:+(UI.$("#so_ins")&&UI.$("#so_ins").value)||0,
+          roundOff:UI.$("#so_ro")?UI.$("#so_ro").checked:(editSo?editSo.roundOff!==false:true),
+          sigImg:sigVal("so_sig"),
           status:editSo?editSo.status:"Confirmed",
           promised:g("so_prom"), priority:g("so_prio") };
         if(o.invoiceType==="export"){
@@ -2208,6 +2306,7 @@
         const o=draft();
         renderTotals(totBox, docCalc("so",o),
           {freightId:"so_fr", freight:o.freight, insuranceId:"so_ins", insurance:o.insurance,
+           roundId:"so_ro", roundOff:o.roundOff,
            exportCcy:o.invoiceType==="export"?o.currency:null});
       }
       function printDraft(){
@@ -2287,7 +2386,7 @@
             portLoading:o.portLoading, portDischarge:o.portDischarge, finalDest:o.finalDest,
             countryDest:o.countryDest, deliveryTerms:o.deliveryTerms, marksPkgs:o.marksPkgs,
             netWt:o.netWt, grossWt:o.grossWt, exportNote:o.exportNote,
-            lines:o.lines, freight:o.freight, insurance:o.insurance, value:o.value};
+            lines:o.lines, freight:o.freight, insurance:o.insurance, roundOff:o.roundOff, sigImg:o.sigImg, value:o.value};
           Object.assign(editSo,patch);
           mo.close(); toast(editSo.id+" updated",{type:"ok"});
           App.saveDelta(()=>DB.sales.update(editSo.id,patch));
@@ -2343,10 +2442,10 @@
           ]),
           // statgrid-3: three tiny figures — they stay side by side on a phone
           h("div",{class:"grid cols-3 statgrid-3",style:"margin:14px 0;gap:8px"},[
-            stat("Rating","★ "+s.rating), stat("On-Time",s.onTime+"%"), stat("Terms",s.terms),
+            stat("Rating",s.rating!=null&&s.rating!==""?"★ "+s.rating:"—"), stat("On-Time",s.onTime!=null&&s.onTime!==""?s.onTime+"%":"—"), stat("Terms",s.terms||"—"),
           ]),
           s.gst?h("div",{class:"muted",style:"font-size:12px;margin-bottom:8px",text:"GSTIN "+s.gst+(partyStateCode(s)?" · "+GST.stateName(partyStateCode(s)):"")}):null,
-          h("div",{style:"margin-bottom:10px"},[ h("div",{class:"flex between",style:"font-size:11px;margin-bottom:4px"},[h("span",{class:"muted",text:"On-time delivery"}),h("span",{class:"muted",text:s.onTime+"%"})]), h("div",{html:meter(s.onTime,s.onTime>92?"ok":s.onTime>85?"warn":"danger")}) ]),
+          h("div",{style:"margin-bottom:10px"},[ h("div",{class:"flex between",style:"font-size:11px;margin-bottom:4px"},[h("span",{class:"muted",text:"On-time delivery"}),h("span",{class:"muted",text:s.onTime!=null&&s.onTime!==""?s.onTime+"%":"not yet rated"})]), h("div",{html:meter(+s.onTime||0,s.onTime==null||s.onTime===""?"mut":s.onTime>92?"ok":s.onTime>85?"warn":"danger")}) ]),
           h("div",{class:"flex between",style:"font-size:13px;padding-top:10px;border-top:1px solid var(--line)"},[
             h("span",{class:"muted",text:items.length+" items supplied"}),
             h("span",{class:"strong",text:ENG.money(spendMap[s.id]||0)+" / yr"})
@@ -3014,9 +3113,7 @@
                                     ? domesticHtml(o, false, {quote:true})
                                     : exportHtml(o, {title:"QUOTATION", validUntil:o.validUntil}))
                : (o.invoiceType==="export" ? exportHtml(o) : domesticHtml(o));
-    const w=window.open("","_blank");
-    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-    w.document.write(html); w.document.close();
+    UI.printHtml(html);
   }
   /* ---- a quotation on paper ----
      The Samples & Quotations page keeps a quote as one product, one unit,
@@ -3035,10 +3132,19 @@
     const price=(q.status==="Won"&&q.finalPrice>0)?q.finalPrice:q.price;
     // currency follows the customer; custCcy lives in a render closure, so read it plainly here
     const ccy=String((cust.currency)||"INR").toUpperCase();
-    printDoc("quote",{ id:q.id, rev:1, date:q.date, validUntil:DB.helpers.daysAhead(30), customerId:q.customerId,
-      company:companies()[0].key, currency:ccy, placeOfSupply:partyStateCode(cust)||"29",
-      lines:[{ itemId:q.itemId, qty:q.qty>0?q.qty:1, rate:price, discPct:0, gstPct:lineGstPct({},it) }],
-      freight:0, insurance:0, payTerms:cust.terms||"", notes:q.note||"", leadId:q.leadId||"" });
+    /* a quote raised on the sales-order form carries its whole sheet — every
+       line, the parties, the terms, the signature — and that is what prints;
+       the first line reads the price the pipeline holds now */
+    const sh=(q.sheet&&Array.isArray(q.sheet.lines)&&q.sheet.lines.length)?q.sheet:null;
+    const lines=sh
+      ? sh.lines.map((l,i)=>Object.assign({},l,{qty:l.qty>0?l.qty:1, rate:i===0?price:l.rate, discPct:l.discPct||0,
+          gstPct:(l.gstPct!=null&&l.gstPct!=="")?l.gstPct:lineGstPct({},ENG.item(l.itemId)||{})}))
+      : [{ itemId:q.itemId, qty:q.qty>0?q.qty:1, rate:price, discPct:0, gstPct:lineGstPct({},it) }];
+    printDoc("quote",{ id:q.id, rev:1, date:q.date, validUntil:(sh&&sh.validUntil)||DB.helpers.daysAhead(30), customerId:q.customerId,
+      company:(sh&&sh.company)||companies()[0].key, currency:(sh&&sh.currency)||ccy,
+      placeOfSupply:(sh&&sh.placeOfSupply)||partyStateCode(cust)||"29", shipTo:sh?(sh.shipTo||""):"",
+      lines, freight:sh?sh.freight:0, insurance:sh?sh.insurance:0, roundOff:sh?sh.roundOff!==false:true,
+      sigImg:sh?(sh.sigImg||""):"", payTerms:(sh&&sh.payTerms)||cust.terms||"", notes:q.note||"", leadId:q.leadId||"" });
   }
 
   /* ============================================================
@@ -3580,9 +3686,7 @@
   }
 
   function printLabels(po,cfg,list){
-    const w=window.open("","_blank");
-    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-    w.document.write(labelSheetHtml(po,cfg,list,{print:true})); w.document.close();
+    UI.printHtml(labelSheetHtml(po,cfg,list,{print:true}),{title:"Labels"});
   }
 
   /* One editable value bag per ordered line, keyed the way STICKER_FIELDS is.
@@ -4376,9 +4480,7 @@
   <div class="note">Use your browser's "Save as PDF" to download</div>
   <script>window.onload=function(){window.print();}<\/script>
 </body></html>`;
-    const w=window.open("","_blank");
-    if(!w){ toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
-    w.document.write(html); w.document.close();
+    UI.printHtml(html);
   }
 
   /* ---- The styled document sheet, used for BOTH the domestic GST tax invoice
@@ -4449,7 +4551,7 @@
                     :[["CGST"+pctSuffix,IN(calc.cgst)],["SGST"+pctSuffix,IN(calc.sgst)]]),
       calc.freight?["Freight / Transport",IN(calc.freight)]:null,
       calc.insurance?["Insurance",IN(calc.insurance)]:null,
-      ["Round Off",(calc.roundOff>=0?"+ ":"− ")+Math.abs(calc.roundOff).toFixed(2)],
+      o.roundOff===false?null:["Round Off",(calc.roundOff>=0?"+ ":"− ")+Math.abs(calc.roundOff).toFixed(2)],
     ].filter(Boolean).map(([l,v])=>`<tr><td>${l}</td><td class="r">${v}</td></tr>`).join("");
 
     const infoPairs=isPO?[
@@ -4546,6 +4648,7 @@
   table.tot tr.g td{background:#F06820;color:#fff;font-weight:800;font-size:15px;border-color:#F06820}
   .sign{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;font-size:11px;color:#777}
   .sig{text-align:center;color:#1a1c1e}.sig .ln{border-top:1.5px solid #555;margin-top:24px;padding-top:5px;min-width:210px;font-weight:700}
+  .sig .sigimg{display:block;height:46px;max-width:230px;object-fit:contain;margin:4px auto 0}.sig.signed .ln{margin-top:2px}
   .strip{display:flex;justify-content:space-between;background:#26282b;color:#fff;font-size:11px;padding:6px 14px;border-radius:6px;margin-top:14px}
   .strip b{color:#F58024}
   .greet{font-size:12px;margin:-4px 0 9px;color:#444}
@@ -4626,7 +4729,7 @@
   </div>
   <div class="sign">
     <div class="muted" style="color:#777">${interState?"Inter-state supply — IGST charged.":"Intra-state supply — CGST + SGST charged."}${isPO||isQuote?"":" Whether tax is payable on reverse charge : No."}</div>
-    <div class="sig">For <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></div>
+    <div class="sig${sigOk(o.sigImg)?" signed":""}">For <b>${esc(co.name)}</b>${sigOk(o.sigImg)?`<img class="sigimg" src="${o.sigImg}" alt="">`:""}<div class="ln">Authorised Signatory</div></div>
   </div>
   </td></tr></tbody></table>
   <div class="pgfoot">
@@ -4689,6 +4792,7 @@
   .signrow{display:flex;justify-content:flex-end;margin-top:6px}
   .sig{border:1.2px solid #222;padding:8px 14px 6px;min-width:300px;font-size:12px}
   .sig .ln{margin-top:44px;font-weight:700}
+  .sig .sigimg{display:block;height:44px;max-width:220px;object-fit:contain;margin:6px 0 0}.sig.signed .ln{margin-top:2px}
   .cert{font-size:11px;margin-top:8px}
   .note{margin-top:8px;font-size:10px;color:#999;text-align:center}
   @media print{ body{padding:6mm} .note{display:none} }
@@ -4738,7 +4842,7 @@
     </tbody>
   </table>
   <div class="words">Amount Chargeable (In Words) :<b>${esc(words)}</b></div>
-  <div class="signrow"><div class="sig">Signature &amp; Date<br>For <b>${esc(co.name)}</b><div class="ln">Authorised Signatory</div></div></div>
+  <div class="signrow"><div class="sig${sigOk(o.sigImg)?" signed":""}">Signature &amp; Date<br>For <b>${esc(co.name)}</b>${sigOk(o.sigImg)?`<img class="sigimg" src="${o.sigImg}" alt="">`:""}<div class="ln">Authorised Signatory</div></div></div>
   <div class="cert">It is hereby certified that to the best of our Knowledge &amp; belief the above mentioned goods are of India origin.</div>
   <div class="note">Computer generated commercial invoice · use your browser's "Save as PDF" to download</div>
   <script>window.onload=function(){window.print();}<\/script>
@@ -4762,5 +4866,184 @@
     newComplaint: { mod:"customers", create:true, ic:"⚠️", label:"Raise a Complaint", run:()=>{ App.go("customers"); setTimeout(()=>complaintForm(),150); } },
   });
   // the Samples & Quotations page lives in mod-crm.js; the sheet it prints on lives here
-  window._erpUtil = Object.assign(window._erpUtil||{}, { printQuote });
+
+  /* ============================================================
+     THE QUOTATION, ON THE SALES ORDER'S FORM (2026-09-25). The desk
+     asked for New Quotation to be laid out exactly as New Sales Order
+     is — the same parties block, the same line cards, the same live
+     totals — so a quote is written the way the order it becomes will
+     be. The pipeline (price, unit, quantity, rounds, won / lost) keeps
+     running on the FIRST line; the whole sheet travels with the quote
+     (q.sheet) and is what prints. Called from the CRM's quoteForm,
+     which owns the record; `api` carries what only the CRM knows (its
+     save wrapper, its leads).
+     ============================================================ */
+  function quoteFormTally(edit, seed, api){
+    seed=seed||{}; api=api||{};
+    const q0=edit||{}, sh=(q0.sheet&&typeof q0.sheet==="object")?q0.sheet:null;
+    const leadById=api.leadById||((id)=>(ENG.data.leads||[]).find(l=>l.id===id)||null);
+    const lead=leadById(q0.leadId||seed.leadId);
+    const openLeads=(ENG.data.leads||[]).filter(l=>(l.stage!=="Won"&&l.stage!=="Lost")||(lead&&l.id===lead.id));
+    const custs=ENG.data.customers.slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+    const fgs=ENG.data.items.filter(i=>i.cat==="FG");
+    const cust0=custs.find(c=>c.id===(q0.customerId||seed.customerId||(lead&&lead.customerId)))||null;
+    const co0=(sh&&sh.company)||companies()[0].key;
+    let lines=[];
+    const totBox=h("div");
+    const sec=docSec;
+    const body=h("div",{},[
+      sec("Parties"),
+      h("div",{class:"form-grid g3"},[
+        U.field("Billing Company (invoice under) *",U.selectHTML("q_co",companyOpts(),co0)),
+        U.field("Customer (Bill To)"+(lead?"":" *"),
+          U.searchSelect("q_cust",(lead?[{v:"",l:"\u2014 the lead, no customer yet \u2014"}]:[]).concat(custs.map(c=>({v:c.id,l:c.name}))),
+            cust0?cust0.id:"","Search customer\u2026")),
+        U.field("Place of Supply",U.selectHTML("q_pos",stateOpts(),(sh&&sh.placeOfSupply)||partyStateCode(cust0)||"29")),
+        U.field("Ship To (delivery address)",`<textarea class="input" id="q_ship" rows="2" placeholder="same as billing">${esc(sh?(sh.shipTo||""):(cust0&&(cust0.shipTo||cust0.address)||""))}</textarea>`,"full"),
+      ]),
+      sec("Quotation Details"),
+      h("div",{class:"form-grid g3"},[
+        U.field("Currency",
+          U.searchSelect("q_ccy",CCY.options(),(sh&&sh.currency)||custCcy(cust0),"Search currency\u2026")
+          +`<div class="muted" id="q_rate" style="font-size:11px;margin-top:5px;line-height:1.4"></div>`),
+        U.field("Quotation No.",`<input class="input" id="q_no" value="${esc(edit?q0.id:"")}" placeholder="given on save" disabled>`),
+        U.field("Date",`<input class="input" id="q_date" type="date" value="${esc(edit?(q0.date||""):DB.helpers.iso(DB.helpers.today()))}" ${edit?"disabled":""}>`),
+        U.field("Valid Until",`<input class="input" id="q_valid" type="date" value="${esc((sh&&sh.validUntil)||DB.helpers.daysAhead(30))}">`),
+        U.field("Lead (enquiry)",edit
+          ?`<input class="input" value="${esc(lead?(lead.company+" \u00b7 "+lead.id):"\u2014 none \u2014")}" disabled>`
+          :U.selectHTML("q_lead",[{v:"",l:"\u2014 none, quote a customer directly \u2014"}].concat(openLeads.map(l=>({v:l.id,l:l.company+" \u00b7 "+l.id}))),(lead&&lead.id)||"")),
+      ]),
+      sec("Goods quoted"),
+      h("div",{id:"q_lines",class:"doc-lines"}),
+      h("button",{class:"btn sm doc-add",onclick:()=>addLine(),html:"\uff0b Add line"}),
+      sec("Payment & notes"),
+      h("div",{class:"form-grid g3"},[
+        U.field("Payment Terms",`<input class="input" id="q_terms" value="${esc(sh?(sh.payTerms||""):(cust0&&cust0.terms||"30 days"))}">`),
+        U.field("Notes",`<input class="input" id="q_notes" value="${esc(q0.note||"")}" placeholder="what was discussed \u2014 width, delivery, payment\u2026 (prints on the quotation)">`,"full"),
+        U.field("Signature on the print",sigHtml("q_sig",sh?(sh.sigImg||""):null,co0,"q_co"),"full"),
+      ]),
+      h("div",{class:"doc-tot"},totBox),
+    ]);
+    const mo=modal({title:edit?("Edit "+q0.id):"New Quotation",
+      sub:edit?(q0.company||""):"Everything here flows straight onto the printed quotation", xwide:true, wide:true, body,
+      headActions:[UI.calcButton()],
+      foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
+        h("button",{class:"btn",onclick:printDraft,html:PRINT_IC+" Print"}),
+        h("button",{class:"btn primary",onclick:save,text:edit?"Save":"Raise quotation"})]});
+    body.addEventListener("input",recalc);
+    body.addEventListener("change",recalc);
+    // the customer follows the lead; place of supply, ship-to, terms and currency follow the customer
+    const leadSel=UI.$("#q_lead");
+    if(leadSel) leadSel.addEventListener("change",()=>{
+      const l=leadById(leadSel.value); if(!l) return;
+      if(l.customerId){ U.ssSet("q_cust",l.customerId); const c=custs.find(x=>x.id===l.customerId); if(c) followCustomer(c); }
+      recalc();
+    });
+    function followCustomer(c){
+      const posEl=UI.$("#q_pos"); const sc=partyStateCode(c); if(posEl&&sc) posEl.value=sc;
+      const shipEl=UI.$("#q_ship"); if(shipEl) shipEl.value=c.shipTo||c.address||"";
+      const tEl=UI.$("#q_terms"); if(tEl&&c.terms) tEl.value=c.terms;
+      const want=custCcy(c);
+      if(UI.$("#q_ccy")&&UI.$("#q_ccy").value!==want) U.ssSet("q_ccy",want);
+    }
+    const custHid=UI.$("#q_cust");
+    if(custHid) custHid.addEventListener("change",()=>{ const c=custs.find(x=>x.id===custHid.value); if(c) followCustomer(c); recalc(); });
+    const ccyEl=UI.$("#q_ccy"), rateEl=UI.$("#q_rate");
+    if(ccyEl) ccyEl.addEventListener("change",()=>ccyRateLine(rateEl,ccyEl.value));
+    ccyRateLine(rateEl, ccyEl?ccyEl.value:"INR");
+
+    function collect(){ const out=[];
+      lines.forEach((_,i)=>{ if(!lines[i]) return; const iEl=UI.$("#ql_item_"+i); if(!iEl) return;
+        const id=iEl.value, qty=+UI.$("#ql_qty_"+i).value||0, rate=+UI.$("#ql_rate_"+i).value;
+        if(id) out.push({itemId:id, qty, rate:rate||(ENG.item(id)||{}).price||0,
+          hsn:(UI.$("#ql_hsn_"+i).value||"").trim(),
+          discPct:+UI.$("#ql_disc_"+i).value||0, gstPct:+UI.$("#ql_gst_"+i).value||0}); });
+      return out; }
+    /* the sheet as the totals and the printer read it: a line quoted with no
+       quantity is priced for one, as the old one-line quote printed it */
+    function draft(){
+      const g=id=>{const el=UI.$("#"+id);return el?el.value:"";};
+      return { id:edit?q0.id:"QTN-(new)", date:g("q_date")||DB.helpers.iso(DB.helpers.today()),
+        customerId:g("q_cust"), company:g("q_co"), currency:g("q_ccy"),
+        placeOfSupply:g("q_pos"), shipTo:g("q_ship").trim(), validUntil:g("q_valid"),
+        payTerms:g("q_terms").trim(), notes:g("q_notes").trim(),
+        lines:collect().map(l=>Object.assign({},l,{qty:l.qty>0?l.qty:1})),
+        freight:+(UI.$("#q_fr")&&UI.$("#q_fr").value)||0,
+        insurance:+(UI.$("#q_ins")&&UI.$("#q_ins").value)||0,
+        roundOff:UI.$("#q_ro")?UI.$("#q_ro").checked:(sh?sh.roundOff!==false:true),
+        sigImg:sigVal("q_sig"), leadId:edit?(q0.leadId||""):g("q_lead") };
+    }
+    function recalc(){
+      const o=draft();
+      renderTotals(totBox, docCalc("so",o), {freightId:"q_fr", freight:o.freight, insuranceId:"q_ins", insurance:o.insurance,
+        roundId:"q_ro", roundOff:o.roundOff, exportCcy:String(o.currency||"INR").toUpperCase()!=="INR"?o.currency:null});
+    }
+    function printDraft(){
+      const o=draft();
+      if(!o.lines.length){ toast("Add at least one line to print",{type:"warn"}); return; }
+      printDoc("quote",Object.assign({},o,{id:edit?q0.id:"DRAFT",rev:1}));
+    }
+    function addLine(seedL){ const idx=lines.length; lines.push({});
+      const itemId=(seedL&&seedL.itemId)||(fgs[0]&&fgs[0].id);
+      const it=ENG.item(itemId)||{};
+      const qtyEl=h("input",{class:"input",id:"ql_qty_"+idx,type:"number",placeholder:"optional",value:(seedL&&seedL.qty>0)?seedL.qty:""});
+      const convEl=h("div",{class:"muted",id:"ql_conv_"+idx,style:"font-size:11px;margin-top:3px"});
+      const syncConv=(x)=>{
+        const kpm=kgPerMetre(x), q=+qtyEl.value||0, u=BOMCALC.normUnit((x&&x.uom)||"KG");
+        if(!kpm||!(q>0)||(u!=="KG"&&u!=="MTR")){ convEl.textContent=""; return; }
+        const basis=" ("+ENG.num(x.gsm,0)+" g/m\u00b2 \u00d7 "+ENG.num(x.width,0)+" mm)";
+        convEl.textContent=u==="MTR"?"= "+ENG.num(q*kpm,1)+" KG"+basis:"= "+ENG.num(q/kpm,1)+" MTR"+basis; };
+      const row=docLine(idx+1,
+        h("div",{html:U.searchSelect("ql_item_"+idx,fgs.map(i=>({v:i.id,l:i.name+(i.thicknessMM!=null?" \u00b7 "+i.thicknessMM+" mm":"")+" \u2014 "+(i.typeCode||i.id)})),itemId,"Search product\u2026")}),
+        [
+          ["HSN",    h("input",{class:"input",id:"ql_hsn_"+idx,placeholder:"HSN",value:(seedL&&seedL.hsn)||it.hsn||""})],
+          ["Qty ("+((it.uom||"kg"))+")", qtyEl],
+          ["Rate",   h("input",{class:"input",id:"ql_rate_"+idx,type:"number",placeholder:"0.00",value:(seedL&&seedL.rate!=null&&seedL.rate!=="")?seedL.rate:(it.price||"")})],
+          ["Disc %", h("input",{class:"input",id:"ql_disc_"+idx,type:"number",placeholder:"0",value:(seedL&&seedL.discPct)||""})],
+          ["GST %",  h("input",{class:"input",id:"ql_gst_"+idx,type:"number",placeholder:"18",value:(seedL&&seedL.gstPct!=null)?seedL.gstPct:lineGstPct(seedL,it)})],
+        ],
+        el=>{ el.remove(); lines[idx]=null; recalc(); });
+      UI.$("#q_lines").appendChild(row);
+      const qtyCell=qtyEl.closest(".doc-line-f"); if(qtyCell) qtyCell.appendChild(convEl);
+      const qtyLab=qtyCell&&qtyCell.querySelector("label");
+      syncConv(it);
+      qtyEl.addEventListener("input",()=>syncConv(ENG.item(UI.$("#ql_item_"+idx).value)||{}));
+      const hid=UI.$("#ql_item_"+idx);
+      if(hid) hid.addEventListener("change",()=>{ const ni=ENG.item(hid.value)||{}; syncConv(ni);
+        if(qtyLab) qtyLab.textContent="Qty ("+((ni.uom)||"kg")+")";
+        UI.$("#ql_hsn_"+idx).value=ni.hsn||""; UI.$("#ql_gst_"+idx).value=lineGstPct(null,ni);
+        if(!UI.$("#ql_rate_"+idx).value) UI.$("#ql_rate_"+idx).value=ni.price||"";
+        recalc(); });
+    }
+    async function save(){
+      const raw=collect(), first=raw[0];
+      const leadId=edit?(q0.leadId||""):(UI.$("#q_lead")?UI.$("#q_lead").value:"");
+      const customerId=UI.$("#q_cust").value;
+      if(!leadId&&!customerId){ toast("Pick the lead or the customer being quoted",{type:"warn"}); return; }
+      if(!first){ toast("Add the product being quoted",{type:"warn"}); return; }
+      if(!(first.rate>0)){ toast("Enter the rate on the first line",{type:"warn"}); return; }
+      const it=ENG.item(first.itemId)||{};
+      const o=draft();
+      const sheet={ company:o.company, placeOfSupply:o.placeOfSupply, shipTo:o.shipTo, currency:o.currency,
+        validUntil:o.validUntil, payTerms:o.payTerms, lines:raw, freight:o.freight, insurance:o.insurance,
+        roundOff:o.roundOff, sigImg:o.sigImg };
+      const rec={ itemId:first.itemId, uom:String(it.uom||"KG").toUpperCase(), qty:first.qty||0, price:first.rate,
+        note:o.notes, customerId, sheet };
+      mo.close();
+      App.params=Object.assign({},App.params||{},{tab:"quotations"});
+      const run=api.save||(async(fn,msg)=>{ const r=await fn(); await App.reloadState(); if(msg) toast(msg,{type:"ok"}); return r; });
+      try{
+        await run(()=>edit?DB.quotations.update(q0.id,rec):DB.quotations.create(Object.assign({leadId,date:o.date},rec)),
+          edit?q0.id+" saved":"Quotation raised"+(leadId?" \u2014 lead moved to Quoted":""));
+      }catch(e){ /* the save wrapper already said what went wrong */ }
+    }
+    /* a saved sheet comes back line by line; the first line reads the price
+       the pipeline holds now (Update price may have moved it since) */
+    if(sh&&Array.isArray(sh.lines)&&sh.lines.length) sh.lines.forEach((l,i)=>addLine(i===0?Object.assign({},l,{rate:q0.price,qty:q0.qty}):l));
+    else if(edit) addLine({itemId:q0.itemId,qty:q0.qty,rate:q0.price});
+    else addLine((seed.itemId||(lead&&lead.product))?{itemId:seed.itemId||lead.product,qty:seed.qty,rate:seed.price}:null);
+    recalc();
+  }
+
+  window._erpUtil = Object.assign(window._erpUtil||{}, { printQuote, quoteFormTally });
 })();

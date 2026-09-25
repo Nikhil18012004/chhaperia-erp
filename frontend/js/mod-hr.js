@@ -516,10 +516,7 @@
   }
 
   function printWorkerProfile(w) {
-    const win = window.open("", "_blank");
-    if (!win) { toast("Popup blocked — allow popups for this site to print", { type: "warn" }); return; }
-    win.document.write(workerProfileDocHtml(w));
-    win.document.close();
+    UI.printHtml(workerProfileDocHtml(w), { title: "Worker profile" });
   }
 
   /* ============================================================
@@ -1278,9 +1275,7 @@
 
   function printPayslips(list, run) {
     if (!list.length) { toast("Nothing to print", { type: "warn" }); return; }
-    const w = window.open("", "_blank");
-    if (!w) { toast("Popup blocked — allow popups for this site to print", { type: "warn" }); return; }
-    w.document.write(payslipDocHtml(list, run)); w.document.close();
+    UI.printHtml(payslipDocHtml(list, run), { title: "Payslips" });
   }
 
   function payslipDetail(s, run) {

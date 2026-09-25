@@ -3612,3 +3612,62 @@ select.ls-in{padding-left:3px;cursor:pointer}
 .ls-findn{font-size:11px;color:var(--lsdim);min-width:56px}
 .ls-findopt{font-size:11.5px;gap:4px;display:inline-flex;align-items:center;color:var(--lsdim)}
 @media (max-width:780px){ .ls-rtab{padding:5px 8px 6px;font-size:12px} }
+
+/* ---- Label Studio print dialog: View data ---- */
+.ls-pp-data{min-width:0}
+.ls-pp-tblwrap{max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:8px}
+.ls-pp-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.ls-pp-tbl th{position:sticky;top:0;z-index:1;background:var(--panel-2);text-align:left;font-size:10.5px;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--text-mut);padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.ls-pp-tbl td{padding:6px 10px;border-bottom:1px solid var(--line);font-family:var(--mono);white-space:nowrap}
+.ls-pp-tbl td:nth-child(-n+3){color:var(--text-mut)}
+.ls-pp-tbl .bad{color:var(--warn)}
+
+/* ---- signature picker on the PO / SO / quotation forms ---- */
+.sig-pick .sig-prev{margin-bottom:6px}
+.sig-pick .sig-prev img{display:block;height:54px;max-width:260px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px}
+
+/* ---- print preview, in this tab (UI.printHtml): a document viewer ---- */
+.print-preview{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;background:var(--bg);color:var(--text)}
+.print-preview-bar{display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex:0 0 auto;box-shadow:0 1px 0 rgba(0,0,0,.08)}
+.print-preview-title{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.print-preview-title b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.print-preview-title .muted{font-size:11.5px}
+.print-close{white-space:nowrap}
+.print-zoom{display:flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)}
+.print-zoom .print-zb{min-width:32px;padding:4px 8px;font-size:12px}
+.print-zoom-n{min-width:46px;text-align:center;font-family:var(--mono);font-size:12px;color:var(--text-mut)}
+.print-go{white-space:nowrap;padding-left:16px;padding-right:18px}
+.print-desk{flex:1 1 auto;min-height:0;overflow:auto;padding:28px 32px 40px;display:flex;justify-content:center;align-items:flex-start;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(127,127,127,.22) 1px, transparent 1.2px) 0 0/22px 22px,
+    linear-gradient(180deg, rgba(0,0,0,.06), rgba(0,0,0,0) 120px);
+  background-color:var(--panel-2)}
+.print-stack{display:flex;flex-direction:column;align-items:center;gap:22px;flex:0 0 auto}
+.print-page-wrap{display:flex;flex-direction:column;align-items:center;gap:6px}
+.print-page{position:relative;flex:0 0 auto;background:#fff;border-radius:2px;overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.25),0 14px 40px rgba(0,0,0,.35),0 0 0 1px rgba(0,0,0,.08)}
+.print-win{position:absolute;overflow:hidden}
+.print-preview-frame{position:absolute;left:0;top:0;border:0;background:#fff;transform-origin:top left;pointer-events:none}
+.print-page-n{font-size:11px;color:var(--text-mut);font-family:var(--mono)}
+.print-preview-hint{flex:0 0 auto;padding:7px 14px;font-size:11.5px;color:var(--text-mut);background:var(--panel);border-top:1px solid var(--line);text-align:center}
+@media(max-width:760px){
+  .print-preview-bar{flex-wrap:wrap;gap:6px 8px;padding:6px 10px}
+  .print-preview-title{order:-1;flex:1 1 100%;text-align:center;align-items:center}
+  .print-preview-title .muted{display:none}
+  .print-zoom .print-zb{min-width:28px;padding:4px 6px}
+  .print-zoom .print-zb:nth-child(4),.print-zoom .print-zb:nth-child(5){display:none}
+  .print-close span:last-child{display:none}
+  .print-close{padding:6px 10px}
+  .print-desk{padding:12px 8px 24px}
+  .print-preview-hint{display:none}
+}
+
+/* Production's five KPIs: five across on a laptop, two-up on a phone like every other page */
+.kpi-grid-5{grid-template-columns:repeat(auto-fit,minmax(196px,1fr))}
+@media(max-width:640px){ .kpi-grid.kpi-grid-5{grid-template-columns:repeat(2,minmax(0,1fr))} }
+
+/* Products & BOM series headings: name and count on one line, the strapline under them on a phone */
+.bom-series-head{flex-wrap:wrap}
+.bom-series-head h2{white-space:nowrap}
+@media(max-width:640px){ .bom-series-head .muted{order:3;flex:1 1 100%;font-size:12px;margin-top:-4px} }

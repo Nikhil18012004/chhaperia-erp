@@ -76,6 +76,20 @@ async function ensureCrm() {
 /** Persist the entire dataset (the frontend saves wholesale). Validates
     shape + referential integrity so a malformed backup/restore can't quietly
     persist orphan movements or non-array collections. */
+/* A SIGNATURE is printed straight into an <img src="…"> on the PO, invoice
+   and quotation sheets, and the print frame shares this page's origin. So
+   only a whole, well-formed raster data URL is ever kept: the base64 charset
+   leaves no quote to break out of the attribute, and SVG (which can carry
+   script) is not accepted. Anything else is dropped, on every path a PO/SO
+   is written by. */
+const SIG_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+const SIG_MAX = 200000;
+const sigOk = (v) => typeof v === "string" && v.length <= SIG_MAX && SIG_RE.test(v);
+function cleanDocSig(d) {
+  if (d && typeof d === "object" && "sigImg" in d && d.sigImg !== "" && !sigOk(d.sigImg)) d.sigImg = "";
+  return d;
+}
+
 async function saveState(data) {
   if (!data || typeof data !== "object") throw err("Invalid dataset", 400);
   const arrays = ["items", "movements", "warehouses", "categories", "suppliers",
@@ -86,6 +100,8 @@ async function saveState(data) {
   if (!Array.isArray(data.items) || !Array.isArray(data.movements)) {
     throw err("Invalid dataset: items[] and movements[] are required", 400);
   }
+  (data.purchaseorders || []).forEach(cleanDocSig);
+  (data.salesorders || []).forEach(cleanDocSig);
   // referential integrity: every movement must reference a known item
   const itemIds = new Set(data.items.map((i) => i && i.id));
   const orphan = data.movements.find((m) => m && m.itemId && !itemIds.has(m.itemId));
@@ -143,6 +159,18 @@ async function updateSettings(doc) {
   if (doc.accent != null) clean.accent = String(doc.accent).slice(0, 20);
   if ("autoAccent" in doc) clean.autoAccent = !!doc.autoAccent;
   if ("lowStockOnly" in doc) clean.lowStockOnly = !!doc.lowStockOnly;
+  /* Signatures for the printed documents, one per billing company: a small
+     PNG data URL each, printed above "Authorised Signatory". Bounded in
+     number and size so the shared settings document cannot be stuffed. */
+  if (doc.signatures != null) {
+    const src = (doc.signatures && typeof doc.signatures === "object" && !Array.isArray(doc.signatures)) ? doc.signatures : {};
+    const out = {};
+    Object.keys(src).slice(0, 10).forEach((k) => {
+      const v = String(src[k] || "");
+      if (sigOk(v)) out[String(k).slice(0, 20)] = v;
+    });
+    clean.signatures = out;
+  }
   /* Label printing config: the whole print definition — which fields print,
      the sheet, its margins, the grid, the label size and the gaps. Whitelisted
      key by key so a bad client can't stuff arbitrary JSON into the shared
@@ -787,7 +815,7 @@ async function assertLinesAreBought(lines, existingLines) {
 
 /* ---- Purchase orders (create / update / delete) ---- */
 async function createPurchaseOrder(po) {
-  po = po || {};
+  po = cleanDocSig(po || {});
   if (!Array.isArray(po.lines) || !po.lines.length) throw err("A purchase order needs at least one line", 400);
   if (!po.supplierId) throw err("A purchase order needs a supplier", 400);
   if (!await repo.getSupplier(po.supplierId)) throw err("Unknown supplier " + po.supplierId, 400);
@@ -820,7 +848,7 @@ async function updatePurchaseOrder(id, patch) {
   const existing = await repo.getPurchaseOrder(id);
   if (!existing) throw err("Purchase order not found", 404);
   await assertNothingReceived(existing, "edit");
-  const merged = Object.assign({}, existing, patch || {}, { id });
+  const merged = cleanDocSig(Object.assign({}, existing, patch || {}, { id }));
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A purchase order needs at least one line", 400);
   if (merged.supplierId && !await repo.getSupplier(merged.supplierId))
     throw err("Unknown supplier " + merged.supplierId, 400);
@@ -872,7 +900,7 @@ async function assertBatchesAreFree(lines, exceptSoId) {
   }
 }
 async function createSalesOrder(so) {
-  so = so || {};
+  so = cleanDocSig(so || {});
   if (!Array.isArray(so.lines) || !so.lines.length) throw err("A sales order needs at least one line", 400);
   if (!so.customerId) throw err("A sales order needs a customer", 400);
   if (!await repo.getCustomer(so.customerId)) throw err("Unknown customer " + so.customerId, 400);
@@ -899,7 +927,7 @@ async function updateSalesOrder(id, patch) {
     throw err("Cannot change the lines of " + id + ": it has been dispatched and its stock "
       + "movements and invoice are already issued against these figures.", 409);
   }
-  const merged = Object.assign({}, existing, patch, { id });
+  const merged = cleanDocSig(Object.assign({}, existing, patch, { id }));
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A sales order needs at least one line", 400);
   if (merged.customerId && !await repo.getCustomer(merged.customerId))
     throw err("Unknown customer " + merged.customerId, 400);
@@ -1412,6 +1440,30 @@ async function mirrorQuoteOnLead(lead, q, by, note) {
   await repo.putLead(lead);
 }
 
+/* THE QUOTATION AS A SHEET. The desk raises a quotation on the same form as
+   a sales order — billing company, place of supply, several lines, freight,
+   terms, a signature — and the printed quotation is that sheet. The pipeline
+   (price, unit, quantity, rounds, won / lost) still runs on the FIRST line,
+   which is the product the quote is about; the sheet carries the rest.
+   Whitelisted key by key, like every other document the browser sends. */
+const QS_LINE_NUM = ["qty", "rate", "discPct", "gstPct", "width", "idMM", "odMM"];
+function cleanQuoteSheet(sh) {
+  if (!sh || typeof sh !== "object" || Array.isArray(sh)) return undefined;
+  const s = (v, n) => (v == null ? "" : String(v).slice(0, n));
+  const out = {
+    company: s(sh.company, 20), placeOfSupply: s(sh.placeOfSupply, 4), shipTo: s(sh.shipTo, 400),
+    currency: s(sh.currency, 3).toUpperCase(), validUntil: s(sh.validUntil, 10), payTerms: s(sh.payTerms, 160),
+    freight: num(sh.freight), insurance: num(sh.insurance), roundOff: sh.roundOff !== false,
+  };
+  if (sigOk(sh.sigImg)) out.sigImg = sh.sigImg;
+  out.lines = (Array.isArray(sh.lines) ? sh.lines : []).slice(0, 50).map((l) => {
+    const o = { itemId: s(l && l.itemId, 60), hsn: s(l && l.hsn, 12), batch: s(l && l.batch, 40) };
+    QS_LINE_NUM.forEach((k) => { if (l && l[k] != null && l[k] !== "" && isFinite(+l[k])) o[k] = +l[k]; });
+    return o;
+  }).filter((l) => l.itemId);
+  return out;
+}
+
 async function createQuotation(body, user) {
   body = body || {};
   const st = await repo.getState();
@@ -1440,6 +1492,8 @@ async function createQuotation(body, user) {
     note, status: "Open", rounds: 1, lastUpdated: date, createdBy: by,
     history: [stamp(by, "quoted", { price, qty, note })],
   };
+  const sheet = cleanQuoteSheet(body.sheet);
+  if (sheet) q.sheet = sheet;
   const saved = await repo.putQuotation(q);
   if (lead) await mirrorQuoteOnLead(lead, saved, by, "Quoted " + quoteText(saved) + " — " + saved.id);
   return saved;
@@ -1469,6 +1523,7 @@ async function updateQuotation(id, patch, user) {
     if (patch.customerId && !await repo.getCustomer(patch.customerId)) throw err("Customer " + patch.customerId + " not found", 404);
     q.customerId = patch.customerId;
   }
+  if (patch.sheet != null) { const sheet = cleanQuoteSheet(patch.sheet); if (sheet) q.sheet = sheet; else delete q.sheet; }
   if (patch.price != null && num(patch.price) !== num(q.price)) return await repriceQuotation(id, { price: patch.price, note: patch.note }, user, q);
   q.value = quoteValue(q.price, q.qty);
   const saved = await repo.putQuotation(q);

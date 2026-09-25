@@ -602,5 +602,160 @@
     return wrap;
   }
 
-  global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV, calcButton, calcEval };
+  /* ---- PRINT IN THIS TAB ----
+     Every printed sheet — invoice, purchase order, label run, payslip,
+     report — used to open in a NEW tab which then asked to print. That left
+     a tab behind every time, was blocked outright by popup blockers, and on
+     a tablet the sheet came up behind the ERP. The sheet is written into a
+     hidden frame on this page instead; the print dialog opens here, and the
+     frame is removed once it closes. The sheet's own "print on load" script
+     is taken off first, so the dialog opens exactly once. */
+  /* ---- THE PAPER, as the sheet declares it ----
+     Every sheet carries an @page rule — "A4; margin 8mm", "A4 portrait;
+     margin 0", "210mm 297mm; margin 0" for a label run. The preview reads it
+     and shows the run as PAGES of that paper, cut where the printer will cut
+     them: the sheet is laid out at the printable width and shown through one
+     page-sized window per page. 96 CSS px to the inch, as the printer lays
+     it out. */
+  const PAPER={a4:[210,297],a5:[148,210],a3:[297,420],letter:[215.9,279.4],legal:[215.9,355.6]};
+  const MMPX=96/25.4;
+  function pageSpec(html){
+    const m=/@page\s*\{([^}]*)\}/i.exec(html||"");
+    const body=m?m[1]:"";
+    const size=(/size\s*:\s*([^;]+)/i.exec(body)||[])[1]||"A4";
+    const marg=(/margin\s*:\s*([^;]+)/i.exec(body)||[])[1]||"10mm";
+    let w=210,h=297;
+    const mm=(v)=>{ const x=/^([\d.]+)\s*(mm|cm|in|px)?$/i.exec(String(v).trim()); if(!x) return null;
+      const n=+x[1], u=(x[2]||"mm").toLowerCase(); return u==="cm"?n*10:u==="in"?n*25.4:u==="px"?n/MMPX:n; };
+    const toks=size.trim().split(/\s+/);
+    const named=PAPER[(toks[0]||"").toLowerCase()];
+    if(named){ w=named[0]; h=named[1]; }
+    else if(toks.length>=2&&mm(toks[0])!=null&&mm(toks[1])!=null){ w=mm(toks[0]); h=mm(toks[1]); }
+    if(/landscape/i.test(size)&&w<h){ const t=w; w=h; h=t; }
+    const mv=marg.trim().split(/\s+/).map(mm).map(v=>v==null?10:v);
+    const [mt,mr,mb,ml]=mv.length===1?[mv[0],mv[0],mv[0],mv[0]]:mv.length===2?[mv[0],mv[1],mv[0],mv[1]]:mv.length===3?[mv[0],mv[1],mv[2],mv[1]]:mv;
+    return { w, h, mt, mr, mb, ml, name:named?toks[0].toUpperCase():Math.round(w)+" × "+Math.round(h)+" mm" };
+  }
+
+  function printHtml(html, opts){
+    opts=opts||{};
+    /* the sheet's own "print on load" comes off: the preview must not print
+       by itself, and the Print button below asks exactly once */
+    html=String(html||"").replace(/<script>\s*window\.onload\s*=\s*function\(\)\s*\{[^<]*window\.print\(\)[^<]*<\/script>/gi,"");
+    document.querySelectorAll(".print-preview").forEach(f=>f.remove());
+    const prev=document.activeElement;
+    const restore=()=>{ try{ if(prev&&prev.focus&&document.contains(prev)) prev.focus({preventScroll:true}); }catch(e){} };
+    const P=pageSpec(html);
+    const pw=P.w*MMPX, ph=P.h*MMPX;                       // the paper, in px
+    const cw=Math.max(200,(P.w-P.ml-P.mr)*MMPX), ch=Math.max(200,(P.h-P.mt-P.mb)*MMPX);   // the printable area
+    /* ---- THE PREVIEW, IN THIS TAB ----
+       Pages of the declared paper on a desk, exactly as they leave the
+       printer, zoomable, with one Print button. The first page's frame is the
+       whole document and is what goes to the printer; the pages after it are
+       windows onto the same sheet, scrolled down one printable height each.
+       Esc, Close or the desk close it; the keyboard goes back where it was. */
+    const stack=h("div",{class:"print-stack"});
+    const desk=h("div",{class:"print-desk"},[stack]);
+    const tTitle=h("b",{text:opts.title||"Print preview"});
+    const tSub=h("span",{class:"muted",text:P.name+" · measuring…"});
+    let ready=false, wantPrint=false, zoom=1, fit=true, pages=[], frames=[];
+    const zLbl=h("span",{class:"print-zoom-n",text:"100%"});
+    const layout=()=>{
+      if(fit){ const avail=desk.clientWidth-(desk.clientWidth<700?16:64); zoom=Math.max(.2,Math.min(1.2,avail/pw)); }
+      zLbl.textContent=Math.round(zoom*100)+"%";
+      stack.style.width=(pw*zoom)+"px";
+      pages.forEach(pg=>{ pg.style.width=(pw*zoom)+"px"; pg.style.height=(ph*zoom)+"px";
+        const win=pg.firstChild; win.style.left=(P.ml*MMPX*zoom)+"px"; win.style.top=(P.mt*MMPX*zoom)+"px";
+        win.style.width=(cw*zoom)+"px"; win.style.height=(ch*zoom)+"px";
+        const f=win.firstChild; f.style.width=cw+"px"; f.style.height=ch+"px"; f.style.transform="scale("+zoom.toFixed(4)+")"; });
+    };
+    const setZoom=(z,keepFit)=>{ fit=!!keepFit; if(!keepFit) zoom=Math.max(.2,Math.min(3,z)); layout(); };
+    const first=()=>frames[0]&&frames[0].contentWindow;
+    const doPrint=()=>{
+      if(!ready){ wantPrint=true; return; }
+      const w=first(); if(!w) return;
+      try{ w.focus(); w.print(); restore(); }
+      catch(e){ toast("Could not open the print dialog",{type:"warn"}); }
+    };
+    const zb=(label,title,fn)=>h("button",{class:"btn sm ghost print-zb",type:"button",title,onclick:fn,text:label});
+    const bClose=h("button",{class:"btn ghost print-close",type:"button",title:"Close  (Esc)",onclick:()=>close()},[h("span",{html:"&#10005;"}),h("span",{text:" Close"})]);
+    const bPrint=h("button",{class:"btn primary print-go",type:"button",title:"Send to the printer, or choose \u201cSave as PDF\u201d there  (Ctrl+P)",
+      onclick:doPrint},[h("span",{html:"&#128438;"}),h("span",{text:" Print"})]);
+    const bar=h("div",{class:"print-preview-bar"},[
+      bClose, h("div",{class:"print-preview-title"},[tTitle,tSub]), h("div",{class:"sp",style:"flex:1"}),
+      h("div",{class:"print-zoom"},[
+        zb("\u2212","Smaller  (\u2212)",()=>setZoom(zoom-.1)), zLbl, zb("+","Larger  (+)",()=>setZoom(zoom+.1)),
+        zb("Fit","Fit the page to the window",()=>setZoom(1,true)), zb("100%","Actual size",()=>setZoom(1)),
+      ]),
+      bPrint,
+    ]);
+    const hint=h("div",{class:"print-preview-hint",text:"Pages are cut where the printer cuts them. Print opens your browser\u2019s printer list \u2014 pick \u201cSave as PDF\u201d there for a file."});
+    const ov=h("div",{class:"print-preview",role:"dialog","aria-modal":"true","aria-label":opts.title||"Print preview"},[bar,desk,hint]);
+    let closed=false;
+    function close(){
+      if(closed) return; closed=true;
+      document.removeEventListener("keydown",onKey,true);
+      window.removeEventListener("resize",onResize);
+      ov.remove(); restore();
+    }
+    function onKey(e){
+      const k=String(e.key||"");
+      if(k==="Escape"){ e.preventDefault(); e.stopPropagation(); close(); }
+      else if((e.ctrlKey||e.metaKey)&&k.toLowerCase()==="p"){ e.preventDefault(); e.stopPropagation(); doPrint(); }
+      else if((k==="+"||k==="=")&&!e.ctrlKey){ e.preventDefault(); setZoom(zoom+.1); }
+      else if(k==="-"&&!e.ctrlKey){ e.preventDefault(); setZoom(zoom-.1); }
+    }
+    const onResize=()=>{ if(fit) layout(); };
+    document.addEventListener("keydown",onKey,true);
+    window.addEventListener("resize",onResize);
+    desk.addEventListener("click",(e)=>{ if(e.target===desk||e.target===stack) close(); });
+    /* one page: a sheet of paper with a window the size of the printable
+       area, and inside it the document scrolled to this page's slice */
+    const addPage=(i)=>{
+      const f=document.createElement("iframe");
+      f.className="print-preview-frame"; f.title=(opts.title||"Print preview")+" — page "+(i+1); f.setAttribute("scrolling","no");
+      const win=h("div",{class:"print-win"},[f]);
+      const pg=h("div",{class:"print-page"},[win]);
+      const cap=h("div",{class:"print-page-n",text:"Page "+(i+1)});
+      pages.push(pg); frames.push(f);
+      stack.appendChild(h("div",{class:"print-page-wrap"},[pg,cap]));
+      f.addEventListener("load",()=>{
+        const w=f.contentWindow; if(!w) return;
+        const d=w.document;
+        try{ d.addEventListener("keydown",onKey,true); }catch(e){}
+        try{ d.documentElement.style.overflow="hidden"; d.body.style.overflow="hidden"; }catch(e){}
+        if(i>0){ try{ w.scrollTo(0,i*ch); d.documentElement.scrollTop=i*ch; }catch(e){} }
+      },{once:true});
+      f.srcdoc=html;
+      return f;
+    };
+    const f0=addPage(0);
+    f0.addEventListener("load",()=>{
+      const w=f0.contentWindow; if(!w){ ready=true; return; }
+      const d=w.document;
+      /* the sheet names itself — "TAX INVOICE SO-010", "Payslips" — and the
+         bar takes that name unless the caller gave a better one */
+      if(!opts.title&&d.title) tTitle.textContent=d.title;
+      const paginate=()=>{
+        const total=Math.max(d.documentElement.scrollHeight,d.body?d.body.scrollHeight:0);
+        const n=Math.max(1,Math.min(60,Math.ceil((total-2)/ch)));
+        while(frames.length<n) addPage(frames.length);
+        stack.querySelectorAll(".print-page-n").forEach((c,i)=>{ c.textContent="Page "+(i+1)+" of "+n; });
+        tSub.textContent=P.name+" · "+n+(n===1?" page":" pages")+" · exactly as it prints";
+        layout();
+      };
+      layout(); paginate();
+      const fonts=(d.fonts&&d.fonts.ready)?d.fonts.ready.catch(()=>{}):Promise.resolve();
+      const imgs=Array.from(d.images||[]).filter(i=>!i.complete)
+        .map(i=>new Promise(r=>{ i.addEventListener("load",r); i.addEventListener("error",r); }));
+      Promise.all([fonts].concat(imgs)).then(()=>{ paginate(); ready=true; if(wantPrint){ wantPrint=false; doPrint(); } });
+    },{once:true});
+    document.body.appendChild(ov);
+    layout();
+    try{ bPrint.focus({preventScroll:true}); }catch(e){}
+    const fr=f0;
+    return fr;
+  }
+
+  global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV, calcButton, calcEval, printHtml };
 })(window);

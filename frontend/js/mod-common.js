@@ -459,8 +459,6 @@
     function printScoped(){
       const hd=outHead(), bd=outRows(), k=keptIdx();
       if(!bd.length){ UI.toast("Nothing to print in this selection",{type:"warn"}); return; }
-      const w=window.open("","_blank");
-      if(!w){ UI.toast("Popup blocked — allow popups for this site to print",{type:"warn"}); return; }
       const esc=UI.esc, org=(ENG.data.org||{});
 
       /* A column is numeric when every value that is present reads as a number.
@@ -594,9 +592,7 @@
         +'<div class="foot"><span>'+esc(org.name||"")+" · "+esc(opts.title||"Report")+"</span>"
         +"<span>"+bd.length+" row"+(bd.length===1?"":"s")+" · "+esc(printedOn)+"</span></div>"
         +"</body></html>";
-      w.document.write(html);
-      w.document.close();
-      setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} },300);
+      UI.printHtml(html,{title:opts.title||"Report"});
     }
     UI.modal({title:opts.title,
       sub:"Narrow it down before you take it away — Download and Print both carry exactly what is on screen",
