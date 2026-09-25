@@ -652,6 +652,17 @@ function matWidthOf(v) {
   return w;
 }
 
+/* Roll ID / OD (mm) — the core's inner diameter and the finished roll's
+   outer diameter the customer wants. Both optional, same sanity bounds as the
+   widths, each with its own message so the office knows which one is wrong. */
+function diaOf(v, label) {
+  if (v === undefined || v === null || v === "") return null;
+  const d = +v;
+  if (!isFinite(d) || d <= 0) throw err("Enter a valid " + label + " in mm", 400);
+  if (d > 5000) throw err(label + " looks wrong — enter it in millimetres", 400);
+  return d;
+}
+
 /* WHO THE RUN IS FOR. Optional — plenty of jobs are made to stock — but once
    it is named it is a FACT, and every screen reads it instead of viewService's
    fallback guess ("some open sales order wants this product"), which can name
@@ -784,6 +795,16 @@ async function updateWorkOrder(user, id, body) {
     const mw = matWidthOf(body.matWidthMM);
     if (mw == null) delete wo.matWidthMM; else wo.matWidthMM = mw;
   }
+  if (body.idMM !== undefined) {
+    const d = diaOf(body.idMM, "ID");
+    if (d == null) delete wo.idMM; else wo.idMM = d;
+  }
+  if (body.odMM !== undefined) {
+    const d = diaOf(body.odMM, "OD");
+    if (d == null) delete wo.odMM; else wo.odMM = d;
+  }
+  if ((body.idMM !== undefined || body.odMM !== undefined)
+      && wo.idMM != null && wo.odMM != null && wo.odMM <= wo.idMM) throw err("OD must be larger than ID", 400);
   if (body.qty !== undefined) {
     const q = +body.qty;
     if (!q || q <= 0) throw err("Enter a valid quantity", 400);
@@ -838,6 +859,8 @@ async function createWorkOrder(user, body) {
   const width = widthOf(body.widthMM);
   // and the width of the roll being FED, which is a property of the material
   const matWidth = matWidthOf(body.matWidthMM);
+  const idMM = diaOf(body.idMM, "ID"), odMM = diaOf(body.odMM, "OD");
+  if (idMM != null && odMM != null && odMM <= idMM) throw err("OD must be larger than ID", 400);
 
   /* Net the requirement against stock that already exists: finished goods go
      straight to packing, half-made rolls skip coating and start at slitting,
@@ -941,6 +964,8 @@ async function createWorkOrder(user, body) {
   if (startLine) wo.startLine = startLine;
   if (width != null) wo.widthMM = width;
   if (matWidth != null) wo.matWidthMM = matWidth;
+  if (idMM != null) wo.idMM = idMM;
+  if (odMM != null) wo.odMM = odMM;
   const customerId = customerIdOf(body.customerId, data);
   if (customerId) wo.customerId = customerId;
   const matWhs = materialWarehousesOf(body.materialWarehouses, data, heldIds);
@@ -1351,6 +1376,8 @@ function summarize(wo, data) {
     stageIdx: wo.stageIdx, dispatched: !!wo.dispatched,
     widthMM: wo.widthMM != null ? wo.widthMM : null,
     matWidthMM: wo.matWidthMM != null ? wo.matWidthMM : null,
+    idMM: wo.idMM != null ? wo.idMM : null,
+    odMM: wo.odMM != null ? wo.odMM : null,
     // total / on the floor / finished / waiting for material
     qty: wo.qty,
     runQty: wo.runQty != null ? wo.runQty : wo.qty,

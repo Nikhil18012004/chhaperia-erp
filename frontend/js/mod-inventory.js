@@ -226,7 +226,9 @@
        somewhere — the server refuses the write either way. */
     const mayEdit=!App.canWrite||App.canWrite("inventory");
     const mayLedger=!App.canAccess||App.canAccess("ledger");
-    const mayBuy=!App.canAccess||App.canAccess("purchase");
+    /* only raw material is BOUGHT — a finished good is made on a work order,
+       and the PO form lists raw materials only */
+    const mayBuy=it.cat==="RM"&&(!App.canAccess||App.canAccess("purchase"));
     modal({title:it.name, sub:it.id+" · "+catName(it.cat), wide:true, body,
       foot:[
         mayLedger?h("button",{class:"btn",onclick:()=>{App.go("ledger",{item:id});UI.$("#modalHost").hidden=true;},text:"📒 Full Ledger"}):null,
@@ -235,7 +237,7 @@
           ?h("button",{class:"btn",title:"Batch "+(labs[0].refNo||labs[0].id)+" · "+labs[0].id,
               onclick:()=>{App.go("lab-reports",{open:labs[0].id});UI.$("#modalHost").hidden=true;},
               text:"🧪 Lab Report"+(labs.length>1?" ("+labs.length+")":"")}):null,
-        (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{App.go("purchase",{create:id});UI.$("#modalHost").hidden=true;},html:`🛒 Raise PO (${esc(ENG.qtyText(it,st.suggest,0))})`}):null,
+        (st.suggest&&mayBuy)?h("button",{class:"btn primary",onclick:()=>{UI.$("#modalHost").hidden=true;App.go("purchase",{create:id});},html:`🛒 Raise PO (${esc(ENG.qtyText(it,st.suggest,0))})`}):null,
         mayEdit?h("button",{class:"btn ghost",onclick:()=>itemForm(it),text:"✎ Edit"}):null
       ].filter(Boolean)});
   }
@@ -1298,8 +1300,9 @@
   /* ============== WAREHOUSES ============== */
   M.warehouses = { title:"Warehouses", sub:"Stock by location", render(root){
     root.appendChild(pageHead("Warehouses","Stock distribution across plant locations",[
+      canEditWh()?h("button",{class:"btn",onclick:()=>adjustForm(),html:"⚖ Adjust Stock"}):null,
       h("button",{class:"btn primary",onclick:()=>transferForm(),html:"🔀 Move Stock"})
-    ]));
+    ].filter(Boolean)));
     const grid=h("div",{class:"grid cols-2"});
     ENG.data.warehouses.forEach(w=>{
       let val=0, items=0;
@@ -1393,6 +1396,10 @@
           {key:"cost",label:"Avg Cost",num:true,width:"88px",render:r=>"₹"+ENG.num(ENG.dispRate(r.it,r.cost),2),sort:r=>r.cost},
           {key:"val",label:"Value",num:true,width:"88px",render:r=>ENG.money(r.val),sort:r=>r.val},
           {key:"share",label:"Share",num:true,width:"66px",render:r=>totalVal>0?ENG.num(r.val/totalVal*100,1)+"%":"—",sort:r=>r.val},
+          // the row itself opens the ledger, so the button stops the click there
+          ...(canEditWh()?[{key:"adj",label:"",noSort:true,width:"78px",render:r=>h("button",{class:"btn sm",
+            title:"Correct the quantity of "+(r.it.name||r.it.id)+" in "+w.name,
+            onclick:e=>{ e.stopPropagation(); mo.close(); adjustForm(w.id, r.it.id); },text:"⚖ Adjust"})}]:[]),
         ],{onRow:openRow,empty:q?"No materials match":"No stock in this warehouse"}));
       }
       const body=h("div",{},[
@@ -1405,8 +1412,134 @@
       // wide: the Weight column takes this to 8 columns, which overflowed the
       // default dialog and clipped Share off the right edge
       const mo=modal({title:whIcon(w.type)+" "+w.name, sub:w.city+" · "+w.type+" — all materials on hand · click a material for its full ledger", body, wide:true,
-        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})]});
+        foot:[
+          canEditWh()?h("button",{class:"btn",onclick:()=>{ mo.close(); adjustForm(w.id); },html:"⚖ Adjust Stock"}):null,
+          h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Close"})].filter(Boolean)});
       draw();
+    }
+
+    /* ---- ADJUST STOCK: correct what one warehouse holds of one material ----
+       Posts one ADJ movement for the DIFFERENCE, so the ledger keeps the
+       history: who changed it, by how much, why, from what to what. Two ways
+       in, because stores work both ways: "Set to counted" (the count says 180,
+       the book says 200 — post −20) and "Add / remove" (5 kg damaged — post −5).
+       Guards:
+         · a warehouse cannot go below zero. The server floors only the item's
+           TOTAL, so a store could otherwise be driven negative while another
+           store props the total up;
+         · a finished good can be reduced here but not increased — finished stock
+           enters through Production → Add to Finished Stock with its batch and
+           lab readings (the 10 Sep ruling), and an adjustment must not be the
+           back door round that;
+         · a reason is required — an unexplained correction is what an audit
+           asks about first. */
+    function adjustForm(presetWh, presetItem){
+      const whs=ENG.data.warehouses;
+      if(!whs.length){ toast("Add a warehouse first",{type:"warn"}); return; }
+      const wh0=(presetWh&&whs.some(w=>w.id===presetWh))?presetWh:whs[0].id;
+      const REASONS=["Physical count","Damaged","Expired / spoiled","Found stock","Data entry correction","Other"];
+      let mode="set";
+      const segBtn=(k,label)=>h("button",{type:"button",class:"btn sm"+(k===mode?" primary":""),"data-mode":k,
+        onclick:()=>{ mode=k; [...seg.children].forEach(b=>b.classList.toggle("primary",b.getAttribute("data-mode")===mode));
+          const box=UI.$("#ad_qty"); if(box){ box.value=""; box.focus(); } sync(); },text:label});
+      const seg=h("div",{class:"flex",style:"gap:6px"},[segBtn("set","Set to counted quantity"),segBtn("delta","Add / remove")]);
+      const body=h("div",{},[
+        h("div",{class:"form-grid"},[
+          field("Warehouse *", selectHTML("ad_wh", whs.map(w=>({v:w.id,l:w.name})), wh0)),
+          h("div",{class:"field"},[h("label",{text:"How to enter it"}), seg]),
+          h("div",{class:"field full",id:"ad_item_wrap"}),
+          h("div",{class:"field"},[h("label",{id:"ad_qty_lbl",text:"Counted quantity *"}),
+            h("div",{html:`<input class="input" id="ad_qty" type="number" step="0.001" placeholder="0" required>`}),
+            h("div",{class:"muted",id:"ad_qty_hint",style:"font-size:11px;margin-top:3px"})]),
+          field("Reason *", selectHTML("ad_reason", REASONS.map(r=>({v:r,l:r})), "Physical count")),
+          field("Note", `<input class="input" id="ad_note" placeholder="e.g. Monthly stock count, rack B2">`,"full"),
+        ]),
+        h("div",{id:"ad_preview",style:"margin-top:6px"})
+      ]);
+      const saveBtn=h("button",{class:"btn primary",onclick:save,text:"Post Adjustment"});
+      const mo=modal({title:"Adjust Stock", sub:"Correct the quantity a warehouse holds — posts an audited ledger entry", body, wide:true,
+        foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}), saveBtn]});
+
+      /* Every material can be picked, not just what the store already holds —
+         stock is FOUND as well as lost. What the store holds is listed first,
+         with its quantity; WIP is engine plumbing and never adjusted by hand. */
+      function renderItems(keep){
+        const whId=UI.$("#ad_wh").value;
+        const rows=ENG.data.items.filter(it=>it.cat!=="WIP")
+          .map(it=>({it,q:((ENG.stock(it.id)||{byWh:{}}).byWh[whId])||0}))
+          .sort((a,b)=>((b.q>0.001)-(a.q>0.001)) || String(a.it.name||"").localeCompare(String(b.it.name||"")));
+        const opts=rows.map(r=>({v:r.it.id, l:matDisplay(r.it)+" · "+r.it.id
+          +(r.q>0.001?" — "+ENG.num(r.q,2)+" "+(r.it.uom||"")+" here":" — none here")}));
+        const sel=(keep&&opts.some(o=>o.v===keep))?keep:(opts[0]&&opts[0].v)||"";
+        UI.$("#ad_item_wrap").innerHTML=`<label>Material *</label><div>`
+          +searchSelect("ad_item", opts, sel, "Search material, code…")+`</div>`;
+        const hid=UI.$("#ad_item"); if(hid){ hid.setAttribute("required",""); hid.onchange=sync; }
+        sync();
+      }
+      function sync(){
+        const id=(UI.$("#ad_item")||{}).value, whId=UI.$("#ad_wh").value;
+        const host=UI.$("#ad_preview"); host.innerHTML="";
+        const lbl=UI.$("#ad_qty_lbl"), hint=UI.$("#ad_qty_hint");
+        if(!id){ saveBtn.disabled=true; return; }
+        const it=ENG.item(id)||{}, u=it.uom||"";
+        const now=((ENG.stock(id)||{byWh:{}}).byWh[whId])||0;
+        lbl.textContent=(mode==="set"?"Counted quantity":"Change (+ add / − remove)")+(u?" ("+u+")":"")+" *";
+        hint.textContent=mode==="set"
+          ? "What is physically there now. The difference is posted."
+          : "e.g. -5 to remove 5 "+u+", 12 to add 12 "+u+".";
+        const raw=(UI.$("#ad_qty")||{}).value;
+        const entered=raw===""?null:+raw;
+        const delta=entered==null||isNaN(entered)?null:(mode==="set"?entered-now:entered);
+        const after=delta==null?null:now+delta;
+        let err=null;
+        if(entered!=null&&!isNaN(entered)){
+          if(mode==="set"&&entered<0) err="A counted quantity cannot be negative.";
+          else if(Math.abs(delta)<0.0005) err="That is what the book already says — nothing to adjust.";
+          else if(after<-0.0005) err=whName(whId)+" holds only "+ENG.num(now,2)+" "+u+" — stock cannot go below zero.";
+          else if(it.cat==="FG"&&delta>0) err="Finished goods are added through Production → Add to Finished Stock, with the batch and lab readings. Here they can only be reduced.";
+        }
+        const cell=(label,val,color)=>h("div",{style:"flex:1;min-width:120px"},[
+          h("div",{class:"muted",style:"font-size:10.5px;font-weight:700;text-transform:uppercase",text:label}),
+          h("div",{class:"mono",style:"font-weight:700;font-size:15px;margin-top:3px"+(color?";color:"+color:""),text:val})]);
+        const card=h("div",{class:"card",style:"box-shadow:none;background:var(--panel-2);padding:12px 14px"},[
+          h("div",{style:"font-weight:700;font-size:13.5px",text:matDisplay(it)}),
+          h("div",{class:"muted mono",style:"font-size:11px;margin-top:2px",text:it.id+" · "+catName(it.cat)+" · in "+whName(whId)}),
+          h("div",{class:"flex wrap",style:"gap:14px;margin-top:11px;padding-top:10px;border-top:1px solid var(--line)"},[
+            cell("On the book now", ENG.num(now,2)+" "+u),
+            cell("Adjustment", delta==null?"—":(delta>0?"+":"")+ENG.num(delta,2)+" "+u,
+              delta==null||err?null:(delta<0?"var(--danger)":"var(--ok)")),
+            cell("After", after==null||err?"—":ENG.num(after,2)+" "+u),
+            cell("Value change", delta==null||err?"—":ENG.money(delta*((ENG.stock(id)||{}).avgCost||it.cost||0))),
+          ]),
+          err?h("div",{style:"font-size:11.5px;color:var(--danger);margin-top:8px",text:err}):null,
+        ].filter(Boolean));
+        host.appendChild(card);
+        saveBtn.disabled=!!err||delta==null;
+      }
+      UI.$("#ad_wh").onchange=()=>renderItems((UI.$("#ad_item")||{}).value);
+      UI.$("#ad_qty").oninput=sync;
+      renderItems(presetItem);
+      setTimeout(()=>{ const b=presetItem?UI.$("#ad_qty"):UI.$("#ad_item_s"); if(b) b.focus(); },60);
+
+      function save(){
+        sync(); if(saveBtn.disabled){ toast("Check the quantity — see the note under the figures",{type:"warn"}); return; }
+        const id=UI.$("#ad_item").value, whId=UI.$("#ad_wh").value, it=ENG.item(id)||{};
+        const now=((ENG.stock(id)||{byWh:{}}).byWh[whId])||0;
+        const entered=+UI.$("#ad_qty").value;
+        const delta=+(mode==="set"?entered-now:entered).toFixed(6);
+        const reason=UI.$("#ad_reason").value, note=UI.$("#ad_note").value.trim();
+        const by=(App.user&&App.user.username)||"user";
+        const move={id:genMoveId(), date:DB.helpers.iso(DB.helpers.today()), itemId:id, wh:whId, type:"ADJ",
+          qty:delta, rate:(ENG.stock(id)||{}).avgCost||it.cost||0,
+          // the note carries the whole story, so the ledger row reads on its own
+          note:reason+" · "+whName(whId)+": "+ENG.num(now,2)+" → "+ENG.num(now+delta,2)+" "+(it.uom||"")+(note?" · "+note:""),
+          by};
+        ENG.data.movements.push(move);
+        mo.close();
+        toast((delta>0?"+":"")+ENG.num(delta,2)+" "+(it.uom||"")+" "+(it.name||id)+" in "+whName(whId),
+          {type:"ok",title:"Stock adjusted"});
+        App.saveDelta(()=>DB.movements.add(move));
+      }
     }
 
     /* move stock from one warehouse to another (posts a linked out/in pair) */

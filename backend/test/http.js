@@ -2073,7 +2073,7 @@ async function run() {
         .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
       if (onShelf > 0.001) {
         await call("POST", "/movements", A, { id: "MV-BATCH-Z", itemId: rm.id, type: "ADJ",
-          qty: -onShelf, wh: "WH-PNY", date: "2026-05-02", manual: true });
+          qty: -onShelf, wh: "WH-PNY", date: "2026-05-02", manual: true, note: "test: empty the shelf" });
       }
       const after = ((await call("GET", "/state", A)).d.movements || [])
         .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
@@ -2235,7 +2235,7 @@ async function run() {
         .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
       if (leftover > 0.001) {
         await call("POST", "/movements", A, { id: "MV-SHIP-Z", itemId: rm.id, type: "ADJ",
-          qty: -leftover, wh: "WH-PNY", date: "2026-06-02", manual: true });
+          qty: -leftover, wh: "WH-PNY", date: "2026-06-02", manual: true, note: "test: empty the shelf" });
       }
       ok("the store is drained again for the tests that follow",
         Math.abs(((await call("GET", "/state", A)).d.movements || [])
@@ -2252,7 +2252,7 @@ async function run() {
       const balNow = ((await call("GET", "/state", A)).d.movements || [])
         .filter((m) => m.itemId === rm.id).reduce((n, m) => n + (+m.qty || 0), 0);
       if (Math.abs(balNow) > 1e-9) await call("POST", "/movements", A, { id: "MV-PART-DRAIN", itemId: rm.id,
-        type: "ADJ", qty: -balNow, rate: 10, wh: "WH-PNY", date: "2026-03-01", manual: true });
+        type: "ADJ", qty: -balNow, rate: 10, wh: "WH-PNY", date: "2026-03-01", manual: true, note: "test: drain" });
       const refused = await call("POST", "/production/wo", A, { itemId: fgP.id, qty: 80, allowShortage: true });
       ok("an order on a material at ZERO is refused even with consent",
         refused.status === 400 && /none of/i.test((refused.d || {}).error || ""),
@@ -2333,6 +2333,62 @@ async function run() {
   const slitMRow = ((await call("GET", "/state", slitW.token)).d.workorders || []).find((w) => w.id === woM.d.id);
   ok("the slitting board is told what roll is going in", !!slitMRow && slitMRow.matWidthMM === 1000,
     slitMRow ? String(slitMRow.matWidthMM) : "not on the board");
+
+  /* ROLL ID / OD — the core's inner diameter and the finished roll's outer
+     diameter. Same road as the widths: optional, validated, editable, and
+     carried to the floor. */
+  const woR = await call("POST", "/production/wo", A, { itemId: fg, qty: 10, idMM: 76, odMM: 300 });
+  ok("a work order accepts a roll ID and OD",
+    woR.d && woR.d.idMM === 76 && woR.d.odMM === 300, JSON.stringify(woR.d && { i: woR.d.idMM, o: woR.d.odMM }));
+  ok("an OD that is not larger than the ID is rejected",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, idMM: 300, odMM: 76 })).status === 400);
+  ok("a negative ID is rejected",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, idMM: -1 })).status === 400);
+  ok("a non-number OD is rejected",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, odMM: "abc" })).status === 400);
+  ok("an ID in the wrong unit is rejected",
+    (await call("POST", "/production/wo", A, { itemId: fg, qty: 10, idMM: 76000 })).status === 400);
+  ok("editing the OD below the stored ID is rejected",
+    (await call("PATCH", "/production/wo/" + woR.d.id, A, { odMM: 50 })).status === 400);
+  const woRClr = await call("PATCH", "/production/wo/" + woR.d.id, A, { idMM: "" });
+  ok("a blank ID clears it and keeps the OD",
+    !!woRClr.d && woRClr.d.idMM === null && woRClr.d.odMM === 300);
+  await call("PATCH", "/production/wo/" + woR.d.id, A, { idMM: 76 });
+  const slitRRow = ((await call("GET", "/state", slitW.token)).d.workorders || []).find((w) => w.id === woR.d.id);
+  ok("the slitting board is told the roll ID and OD",
+    !!slitRRow && slitRRow.idMM === 76 && slitRRow.odMM === 300,
+    slitRRow ? slitRRow.idMM + "/" + slitRRow.odMM : "not on the board");
+
+  section("A stock adjustment is checked by the server, not only the form");
+  /* The Warehouses → Adjust Stock form refuses these in the browser; the
+     server must refuse them too, or any other caller walks straight past. */
+  await call("POST", "/items", A, { id: "RM-ADJT", name: "Adjust test RM", cat: "RM", cost: 5, uom: "KG" });
+  await call("POST", "/movements", A, { itemId: "RM-ADJT", type: "GRN", qty: 10, wh: "WH-PNY", rate: 5 });
+  await call("POST", "/movements", A, { itemId: "RM-ADJT", type: "GRN", qty: 5, wh: "WH-FG", rate: 5 });
+  ok("an adjustment with no reason is refused",
+    (await call("POST", "/movements", A, { itemId: "RM-ADJT", type: "ADJ", qty: -1, wh: "WH-PNY" })).status === 400);
+  const adjOver = await call("POST", "/movements", A, { itemId: "RM-ADJT", type: "ADJ", qty: -12, wh: "WH-PNY",
+    note: "Physical count" });
+  ok("a store cannot be adjusted below zero even when another store holds stock", adjOver.status === 400,
+    adjOver.status + " " + JSON.stringify(adjOver.d).slice(0, 120));
+  const adjOk = await call("POST", "/movements", A, { itemId: "RM-ADJT", type: "ADJ", qty: -10, wh: "WH-PNY",
+    note: "Physical count" });
+  ok("a store can be adjusted down to exactly zero", [200, 201].includes(adjOk.status), String(adjOk.status));
+  const adjRow = (await call("GET", "/state", A)).d.movements.find((m) => m.id === adjOk.d.id);
+  ok("the server numbers the adjustment", !!adjRow && adjRow.ref === "ADJ-" + adjOk.d.id,
+    adjRow ? String(adjRow.ref) : "not found");
+  ok("an adjustment of zero is refused",
+    (await call("POST", "/movements", A, { itemId: "RM-ADJT", type: "ADJ", qty: 0, wh: "WH-FG",
+      note: "Physical count" })).status === 400);
+  const fgUp = await call("POST", "/movements", A, { itemId: fg, type: "ADJ", qty: 1, wh: "WH-FG",
+    note: "Found stock" });
+  ok("finished goods cannot be adjusted UP (they enter through Add to Finished Stock)", fgUp.status === 409,
+    fgUp.status + " " + JSON.stringify(fgUp.d).slice(0, 120));
+  const st0 = (await call("GET", "/state", A)).d;
+  st0.movements.push({ id: "MV-ADJ-FGUP", date: "2026-09-25", itemId: fg, wh: "WH-FG", type: "ADJ", qty: 1,
+    note: "Stock take import" });
+  ok("the bulk save (stock-take import) refuses a new +ADJ on finished goods too",
+    (await call("PUT", "/state", A, st0)).status === 409);
 
   section("A production stage shows only on its owner's board");
   const supSees = async (tok) => {
@@ -2438,7 +2494,7 @@ async function run() {
       ok("a raw material is still received as before", w.status < 300, "status=" + w.status);
     }
     // 30 kg of it already sits in the finished store, at 25 mm (a counted adjustment)
-    await call("POST", "/movements", A, { itemId: nfg, type: "ADJ", qty: 30, wh: "WH-FG", rate: 0, note: "test shelf" });
+    await call("POST", "/movements", A, { itemId: nfg, type: "OPEN", qty: 30, wh: "WH-FG", rate: 0, note: "test shelf" });
 
     const wo1 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 100, widthMM: 25 })).d;
     const p1 = wo1.plan || {};
@@ -2464,7 +2520,7 @@ async function run() {
       .filter((m) => m.itemId === nfg).reduce((n, m) => n + (+m.qty || 0), 0);
     ok("releasing a work order draws its finished stock immediately", leftAfterWo1 === 0,
       "on hand " + leftAfterWo1);
-    await call("POST", "/movements", A, { itemId: nfg, type: "ADJ", qty: 30, wh: "WH-FG", rate: 0, note: "test shelf" });
+    await call("POST", "/movements", A, { itemId: nfg, type: "OPEN", qty: 30, wh: "WH-FG", rate: 0, note: "test shelf" });
 
     // an order fully covered by stock skips production entirely
     const wo3 = (await call("POST", "/production/wo", A, { itemId: nfg, qty: 20, widthMM: 25 })).d;
@@ -2494,7 +2550,7 @@ async function run() {
     await call("POST", "/items", A, { id: sfg, name: "SPLIT TEST TAPE", cat: "FG", uom: "KG",
       thicknessMM: 0.05, gsm: 100, tapeWidthMM: 25, typeCode: "SPLITTEST-05" });
     await call("PUT", "/boms/" + sfg, A, { yield: 1, lines: [[rm, 1]] });
-    await call("POST", "/movements", A, { itemId: sfg, type: "ADJ", qty: 50, wh: "WH-FG", rate: 0, note: "test shelf" });
+    await call("POST", "/movements", A, { itemId: sfg, type: "OPEN", qty: 50, wh: "WH-FG", rate: 0, note: "test shelf" });
 
     // take only 10 of the 50 available
     const woA = (await call("POST", "/production/wo", A,
@@ -2937,7 +2993,7 @@ async function run() {
     // now has a floor (tested below), so this probe writes off what exists
     await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "GRN", qty: 5, wh, rate: 1 });
     ok("an adjustment may still go either way",
-      (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "ADJ", qty: -5, wh })).status === 201);
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-3", type: "ADJ", qty: -5, wh, note: "Physical count" })).status === 201);
 
     /* ---- orders must name things that exist ---- */
     ok("a PO against an unknown supplier is refused",
@@ -3032,9 +3088,18 @@ async function run() {
     ok("an issue the stock covers still posts",
       (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ISSUE", qty: -40, wh })).status === 201);
     ok("an adjustment cannot write off below zero",
-      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -1e6, wh })).status === 400);
-    ok("an adjustment down to exactly zero is allowed",
-      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -60, wh })).status === 201);
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -1e6, wh, note: "Physical count" })).status === 400);
+    /* An adjustment is floored at ITS store: the 60 on hand is split between
+       two stores, so writing all 60 off one of them would take it negative. */
+    ok("an adjustment cannot take one store below zero while the other holds the rest",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -60, wh, note: "Physical count" })).status === 400);
+    const heldAt = async (w) => (await call("GET", "/state", A)).d.movements
+      .filter((m) => m.itemId === "RM-XMOD-4" && m.wh === w).reduce((n, m) => n + (+m.qty || 0), 0);
+    const hereQ = await heldAt(wh), thereQ = await heldAt(whB);
+    ok("an adjustment down to exactly zero is allowed, store by store",
+      (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -hereQ, wh, note: "Physical count" })).status === 201
+      && (await call("POST", "/movements", A, { itemId: "RM-XMOD-4", type: "ADJ", qty: -thereQ, wh: whB, note: "Physical count" })).status === 201,
+      hereQ + " + " + thereQ);
     ok("…and the ledger rests at zero, not below",
       Math.abs(await stockOf("RM-XMOD-4")) < 1e-6, "total " + (await stockOf("RM-XMOD-4")));
   }
@@ -3113,7 +3178,7 @@ async function run() {
     const fgS = { id: "FG-STORE-TAPE", name: "Store test tape", cat: "FG", uom: "KG", typeCode: "CH-PTFE-98", group: "OTHER", cost: 100, price: 200, tapeWidthMM: 25 };
     await call("POST", "/items", A, fgS);
     await call("PUT", "/boms/" + fgS.id, A, { yield: 100, lines: [[rmS.id, 1.0]] });
-    const put = (wh, qty) => call("POST", "/movements", A, { itemId: fgS.id, type: "ADJ", qty, rate: 100, wh, date: "2026-01-02", manual: true, note: "store test" });
+    const put = (wh, qty) => call("POST", "/movements", A, { itemId: fgS.id, type: "OPEN", qty, rate: 100, wh, date: "2026-01-02", manual: true, note: "store test" });
     ok("finished rolls booked into two stores (and one in quarantine)", (await put("WH-FG", 30)).status === 201 && (await put("WH-PNY", 20)).status === 201 && (await put("WH-QC", 7)).status === 201);
 
     const pv = await call("POST", "/production/wo/preview", A, { itemId: fgS.id, qty: 100, widthMM: 25, fgDraws: [{ id: fgS.id, wh: "WH-PNY", qty: 15 }] });

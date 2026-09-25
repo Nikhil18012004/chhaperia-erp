@@ -266,6 +266,9 @@ async function stateForSupervisor(area, username, opts) {
         // and the width of the roll going in — slitting needs both to know how
         // many tapes come off one roll and how much edge is left over
         matWidthMM: wo.matWidthMM != null ? wo.matWidthMM : null,
+        // roll core ID and finished OD the order asks for
+        idMM: wo.idMM != null ? wo.idMM : null,
+        odMM: wo.odMM != null ? wo.odMM : null,
         customer: showCustomer ? customerForWO(wo) : undefined, // label info for slitting only
         updatedBy: wo.updatedBy || null, updatedAt: wo.updatedAt || null,
         // routing / stage hand-off

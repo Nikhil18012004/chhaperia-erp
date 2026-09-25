@@ -45,14 +45,16 @@
   /* ---------- modal ---------- */
   /* wide  = 960px  (tables, detail views)
      xwide = 1240px (document forms: PO / SO carry a header block AND line items) */
-  function modal({title, sub, body, foot, wide, xwide, onClose}){
+  function modal({title, sub, body, foot, wide, xwide, onClose, headActions}){
     const host=$("#modalHost"); host.hidden=false; host.innerHTML="";
     const prevFocus=document.activeElement;   // restore focus on close (a11y)
     const width=xwide?"width:min(1240px,96vw)":(wide?"width:min(960px,96vw)":"");
     const m=h("div",{class:"modal",role:"dialog","aria-modal":"true","aria-label":title||"Dialog",style:width},[
       h("div",{class:"modal-head"},[
         h("div",{},[ h("h3",{text:title||""}), sub?h("div",{class:"sub",text:sub}):null ]),
-        h("button",{class:"icon-btn","aria-label":"Close dialog",style:"margin-left:auto",onclick:close,text:"✕"})
+        // optional tools (e.g. the calculator) sit just left of the ✕
+        (headActions&&headActions.length)?h("div",{class:"modal-head-tools"},headActions):null,
+        h("button",{class:"icon-btn","aria-label":"Close dialog",style:(headActions&&headActions.length)?"":"margin-left:auto",onclick:close,text:"✕"})
       ]),
       h("div",{class:"modal-body"}, typeof body==="string"?h("div",{html:body}):body),
       foot?h("div",{class:"modal-foot"},foot):null
@@ -496,5 +498,109 @@
   }
   document.addEventListener("DOMContentLoaded",()=>document.addEventListener("keydown",enterSaves));
 
-  global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV };
+  /* ---- a small pocket calculator ----
+     calcButton() returns a header icon button; clicking it drops a compact
+     calculator under it. Clicks or keyboard (digits, + - * / % ( ), Enter,
+     Backspace, Esc). The keys it answers never reach the dialog underneath:
+     Enter there would press "Create", Esc would close the whole form. The
+     sum is parsed here, never eval()'d. */
+  function calcEval(src){
+    const s=String(src).replace(/×/g,"*").replace(/÷/g,"/").replace(/−/g,"-").replace(/\s+/g,"");
+    let i=0;
+    const peek=()=>s[i];
+    function num(){
+      const m=/^(?:\d+\.?\d*|\.\d+)/.exec(s.slice(i));
+      if(!m) throw new Error("bad");
+      i+=m[0].length; return parseFloat(m[0]);
+    }
+    function factor(){
+      if(peek()==="-"){ i++; return -factor(); }
+      if(peek()==="+"){ i++; return factor(); }
+      let v;
+      if(peek()==="("){ i++; v=expr(); if(peek()===")") i++; }
+      else v=num();
+      while(peek()==="%"){ i++; v=v/100; }
+      return v;
+    }
+    function term(){ let v=factor();
+      while(peek()==="*"||peek()==="/"){ const op=s[i++]; const r=factor(); v=op==="*"?v*r:v/r; }
+      return v; }
+    function expr(){ let v=term();
+      while(peek()==="+"||peek()==="-"){ const op=s[i++]; const r=term(); v=op==="+"?v+r:v-r; }
+      return v; }
+    if(!s) return 0;
+    const v=expr();
+    if(i<s.length||!isFinite(v)) throw new Error("bad");
+    return +v.toPrecision(12);
+  }
+  function calcButton(){
+    const wrap=h("div",{class:"calc-wrap"});
+    const btn=h("button",{class:"icon-btn calc-btn",type:"button",title:"Calculator","aria-label":"Open calculator",
+      "aria-expanded":"false"});
+    // a drawn calculator — body, display, 3×3 keys — in the theme's own colours
+    btn.innerHTML='<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+      +'<rect x="4.5" y="2.5" width="15" height="19" rx="2.5"/>'
+      +'<rect x="7.5" y="5.5" width="9" height="3.5" rx=".8" fill="currentColor" fill-opacity=".18"/>'
+      +'<g fill="currentColor" stroke="none"><circle cx="8.6" cy="12.6" r="1.05"/><circle cx="12" cy="12.6" r="1.05"/><circle cx="15.4" cy="12.6" r="1.05"/>'
+      +'<circle cx="8.6" cy="15.6" r="1.05"/><circle cx="12" cy="15.6" r="1.05"/><circle cx="15.4" cy="15.6" r="1.05"/>'
+      +'<circle cx="8.6" cy="18.6" r="1.05"/><circle cx="12" cy="18.6" r="1.05"/><rect x="14.4" y="17.6" width="2" height="2" rx=".5"/></g></svg>';
+    const expr=h("div",{class:"calc-expr"});
+    const out=h("input",{class:"calc-out",type:"text",inputmode:"decimal",autocomplete:"off",
+      "aria-label":"Calculator input"});
+    const pad=h("div",{class:"calc-pad"});
+    const pop=h("div",{class:"calc-pop",role:"dialog","aria-label":"Calculator"},[
+      expr, out, pad,
+      h("div",{class:"calc-foot"},[
+        h("button",{class:"btn sm ghost",type:"button",onclick:()=>copy(),text:"Copy result"}),
+      ]),
+    ]);
+    pop.hidden=true;
+    let justDone=false;
+    const live=()=>{ try{ const v=calcEval(out.value);
+        expr.textContent=/[-+*/×÷%(]/.test(out.value.replace(/^-/,""))?"= "+v:""; }
+      catch{ expr.textContent=""; } };
+    const put=(t)=>{
+      // after "=", a digit starts a new sum; an operator carries the answer on
+      if(justDone && /[\d.(]/.test(t)) out.value="";
+      justDone=false; out.value+=t; out.focus(); live(); };
+    const equals=()=>{
+      try{ const v=calcEval(out.value); expr.textContent=out.value+" ="; out.value=String(v); justDone=true; }
+      catch{ expr.textContent="Can't work that out"; }
+      out.focus(); };
+    const clear=()=>{ out.value=""; expr.textContent=""; justDone=false; out.focus(); };
+    const back=()=>{ out.value=out.value.slice(0,-1); justDone=false; out.focus(); live(); };
+    function copy(){
+      let v; try{ v=calcEval(out.value); }catch{ toast("Nothing to copy",{type:"warn"}); return; }
+      const done=()=>toast("Copied "+v,{type:"ok",dur:1600});
+      const fallback=()=>{ out.value=String(v); out.select(); try{ document.execCommand("copy"); done(); }catch{} };
+      if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(String(v)).then(done,fallback);
+      else fallback();
+    }
+    [["C","fn",clear],["⌫","fn",back],["%","op"],["÷","op"],
+     ["7"],["8"],["9"],["×","op"],
+     ["4"],["5"],["6"],["−","op"],
+     ["1"],["2"],["3"],["+","op"],
+     ["0","wide"],["."],["=","eq",equals]].forEach(([k,cls,fn])=>{
+      pad.appendChild(h("button",{type:"button",class:"calc-k"+(cls?" "+cls:""),
+        onclick:fn||(()=>put(k==="÷"?"/":k==="×"?"*":k==="−"?"-":k)),text:k}));
+    });
+    out.addEventListener("input",()=>{ justDone=false; live(); });
+    const open=(on)=>{ pop.hidden=!on; btn.setAttribute("aria-expanded",String(on));
+      btn.classList.toggle("on",on); if(on) setTimeout(()=>out.focus(),0); };
+    btn.onclick=(e)=>{ e.stopPropagation(); open(pop.hidden); };
+    pop.addEventListener("keydown",(e)=>{
+      if(e.key==="Enter"||e.key==="="){ e.preventDefault(); e.stopPropagation(); equals(); }
+      else if(e.key==="Escape"){ e.preventDefault(); e.stopPropagation(); open(false); btn.focus(); }
+      else if(e.key!=="Tab") e.stopPropagation();   // Tab still walks the dialog
+    });
+    // a click anywhere else folds it away; the dialog stays as it was
+    const outside=(e)=>{
+      if(!wrap.isConnected){ document.removeEventListener("mousedown",outside); return; }
+      if(!pop.hidden && !wrap.contains(e.target)) open(false); };
+    document.addEventListener("mousedown",outside);
+    wrap.appendChild(btn); wrap.appendChild(pop);
+    return wrap;
+  }
+
+  global.UI = { $, $$, h, esc, toast, modal, confirm, confirmSave, table, badge, meter, sparkEl, NAV, calcButton, calcEval };
 })(window);

@@ -946,6 +946,26 @@
     panelrule:'<path d="M4 5.2h16a.8.8 0 01.8.8v12a.8.8 0 01-.8.8H4a.8.8 0 01-.8-.8V6a.8.8 0 01.8-.8z"/><path d="M3.2 9.4h17.6M8 5.2v13.6"/>',
     full:'<path d="M4 8.8V4.4h4.4M15.6 4.4H20v4.4M20 15.2v4.4h-4.4M8.4 19.6H4v-4.4"/>',
     grid:'<path d="M3.6 3.6h16.8v16.8H3.6z"/><path d="M9.2 3.6v16.8M14.8 3.6v16.8M3.6 9.2h16.8M3.6 14.8h16.8"/>',
+
+    /* Word's ribbon tabs: lists, editing, arranging */
+    bullets:'<circle cx="5" cy="6.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="17.5" r="1.4" fill="currentColor" stroke="none"/><path d="M9.5 6.5h10.5M9.5 12h10.5M9.5 17.5h10.5"/>',
+    numbering:'<path d="M3.8 4.9l1.3-.7v4.3M3.6 8.5h2.9M3.6 12.1a1.3 1.3 0 012.5.5c0 .9-2.5 1.8-2.5 2.9h2.7M3.7 17.6h2.3l-1.2 1.3a1.1 1.1 0 11-1.1 1.6"/><path d="M9.5 6.5h10.5M9.5 12h10.5M9.5 17.5h10.5"/>',
+    find:'<circle cx="10.4" cy="10.4" r="6.2"/><path d="M15 15l5.4 5.4"/>',
+    replace:'<path d="M4 7.5h9.5M10.5 4.5l3 3-3 3"/><path d="M20 16.5h-9.5M13.5 13.5l-3 3 3 3"/>',
+    selectall:'<path d="M4 7V4h3M10.5 4h3M17 4h3v3M20 10.5v3M20 17v3h-3M13.5 20h-3M7 20H4v-3M4 13.5v-3"/><path d="M8 8h8v8H8z" fill="currentColor" fill-opacity=".18"/>',
+    front:'<path d="M3.5 3.5h10v10h-10z"/><path d="M10.5 10.5h10v10h-10z" fill="currentColor" fill-opacity=".3"/>',
+    back:'<path d="M3.5 3.5h10v10h-10z" fill="currentColor" fill-opacity=".3"/><path d="M10.5 10.5h10v10h-10z"/>',
+    rotate:'<path d="M19.4 12.4a7.4 7.4 0 11-2.3-5.6"/><path d="M19.8 4.2v4.4h-4.4"/>',
+    distx:'<path d="M3.5 4v16M20.5 4v16"/><path d="M9 7.5h6v9H9z"/>',
+    disty:'<path d="M4 3.5h16M4 20.5h16"/><path d="M7.5 9h9v6h-9z"/>',
+    pagesetup:'<path d="M6 3.6h12v16.8H6z"/><path d="M9 7.5h6M9 11h6M9 14.5h4"/>',
+    objleft:'<path d="M4 3.5v17"/><path d="M7 6h11v4.5H7zM7 13.5h7V18H7z"/>',
+    objcx:'<path d="M12 3.5v17"/><path d="M5.5 6h13v4.5h-13zM8 13.5h8V18H8z"/>',
+    objright:'<path d="M20 3.5v17"/><path d="M6 6h11v4.5H6zM10 13.5h7V18h-7z"/>',
+    objtop:'<path d="M3.5 4h17"/><path d="M6 7h4.5v11H6zM13.5 7H18v7h-4.5z"/>',
+    objcy:'<path d="M3.5 12h17"/><path d="M6 5.5h4.5v13H6zM13.5 8H18v8h-4.5z"/>',
+    objbottom:'<path d="M3.5 20h17"/><path d="M6 6h4.5v11H6zM13.5 10H18v7h-4.5z"/>',
+    spell:'<path d="M3.6 15.4l3.6-9.2 3.6 9.2M5 12.2h4.4"/><path d="M12.8 14l2.6 2.6 5-5.4"/>',
   };
   /* Built through innerHTML on an HTML span rather than createElementNS: the
      namespace-aware path is the one older WebKit builds get wrong, and this
@@ -2021,6 +2041,19 @@
     };
     let dirty=false;
     let rulers=true;
+    /* WORD'S RIBBON TABS. Home is where Word opens and where the letters are
+       dressed; Insert, Layout and View hold what the left-hand toolbox, the
+       right-click menu and the status bar also offer — the same actions, in
+       the place a Word user reaches for them first. */
+    let rtab="home";
+    /* Type sizes in millimetres, as the label is measured — or in POINTS, as
+       Word gives them (12 pt, not 4.23 mm): View → Units switches the size
+       boxes, and the choice is remembered per browser. */
+    let fontUnit=(()=>{ try{ return global.localStorage.getItem("ls.fontUnit")==="pt"?"pt":"mm"; }catch(e){ return "mm"; } })();
+    let spell=(()=>{ try{ return global.localStorage.getItem("ls.spell")!=="off"; }catch(e){ return true; } })();
+    let gridVis=true;                // View → Gridlines: the dots on the canvas, not the snap
+    let findOpen=false, findMode="find";   // the Find & Replace panel
+    const findState={q:"",r:"",cs:false,ww:false,oid:null,at:-1};
     let galStock="";                 // the stock a new blank label is cut to
     let full=false;                  // the designer, filling the screen
     let tool=null;                   // the armed toolbox tool, or null for the pointer
@@ -3061,9 +3094,11 @@
     const textOf=(o)=>!o?"":(o.type==="text"||o.type==="barcode"||o.type==="qr")
       ?(o.src&&o.src.kind==="fixed"?String(o.text||""):srcValue(o,canvasCtx())):"";
     function copySel(quiet){
-      const o=selObj(); if(!o) return;
-      clip=JSON.parse(JSON.stringify(o));
-      clipText=textOf(o);
+      /* EVERYTHING SELECTED, as Word copies every shape picked out — three
+         captions and a barcode copy as three captions and a barcode */
+      const list=selObjs(); if(!list.length) return;
+      clip=list.map(o=>JSON.parse(JSON.stringify(o)));
+      clipText=list.map(textOf).filter(Boolean).join("\n");
       /* …and the system clipboard, where the browser allows it — so a caption
          copied here can be pasted into Word, a mail, or the ERP's own fields.
          Over plain HTTP this API does not exist; the copy EVENT (below, with
@@ -3074,20 +3109,167 @@
       paint();
     }
     function cutSel(){
-      const o=selObj(); if(!o) return;
+      if(!selObjs().length) return;
       copySel(true);
       delSel();
     }
     function pasteClip(){
-      if(!clip) return toast("Nothing on the clipboard",{type:"warn"});
-      if(doc().objects.length>=MAX_OBJ)
+      if(!clip||!clip.length) return toast("Nothing on the clipboard",{type:"warn"});
+      if(doc().objects.length+clip.length>MAX_OBJ)
         return toast("That is the "+MAX_OBJ+"-object limit",{type:"warn"});
       /* Re-validated against the CURRENT label, not the one it was copied from:
-         a 60 mm-wide field pasted onto a 25 mm flag has to be clamped. */
-      const c=cleanObject(JSON.parse(JSON.stringify(clip)),doc());
-      if(!c) return;
-      c.id=uid("o_"); c.x=+(c.x+3).toFixed(1); c.y=+(c.y+3).toFixed(1);
-      doc().objects.push(c); setSel(c.id); touch(); paint();
+         a 60 mm-wide field pasted onto a 25 mm flag has to be clamped. Each
+         paste lands a step down and right of the last, so pasting three times
+         fans the copies out instead of stacking them on one spot. */
+      const made=[];
+      clip.forEach(src=>{
+        src.x=+(src.x+3).toFixed(1); src.y=+(src.y+3).toFixed(1);
+        const c=cleanObject(JSON.parse(JSON.stringify(src)),doc());
+        if(!c) return;
+        c.id=uid("o_");
+        doc().objects.push(c); made.push(c.id);
+      });
+      if(!made.length) return;
+      selIds=made; touch(); paint();
+    }
+    /* ============================================================
+       FIND & REPLACE — Word's Ctrl+F / Ctrl+H. A bar under the ribbon;
+       each match opens its field with the letters selected, so typing
+       over them is the replacement, exactly as it is in Word. Only
+       fixed text can be searched: a serial or a bound field has no
+       words of its own to find.
+       ============================================================ */
+    const escRe=(s)=>String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    function findMatches(){
+      const q=findState.q; if(!q) return [];
+      let re;
+      try{
+        re=new RegExp((findState.ww?"(?<![\\p{L}\\p{N}_])":"")+escRe(q)+(findState.ww?"(?![\\p{L}\\p{N}_])":""),
+          "gu"+(findState.cs?"":"i"));
+      }catch(e){ return []; }
+      const out=[];
+      doc().objects.forEach(o=>{
+        if(o.type!=="text"||o.hidden||!(o.src&&o.src.kind==="fixed")) return;
+        const t=String(o.text||""); let m; re.lastIndex=0;
+        while((m=re.exec(t))){ out.push({o,a:m.index,b:m.index+m[0].length}); if(!m[0].length) re.lastIndex++; }
+      });
+      return out;
+    }
+    const findCount=()=>{
+      if(!findState.q) return "";
+      const n=findMatches().length;
+      return n?(findState.at>=0?(findState.at+1)+" of "+n:n+" found"):"none";
+    };
+    function openFind(mode){
+      findOpen=true; findMode=mode||findMode;
+      if(editor) editor.commit();
+      paint();
+      setTimeout(()=>{ const i=root.querySelector(".ls-findq"); if(i){ i.focus(); i.select(); } },30);
+    }
+    function closeFind(){ findOpen=false; findState.at=-1; paint(); }
+    function findNext(dir){
+      if(!findOpen){ openFind("find"); return null; }
+      if(editor) editor.commit();
+      const ms=findMatches();
+      if(!ms.length){ findState.at=-1; toast(findState.q?"Not found":"Type something to find",{type:"warn"}); return null; }
+      let i=findState.at+(dir<0?-1:1);
+      if(i<0) i=ms.length-1; if(i>=ms.length) i=0;
+      findState.at=i;
+      const m=ms[i];
+      setSel(m.o.id); paint();
+      const c=root.querySelector(".ls-canvas");
+      if(c) editText(m.o,c,PX_MM*zoom,{sel:{a:m.a,b:m.b}});
+      return m;
+    }
+    function replaceOne(){
+      if(editor) editor.commit();
+      const ms=findMatches();
+      const m=ms[findState.at];
+      if(!m){ findNext(1); return; }
+      const t=String(m.o.text||"");
+      setText(m.o,t.slice(0,m.a)+findState.r+t.slice(m.b));
+      touch();
+      findState.at-=1;             // the next match now sits at this index
+      findNext(1);
+    }
+    function replaceAll(){
+      if(editor) editor.commit();
+      const ms=findMatches();
+      if(!ms.length){ toast("Not found",{type:"warn"}); return; }
+      /* back to front, so the offsets in front of each stay true */
+      ms.slice().reverse().forEach(m=>{
+        const t=String(m.o.text||"");
+        setText(m.o,t.slice(0,m.a)+findState.r+t.slice(m.b));
+      });
+      touch(); findState.at=-1; paint();
+      toast("Replaced "+ms.length,{type:"ok"});
+    }
+    function findBar(){
+      const q=h("input",{class:"ls-in ls-findq",type:"text",placeholder:"Find…","aria-label":"Find"});
+      q.value=findState.q;
+      const count=h("span",{class:"ls-findn",text:findCount()});
+      q.addEventListener("input",()=>{ findState.q=q.value; findState.at=-1; count.textContent=findCount(); });
+      q.addEventListener("keydown",(e)=>{ e.stopPropagation();
+        if(e.key==="Enter"){ e.preventDefault(); findNext(e.shiftKey?-1:1); }
+        else if(e.key==="Escape"){ e.preventDefault(); closeFind(); } });
+      const r=h("input",{class:"ls-in ls-findr",type:"text",placeholder:"Replace with…","aria-label":"Replace with"});
+      r.value=findState.r;
+      r.addEventListener("input",()=>{ findState.r=r.value; });
+      r.addEventListener("keydown",(e)=>{ e.stopPropagation();
+        if(e.key==="Enter"){ e.preventDefault(); replaceOne(); }
+        else if(e.key==="Escape"){ e.preventDefault(); closeFind(); } });
+      const opt=(label,key)=>{ const c=h("input",{type:"checkbox"}); c.checked=!!findState[key];
+        c.addEventListener("change",()=>{ findState[key]=c.checked; findState.at=-1; count.textContent=findCount(); });
+        return h("label",{class:"ls-chk ls-findopt"},[c,h("span",{text:label})]); };
+      const tb=(text,title,onclick)=>h("button",{class:"ls-b ls-btxt",type:"button",title:title,onclick},[h("span",{class:"ls-bt",text})]);
+      return h("div",{class:"ls-findbar",
+        onkeydown:(e)=>{ if(e.key==="Escape"){ e.preventDefault(); e.stopPropagation(); closeFind(); } }},[
+        ico("find",14), q, count,
+        tb("▲","Previous  (Shift+Enter)",()=>findNext(-1)),
+        tb("▼","Next  (Enter / F3)",()=>findNext(1)),
+        opt("Match case","cs"), opt("Whole words","ww"),
+        h("div",{class:"ls-rsep"}),
+        ...(findMode==="replace"
+          ? [r, tb("Replace","Replace this one and find the next",replaceOne),
+               tb("Replace All","Replace every match on this label",replaceAll)]
+          : [tb("Replace…","Find and replace  (Ctrl+H)",()=>{ findMode="replace"; paint(); })]),
+        h("div",{class:"sp"}),
+        h("button",{class:"ls-px",type:"button",title:"Close  (Esc)",onclick:closeFind},ico("close",13)),
+      ]);
+    }
+
+    /* ---- BULLETS AND NUMBERING. Each line of the field gets its mark, or
+       loses it again when the same button is pressed on a list. The marks are
+       letters in the text, so they print with the text and survive an export. */
+    const listKind=(o)=>{
+      const ls=String(o.text||"").split("\n").filter(l=>l.trim());
+      if(!ls.length) return "";
+      if(ls.every(l=>/^• /.test(l))) return "bullet";
+      if(ls.every(l=>/^\d+\. /.test(l))) return "number";
+      return "";
+    };
+    function toggleList(kind){
+      const o=editor?editor.o:selObj(); if(!o||o.type!=="text") return;
+      if(editor) editor.commit();
+      const cur=listKind(o);
+      let n=0;
+      const out=String(o.text||"").split("\n").map(l=>{
+        const bare=l.replace(/^(• |\d+\. )/,"");
+        if(cur===kind||!bare.trim()) return bare;
+        n++; return (kind==="bullet"?"• ":(n+". "))+bare;
+      });
+      setText(o,out.join("\n"));
+      if(cur!==kind){ o.wrap=true; o.align="left"; }
+      touch(); paint();
+      const c=root.querySelector(".ls-canvas");
+      if(c) editText(o,c,PX_MM*zoom,{sel:{a:o.text.length,b:o.text.length}});
+    }
+
+    /* Ctrl+A on the label: every object on it, as Word selects the page */
+    function selectAllObjs(){
+      if(editor){ editor.commit(); }
+      selIds=doc().objects.filter(o=>!o.hidden).map(o=>o.id);
+      tool=null; paint();
     }
     /* Text from OUTSIDE — a line copied in Word, a cell in Excel — lands as a
        new text field, the way pasting onto a slide does. */
@@ -3116,6 +3298,19 @@
        ============================================================ */
     /* the sizes a label is ever set in — 0.6 mm is unreadable, 120 mm a poster */
     const SIZES=["1.5","2","2.5","3","3.5","4","4.5","5","6","7","8","9","10","12","14","16","20","24"];
+    /* Word's own list, in points */
+    const PT_SIZES=["5","6","7","8","9","10","11","12","14","16","18","20","22","24","26","28","36","48","72"];
+    const PT_MM=2.83465;
+    /* what a size box shows for a size held in mm, and back — to the half
+       point, as Word keeps them */
+    const sizeShow=(mm)=>(mm===""||mm==null)?"":(fontUnit==="pt"?Math.round(+mm*PT_MM*2)/2:+mm);
+    const sizeTake=(v)=>fontUnit==="pt"?(+v)/PT_MM:+v;
+    /* the size box, in whichever unit View → Units says */
+    function sizeCombo(mm,w,title,off){
+      return combo(sizeShow(mm),fontUnit==="pt"?PT_SIZES:SIZES,(v)=>setSize(sizeTake(v)),w,
+        (title||"Type size")+" in "+(fontUnit==="pt"?"points":"millimetres")+" — type any value, or pick one",
+        off,fontUnit);
+    }
     /* A design saved before this list existed can carry a size that is not on
        it. Rather than show an empty box — which reads as "no size" and is a lie
        — the size it actually is joins the list, in its place. */
@@ -3157,7 +3352,7 @@
     };
     /* the small labelled rows stacked beside Paste */
     const rsm=(opt)=>{
-      const b=h("button",{class:"ls-bs",type:"button",title:opt.title||opt.label,
+      const b=h("button",{class:"ls-bs"+(opt.on?" on":""),type:"button",title:opt.title||opt.label,
         onpointerdown:keepEditor,onclick:opt.off?null:opt.onclick},
         [ico(opt.icon,13),h("span",{text:opt.label})]);
       if(opt.off){ b.disabled=true; b.classList.add("off"); }
@@ -3365,11 +3560,9 @@
           /* TYPE ANY SIZE. This was a drop-down of the common sizes and
              nothing else, so a field that needed 4.2 mm could not be set at
              all. The list is still one click away on the caret. */
-          combo(isText?(f.size==null?"":f.size):(canType?o.size:4),SIZES,(v)=>setSize(v),66,
-            o&&o.type!=="text"?"Size of the printed caption, in millimetres — type any value"
-                              :"Type size in millimetres — type any value, or pick one",
-            !canType,"mm"),
-          h("span",{class:"ls-unit",text:"mm"}),
+          sizeCombo(isText?(f.size==null?"":f.size):(canType?o.size:4),66,
+            o&&o.type!=="text"?"Size of the printed caption":"Type size",!canType),
+          h("span",{class:"ls-unit",text:fontUnit}),
         ]),
         h("div",{class:"ls-rrow"},[
           rbtn({text:"B",cls:"ls-fx-b",fx:"bold",title:"Bold  (Ctrl+B)",off:!isText,
@@ -3414,6 +3607,11 @@
       const gPara=h("div",{class:"ls-rgb"},[
         h("div",{class:"ls-rcol"},[
           h("div",{class:"ls-rrow"},[
+            rbtn({icon:"bullets",title:"Bullets — a • on every line",off:!isText,
+              on:isText&&listKind(o)==="bullet",onclick:()=>toggleList("bullet")}),
+            rbtn({icon:"numbering",title:"Numbering — 1. 2. 3. down the lines",off:!isText,
+              on:isText&&listKind(o)==="number",onclick:()=>toggleList("number")}),
+            h("div",{class:"ls-rsep"}),
             al("alignleft","left","Align left"),
             al("aligncenter","center","Centre"),
             al("alignright","right","Align right"),
@@ -3480,15 +3678,112 @@
          a tablet or a phone it takes a row of its own above them (CSS). On
          a phone the Font group leads: it is what a thumb goes to the
          ribbon for while typing, and the clipboard can wait behind it. */
+      /* ---- Editing — Home's last group, as Word has it ---- */
+      const gEdit=h("div",{class:"ls-rgb"},[h("div",{class:"ls-rcol ls-rstack"},[
+        rsm({icon:"find",     label:"Find",       onclick:()=>openFind("find"),    title:"Find text on this label  (Ctrl+F)"}),
+        rsm({icon:"replace",  label:"Replace",    onclick:()=>openFind("replace"), title:"Find and replace  (Ctrl+H)"}),
+        rsm({icon:"selectall",label:"Select All", onclick:selectAllObjs,           title:"Select every object on the label  (Ctrl+A)"}),
+      ])]);
+
+      /* ---- Insert — what the toolbox offers, laid out as Word's Insert tab ---- */
+      const insBtn=(key)=>{ const t=TOOLS.find(x=>x.v===key); return rbig({icon:t.v,
+        label:{richtext:"Rich\nText",roundrect:"Rounded\nRect",datetime:"Date /\nTime",qr:"QR\nCode"}[t.v]||t.l,
+        on:!!tool&&tool.key===t.v,title:t.l+" — click, then click the label or drag out its size",
+        onclick:()=>{ if(editor) editor.commit(); armTool(t); }}); };
+      const insertGroups=()=>[
+        grp("Text",   h("div",{class:"ls-rgb"},["text","richtext","icon","counter","datetime"].map(insBtn)),"ls-rg-ins"),
+        grp("Codes",  h("div",{class:"ls-rgb"},["barcode","qr"].map(insBtn)),"ls-rg-ins"),
+        grp("Shapes", h("div",{class:"ls-rgb"},["line","rect","roundrect","ellipse"].map(insBtn)),"ls-rg-ins"),
+        grp("Pictures",h("div",{class:"ls-rgb"},[insBtn("image")]),"ls-rg-ins"),
+      ];
+
+      /* ---- Layout — the label, and where things sit on it ---- */
+      const many=selIds.length>1, d=doc();
+      const ab=(icon,what,t1,tn)=>rbtn({icon,title:many?tn:t1,off:!o,onclick:()=>alignTo(what)});
+      const layoutGroups=()=>[
+        grp("Label",h("div",{class:"ls-rgb"},[
+          rbig({icon:"pagesetup",label:"Label\nSize",title:"Label size and stock — "+sizeS(d.w,d.h),onclick:()=>layoutDialog()}),
+          rbig({icon:"print",label:"Page\nSetup",title:"Sheet, margins, copies",onclick:pageSetupDialog}),
+        ]),"ls-rg-lay"),
+        grp("Align",h("div",{class:"ls-rgb"},[h("div",{class:"ls-rcol"},[
+          h("div",{class:"ls-rrow"},[
+            ab("objleft","left","Align to the left edge of the label","Align left edges"),
+            ab("objcx","cx","Centre across the label","Centre on each other"),
+            ab("objright","right","Align to the right edge of the label","Align right edges"),
+            rbtn({icon:"valignfit",title:"Fit the box to the label's width",off:!o,onclick:()=>alignTo("full")}),
+          ]),
+          h("div",{class:"ls-rrow"},[
+            ab("objtop","top","Align to the top of the label","Align tops"),
+            ab("objcy","cy","Centre down the label","Centre in a row"),
+            ab("objbottom","bottom","Align to the bottom of the label","Align bottoms"),
+            rbtn({icon:"distx",title:"Spread evenly across (three or more)",off:selIds.length<3,onclick:()=>distribute("x")}),
+            rbtn({icon:"disty",title:"Spread evenly down (three or more)",off:selIds.length<3,onclick:()=>distribute("y")}),
+          ]),
+        ])]),"ls-rg-lay"),
+        grp("Arrange",h("div",{class:"ls-rgb"},[
+          rbig({icon:"front",label:"Bring to\nFront",off:!o,title:"Bring to front",onclick:()=>order("front")}),
+          rbig({icon:"back",label:"Send to\nBack",off:!o,title:"Send to back",onclick:()=>order("back")}),
+          h("div",{class:"ls-rcol ls-rstack"},[
+            rsm({icon:"front",label:"Forward",off:!o,title:"Bring forward one step",onclick:()=>order("up")}),
+            rsm({icon:"back",label:"Backward",off:!o,title:"Send backward one step",onclick:()=>order("down")}),
+          ]),
+          rbig({icon:"rotate",label:"Rotate",off:!o,on:!!o&&!!o.rot,title:"Turn a quarter turn at a time",
+            onclick:onSel(s=>{s.rot=((+s.rot||0)+90)%360;})}),
+        ]),"ls-rg-lay"),
+        grp("Grid",h("div",{class:"ls-rgb"},[h("div",{class:"ls-rcol ls-rstack"},[
+          rsm({icon:"grid",label:"Snap to grid",on:!!d.snap,title:"Objects settle on the "+d.grid+" mm grid",
+            onclick:()=>{ d.snap=!d.snap; touch(); paint(); }}),
+          rsm({icon:"pagesetup",label:"Grid "+d.grid+" mm",title:"Grid spacing — set in Page Setup",onclick:pageSetupDialog}),
+        ])]),"ls-rg-lay"),
+      ];
+
+      /* ---- View — what is shown, how large, in what unit ---- */
+      const setUnit=(u)=>{ fontUnit=u; try{ global.localStorage.setItem("ls.fontUnit",u); }catch(e){} paint(); };
+      const viewGroups=()=>[
+        grp("Show",h("div",{class:"ls-rgb"},[
+          h("div",{class:"ls-rcol ls-rstack"},[
+            rsm({icon:"panelrule",label:"Rulers",on:rulers,title:"Millimetre rulers along the label",onclick:()=>{rulers=!rulers;paint();}}),
+            rsm({icon:"grid",label:"Gridlines",on:gridVis,title:"The dot grid on the canvas (never printed)",onclick:()=>{gridVis=!gridVis;paint();}}),
+          ]),
+          h("div",{class:"ls-rcol ls-rstack"},[
+            rsm({icon:"panelleft",label:"Tools",on:showTools,title:"The Tools panel",onclick:()=>{showTools=!showTools;if(showTools&&global.innerWidth<=780)showProps=false;paint();}}),
+            rsm({icon:"panelright",label:"Properties",on:showProps,title:"Object Properties and Layers",onclick:()=>{showProps=!showProps;if(showProps&&global.innerWidth<=780)showTools=false;paint();}}),
+          ]),
+        ]),"ls-rg-view"),
+        grp("Zoom",h("div",{class:"ls-rgb"},[
+          rbig({icon:"zoomin",label:"Zoom\nIn",title:"Zoom in",onclick:()=>{zoom=Math.min(6,+(zoom+.1).toFixed(2));paint();}}),
+          rbig({icon:"zoomout",label:"Zoom\nOut",title:"Zoom out",onclick:()=>{zoom=Math.max(.2,+(zoom-.1).toFixed(2));paint();}}),
+          rbig({icon:"fit",label:"Fit\nLabel",title:"Zoom so the whole label fits",onclick:()=>{zoom=fitZoom();paint();}}),
+          rbig({icon:"pagesetup",label:"100%",title:"Actual size",on:Math.abs(zoom-1)<.005,onclick:()=>{zoom=1;paint();}}),
+        ]),"ls-rg-view"),
+        grp("Units",h("div",{class:"ls-rgb"},[h("div",{class:"ls-rcol ls-rstack"},[
+          rsm({icon:"text",label:"Points (pt)",on:fontUnit==="pt",title:"Type sizes in points, as Word shows them",onclick:()=>setUnit("pt")}),
+          rsm({icon:"panelrule",label:"Millimetres",on:fontUnit==="mm",title:"Type sizes in millimetres",onclick:()=>setUnit("mm")}),
+        ])]),"ls-rg-view"),
+        grp("Proofing",h("div",{class:"ls-rgb"},[
+          rbig({icon:"spell",label:"Spelling",on:spell,title:"Underline misspelt words while typing (the browser's dictionary)",
+            onclick:()=>{ spell=!spell; try{ global.localStorage.setItem("ls.spell",spell?"on":"off"); }catch(e){} paint(); }}),
+        ]),"ls-rg-view"),
+        grp("Window",h("div",{class:"ls-rgb"},[
+          rbig({icon:"full",label:full?"Exit Full\nScreen":"Full\nScreen",on:full,title:full?"Leave full screen  (Esc)":"Fill the screen with the designer",onclick:toggleFull}),
+        ]),"ls-rg-view"),
+      ];
+
+      const TABS=[["home","Home"],["insert","Insert"],["layout","Layout"],["view","View"]];
+      const tabs=h("div",{class:"ls-rtabs",role:"tablist"},TABS.map(([k,l])=>h("button",{
+        class:"ls-rtab"+(rtab===k?" on":""),type:"button",role:"tab","aria-selected":String(rtab===k),
+        onpointerdown:keepEditor,onclick:()=>{ rtab=k; ribbonPaint(); },text:l})));
+      const groups=rtab==="insert"?insertGroups():rtab==="layout"?layoutGroups():rtab==="view"?viewGroups():[
+        grp("Clipboard",gClip,"ls-rg-clip"),
+        grp("Font",gFont,"ls-rg-font"),
+        grp("Paragraph",gPara,"ls-rg-para"),
+        grp("Spacing",gSpace,"ls-rg-space"),
+        grp("Editing",gEdit,"ls-rg-edit"),
+      ];
       return h("div",{class:"ls-ribbon"},[
-        h("div",{class:"ls-rscroll"},[
-          grp("Clipboard",gClip,"ls-rg-clip"),
-          grp("Font",gFont,"ls-rg-font"),
-          grp("Paragraph",gPara,"ls-rg-para"),
-          grp("Spacing",gSpace,"ls-rg-space"),
-          h("div",{class:"sp"}),
-        ]),
-        docBox(),
+        h("div",{class:"ls-rtop"},[tabs,h("div",{class:"sp"}),docBox()]),
+        h("div",{class:"ls-rscroll"},groups.concat([h("div",{class:"sp"})])),
+        findOpen?findBar():null,
       ]);
     }
 
@@ -3671,6 +3966,14 @@
     }
     /* Stepping the type by the sizes people actually set, not by ±1 mm. */
     const nextSize=(cur,dir)=>{
+      if(fontUnit==="pt"){
+        const p=(+cur||4)*PT_MM;
+        let i=PT_SIZES.findIndex(x=>+x>=p-0.26);
+        if(i<0) i=PT_SIZES.length-1;
+        if(dir>0) i=Math.min(PT_SIZES.length-1,i+(Math.abs(+PT_SIZES[i]-p)<0.26?1:0));
+        else      i=Math.max(0,i-1);
+        return +Math.min(120,Math.max(.6,(+PT_SIZES[i])/PT_MM)).toFixed(2);
+      }
       cur=+cur||4;
       let i=SIZES.findIndex(x=>+x>=cur-0.001);
       if(i<0) i=SIZES.length-1;
@@ -4072,7 +4375,7 @@
          label's own background PICTURE is not here: it is a layer inside the
          render, drawn by the same generator the printer uses, so what is on
          the canvas is the picture that will print rather than a copy of it. */
-      if(d.grid>0){
+      if(gridVis&&d.grid>0){
         cv.style.backgroundImage="radial-gradient(circle, rgba(127,127,127,.45) "+
           Math.max(.5,k*d.grid*.035).toFixed(2)+"px, transparent "+
           Math.max(.6,k*d.grid*.04).toFixed(2)+"px)";
@@ -4686,7 +4989,7 @@
       w.runs=(o.runs&&o.runs.length)?JSON.parse(JSON.stringify(o.runs)):undefined;
 
       const box=h("div",{class:"ls-editbox"});
-      const ed=h("div",{class:"ls-edit ls-rich",contenteditable:"true",spellcheck:"false",
+      const ed=h("div",{class:"ls-edit ls-rich",contenteditable:"true",spellcheck:spell?"true":"false",
         tabindex:"0",role:"textbox","aria-multiline":"true","aria-label":"Text on the label"});
       box.appendChild(ed);
       const tip=h("div",{class:"ls-edittip",
@@ -5029,6 +5332,7 @@
         e.stopPropagation();                       // the document's shortcuts are handled here
         const mod=e.ctrlKey||e.metaKey, kk=(e.key||"").toLowerCase();
         if(e.key==="Escape"){ e.preventDefault(); finish(false); paint(); return; }
+        if(e.key==="F3"){ e.preventDefault(); findNext(e.shiftKey?-1:1); return; }
         if(e.key==="Tab"){ e.preventDefault(); step(e.shiftKey?-1:1); return; }
         if(e.key==="Enter"){ e.preventDefault(); if(mod){ finish(true); paint(); } else insert("\n"); return; }
         if(!mod) return;
@@ -5066,7 +5370,8 @@
       /* A field still holding the words it was born with is a placeholder, and
          typing should replace it outright. Anything actually written gets the
          caret where the click was, or at the end. */
-      if(BORN.indexOf(w.text)>=0) setSelection({a:0,b:w.text.length});
+      if(at&&at.sel) setSelection(at.sel);                 // Find opened it on the match
+      else if(BORN.indexOf(w.text)>=0) setSelection({a:0,b:w.text.length});
       else if(!caretFrom(at)) setSelection({a:w.text.length,b:w.text.length});
       lastSel=selOffsets()||lastSel;
       document.addEventListener("selectionchange",onSelCh);
@@ -5545,8 +5850,7 @@
             /* no fixed width: the panel is 210 px and this box shares its row
                with four buttons, so it takes what is left rather than a number
                that was right on one screen and overflowed the next */
-            combo(o.size,SIZES,(v)=>setSize(v),0,
-              "Type size in millimetres — type any value, or pick one",false,"mm"),
+            sizeCombo(o.size,0,"Type size",false),
             /* the same verbs as the ribbon: on the letters picked out, the
                word under the caret, or the field — Word's three cases */
             rbtn({text:"B",cls:"ls-fx-b",fx:"bold",title:"Bold  (Ctrl+B)",
@@ -5560,8 +5864,9 @@
           ]),
         ]));
         b.appendChild(h("div",{class:"ls-phint",
-          text:"That is "+mmToPt(o.size)+" pt — a label is measured in millimetres, "+
-               "so 4 mm is about 11 pt."}));
+          text:fontUnit==="pt"
+            ? "That is "+(+o.size).toFixed(2)+" mm of type. View → Units switches sizes to millimetres."
+            : "That is "+mmToPt(o.size)+" pt — a label is measured in millimetres, so 4 mm is about 11 pt."}));
         /* Said where it can be acted on, with the action next to it. */
         if(textOverflows(o)) b.appendChild(h("div",{class:"ls-pover"},[
           h("div",{text:"This text does not fit its box — the part that overruns "+
@@ -5610,8 +5915,7 @@
         if(o.showText){
           b.appendChild(fL("Caption font",psel(o.font,FONTS.map(f=>({v:f.v,l:f.l})),
             v=>{o.font=v;})));
-          b.appendChild(fR("Caption size",combo(o.size,SIZES,(v)=>setSize(v),0,
-            "Caption size in millimetres — type any value",false,"mm")));
+          b.appendChild(fR("Caption size",sizeCombo(o.size,0,"Caption size",false)));
         }
         const val=srcValue(o,{index:0,now:new Date(),prompts:{}});
         const enc=(o.type==="qr"||o.sym==="qr")?!!qrEncode(val,o.ecl):!!encodeBar(o.sym,val);
@@ -7324,6 +7628,8 @@
         if(isT) fmtAlign({l:"left",e:"center",r:"right",j:"justify"}[k]); return true; }
       if(sh&&k==="c"){ painterCopy(); return true; }
       if(sh&&k==="v"){ if(painter) painterApply(null); return true; }
+      if(!sh&&k==="f"){ openFind("find"); return true; }
+      if(!sh&&k==="h"){ openFind("replace"); return true; }
       return false;
     }
     const onKey=(e)=>{
@@ -7335,11 +7641,13 @@
          is now ours to leave, since the browser is no longer holding it. */
       if(e.key==="Escape"){
         if(ctxEl){ closeCtx(); return; }
+        if(findOpen&&(!typing||(t&&t.closest&&t.closest(".ls-findbar")))){ closeFind(); return; }
         if(painter){ painter=null; paint(); return; }
         if(bgEdit){ bgEdit=false; paint(); return; }
         if(tool){ tool=null; paint(); return; }
         if(full){ full=false; paint(); return; }
       }
+      if(e.key==="F3"&&screen==="design"&&!typing){ e.preventDefault(); findNext(e.shiftKey?-1:1); return; }
       /* Delete removes the selection wherever the studio has focus — but never
          out from under someone typing into a field.
 
@@ -7362,6 +7670,7 @@
       if(k==="s"){ e.preventDefault(); save(); return; }
       if(k==="p"){ e.preventDefault(); printDialog(); return; }
       if(typing) return;                       // the rest belong to the field
+      if(k==="a"){ e.preventDefault(); selectAllObjs(); return; }   // Word: the whole page
       if(wordKey(e)){ e.preventDefault(); return; }
       if(k==="z"&&!e.shiftKey){ e.preventDefault(); undo(); return; }
       if(k==="y"||(k==="z"&&e.shiftKey)){ e.preventDefault(); redo(); return; }
@@ -7408,7 +7717,12 @@
       if(pasteTimer){ clearTimeout(pasteTimer); pasteTimer=null; }
       const t=e.clipboardData?String(e.clipboardData.getData("text/plain")||""):"";
       e.preventDefault();
-      if(t&&(t!==clipText||!clip)&&pasteText(t)) return;
+      /* Windows hands the words back with \r\n where \n went out, so the
+         studio's own copy is known by its words alone, line ends aside —
+         otherwise a two-line caption copied here came back as outside text
+         and pasted as a plain box instead of the objects on the clipboard */
+      const same=(a,b)=>String(a).replace(/\r\n?/g,"\n")===String(b).replace(/\r\n?/g,"\n");
+      if(t&&(!same(t,clipText)||!clip)&&pasteText(t)) return;
       pasteClip();
     };
     document.addEventListener("copy",onCopy);

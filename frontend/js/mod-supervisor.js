@@ -747,6 +747,9 @@
         // the order's own slitting width wins over any width held on the product
         w.widthMM ? fact("Width", w.widthMM + " mm")
           : (p.widthMM ? fact("Width", (Array.isArray(p.widthMM) ? p.widthMM.join("/") : p.widthMM) + " mm") : null),
+        // the roll the order asks for — core ID and finished OD
+        w.idMM ? fact("ID", w.idMM + " mm") : null,
+        w.odMM ? fact("OD", w.odMM + " mm") : null,
         w.due ? fact("Due", H("span", { style: overdue ? "color:var(--danger);font-weight:700" : "", text: w.due + (overdue ? " ⏰" : "") })) : null,
         w.priority && w.priority !== "Normal" ? fact("Priority", H("span", { style: "font-weight:700;color:var(--danger)", text: w.priority })) : null,
       ].filter(Boolean));

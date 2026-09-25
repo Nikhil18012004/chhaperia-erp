@@ -112,6 +112,14 @@ async function saveState(data) {
       + (+odd.sum.toFixed(3)) + "). A transfer needs an OUT leg and an IN leg of the same quantity — post it "
       + "from Move Stock, or put both legs on the sheet with the same item, date and reference.", 400);
   }
+  // the same finished-goods rule the movements endpoint applies, for NEW rows
+  // only — the stock-take import lands here
+  const itemById = new Map(data.items.map((i) => [i && i.id, i]));
+  for (const m of data.movements) {
+    if (!m || known.has(m.id)) continue;
+    const upErr = fgAdjustUpError(m, itemById.get(m.itemId));
+    if (upErr) throw upErr;
+  }
   // keep any newly-introduced work orders / products stage-ready
   S.ensureStageModel(data);
   // pay is monthly only — an imported sheet may still carry daily rates
@@ -463,6 +471,17 @@ async function upsertItem(item) {
 
 const MOVE_TYPES = ["OPEN", "GRN", "ISSUE", "PROD", "SALE", "ADJ", "RET", "SCRAP", "XFER"];
 
+/* An adjustment may write finished goods DOWN (damaged, short on a count) but
+   never up: an FG enters the store through Production -> Add to Finished Stock,
+   with its batch and lab readings (the 10 Sep ruling). A +ADJ was the one door
+   the GRN rule below left open. Shared by addMovement and the bulk save. */
+function fgAdjustUpError(m, item) {
+  if (!m || m.type !== "ADJ" || !item || item.cat !== "FG" || !(+m.qty > 0)) return null;
+  return err("Finished goods cannot be adjusted up. " + (item.name || item.id) + " enters the store "
+    + "through Production → Add to Finished Stock, with the batch number and the lab readings. "
+    + "An adjustment can only reduce it.", 409);
+}
+
 /** Append one stock movement (manual receipt / adjustment). */
 /* Which way each type is allowed to point. The ledger stores an outbound
    movement as a NEGATIVE quantity, so the sign is not cosmetic — it is the
@@ -534,6 +553,25 @@ async function addMovement(m) {
       qty: amt, rate, ref: m.ref || null, note: m.noteTo || m.note || null, by: m.by || null };
     await repo.addMovements([out, inn]);
     return { ok: true, id: out.id, idTo: inn.id };
+  }
+  if (m.type === "ADJ") {
+    const upErr = fgAdjustUpError(m, mvItem);
+    if (upErr) throw upErr;
+    // a correction nobody can explain is what an audit asks about first
+    if (!String(m.note || "").trim()) throw err("An adjustment needs a reason.", 400);
+    if (!(Math.abs(q) > 1e-9)) throw err("An adjustment of zero changes nothing.", 400);
+    /* The item-wide floor below cannot see a store going negative while
+       another store still holds stock — an ADJ names its store, so it is
+       floored there. */
+    if (q < 0 && m.wh) {
+      const there = await repo.onHandAt(m.itemId, m.wh);
+      if (-q > there + 1e-6)
+        throw err((mvItem.name || m.itemId) + " in " + m.wh + " holds only " + +there.toFixed(3) + " "
+          + (mvItem.uom || "") + ", so it cannot be adjusted by " + +q.toFixed(3) + ". Stock cannot go below zero.", 400);
+    }
+    // the reference is the server's, so two adjustments never share one
+    if (!m.id) m.id = mvId();
+    if (!m.ref) m.ref = "ADJ-" + m.id;
   }
   /* Stock has a floor. The sign rules above stop a receipt posing as a
      write-off, but nothing bounded the size: an ISSUE of −9,000,000,000 posted

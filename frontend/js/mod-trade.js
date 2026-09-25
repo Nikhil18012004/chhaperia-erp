@@ -65,6 +65,15 @@
     if(w) return w+" mm wide";
     return "";
   }
+  /* "ID 76 · OD 300 mm" — the roll the customer ordered. The line's own
+     figures win; a blank falls back to the work order the line is served from. */
+  function lineRoll(l){
+    if(!l) return "";
+    const wo=l.batch?woById(l.batch):null;
+    const pick=k=>(l[k]!=null&&l[k]!=="")?+l[k]:((wo&&wo[k]!=null&&wo[k]!=="")?+wo[k]:null);
+    const id=pick("idMM"), od=pick("odMM");
+    return [id?"ID "+trimNum(id):null, od?"OD "+trimNum(od):null].filter(Boolean).join(" · ")+(id||od?" mm":"");
+  }
 
   /* Build GST.calcDoc() input from document lines. */
   function gstLinesOf(o){
@@ -96,7 +105,7 @@
       qcOnly?"Goods receipts awaiting an incoming-material test"
             :"Auto-suggested reorders, open POs and goods receipts that post straight to stock",[
       h("button",{class:"btn",onclick:reorderWizard,html:"🪄 Reorder Suggestions"}),
-      h("button",{class:"btn primary",onclick:()=>poForm(params&&params.create),html:"＋ New PO"})
+      h("button",{class:"btn primary",onclick:()=>poForm(),html:"＋ New PO"})
     ]));
     const pos=ENG.data.purchaseorders;
     const open=pos.filter(p=>p.status!=="Received");
@@ -191,6 +200,12 @@
     // ⌘K "New Purchase Order" lands here with openNew; consume the flag so a
     // later re-render (saveDelta) doesn't reopen the form.
     if(params&&params.openNew){ params.openNew=false; poForm(); }
+    /* "Raise PO" on a stock item lands here with that item named: open the
+       form straight away, filled for it — its supplier, the suggested
+       reorder quantity and its cost. Consumed so a re-render doesn't reopen. */
+    if(params&&params.create){ const c=params.create; params.create=null;
+      // raw material only — a finished good is never bought on a PO
+      if((ENG.item(c)||{}).cat==="RM") poForm(c); }
     /* arriving from a ledger row (or anywhere else) with a document named */
     if(params&&params.open){ const po=pos.find(p=>p.id===params.open); params.open=null; if(po) poDetail(po); }
 
@@ -1336,6 +1351,9 @@
       const editPo=(arg && typeof arg==="object" && arg.id)?arg:null;
       const presetItem=(typeof arg==="string")?arg:null;
       const sups=ENG.data.suppliers;
+      // a preset item brings its usual supplier, when that supplier still exists
+      const presetSup=presetItem?((ENG.item(presetItem)||{}).supplierId||null):null;
+      const sup0=(presetSup&&sups.some(s=>s.id===presetSup))?presetSup:(sups[0]&&sups[0].id);
       let lines=[];
       const totBox=h("div");
       const ev=k=>esc(editPo?(editPo[k]||""):"");
@@ -1348,7 +1366,7 @@
           U.field("Document Type",U.selectHTML("po_dtype",[
             {v:"po",l:"Purchase Order"},{v:"proforma",l:"Proforma Invoice"}],
             editPo?(editPo.docType||"po"):"po")),
-          U.field("Supplier *",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:(sups[0]&&sups[0].id),"Search supplier…")),
+          U.field("Supplier *",U.searchSelect("po_sup",sups.map(s=>({v:s.id,l:s.name})),editPo?editPo.supplierId:sup0,"Search supplier…")),
           U.field("PO Date",`<input class="input" id="po_date" type="date" value="${esc(editPo?(editPo.date||""):DB.helpers.iso(DB.helpers.today()))}">`),
           U.field("Expected ETA",`<input class="input" id="po_eta" type="date" value="${esc(editPo?editPo.eta:DB.helpers.daysAhead(14))}">`),
           U.field("Valid Upto",`<input class="input" id="po_valid" type="date" value="${ev("validUpto")}">`),
@@ -2031,6 +2049,7 @@
         h("div",{class:"doc-tot"},totBox),
       ]);
       const mo=modal({title:editSo?("Edit "+editSo.id):"New Sales Order", sub:editSo?"Update this sales order":"Everything here flows straight onto the tax invoice", xwide:true, wide:true, body,
+        headActions:[UI.calcButton()],
         foot:[h("button",{class:"btn ghost",onclick:()=>mo.close(),text:"Cancel"}),
           h("button",{class:"btn",onclick:printDraft,html:PRINT_IC+" Print"}),
           h("button",{class:"btn primary",onclick:save,text:editSo?"Save Changes":"Create Order"})]});
@@ -2146,6 +2165,9 @@
           if(id&&qty>0) out.push({itemId:id, qty, rate:rate||ENG.item(id).price,
             width:lineWidth({itemId:id, batch})||null,
             hsn:(UI.$("#sl_hsn_"+i).value||"").trim(), batch,
+            // roll core ID and finished OD the customer asked for (mm)
+            idMM:+UI.$("#sl_idmm_"+i).value>0?+UI.$("#sl_idmm_"+i).value:null,
+            odMM:+UI.$("#sl_odmm_"+i).value>0?+UI.$("#sl_odmm_"+i).value:null,
             discPct:+UI.$("#sl_disc_"+i).value||0, gstPct:+UI.$("#sl_gst_"+i).value||0}); });
         return out; }
       function draft(){
@@ -2220,6 +2242,8 @@
             ["HSN",         h("input",{class:"input",id:"sl_hsn_"+idx,placeholder:"HSN",value:(seed&&seed.hsn)||it.hsn||""})],
             ["Batch (W.O.)",h("div",{html:U.selectHTML("sl_batch_"+idx,batchOpts(itemId),(seed&&seed.batch)||"")})],
             ["Qty ("+((it.uom||"kg"))+")", sQtyEl],
+            ["ID (mm)",     h("input",{class:"input",id:"sl_idmm_"+idx,type:"number",min:"0",step:"0.5",placeholder:"e.g. 76",value:(seed&&seed.idMM!=null)?seed.idMM:""})],
+            ["OD (mm)",     h("input",{class:"input",id:"sl_odmm_"+idx,type:"number",min:"0",step:"0.5",placeholder:"e.g. 300",value:(seed&&seed.odMM!=null)?seed.odMM:""})],
             ["Rate",        h("input",{class:"input",id:"sl_rate_"+idx,type:"number",placeholder:"0.00",value:rateVal})],
             ["Disc %",      h("input",{class:"input",id:"sl_disc_"+idx,type:"number",placeholder:"0",value:(seed&&seed.discPct)||""})],
             ["GST %",       h("input",{class:"input",id:"sl_gst_"+idx,type:"number",placeholder:"18",value:(seed&&seed.gstPct!=null)?seed.gstPct:lineGstPct(seed,it)})],
@@ -2250,6 +2274,7 @@
       function save(){
         const o=draft();
         if(!o.lines.length){ toast("Add at least one line",{type:"warn"}); return; }
+        if(o.lines.some(l=>l.idMM&&l.odMM&&l.odMM<=l.idMM)){ toast("OD must be larger than ID",{type:"warn"}); return; }
         if(editSo){
           const patch={customerId:o.customerId, company:o.company, invoiceNo:o.invoiceNo,
             invoiceType:o.invoiceType, currency:o.currency,
@@ -4401,9 +4426,9 @@
       const pk=lineAsKg(l,it);
       // the size a customer orders by — thickness × width, the width taken from
       // the work order this line is served from
-      const size=lineSize(l,it);
+      const size=lineSize(l,it), roll=lineRoll(l);
       return `<tr><td class="c">${i+1}</td>`+
-        `<td>${esc(it.name||l.itemId)}<div class="sub">${esc(size||l.itemId)}</div></td>`+
+        `<td>${esc(it.name||l.itemId)}<div class="sub">${esc(size||l.itemId)}${roll?" · "+esc(roll):""}</div></td>`+
         `<td class="c">${esc(l.hsn||it.hsn||"—")}</td>`+
         (anyBatch?`<td class="c">${esc(l.batch?batchNo(l.batch):"—")}</td>`:"")+
         /* A PO prints the unit it was PLACED in. A sales line has no unit of
@@ -4635,9 +4660,9 @@
     const hsns=[...new Set((o.lines||[]).map(l=>l.hsn||(ENG.item(l.itemId)||{}).hsn).filter(Boolean))];
     const bank=co.bank||{};
     const rows=(o.lines||[]).map((l,i)=>{ const it=ENG.item(l.itemId)||{};
-      const size=lineSize(l,it);
+      const size=lineSize(l,it), roll=lineRoll(l);
       return `<tr>${i===0?`<td rowspan="${(o.lines||[]).length}" class="marks">${esc(o.marksPkgs||"")}</td>`:""}`+
-        `<td><b>${esc(it.name||l.itemId)}</b><div class="sub">${size?"SIZE: "+esc(size):esc(l.itemId)}${l.batch?" · Batch No. "+esc(batchNo(l.batch)):""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
+        `<td><b>${esc(it.name||l.itemId)}</b><div class="sub">${size?"SIZE: "+esc(size):esc(l.itemId)}${roll?" · "+esc(roll):""}${l.batch?" · Batch No. "+esc(batchNo(l.batch)):""}${l.discPct?" · disc "+l.discPct+"%":""}</div></td>`+
         `<td class="r">${ENG.num(l.qty,2)}</td><td class="r">${F2(l.rate)}</td><td class="r">${F2(l.qty*l.rate*(1-(l.discPct||0)/100))}</td></tr>`; }).join("");
     const exNote=(o.exportNote||"").split("\n").map(s=>s.trim()).filter(Boolean);
     const words=GST.amountInWordsCcy(total, ccy).toUpperCase();

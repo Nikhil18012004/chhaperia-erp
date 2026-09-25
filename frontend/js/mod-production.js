@@ -1147,6 +1147,8 @@
           // width is a slitting parameter, not a material one — it can still be
           // corrected after the run has started, right up to dispatch
           U.field("Tape Width (mm)",`<input class="input" id="we_width" type="number" min="0" step="0.5" placeholder="e.g. 25" value="${esc(wo.widthMM!=null?wo.widthMM:"")}">`),
+          U.field("ID (mm)",`<input class="input" id="we_idmm" type="number" min="0" step="0.5" placeholder="e.g. 76" value="${esc(wo.idMM!=null?wo.idMM:"")}">`),
+          U.field("OD (mm)",`<input class="input" id="we_odmm" type="number" min="0" step="0.5" placeholder="e.g. 300" value="${esc(wo.odMM!=null?wo.odMM:"")}">`),
           /* the line fixes where the job started and what each stage drew, so
              a released order (its stock is issued on release) keeps it */
           started
@@ -1172,6 +1174,8 @@
       async function save(){
         const patch={ id:UI.$("#we_id").value.trim(), due:UI.$("#we_due").value, priority:UI.$("#we_prio").value,
           widthMM:UI.$("#we_width").value===""?null:+UI.$("#we_width").value,
+          idMM:UI.$("#we_idmm").value===""?null:+UI.$("#we_idmm").value,
+          odMM:UI.$("#we_odmm").value===""?null:+UI.$("#we_odmm").value,
           // sent even when empty — that is how a customer is cleared
           customerId:(UI.$("#we_cust")||{}).value||"" };
         if(!patch.id){ toast("Enter a work order number",{type:"warn"}); return; }
@@ -1518,6 +1522,8 @@
           ["Customer", woCustomerName(wo)||h("span",{class:"muted",text:"To stock — no customer named"})],
           ...(it.thicknessMM!=null?[["Thickness",it.thicknessMM+" mm"]]:[]),
           ...(wo.widthMM?[["Tape Width",wo.widthMM+" mm"]]:[]),
+          ...(wo.idMM?[["ID",wo.idMM+" mm"]]:[]),
+          ...(wo.odMM?[["OD",wo.odMM+" mm"]]:[]),
           ...(it.thicknessMM!=null&&wo.widthMM?[["Size",it.thicknessMM+" × "+wo.widthMM+" mm"]]:[]),
           ["Ordered",ENG.num(wo.qty)+" kg"],
           /* On a partial order the ordered figure alone says nothing about
@@ -2035,6 +2041,9 @@
             .concat(custs.map(c=>({v:c.id,l:c.name}))), "", "Search customer, or leave blank…")
           +`<div class="muted" style="font-size:11px;margin-top:4px">Optional — shown on the job card, the label and the production board</div>`,"full"),
         U.field("Tape Width (mm)",`<input class="input" id="w_width" type="number" min="0" step="0.5" placeholder="e.g. 25"><div class="muted" id="w_wnote" style="font-size:11px;margin-top:3px"></div>`),
+        // roll dimensions the order asks for — the core's ID and the roll's OD
+        U.field("ID (mm)",`<input class="input" id="w_id" type="number" min="0" step="0.5" placeholder="e.g. 76">`),
+        U.field("OD (mm)",`<input class="input" id="w_od" type="number" min="0" step="0.5" placeholder="e.g. 300">`),
         /* The width of the ROLL being fed is not asked for. It is a property of
            the material the store issues, not a decision the office makes when
            the order is raised, and the two widths sitting side by side were
@@ -2406,6 +2415,10 @@ recalc(); },50);
           if(rel<qty-1e-6) payload.releaseQty=rel;
         }
         const wmm=+UI.$("#w_width").value; if(wmm>0) payload.widthMM=wmm;
+        const idV=+UI.$("#w_id").value, odV=+UI.$("#w_od").value;
+        if(idV>0) payload.idMM=idV;
+        if(odV>0) payload.odMM=odV;
+        if(idV>0&&odV>0&&odV<=idV){ toast("OD must be larger than ID",{type:"warn"}); return; }
         /* how much comes off the shelf, STORE BY STORE, exactly as typed — an
            empty list included, so the server draws nothing the office did not
            ask for. The half-made pile likewise: blank means none. */
