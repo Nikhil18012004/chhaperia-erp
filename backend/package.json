@@ -12,7 +12,7 @@
     "test:smoke": "node test/smoke.js",
     "test:http": "node test/http.js",
     "test:labels": "node test/label-runs.js && node test/http-labels.js",
-    "test:ui": "node test/ui-boot.js && node test/ui-print.js && node test/ui-text.js",
+    "test:ui": "node test/ui-boot.js && node test/ui-print.js && node test/ui-text.js && node test/ui-sig.js",
     "test:unit": "node test/unit-core.js",
     "test:audit-routes": "node test/http-audit-routes.js",
     "test:audit-rules": "node test/http-audit-rules.js"

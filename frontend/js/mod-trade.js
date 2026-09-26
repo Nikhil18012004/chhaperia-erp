@@ -1819,7 +1819,7 @@
      signature; "" = a saved document that has none, and keeps none */
   function sigHtml(id,cur,coKey,coSelId){
     const v=sigOk(cur!=null?cur:savedSig(coKey))?(cur!=null?cur:savedSig(coKey)):"";
-    return `<div class="sig-pick" data-sig="${esc(id)}" data-cosel="${esc(coSelId||"")}">`
+    return `<div class="sig-pick" data-sig="${esc(id)}" data-cosel="${esc(coSelId||"")}" data-co="${esc(coKey||"")}" data-fresh="${cur==null?"1":"0"}">`
       +`<input type="hidden" id="${esc(id)}" value="${esc(v)}">`
       +`<input type="file" accept="image/*" data-sig-file="${esc(id)}" hidden>`
       +`<div class="sig-prev"${v?"":" hidden"}><img src="${esc(v)}" alt="Signature"></div>`
@@ -1848,9 +1848,10 @@
       rd.readAsDataURL(file);
     });
   }
-  function sigSet(id,v){
+  function sigSet(id,v,byHand){
     const box=document.querySelector(`.sig-pick[data-sig="${id}"]`); if(!box) return;
     v=sigOk(v)?v:"";
+    if(byHand) box.setAttribute("data-touched","1");   // chosen or removed on THIS form: the company no longer decides
     const hid=box.querySelector("input[type=hidden]"); hid.value=v;
     const prev=box.querySelector(".sig-prev"); prev.hidden=!v; prev.querySelector("img").src=v;
     box.querySelector("[data-sig-choose]").textContent=v?"Change picture\u2026":"Choose picture\u2026";
@@ -1869,15 +1870,32 @@
     const c=t.closest("[data-sig-choose]");
     if(c){ const f=document.querySelector(`input[data-sig-file="${c.getAttribute("data-sig-choose")}"]`); if(f) f.click(); return; }
     const r=t.closest("[data-sig-remove]");
-    if(r) sigSet(r.getAttribute("data-sig-remove"),"");
+    if(r) sigSet(r.getAttribute("data-sig-remove"),"",true);
   });
   document.addEventListener("change",async(e)=>{
+    /* THE SIGNATURE FOLLOWS THE BILLING COMPANY. The picker is seeded from the
+       company the form opened on; when the desk picks another company it shows
+       THAT company's remembered signature — unless a picture was chosen or
+       removed by hand on this form, or a saved document carries a picture of
+       its own that is not simply the old company's remembered one. */
+    const sel=e.target;
+    if(sel&&sel.id&&!(sel.matches&&sel.matches("input[data-sig-file]"))){
+      document.querySelectorAll(`.sig-pick[data-cosel="${sel.id}"]`).forEach(box=>{
+        const prev=box.getAttribute("data-co")||"", next=String(sel.value||"");
+        if(prev===next) return;
+        box.setAttribute("data-co",next);
+        if(box.getAttribute("data-touched")==="1") return;
+        const cur=(box.querySelector("input[type=hidden]")||{}).value||"";
+        if(box.getAttribute("data-fresh")==="1"||(cur&&cur===savedSig(prev))) sigSet(box.getAttribute("data-sig"),savedSig(next));
+      });
+      return;
+    }
     const f=e.target; if(!(f&&f.matches&&f.matches("input[data-sig-file]"))) return;
     const id=f.getAttribute("data-sig-file"), file=f.files&&f.files[0]; f.value="";
     if(!file) return;
     try{
       const v=await sigShrink(file);
-      sigSet(id,v);
+      sigSet(id,v,true);
       const box=f.closest(".sig-pick"), coSel=box&&box.getAttribute("data-cosel")?UI.$("#"+box.getAttribute("data-cosel")):null;
       rememberSig(coSel?coSel.value:"",v);
       toast("Signature added \u2014 it prints above \u201cAuthorised Signatory\u201d",{type:"ok"});
