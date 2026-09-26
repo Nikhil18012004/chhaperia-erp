@@ -28,17 +28,13 @@
    ============================================================ */
 "use strict";
 const repo = require("../db/repository");
+const N = require("./numbering");
 
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
 function num(v) { return v == null || v === "" || isNaN(+v) ? null : +v; }
 function todayISO() { const x = new Date(); const p = (n) => String(n).padStart(2, "0"); return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`; }
 
 /* ---- next sequential id from existing rows ---- */
-function nextId(list, prefix, width) {
-  let max = 0;
-  (list || []).forEach((x) => { const m = /(\d+)\s*$/.exec(String((x && x.id) || "")); if (m) max = Math.max(max, +m[1]); });
-  return prefix + String(max + 1).padStart(width || 3, "0");
-}
 
 /* ============================================================
    PARAMETER CATALOG — single source of truth (shared shape with
@@ -247,7 +243,7 @@ async function createProduct(p) {
     /* no id asked for — configure the placeholder where it stands, so nothing
        already pointing at it has to be re-pointed */
     if (stub) return await repo.putLabProduct(Object.assign({}, prod, { id: stub.id, auto: false }));
-    prod.id = nextId(await listProducts(), "LP-");
+    prod.id = await N.nextId("labProduct", await listProducts(), "LP-", 3);
   } else if (await repo.getLabProduct(prod.id)) throw err("Product " + prod.id + " already exists", 409);
   else if (stub) await repo.deleteLabProduct(stub.id);
   return await repo.putLabProduct(prod);
@@ -394,7 +390,7 @@ async function buildReport(body, existing, user) {
   const graded = hasLab ? labGraded : prodGraded;
 
   return {
-    id: base.id || body.id || nextId(await listReports(), "LR-", 4),
+    id: base.id || body.id || await N.nextId("labReport", await listReports(), "LR-", 4),
     productId: product.id,
     productCode: product.code,
     productName: product.name,

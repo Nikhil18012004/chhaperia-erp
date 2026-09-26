@@ -14,6 +14,7 @@
    ============================================================ */
 "use strict";
 const repo = require("../db/repository");
+const N = require("./numbering");
 const erp = require("./erpService");
 const GT = require("./grnTestService");
 const LAB = require("./labService");
@@ -23,11 +24,6 @@ function err(msg, status) { const e = new Error(msg); e.status = status || 400; 
 function str(v, n) { return v == null ? "" : String(v).trim().slice(0, n || 200); }
 function num(v) { return v == null || v === "" || isNaN(+v) ? null : +v; }
 function todayISO() { const x = new Date(); const p = (n) => String(n).padStart(2, "0"); return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`; }
-function nextId(list, prefix) {
-  let max = 0;
-  (list || []).forEach((x) => { const m = /(\d+)\s*$/.exec(String((x && x.id) || "")); if (m) max = Math.max(max, +m[1]); });
-  return prefix + String(max + 1).padStart(4, "0");
-}
 
 /* ---- the item ---- */
 const ITEM_FIELDS = ["name", "cat", "uom", "reorder", "safety", "lead", "cost", "price", "hsn", "gstRate", "barcode",
@@ -319,7 +315,7 @@ async function propose(kind, payload, user) {
   const clean = await K.validate(payload);
   if (kind === "item" && await repo.getItem(clean.item.id)) throw err("Item " + clean.item.id + " already exists", 409);
   const ap = {
-    id: nextId(await repo.getApprovals(), "AP-"), kind, payload,
+    id: await N.nextId("approval", await repo.getApprovals(), "AP-", 4), kind, payload,
     summary: summaryOf(kind, clean), status: "Pending",
     by: (user && user.username) || "", byRole: (user && user.role) || "", at: new Date().toISOString(),
     decidedBy: "", decidedAt: null, note: "", result: null,

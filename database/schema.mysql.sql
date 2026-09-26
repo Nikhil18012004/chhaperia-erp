@@ -455,3 +455,12 @@ CREATE TABLE IF NOT EXISTS `approvals` (
   `doc` JSON         NOT NULL,           -- kind,payload{},summary,status,by,at,decidedBy,decidedAt,note,result
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;
+
+-- Document number series: one row per kind of document (po, so, wo, grn:26-27, …)
+-- holding the last number handed out. Taken under a row lock in
+-- repository.nextNumber() so two saves at the same moment never share a number.
+CREATE TABLE IF NOT EXISTS `counters` (
+  `series` VARCHAR(48)  NOT NULL,
+  `n`      INT          NOT NULL,
+  PRIMARY KEY (`series`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;

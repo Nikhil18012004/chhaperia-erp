@@ -133,6 +133,22 @@ async function run() {
   ok("the bulk save drops an attribute-breaking signature too",
     (await call("GET", "/state", A)).d.salesorders.find((x) => x.id === soSig.id).sigImg === "");
 
+  /* TWO CLERKS PRESS SAVE AT THE SAME MOMENT. A number used to be "the biggest
+     on file plus one", read by the request that needed it, so simultaneous
+     creates shared a number and the later save silently overwrote the earlier.
+     Every series is now taken under a lock (repository.nextNumber). */
+  {
+    const par = (n, f) => Promise.all(Array.from({ length: n }, (_, i) => f(i)));
+    const rs = await par(6, () => call("POST", "/sales-orders", A, { customerId: cust, lines: [{ itemId: fg, qty: 1, rate: 1 }] }));
+    const ids = rs.filter((r) => r.status === 201).map((r) => r.d.id);
+    const onFile = (await call("GET", "/state", A)).d.salesorders.filter((s) => ids.includes(s.id)).length;
+    ok("6 simultaneous sales orders get 6 distinct numbers and 6 records", new Set(ids).size === 6 && onFile === 6,
+      JSON.stringify(ids) + " — " + onFile + " on file");
+    const ls = await par(6, (i) => call("POST", "/leads", A, { company: "Race Co " + i }));
+    const lids = ls.filter((r) => r.status === 201).map((r) => r.d.id);
+    ok("…and so do 6 simultaneous CRM leads", new Set(lids).size === 6, JSON.stringify(lids));
+  }
+
   /* Sheet goods — fabric, film, mica tape — are bought to a THICKNESS, and the
      supplier cannot fill the order without it. It is set per LINE, because the
      thickness this order needs is not always the one the item master carries. */

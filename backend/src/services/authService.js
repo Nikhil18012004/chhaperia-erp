@@ -219,7 +219,7 @@ async function createUserAccount({ username, name, role, area, password }) {
   if (!VALID_ROLES.includes(role)) throw httpErr("Invalid role", 400);
   if (role === "supervisor" && !VALID_AREAS.includes(area)) throw httpErr("Supervisor needs a valid area", 400);
   if (await users.findByUsername(username)) throw httpErr("Username already exists", 409);
-  if (!password || String(password).length < 4) throw httpErr("Password must be at least 4 characters", 400);
+  if (!password || String(password).length < 8) throw httpErr("Password must be at least 8 characters", 400);
   const id = "U-" + crypto.randomBytes(4).toString("hex").toUpperCase();
   return await users.createUser({
     id, username, name: name || username, role,
@@ -229,17 +229,38 @@ async function createUserAccount({ username, name, role, area, password }) {
 }
 
 async function updateUserAccount(id, patch) {
+  const cur = await users.findById(id);
+  if (!cur) throw httpErr("User not found", 404);
   const out = {};
   if (patch.name != null) out.name = patch.name;
   if (patch.role != null) {
     if (!VALID_ROLES.includes(patch.role)) throw httpErr("Invalid role", 400);
     out.role = patch.role;
   }
+  /* A supervisor is the supervisor OF somewhere — the area is what the floor
+     login shows and what the boards are scoped by — so a supervisor without
+     one, or with an area the plant does not have, is refused. Any other role
+     has no area. */
   if (patch.area !== undefined) out.area = patch.area || null;
+  const role = out.role || cur.role;
+  if (role === "supervisor") {
+    const area = "area" in out ? out.area : cur.area;
+    if (!VALID_AREAS.includes(area)) throw httpErr("Supervisor needs a valid area (" + VALID_AREAS.join(", ") + ")", 400);
+  } else if ("area" in out) out.area = null;
   if (patch.active != null) out.active = !!patch.active;
   if (patch.password) {
-    if (String(patch.password).length < 4) throw httpErr("Password must be at least 4 characters", 400);
+    /* the same floor a self-service change has: a 4-letter password set by
+       the admin is exactly as weak as one the person chose */
+    if (String(patch.password).length < 8) throw httpErr("Password must be at least 8 characters", 400);
     out.pass = hashPassword(patch.password);
+  }
+  /* THE LAST ADMIN STAYS AN ADMIN. Demoting or switching off the only active
+     administrator locks everybody out of Users & Access, payroll reopen, the
+     spec limits and every ruling — and no session left could undo it. */
+  const stillAdmin = (out.role || cur.role) === "admin" && (out.active != null ? out.active : cur.active !== false);
+  if (cur.role === "admin" && cur.active !== false && !stillAdmin) {
+    const others = (await users.listUsers()).filter((u) => u.id !== id && u.role === "admin" && u.active !== false);
+    if (!others.length) throw httpErr("This is the only active administrator — make someone else an admin first", 400);
   }
   const u = await users.updateUser(id, out);
   if (!u) throw httpErr("User not found", 404);

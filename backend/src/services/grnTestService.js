@@ -37,6 +37,7 @@
    ============================================================ */
 "use strict";
 const repo = require("../db/repository");
+const N = require("./numbering");
 
 let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
@@ -275,11 +276,6 @@ function missingParams(values, params) {
   });
 }
 
-function nextId(list) {
-  let max = 0;
-  (list || []).forEach((x) => { const m = /(\d+)\s*$/.exec(String((x && x.id) || "")); if (m) max = Math.max(max, +m[1]); });
-  return "GT-" + String(max + 1).padStart(4, "0");
-}
 
 /* ============================================================
    THE MATERIAL MASTER SIDE (admin)
@@ -456,7 +452,7 @@ async function submitTest(grnId, body, user) {
      decision belongs to the reading it was made on. */
   const priorDecision = existing && existing.result === graded.result ? (existing.decision || "") : "";
   const test = {
-    id: (existing && existing.id) || nextId(await repo.getGrnTests()),
+    id: (existing && existing.id) || await N.nextId("grnTest", await repo.getGrnTests(), "GT-", 4),
     grnId, itemId,
     poId: grn.poId || "", supplierId: grn.supplierId || "",
     itemName: item.name || line.name || itemId,

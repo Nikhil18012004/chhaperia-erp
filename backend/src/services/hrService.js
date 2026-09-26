@@ -18,6 +18,7 @@
    ============================================================ */
 "use strict";
 const repo = require("../db/repository");
+const N = require("./numbering");
 
 function err(msg, status) { const e = new Error(msg); e.status = status || 400; return e; }
 const pad = (n) => String(n).padStart(2, "0");
@@ -27,11 +28,6 @@ function num(v) { return v == null || v === "" || isNaN(+v) ? 0 : +v; }
 function round(v, d = 2) { const p = Math.pow(10, d); return Math.round((+v || 0) * p) / p; }
 
 /* ---- next sequential id from existing rows ---- */
-function nextId(list, prefix, width = 4) {
-  let max = 0;
-  (list || []).forEach((x) => { const m = /(\d+)\s*$/.exec(String((x && x.id) || "")); if (m) max = Math.max(max, +m[1]); });
-  return prefix + String(max + 1).padStart(width, "0");
-}
 
 /* ============================================================
    CONFIG — merged over defaults, stored in settings.hr
@@ -143,7 +139,7 @@ async function listWorkers() { return (await repo.getState()).hrWorkers; }
 async function createWorker(w) {
   w = w || {};
   if (!w.name) throw err("Worker needs a name", 400);
-  if (!w.id) w.id = nextId((await repo.getState()).hrWorkers, "EMP-");
+  if (!w.id) w.id = await N.nextId("worker", (await repo.getState()).hrWorkers, "EMP-", 4);
   else if (await repo.getWorker(w.id)) throw err("Worker " + w.id + " already exists", 409);
   if (w.deviceUid && await repo.getWorkerByDevice(w.deviceUid) && (await repo.getWorkerByDevice(w.deviceUid)).id !== w.id)
     throw err("Device id " + w.deviceUid + " is already mapped to another worker", 409);
@@ -293,7 +289,7 @@ async function applyLeave(l) {
   if (!working) throw err("Those dates fall on the weekly off — Sunday is not a leave day", 400);
   // a caller may state fewer days than the span (a half day), never more
   const days = l.days != null ? Math.min(num(l.days), working) : working;
-  const lv = { id: l.id || nextId((await repo.getState()).hrLeaves, "LV-"), workerId: l.workerId, type: l.type,
+  const lv = { id: l.id || await N.nextId("leave", (await repo.getState()).hrLeaves, "LV-", 4), workerId: l.workerId, type: l.type,
     fromDate: l.fromDate, toDate: l.toDate, days, status: l.status || "Pending",
     reason: l.reason || null, appliedOn: l.appliedOn || todayISO() };
   return await repo.putLeave(lv);

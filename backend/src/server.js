@@ -24,6 +24,7 @@ const PORT = process.env.PORT || 4000;
 const FRONTEND_DIR = path.join(__dirname, "..", "..", "frontend");
 
 const app = express();
+app.disable("x-powered-by");   // no server banner
 /* EVERYTHING that leaves this server is gzipped, and it has to be first in the
    chain to catch both the API and the static frontend.
    The plant does not browse this from the machine it runs on — it comes in over
@@ -36,6 +37,17 @@ const app = express();
    The default threshold (1 KB) leaves small replies alone, where the CPU spent
    compressing would cost more than the bytes saved. */
 app.use(compression());
+/* Browser-side hardening on every reply, at no cost: the page may not be
+   framed by another site (a click-jacked "Approve" button is still an
+   approval), and nothing is MIME-sniffed into a script. A script CSP is not
+   set — the app is inline-script heavy — so this stays to what is free. */
+app.use((req, res, next) => {
+  res.set("X-Frame-Options", "SAMEORIGIN");
+  res.set("Content-Security-Policy", "frame-ancestors 'self'");
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("Referrer-Policy", "same-origin");
+  next();
+});
 // Lab test-certificate uploads carry embedded images and keep the old 25 MB
 // allowance; everything else gets a tight 1 MB body cap (the JSON payloads
 // are small — a huge body anywhere else is an attack, not a feature).
@@ -90,6 +102,8 @@ app.get("/api/fx/pair", (req, res, next) => {
 app.use("/api/hr", hrRoutes);
 // API (protected, role-scoped)
 app.use("/api", apiRoutes);
+// an unknown API path is a JSON 404, never the HTML shell served as if it were data
+app.use("/api", (req, res) => res.status(404).json({ error: "No such API route: " + req.method + " " + req.path }));
 
 // Never cache the HTML shell, so bumped script ?v= URLs always take effect
 // (browsers were reusing a stale index.html that still pointed at old JS).
@@ -234,6 +248,14 @@ async function boot() {
 }
 
 const server = app.listen(PORT);
+/* A port that cannot be opened is fatal. Without this the process logged the
+   EADDRINUSE and then carried on to print its banner as if it were serving —
+   a second copy started by mistake looked exactly like the one that works. */
+server.on("error", (e) => {
+  console.error("\n  Chhaperia ERP could not start:\n  " + (e && e.code === "EADDRINUSE"
+    ? "port " + PORT + " is already in use — is the ERP already running?" : (e && e.message)) + "\n");
+  process.exit(1);
+});
 
 /* Exported so the tests can wait for the schema, the migrations and the seed
    to be in place before they ask the API for anything. A failure here is

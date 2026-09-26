@@ -211,7 +211,7 @@ async function saveState(data) {
 
     for (const t of ["movements", "work_orders", "sales_orders", "purchase_orders",
       "boms", "items", "suppliers", "customers", "warehouses", "categories",
-      "leads", "org", "settings", "meta"]) {
+      "leads", "org", "settings", "meta", "counters"]) {
       await x.run("DELETE FROM `" + t + "`");
     }
 
@@ -1163,7 +1163,34 @@ async function hrIsEmpty(x0) {
   return Number(await x.val("SELECT COUNT(*) AS `c` FROM `hr_workers`")) === 0;
 }
 
-module.exports = { getState, saveState, isEmpty, updateSettings, getWorkOrder, putWorkOrder, onHandOf, onHandAt,
+/* ---------- DOCUMENT NUMBER SERIES ----------
+   One row per series (`po`, `so`, `wo`, `grn:26-27`, …) holding the last
+   number handed out. A taker locks the row, moves it past both the row and
+   the floor it was given (the biggest number the caller saw on file), and
+   leaves with that number — so two takers queue instead of both reading
+   "the biggest plus one". See services/numbering.js for the why. */
+async function nextNumber(series, floor, x0) {
+  const take = async (x) => {
+    const cur = await x.val("SELECT `n` FROM `counters` WHERE `series`=? FOR UPDATE", [series]);
+    const n = Math.max(+cur || 0, +floor || 0) + 1;
+    if (cur === undefined) await x.run("INSERT INTO `counters`(`series`,`n`) VALUES(?,?)", [series, n]);
+    else await x.run("UPDATE `counters` SET `n`=? WHERE `series`=?", [n, series]);
+    return n;
+  };
+  if (x0) return await take(x0);   // inside the caller's transaction: the lock rides with it
+  /* the first two takers of a brand-new series can collide on the INSERT (a
+     gap lock lets both in); the loser simply takes again */
+  for (let attempt = 0; ; attempt++) {
+    try { return await withTx(take); }
+    catch (e) {
+      const code = (e && e.code) || "";
+      if (attempt < 5 && (code === "ER_DUP_ENTRY" || code === "ER_LOCK_DEADLOCK" || code === "ER_LOCK_WAIT_TIMEOUT")) continue;
+      throw e;
+    }
+  }
+}
+
+module.exports = { getState, saveState, isEmpty, updateSettings, nextNumber, getWorkOrder, putWorkOrder, onHandOf, onHandAt,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getGrns, putGrn, insertGrn, getGrn,
   getGrnTests, getGrnTest, getGrnTestFor, putGrnTest, deleteGrnTest,

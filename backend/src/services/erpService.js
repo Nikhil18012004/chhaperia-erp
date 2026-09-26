@@ -6,6 +6,7 @@
    ============================================================ */
 "use strict";
 const repo = require("../db/repository");
+const N = require("./numbering");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const HR = require("./hrService");
@@ -629,12 +630,8 @@ async function nextGrnNo(dateISO, x) {
   const [y, m] = String(dateISO).split("-").map(Number);
   const startYY = (m >= 4 ? y : y - 1) % 100;
   const fy = String(startYY).padStart(2, "0") + "-" + String((startYY + 1) % 100).padStart(2, "0");
-  let max = 0;
-  (await repo.getGrns(x)).forEach((g) => {
-    const match = new RegExp("^GRN/" + fy + "/(\\d+)$").exec(String(g.id || ""));
-    if (match) max = Math.max(max, +match[1]);
-  });
-  return "GRN/" + fy + "/" + String(max + 1).padStart(4, "0");
+  // one series per financial year, taken inside the receipt's own transaction
+  return await N.nextId("grn:" + fy, await repo.getGrns(x), "GRN/" + fy + "/", 4, x);
 }
 const strOr = (v, n) => (v == null ? "" : String(v).slice(0, n || 80));
 
@@ -767,14 +764,6 @@ async function receiveInTx(x, poId, body, user) {
 }
 
 /* collision-free sequential id from the highest numeric suffix in use. */
-function nextId(list, prefix) {
-  let max = 0, width = 3;
-  (list || []).forEach((x) => {
-    const m = /(\d+)\s*$/.exec(String((x && x.id) || ""));
-    if (m) { max = Math.max(max, +m[1]); width = Math.max(width, m[1].length); }
-  });
-  return prefix + String(max + 1).padStart(width, "0");
-}
 function num(v) { return v == null || v === "" || isNaN(+v) ? 0 : +v; }
 
 /* ---- referential checks shared by both order types ----
@@ -821,7 +810,7 @@ async function createPurchaseOrder(po) {
   if (!await repo.getSupplier(po.supplierId)) throw err("Unknown supplier " + po.supplierId, 400);
   await assertLinesReferenceRealItems(po.lines, "purchase order");
   await assertLinesAreBought(po.lines, []);
-  if (!po.id) po.id = nextId((await repo.getState()).purchaseorders, "PO-");
+  if (!po.id) po.id = await N.nextId("po", (await repo.getState()).purchaseorders, "PO-");
   else if (await repo.getPurchaseOrder(po.id)) throw err("Purchase order " + po.id + " already exists", 409);
   po.date = po.date || todayISO();
   po.status = po.status || "Open";
@@ -906,7 +895,7 @@ async function createSalesOrder(so) {
   if (!await repo.getCustomer(so.customerId)) throw err("Unknown customer " + so.customerId, 400);
   await assertLinesReferenceRealItems(so.lines, "sales order");
   await assertBatchesAreFree(so.lines, so.id);
-  if (!so.id) so.id = nextId((await repo.getState()).salesorders, "SO-");
+  if (!so.id) so.id = await N.nextId("so", (await repo.getState()).salesorders, "SO-");
   else if (await repo.getSalesOrder(so.id)) throw err("Sales order " + so.id + " already exists", 409);
   so.date = so.date || todayISO();
   so.status = so.status || "Confirmed";
@@ -1119,7 +1108,7 @@ async function deleteBom(itemId) {
 async function createLead(lead) {
   lead = lead || {};
   if (!lead.company) throw err("A lead needs a company", 400);
-  if (!lead.id) lead.id = nextId((await repo.getState()).leads, "LD-");
+  if (!lead.id) lead.id = await N.nextId("lead", (await repo.getState()).leads, "LD-");
   else if (await repo.getLead(lead.id)) throw err("Lead " + lead.id + " already exists", 409);
   lead.stage = lead.stage || "New";
   lead.created = lead.created || todayISO();
@@ -1171,7 +1160,7 @@ async function deleteCustomer(id) {
 async function createSupplier(s) {
   s = s || {};
   if (!s.name) throw err("Supplier needs a name", 400);
-  if (!s.id) s.id = nextId((await repo.getState()).suppliers, "SUP-");
+  if (!s.id) s.id = await N.nextId("supplier", (await repo.getState()).suppliers, "SUP-");
   else if (await repo.getSupplier(s.id)) throw err("Supplier " + s.id + " already exists", 409);
   return await repo.putSupplier(s);
 }
@@ -1276,7 +1265,7 @@ async function createAppointment(a) {
   if (!a.title) throw err("An appointment needs a title", 400);
   if (!a.date) throw err("An appointment needs a date", 400);
   if (a.kind && !APPT_KINDS.includes(a.kind)) throw err("Unknown appointment kind " + a.kind, 400);
-  if (!a.id) a.id = nextId((await repo.getState()).appointments, "AP-");
+  if (!a.id) a.id = await N.nextId("appointment", (await repo.getState()).appointments, "AP-");
   else if (await repo.getAppointment(a.id)) throw err("Appointment " + a.id + " already exists", 409);
   a.kind = a.kind || "Meeting";
   a.created = a.created || todayISO();
@@ -1319,7 +1308,7 @@ async function createComplaint(c, user) {
   // nextId reads its zero-padding from the ids already present; with none it
   // falls back to three digits, so the very first complaint would be CMP-001
   // and every later one four wide. Seed the width instead.
-  if (!c.id) c.id = nextId((st.complaints || []).length ? st.complaints : [{ id: "CMP-0000" }], "CMP-");
+  if (!c.id) c.id = await N.nextId("complaint", st.complaints, "CMP-", 4);
   else if (await repo.getComplaint(c.id)) throw err("Complaint " + c.id + " already exists", 409);
   c.batch = normBatch(c.batch);
   if (c.batch && !(st.workorders || []).some((w) => w.id === c.batch))
@@ -1484,7 +1473,7 @@ async function createQuotation(body, user) {
   const date = body.date || todayISO();
   const q = {
     // seeded so the very first id is four digits wide, not QTN-001
-    id: nextId((st.quotations || []).length ? st.quotations : [{ id: "QTN-0000" }], "QTN-"),
+    id: await N.nextId("quotation", st.quotations, "QTN-", 4),
     date, leadId: lead ? lead.id : "", customerId,
     company: lead ? lead.company : (((st.customers || []).find((c) => c.id === customerId) || {}).name || ""),
     itemId, productName: item.name || itemId,
@@ -1664,7 +1653,7 @@ async function closeQuotesOfLead(lead, outcome, user) {
 async function createTransporter(t) {
   t = t || {};
   if (!t.name) throw err("Transporter needs a name", 400);
-  if (!t.id) t.id = nextId((await repo.getState()).transporters, "TR-");
+  if (!t.id) t.id = await N.nextId("transporter", (await repo.getState()).transporters, "TR-");
   else if (await repo.getTransporter(t.id)) throw err("Transporter " + t.id + " already exists", 409);
   if (t.active == null) t.active = true;
   return await repo.putTransporter(t);
@@ -1725,7 +1714,7 @@ module.exports = { getState, saveState, updateSettings, reset, ensureStageModel,
   saveBom, deleteBom, ensureWipsForBoms, createLead, updateLead, deleteLead,
   upsertCustomer, updateCustomer, deleteCustomer,
   createSupplier, updateSupplier, deleteSupplier, updateOrg, ensureCompanies,
-  deleteItem, deleteWorkOrder, nextId, updateWarehouse,
+  deleteItem, deleteWorkOrder, updateWarehouse,
   createTransporter, updateTransporter, deleteTransporter, ensureDispatch,
   createAppointment, updateAppointment, deleteAppointment, APPT_KINDS,
   createComplaint, updateComplaint, deleteComplaint, batchSpread, CMP_STATUS,

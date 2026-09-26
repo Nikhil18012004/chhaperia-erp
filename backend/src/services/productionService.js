@@ -14,6 +14,7 @@
    ============================================================ */
 "use strict";
 const repo = require("../db/repository");
+const N = require("./numbering");
 const { buildSeed } = require("../seed/seed");
 const S = require("./stageService");
 const LAB = require("./labService");
@@ -938,10 +939,8 @@ async function createWorkOrder(user, body) {
     }
   }
 
-  // next WO id
-  let max = 0;
-  (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
-  const id = "WO-" + String(max + 1).padStart(4, "0");
+  // next WO id — from the locked series, so two clerks never share a number
+  const id = await N.nextId("wo", data.workorders, "WO-", 4);
 
   // the line follows the route: a job that must be produced starts on its
   // owner's RM line, otherwise it lands on a slitting line
@@ -1475,12 +1474,11 @@ async function createAdhocProduction(user, body) {
   if (!(data.warehouses || []).some((w) => w.id === wh)) throw err("Choose a valid store", 400);
 
   // a routed WO so the run shows on the same boards as planned work
-  let max = 0;
-  (data.workorders || []).forEach((w) => { const m = /(\d+)/.exec(w.id || ""); if (m) max = Math.max(max, +m[1]); });
+  const woId = await N.nextId("wo", data.workorders, "WO-", 4);
   const now = new Date().toISOString();
   const line = lineForItem(item, data, body.line, { qty: kg });
   const wo = {
-    id: "WO-" + String(max + 1).padStart(4, "0"),
+    id: woId,
     date: todayISO(), itemId: item.id, qty: kg, status: "Released",
     due: null, line, progress: 0, priority: "Normal",
     route: S.freshRoute({ line, itemId: item.id, qty: kg }, data), stageIdx: 0, legacy: false,
