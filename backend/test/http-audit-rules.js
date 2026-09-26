@@ -105,8 +105,11 @@ async function run() {
   /* ============================================================ */
   section("C. A shipped order stays shipped");
   {
-    await call("POST", "/items", A, { id: "FG-AU-C1", name: "Audit shipped tape", cat: "FG", uom: "KG", cost: 50, price: 100 });
-    await call("POST", "/movements", A, { itemId: "FG-AU-C1", type: "GRN", qty: 100, wh: "WH-FG", manual: true });
+    /* finished stock is booked through Production → Add to Finished Stock — a
+       finished good is never received like a raw material (10 Sep ruling) */
+    await rm("RM-AU-C0", { "WH-PNY": 1000 });
+    await fg("FG-AU-C1", [["RM-AU-C0", 1]], { name: "Audit shipped tape" });
+    await call("POST", "/production/finished", A, Object.assign({ itemId: "FG-AU-C1", qty: 100, wh: "WH-FG" }, LOT("LOT-C1")));
     const so = (await call("POST", "/sales-orders", O, { customerId: cust0, lines: [{ itemId: "FG-AU-C1", qty: 10, rate: 100 }] })).d;
     await call("POST", "/sales-orders/" + so.id + "/dispatch", O, {});
     ok("dispatch takes 10 out", Math.abs((await stock("FG-AU-C1")) - 90) < 1e-6);
@@ -320,7 +323,7 @@ async function run() {
     const b0 = await stock("RM-AU-H3");
     await par(4, () => call("POST", "/purchase-orders/" + poX.id + "/receive", O, { wh: "WH-PNY", lines: [{ i: 0, qty: 100 }] }));
     ok("four simultaneous receipts of the same 100-unit order book 100, not 400", Math.abs((await stock("RM-AU-H3")) - b0 - 100) < 1e-6, (await stock("RM-AU-H3")) - b0);
-    await call("POST", "/movements", A, { itemId: "FG-AU-H3", type: "GRN", qty: 50, wh: "WH-FG", manual: true });
+    await call("POST", "/production/finished", A, Object.assign({ itemId: "FG-AU-H3", qty: 50, wh: "WH-FG" }, LOT("LOT-H3")));
     const soX = (await call("POST", "/sales-orders", O, { customerId: cust0, lines: [{ itemId: "FG-AU-H3", qty: 10, rate: 1 }] })).d;
     const f0 = await stock("FG-AU-H3");
     await par(4, () => call("POST", "/sales-orders/" + soX.id + "/dispatch", O, {}));

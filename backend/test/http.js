@@ -149,6 +149,29 @@ async function run() {
     ok("…and so do 6 simultaneous CRM leads", new Set(lids).size === 6, JSON.stringify(lids));
   }
 
+  /* STOCK HAS A FLOOR IN EVERY STORE, AN ORDER'S VALUE IS ITS LINES, AND A
+     STATUS IS EARNED. */
+  {
+    await call("POST", "/items", A, { id: "RM-FLOOR-T", name: "Floor test resin", cat: "RM", uom: "KG", cost: 10 });
+    await call("POST", "/movements", A, { itemId: "RM-FLOOR-T", type: "GRN", qty: 10, wh: "WH-PNY", manual: true, note: "seed" });
+    ok("an issue from a store that holds none of the material is refused, though another store has it",
+      (await call("POST", "/movements", A, { itemId: "RM-FLOOR-T", type: "ISSUE", qty: -1, wh: "WH-WIP" })).status === 400);
+    ok("…and the same issue from the store that holds it posts",
+      (await call("POST", "/movements", A, { itemId: "RM-FLOOR-T", type: "ISSUE", qty: -1, wh: "WH-PNY" })).status === 201);
+    const v1 = (await call("POST", "/sales-orders", A, { customerId: cust, value: 1, lines: [{ itemId: fg, qty: 10, rate: 100 }] })).d;
+    ok("a sales order's value is worked out from its lines, not taken from the browser", v1.value === 1000, v1.value);
+    ok("a negative rate on a sales line is refused",
+      (await call("POST", "/sales-orders", A, { customerId: cust, lines: [{ itemId: fg, qty: 1, rate: -5 }] })).status === 400);
+    ok("a status of Dispatched cannot be typed onto an order — only Dispatch earns it",
+      (await call("PATCH", "/sales-orders/" + v1.id, A, { status: "Dispatched" })).status === 409);
+    await call("POST", "/items", A, { id: "RM-FLOOR-U", name: "Floor test hardener", cat: "RM", uom: "KG", cost: 10 });
+    const poR = (await call("POST", "/purchase-orders", A, { supplierId: sup, eta: "2026-08-01", lines: [{ itemId: "RM-FLOOR-U", qty: 5, rate: 1, recd: 0 }] })).d;
+    await call("POST", "/purchase-orders/" + poR.id + "/receive", A, { wh: "WH-PNY", lines: [{ i: 0, qty: 5 }] });
+    await call("POST", "/movements", A, { itemId: "RM-FLOOR-U", type: "ISSUE", qty: -3, wh: "WH-PNY", note: "used" });
+    ok("a purchase order whose delivery has been drawn on cannot be deleted (the store would go below zero)",
+      (await call("DELETE", "/purchase-orders/" + poR.id, A)).status === 409);
+  }
+
   /* Sheet goods — fabric, film, mica tape — are bought to a THICKNESS, and the
      supplier cannot fill the order without it. It is set per LINE, because the
      thickness this order needs is not always the one the item master carries. */
@@ -1846,7 +1869,11 @@ async function run() {
 
   /* ---- supervisor floor actions ---- */
   section("Floor actions: return + unplanned production");
+  // a return puts back what was issued, so the issue comes first
+  await call("POST", "/movements", A, { itemId: "RM-HTTP", type: "GRN", qty: 5, wh: "WH-PNY", manual: true, note: "seed for the return" });
+  await call("POST", "/movements", A, { itemId: "RM-HTTP", type: "ISSUE", qty: -5, wh: "WH-PNY", note: "issued to the floor" });
   const ret = await call("POST", "/production/return", C, { itemId: "RM-HTTP", qty: 5, reason: "unused issue" });
+  ok("…but no more than was issued", (await call("POST", "/production/return", C, { itemId: "RM-HTTP", qty: 1, reason: "never issued" })).status === 400);
   ok("supervisor can return material to store", ret.status === 201 && ret.d.movement.type === "RET" && ret.d.movement.qty === 5);
   ok("return rejects a zero quantity", (await call("POST", "/production/return", C, { itemId: "RM-HTTP", qty: 0 })).status === 400);
   const adhoc = await call("POST", "/production/adhoc", C, { itemId: fg, rolls: 2, lengthM: 1000, widthMM: 1000, gsm: 100 });

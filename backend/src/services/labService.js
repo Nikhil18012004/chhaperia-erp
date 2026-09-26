@@ -94,7 +94,13 @@ function specKeys(product) {
 function cleanSpec(spec) {
   const out = {};
   if (spec && typeof spec === "object") {
-    Object.keys(spec).forEach((k) => { if (hasLimit(spec[k])) out[k] = spec[k]; });
+    // a limit is stored as {min, max, nominal} in that order, whatever order it arrived in
+    Object.keys(spec).forEach((k) => {
+      if (!hasLimit(spec[k])) return;
+      const o = {};
+      ["min", "max", "nominal"].forEach((f) => { if (spec[k][f] != null && spec[k][f] !== "") o[f] = spec[k][f]; });
+      out[k] = o;
+    });
   }
   return out;
 }
@@ -239,6 +245,14 @@ async function createProduct(p) {
   const prod = normalizeProduct(p);
   /* the placeholder every finished good is given makes way for the real thing */
   const stub = prod.itemId && !prod.auto ? await placeholderForItem(prod.itemId, prod.id) : null;
+  /* ONE ITEM, ONE LAB PRODUCT. A second configured product for an item that
+     already has one would leave the floor sheet and the coating gate reading
+     whichever the list held first. */
+  if (prod.itemId && !prod.auto) {
+    const other = (await listProducts()).find((p) => p.itemId === prod.itemId && !p.auto && p.id !== prod.id);
+    if (other) throw err(prod.itemId + " already has a configured lab product (" + other.id + (other.name ? " — " + other.name : "")
+      + "). Edit that one instead of raising a second.", 409);
+  }
   if (!prod.id) {
     /* no id asked for — configure the placeholder where it stands, so nothing
        already pointing at it has to be re-pointed */
@@ -248,10 +262,13 @@ async function createProduct(p) {
   else if (stub) await repo.deleteLabProduct(stub.id);
   return await repo.putLabProduct(prod);
 }
-async function updateProduct(id, patch) {
+async function updateProduct(id, patch, user) {
   const existing = await repo.getLabProduct(id);
   if (!existing) throw err("Product not found", 404);
-  const merged = Object.assign({}, existing, patch || {}, { id });
+  patch = Object.assign({}, patch || {});
+  // the LIMITS are the admin's (PUT /spec is admin-only); an edit by anyone else keeps the spec it had
+  if ("spec" in patch && !(user && user.role === "admin")) delete patch.spec;
+  const merged = Object.assign({}, existing, patch, { id });
   return await repo.putLabProduct(normalizeProduct(merged));
 }
 async function deleteProduct(id) {
@@ -349,6 +366,15 @@ function sourceForUser(user) {
 
 async function buildReport(body, existing, user) {
   body = body || {};
+  if (typeof body !== "object" || Array.isArray(body)) throw err("A certificate is an object with productId, refNo and values", 400);
+  ["values", "labValues", "prodValues", "flags"].forEach((k) => {
+    if (body[k] != null && (typeof body[k] !== "object" || Array.isArray(body[k]))) throw err(k + " must be an object of parameter readings", 400);
+  });
+  ["productId", "refNo", "reportDate", "source", "woId"].forEach((k) => {
+    if (body[k] != null && typeof body[k] === "object") throw err(k + " must be text", 400);
+  });
+  if (body.reportDate != null && body.reportDate !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.reportDate)))
+    throw err("reportDate must be YYYY-MM-DD", 400);
   const product = await repo.getLabProduct(body.productId);
   if (!product) throw err("Unknown product " + (body.productId || ""), 400);
   // Prefer the report's own type toggles (the entry form can override the

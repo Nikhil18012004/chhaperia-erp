@@ -224,7 +224,12 @@ async function saveLeaveType(t) {
   if (!t || !t.id) throw err("Leave type needs an id/code", 400);
   return await repo.putLeaveType(Object.assign({ name: t.id }, t));
 }
-async function deleteLeaveType(id) { return await repo.deleteLeaveType(id); }
+async function deleteLeaveType(id) {
+  if (!await repo.getLeaveType(id)) throw err("Leave type not found", 404);
+  const used = ((await repo.getState()).hrLeaves || []).filter((l) => l.type === id).length;
+  if (used) throw err("Cannot delete this leave type: " + used + " leave(s) are filed under it. Re-type or delete those first.", 400);
+  return await repo.deleteLeaveType(id);
+}
 
 function daysBetween(from, to) { return eachDate(from, to).length; }
 /* A Sunday inside a leave is nobody's leave day: it was the weekly off anyway.

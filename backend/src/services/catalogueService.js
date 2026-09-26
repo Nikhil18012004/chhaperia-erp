@@ -85,6 +85,8 @@ function cleanBom(raw) {
   if (raw.mode === "create") {
     const lines = cleanBomLines(raw.lines);
     if (!lines.length) throw err("The recipe needs at least one component with a quantity", 400);
+    // the form labels every quantity "Qty per kg" — and that is how the line is read
+    lines.forEach((l) => { l.basis = "kg"; });
     return { mode: "create", yield: cleanYield(raw.yield), lines };
   }
   if (raw.mode === "append") {
@@ -184,7 +186,7 @@ async function applyNewItem(payload, user) {
   } else if (p.bom && p.bom.mode === "append") {
     const b = await repo.getBom(p.bom.productId);
     const lines = (b.lines || []).slice();
-    const line = { id: item.id, rm: item.name, qty: p.bom.qty, unit: p.bom.unit,
+    const line = { id: item.id, rm: item.name, qty: p.bom.qty, unit: p.bom.unit, basis: "kg",   // "quantity per kg of product"
       pickupPct: p.bom.pickupPct == null ? null : p.bom.pickupPct };
     /* REPLACING KEEPS THE LINE WHERE IT STOOD. A line's position is its layer,
        and a coating line that jumped to the end of the list would be computed
@@ -257,8 +259,12 @@ async function labProductFrom(item, tests, lab) {
   const existing = await LAB.productForItem(item.id);
   if (existing) {
     const own = (existing.params || []).filter((p) => p && p.key && !custom.some((c) => c.key === p.key)).concat(custom);
-    return await LAB.updateProduct(existing.id, { params: own, spec: Object.assign({}, existing.spec || {}, spec),
-      thickness: item.thicknessMM != null ? String(item.thicknessMM) : existing.thickness, gsm: item.gsm != null ? item.gsm : existing.gsm });
+    /* applied AS ADMIN: a direct entry here came from admin or office, and a
+       proposal reaching this point has been approved by an admin — the limits
+       are the admin's to set, and this is the admin setting them. The
+       placeholder is configured by this, so it stops being one. */
+    return await LAB.updateProduct(existing.id, { params: own, spec: Object.assign({}, existing.spec || {}, spec), auto: false,
+      thickness: item.thicknessMM != null ? String(item.thicknessMM) : existing.thickness, gsm: item.gsm != null ? item.gsm : existing.gsm }, { role: "admin" });
   }
   const lp = Object.assign({ name: item.name, code: item.typeCode || item.id.replace(/^FG-/, ""),
     thickness: item.thicknessMM != null ? String(item.thicknessMM) : "", series: item.group || item.series || "", gsm: item.gsm },

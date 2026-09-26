@@ -99,6 +99,36 @@ function assertNoNegativeStock(moves, data, itemsById) {
   }
 }
 
+/* The same floor, read from the database under the caller's lock rather
+   than from a snapshot — what two simultaneous saves need. */
+async function assertNoNegativeStockLive(moves, itemsById, data, x) {
+  const wantItem = {}, wantWh = {};
+  (moves || []).forEach((m) => {
+    const q = +m.qty || 0;
+    if (q >= 0) return;
+    wantItem[m.itemId] = (wantItem[m.itemId] || 0) + (-q);
+    if (m.wh) { const per = wantWh[m.itemId] || (wantWh[m.itemId] = {}); per[m.wh] = (per[m.wh] || 0) + (-q); }
+  });
+  const r3 = (v) => +(+v).toFixed(3);
+  const nameOf = (id) => ((itemsById || {})[id] || {}).name || id;
+  const uomOf = (id) => ((itemsById || {})[id] || {}).uom || "";
+  for (const id of Object.keys(wantItem)) {
+    const have = await repo.onHandOf(id, x);
+    if (wantItem[id] > have + 1e-6)
+      throw err("Cannot issue " + r3(wantItem[id]) + " " + uomOf(id) + " of " + nameOf(id)
+        + " — only " + r3(have) + " is in the store now (another order took the rest a moment ago). "
+        + "Stock cannot go below zero.", 409);
+    for (const wh of Object.keys(wantWh[id] || {})) {
+      const there = await repo.onHandAt(id, wh, x);
+      if (wantWh[id][wh] > there + 1e-6) {
+        const w = ((data || {}).warehouses || []).find((s) => s.id === wh) || {};
+        throw err("Cannot issue " + r3(wantWh[id][wh]) + " " + uomOf(id) + " of " + nameOf(id)
+          + " from " + (w.name || wh) + " — it holds " + r3(there) + " now. Stock cannot go below zero in a store.", 409);
+      }
+    }
+  }
+}
+
 let _mvSeq = 0;
 function mvId() { return "MV-" + Date.now().toString(36).toUpperCase() + "-" + (++_mvSeq).toString(36).toUpperCase(); }
 const r2 = (n) => Math.round((+n || 0) * 100) / 100;
@@ -754,7 +784,23 @@ async function updateWorkOrder(user, id, body) {
     if (newId.length > 24) throw err("Work order number is too long", 400);
     if (newId !== wo.id) {
       if ((data.workorders || []).some((w) => w.id === newId)) throw err("Work order " + newId + " already exists", 409);
-      await repo.renameWorkOrder(wo.id, newId);
+      const oldId = wo.id;
+      await repo.renameWorkOrder(oldId, newId);
+      /* THE NUMBER IS THE BATCH. The certificate filed against it and the
+         sales-order lines that ship it follow the new number — or the job
+         reaches the floor unmeasured and the order can no longer dispatch. */
+      const batchNo = (v) => String(v || "").replace(/^WO[\s-]*/i, "") || String(v || "");
+      for (const r of (data.labReports || [])) {
+        if (String(r.woId || "") !== oldId) continue;
+        r.woId = newId;
+        if (String(r.refNo || "") === batchNo(oldId) || String(r.refNo || "") === oldId) r.refNo = batchNo(newId);
+        await repo.putLabReport(r);
+      }
+      for (const s of (data.salesorders || [])) {
+        if (!(s.lines || []).some((l) => l && l.batch === oldId)) continue;
+        s.lines.forEach((l) => { if (l && l.batch === oldId) l.batch = newId; });
+        await repo.putSalesOrder(s);
+      }
       wo.id = newId;
     }
   }
@@ -1014,14 +1060,36 @@ async function createWorkOrder(user, body) {
         todayISO(), data.movements, held)) moves.push(m);
     }
   }
-  if (moves.length) { assertNoNegativeStock(moves, data, itemsById); await repo.addMovements(moves); }
+  if (moves.length) assertNoNegativeStock(moves, data, itemsById);
   (wo.route || []).forEach((r) => { r.posted = true; });
   wo.stockPosted = true;
   wo.stockPostedAt = new Date().toISOString();
-
   wo.status = S.rollupStatus(wo);
-  await repo.putWorkOrder(wo);
-  return summarize(wo, data);
+  /* ---- the write, under a lock per material ----
+     The snapshot check above is what the office saw; it is not what the store
+     holds by the time the write lands. Five orders raised together against
+     100 kg each read 100 kg and each issued 30. So the materials this job
+     draws are locked, the on-hand is read again under that lock, and the
+     issues and the order land in one transaction — or none of it does. */
+  const drawn = [...new Set(moves.filter((m) => +m.qty < 0).map((m) => m.itemId))];
+  if (drawn.length) await repo.ensureLockRows(drawn);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await repo.withTx(async (x) => {
+        if (drawn.length) {
+          await repo.lockItems(drawn, x);
+          await assertNoNegativeStockLive(moves, itemsById, data, x);
+        }
+        if (moves.length) await repo.addMovements(moves, x);
+        await repo.putWorkOrder(wo, x);
+        return summarize(wo, data);
+      });
+    } catch (e) {
+      // a deadlock is the database asking one of two writers to go again, not a refusal
+      if (attempt < 3 && e && (e.code === "ER_LOCK_DEADLOCK" || e.code === "ER_LOCK_WAIT_TIMEOUT")) continue;
+      throw e;
+    }
+  }
 }
 
 /* ============================================================
@@ -1185,6 +1253,8 @@ async function produceFinished(user, body) {
     note: (isWip ? "Work in process added at " : "Finished stock added at ") + warehouse.name
       + (tapeWidth ? " · " + tapeWidth + " mm tape width" : "") + labTag, by });
 
+  // the same floor as every other issue — a booking short of raw is refused, not posted negative
+  assertNoNegativeStock(moves, data, itemsById);
   await repo.addMovements(moves);
 
   /* The parameters the form collected belong to the ITEM — the tape width a
@@ -1262,7 +1332,7 @@ async function recordExcessMaterial(user, body) {
   const isOffice = user.role === "admin" || user.role === "office";
   if (!isOffice && user.role !== "supervisor") throw err("Forbidden", 403);
   body = body || {};
-  const lines = Array.isArray(body.lines) ? body.lines : [];
+  const lines = (Array.isArray(body.lines) ? body.lines : []).map((l) => (l && typeof l === "object" && !Array.isArray(l)) ? l : {});
   if (!lines.length) throw err("Add at least one material to justify", 400);
 
   const data = await fullState();
@@ -1423,6 +1493,20 @@ async function returnStock(user, body) {
   if (!item) throw err("Unknown material", 400);
   const qty = +body.qty;
   if (!qty || qty <= 0) throw err("Enter a valid quantity", 400);
+  if (!isFinite(qty) || qty > 1e9) throw err("A quantity of " + body.qty + " is not plausible — check the figure.", 400);
+  /* A RETURN PUTS BACK WHAT WAS ISSUED — no more. Without that bound the floor
+     could "return" a million kilos of something never drawn, and the ledger
+     held it. And a finished good is never a return: what comes off the line
+     goes through Add to Finished Stock, with its batch and its lab readings,
+     or it does not enter the store at all. */
+  if (item.cat === "FG")
+    throw err((item.name || item.id) + " is production output — book it through Add to Finished Stock, with the batch "
+      + "number and the lab readings. A return cannot go round the store door.", 409);
+  const issued = (data.movements || []).filter((m) => m.itemId === item.id && m.type === "ISSUE").reduce((s, m) => s - (+m.qty || 0), 0);
+  const returned = (data.movements || []).filter((m) => m.itemId === item.id && m.type === "RET").reduce((s, m) => s + (+m.qty || 0), 0);
+  if (qty > issued - returned + 1e-6)
+    throw err("Only " + (+(issued - returned).toFixed(3)) + " " + (item.uom || "") + " of " + (item.name || item.id)
+      + " was issued and not yet returned — " + qty + " cannot come back.", 400);
 
   // default the destination from the material's own category
   const isFinished = item.cat === "FG";
@@ -1486,7 +1570,6 @@ async function createAdhocProduction(user, body) {
     createdBy: user.username, createdAt: now,
   };
   wo.status = S.rollupStatus(wo);
-  await repo.putWorkOrder(wo);
 
   const ref = "AP-" + Date.now().toString(36).toUpperCase();
   // the run's output is NOT stocked (same rule as every stage) — only the
@@ -1518,6 +1601,15 @@ async function createAdhocProduction(user, body) {
     });
     deducted = consumed.length > 0;
   }
+  /* the same floor as every other issue: a run the store cannot cover is
+     refused before anything — the work order included — is written */
+  assertNoNegativeStock(moves, data, Object.fromEntries((data.items || []).map((i) => [i.id, i])));
+  /* the materials are issued HERE, once; the stages the board then walks
+     through are marked posted so completing them cannot draw them again */
+  (wo.route || []).forEach((r) => { r.posted = true; });
+  wo.stockPosted = true;
+  wo.stockPostedAt = now;
+  await repo.putWorkOrder(wo);
   await repo.addMovements(moves);
 
   return {

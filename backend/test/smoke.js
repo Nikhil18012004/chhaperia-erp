@@ -305,12 +305,16 @@ try {
     ok("an imported worker survives", !!wk && wk.dailyRate === 700);
     ok("an imported attendance row survives", (back.hrAttendance || []).some((a) => a.id === "EMP-SMOKE:2026-08-06"));
 
-    // NEGATIVE 1: dropping a row from the payload must really delete it —
-    // otherwise "save" is a merge and a deletion would silently come back.
+    // The save MERGES (2026-09-26): dropping a row from the payload leaves it on
+    // file — a stale browser copy can no longer erase what another screen did.
+    // Only the admin's restore (replace) rewrites everything.
     const pruned = await repo.getState();
     pruned.transporters = pruned.transporters.filter((t) => t.id !== "TR-SMOKE");
     await erp.saveState(pruned);
-    ok("removing a transporter from the payload deletes it",
+    ok("removing a transporter from the payload does NOT delete it (the save merges)",
+      (await repo.getState()).transporters.some((t) => t.id === "TR-SMOKE"));
+    await erp.saveState(pruned, { replace: true });
+    ok("…the restore (replace) does",
       !(await repo.getState()).transporters.some((t) => t.id === "TR-SMOKE"));
 
     // NEGATIVE 2: a payload that never mentions the collection must leave it

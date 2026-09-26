@@ -194,6 +194,11 @@
          recipe but not of every run: some customers want the print, some do
          not. It is EXCLUDED unless the order says otherwise - see resolve(). */
       optional: !!l.optional,
+      /* THE BASIS THE LINE WAS WRITTEN IN. The recipe sheet states a quantity
+         per 1000 m² batch; the New Item form and the join-a-recipe box state
+         it per kg of product. A line that says which it is keeps that word,
+         and toLegacy() reads it before anything the product implies. */
+      basis: l.basis === "kg" || l.basis === "batch" ? l.basis : null,
       legacy: false,
     };
   }
@@ -373,7 +378,10 @@
     meta = meta || bom.meta || {};
     var lines = resolve(bom, choices || {});
     var c = compute({ lines: lines }, meta);
-    var perUnitBasis = String(meta.basis || bom.basis || "").toLowerCase() === "batch" || !!c.fgKgPerBatch;
+    /* per batch when the product carries a GSM (the sheet's convention) — unless
+       the LINE says per kg: the per-kg editors write that, and a plain
+       [id, qty] tuple is per kg by definition */
+    var bomBasis = (String(meta.basis || bom.basis || "").toLowerCase() === "batch" || !!c.fgKgPerBatch) ? "batch" : "kg";
     var look = typeof items === "function"
       ? items
       : function (id) { return items ? items[id] : null; };
@@ -386,7 +394,8 @@
         var conv = convertQty(qty, from, to, rm);
         if (conv != null) qty = conv;
       }
-      var per = (perUnitBasis && c.fgKgPerBatch) ? qty / c.fgKgPerBatch : qty;
+      var basis = l.legacy ? "kg" : (l.basis || bomBasis);
+      var per = (basis === "batch" && c.fgKgPerBatch) ? qty / c.fgKgPerBatch : qty;
       return [l.id, per];
     }).filter(function (x) { return x && x[1] > 0; });
   }

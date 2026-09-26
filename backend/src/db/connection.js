@@ -305,24 +305,38 @@ function wrap(e, cfg) {
    the pool for ordinary work, and to a single connection inside a
    transaction — same shape either way, so repository functions do
    not care which one they were handed. */
+/* mysql2 refuses `undefined` as a bind value, which surfaced as a 500 to the
+   caller whenever a document simply lacked a field. A field that is not there
+   is SQL NULL, and that is what it becomes here. */
+function bindable(params) {
+  if (params == null) return [];
+  if (Array.isArray(params)) return params.map((v) => (v === undefined ? null : v));
+  if (typeof params === "object") {
+    const o = {};
+    for (const k of Object.keys(params)) o[k] = params[k] === undefined ? null : params[k];
+    return o;
+  }
+  return params;
+}
 function executor(target) {
+  const q = (sql, params) => target.execute(sql, bindable(params));
   return {
-    async all(sql, params) { const [rows] = await target.execute(sql, params || []); return rows; },
+    async all(sql, params) { const [rows] = await q(sql, params); return rows; },
     async one(sql, params) {
-      const [rows] = await target.execute(sql, params || []);
+      const [rows] = await q(sql, params);
       return rows.length ? rows[0] : undefined;
     },
     /* better-sqlite3 had .pluck(): the first column of the first row, which
        is what a lookup for one scalar wants. This is that. */
     async val(sql, params) {
-      const [rows] = await target.execute(sql, params || []);
+      const [rows] = await q(sql, params);
       if (!rows.length) return undefined;
       const r = rows[0];
       const k = Object.keys(r)[0];
       return k === undefined ? undefined : r[k];
     },
     async run(sql, params) {
-      const [res] = await target.execute(sql, params || []);
+      const [res] = await q(sql, params);
       return { affectedRows: res.affectedRows, insertId: res.insertId };
     },
   };

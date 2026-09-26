@@ -581,6 +581,8 @@ async function putPurchaseOrder(p, x0) {
 async function deletePurchaseOrder(id) {
   await withTx(async (x) => {
     await x.run("DELETE FROM `movements` WHERE `ref`=?", [id]);
+    // a failed lot of this delivery that was moved to quarantine goes with it — nothing of the delivery stays anywhere
+    await x.run("DELETE FROM `movements` WHERE `type`='XFER' AND `ref` IN (SELECT `id` FROM `grns` WHERE `doc`->>'$.poId'=?)", [id]);
     await x.run("UPDATE `grns` SET `doc`=JSON_SET(`doc`,'$.status','Cancelled') " +
       "WHERE `doc`->>'$.poId'=?", [id]);
     await x.run("DELETE FROM `purchase_orders` WHERE `id`=?", [id]);
@@ -1163,6 +1165,49 @@ async function hrIsEmpty(x0) {
   return Number(await x.val("SELECT COUNT(*) AS `c` FROM `hr_workers`")) === 0;
 }
 
+/* ---------- THE MERGING SAVE ----------
+   Every row the payload carries is written over the row of the same id;
+   rows on file that the payload does not mention are left alone; ledger
+   history is only ever added to. What the browser's whole-copy save (the
+   Excel import) needs, where saveState() above is a restore. */
+async function mergeState(d) {
+  const n = {};
+  const each = async (key, list, fn) => { let c = 0; for (const row of list || []) { if (row) { await fn(row); c++; } } if (c) n[key] = c; };
+  await withTx(async (x) => {
+    if (d.org && typeof d.org === "object") await putOrg(d.org, x);
+    await each("categories", d.categories, (c) => x.run(
+      "INSERT INTO `categories`(`id`,`name`,`kind`) VALUES(:id,:name,:kind) AS `new` ON DUPLICATE KEY UPDATE `name`=`new`.`name`, `kind`=`new`.`kind`",
+      { id: c.id, name: c.name, kind: c.kind || null }));
+    await each("warehouses", d.warehouses, (w) => putWarehouse(w, x));
+    await each("suppliers", d.suppliers, (s) => putSupplier(s, x));
+    await each("customers", d.customers, (c) => putCustomer(c, x));
+    await each("transporters", d.transporters, (t) => putTransporter(t, x));
+    await each("items", d.items, (i) => putItem(i, x));
+    for (const [itemId, b] of Object.entries(d.boms || {})) { if (b) { await putBom(itemId, b, x); n.boms = (n.boms || 0) + 1; } }
+    const known = new Set((await x.all("SELECT `id` FROM `movements`")).map((r) => r.id));
+    const fresh = (d.movements || []).filter((m) => m && m.id && !known.has(m.id));
+    if (fresh.length) { await addMovements(fresh, x); n.movements = fresh.length; }
+    await each("workorders", d.workorders, (w) => putWorkOrder(w, x));
+    await each("salesorders", d.salesorders, (s) => putSalesOrder(s, x));
+    await each("purchaseorders", d.purchaseorders, (p) => putPurchaseOrder(p, x));
+    await each("leads", d.leads, (l) => putLead(l, x));
+    await each("appointments", d.appointments, (a) => putAppointment(a, x));
+    await each("complaints", d.complaints, (c) => putComplaint(c, x));
+    await each("quotations", d.quotations, (q) => putQuotation(q, x));
+    await each("grns", d.grns, (g) => putGrn(g, x));
+    await each("grnTests", d.grnTests, (t) => putGrnTest(t, x));
+    await each("labProducts", d.labProducts, (p) => putLabProduct(p, x));
+    await each("labReports", d.labReports, (r) => putLabReport(r, x));
+    await each("hrWorkers", d.hrWorkers, (w) => putWorker(w, x));
+    await each("hrLeaveTypes", d.hrLeaveTypes, (t) => putLeaveType(t, x));
+    await each("hrLeaves", d.hrLeaves, (l) => putLeave(l, x));
+    await each("hrAttendance", d.hrAttendance, (a) => putAttendance(a, x));
+    await each("hrPayruns", d.hrPayruns, (p) => putPayrun(p, x));
+    await each("hrPayslips", d.hrPayslips, (p) => putPayslip(p, x));
+  });
+  return { ok: true, merged: n };
+}
+
 /* ---------- DOCUMENT NUMBER SERIES ----------
    One row per series (`po`, `so`, `wo`, `grn:26-27`, …) holding the last
    number handed out. A taker locks the row, moves it past both the row and
@@ -1190,7 +1235,28 @@ async function nextNumber(series, floor, x0) {
   }
 }
 
-module.exports = { getState, saveState, isEmpty, updateSettings, nextNumber, getWorkOrder, putWorkOrder, onHandOf, onHandAt,
+/* ---------- PER-MATERIAL LOCKS ----------
+   A row per material in `counters` (`lock:<itemId>`; n is unused) that a
+   stock-drawing write locks FOR UPDATE inside its transaction, so two writes
+   against the same material queue and the second reads what the first left.
+   Rows are taken in sorted order, so two writers never deadlock on each
+   other's materials. */
+/* The rows are made OUTSIDE the transaction that will lock them (autocommit,
+   INSERT IGNORE). Made inside it, the duplicate check took a SHARED lock on
+   the row for every waiting transaction at once, and the FOR UPDATE that
+   followed deadlocked them against each other (three of six simultaneous
+   work orders answered 500). A committed row takes a plain exclusive lock. */
+async function ensureLockRows(ids) {
+  const x = await ex(null);
+  for (const id of [...new Set(ids || [])])
+    await x.run("INSERT IGNORE INTO `counters`(`series`,`n`) VALUES(?,0)", ["lock:" + id]);
+}
+async function lockItems(ids, x) {
+  for (const id of [...new Set(ids || [])].sort())
+    await x.val("SELECT `n` FROM `counters` WHERE `series`=? FOR UPDATE", ["lock:" + id]);
+}
+
+module.exports = { getState, saveState, mergeState, isEmpty, updateSettings, nextNumber, ensureLockRows, lockItems, getWorkOrder, putWorkOrder, onHandOf, onHandAt,
   addMovements, addMovement, getItem, putItem, getPurchaseOrder, putPurchaseOrder,
   deletePurchaseOrder, getGrns, putGrn, insertGrn, getGrn,
   getGrnTests, getGrnTest, getGrnTestFor, putGrnTest, deleteGrnTest,

@@ -91,20 +91,32 @@ function cleanDocSig(d) {
   return d;
 }
 
-async function saveState(data) {
+async function saveState(data, opts) {
+  opts = opts || {};
+  const replace = !!opts.replace;
   if (!data || typeof data !== "object") throw err("Invalid dataset", 400);
   const arrays = ["items", "movements", "warehouses", "categories", "suppliers",
     "customers", "purchaseorders", "salesorders", "workorders", "leads", "grns"];
   for (const k of arrays) {
     if (data[k] != null && !Array.isArray(data[k])) throw err(`Invalid dataset: ${k} must be an array`, 400);
   }
-  if (!Array.isArray(data.items) || !Array.isArray(data.movements)) {
+  if (replace && (!Array.isArray(data.items) || !Array.isArray(data.movements))) {
     throw err("Invalid dataset: items[] and movements[] are required", 400);
   }
+  data.items = data.items || []; data.movements = data.movements || [];
   (data.purchaseorders || []).forEach(cleanDocSig);
   (data.salesorders || []).forEach(cleanDocSig);
+  /* THE SAVE MERGES. The browser sends its whole copy of the data (the Excel
+     import lands here), and the database used to be wiped and rewritten from
+     it — so a receipt posted from another screen while the import dialog was
+     open was gone, and a partial sheet erased every collection it left out.
+     Now every row sent is written over the row of the same id, rows already
+     on file that the payload does not mention are left alone, and ledger
+     history is only ever added to. A restore from a backup is the one time
+     the old behaviour is wanted: admin, with ?replace=1. */
+  const current = replace ? { items: [] } : await repo.getState();
   // referential integrity: every movement must reference a known item
-  const itemIds = new Set(data.items.map((i) => i && i.id));
+  const itemIds = new Set(data.items.map((i) => i && i.id).concat((current.items || []).map((i) => i && i.id)));
   const orphan = data.movements.find((m) => m && m.itemId && !itemIds.has(m.itemId));
   if (orphan) throw err(`Movement ${orphan.id || ""} references unknown item ${orphan.itemId}`, 400);
   /* A TRANSFER IS A PAIR. The movements endpoint refuses a lone XFER leg (it
@@ -131,7 +143,7 @@ async function saveState(data) {
   }
   // the same finished-goods rule the movements endpoint applies, for NEW rows
   // only — the stock-take import lands here
-  const itemById = new Map(data.items.map((i) => [i && i.id, i]));
+  const itemById = new Map((current.items || []).concat(data.items).map((i) => [i && i.id, i]));
   for (const m of data.movements) {
     if (!m || known.has(m.id)) continue;
     const upErr = fgAdjustUpError(m, itemById.get(m.itemId));
@@ -141,7 +153,11 @@ async function saveState(data) {
   S.ensureStageModel(data);
   // pay is monthly only — an imported sheet may still carry daily rates
   if (Array.isArray(data.hrWorkers)) data.hrWorkers.forEach((w) => { if (w) HR.normalizeWorker(w); });
-  return await repo.saveState(data);
+  if (replace) return await repo.saveState(data);
+  const out = await repo.mergeState(data);
+  // settings go through the whitelist, never wholesale (the signatures rule, the label library, …)
+  if (data.settings && typeof data.settings === "object" && !Array.isArray(data.settings)) await updateSettings(data.settings);
+  return out;
 }
 
 /** Patch the UI settings document — whitelist known keys, coerce types, and
@@ -457,6 +473,32 @@ function isoOf(x) {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 }
 function todayISO() { return isoOf(new Date()); }
+/* A date on a ledger entry is YYYY-MM-DD, a real calendar day, and not off in
+   the future: an entry dated 2026-13-45 or 2099 is a typo that would sort every
+   report wrongly for ever. Up to a year ahead is allowed (an ETA, a post-dated
+   receipt); beyond that is refused. */
+function isoDateOrThrow(v, what) {
+  const s = String(v == null ? "" : v).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+  if (!d || d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3])
+    throw err("The " + (what || "date") + " must be a real day written as YYYY-MM-DD (got \"" + s.slice(0, 20) + "\")", 400);
+  if (+m[1] < 2000) throw err("The " + (what || "date") + " " + s + " is before 2000 — check the year.", 400);
+  const limit = new Date(); limit.setFullYear(limit.getFullYear() + 1);
+  if (d > limit) throw err("The " + (what || "date") + " " + s + " is more than a year away — check the year.", 400);
+  return s;
+}
+/* A GSTIN is 15 characters and the last is a check digit (mod 36 over the
+   first 14, weights 1 and 2 alternating), so a typo is caught here rather than
+   printed on every invoice. Mirrors frontend/js/gst.js. */
+const GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+function validGSTIN(g) {
+  g = String(g || "").trim().toUpperCase();
+  if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z][ZC][0-9A-Z]$/.test(g)) return false;
+  let sum = 0;
+  for (let i = 0; i < 14; i++) { const p = GSTIN_CHARS.indexOf(g[i]) * (i % 2 ? 2 : 1); sum += Math.floor(p / 36) + (p % 36); }
+  return GSTIN_CHARS[(36 - (sum % 36)) % 36] === g[14];
+}
 /* an ISO date moved by n days (negative goes back), in local time like todayISO */
 function addDays(iso, n) {
   const d = new Date(String(iso || todayISO()) + "T00:00:00");
@@ -474,14 +516,22 @@ function err(msg, status) { const e = new Error(msg); e.status = status || 400; 
 
 /** Create or update one stock item. Partial fields are merged over the
     existing row (so a PATCH never nulls out omitted columns). */
-async function upsertItem(item) {
+async function upsertItem(item, opts) {
+  opts = opts || {};
   if (!item || !item.id) throw err("Item id is required", 400);
   const existing = await repo.getItem(item.id);
+  if (!existing && opts.mustExist) throw err("Item " + item.id + " not found", 404);
   if (!existing && !item.name) throw err("New item needs a name", 400);
+  if (!existing && !item.cat) throw err("New item needs a category (RM, PKG, CON, WIP or FG)", 400);
   const merged = existing ? Object.assign({}, existing, item) : Object.assign({}, item);
-  // coerce numeric columns so a stringy "42" never lands in a REAL column
+  // coerce numeric columns so a stringy "42" never lands in a REAL column —
+  // and none of them can be negative: a cost below zero is a typo, not a price
   ["cost", "price", "reorder", "safety", "lead"].forEach((k) => {
-    if (merged[k] != null && merged[k] !== "") merged[k] = +merged[k] || 0;
+    if (merged[k] != null && merged[k] !== "") {
+      if (isNaN(+merged[k]) || !isFinite(+merged[k])) throw err(k + " must be a number", 400);
+      merged[k] = +merged[k];
+      if (merged[k] < 0) throw err(k + " cannot be negative", 400);
+    }
   });
   // fail fast on a bad category instead of leaking a raw FK-violation 500
   if (merged.cat && !await repo.categoryExists(merged.cat)) throw err("Unknown category " + merged.cat, 400);
@@ -524,9 +574,12 @@ const MOVE_OUTBOUND = ["ISSUE", "SALE", "SCRAP"];
 
 async function addMovement(m) {
   if (!m || !m.itemId || !m.type) throw err("Movement needs itemId and type", 400);
-  if (m.qty == null || isNaN(+m.qty)) throw err("Movement needs a numeric qty", 400);
+  if (m.qty == null || isNaN(+m.qty) || !isFinite(+m.qty)) throw err("Movement needs a numeric qty", 400);
   if (!MOVE_TYPES.includes(m.type)) throw err("Invalid movement type '" + m.type + "'", 400);
   const q = +m.qty;
+  // no shelf holds a billion of anything; a figure that size is a slip of the keyboard
+  if (Math.abs(q) > 1e9) throw err("A quantity of " + q + " is not plausible — check the figure.", 400);
+  if (m.date != null && m.date !== "") m.date = isoDateOrThrow(m.date, "movement date");
   if (q < 0 && MOVE_INBOUND.includes(m.type))
     throw err("A " + m.type + " movement brings stock IN, so its quantity cannot be negative. "
       + "Use an adjustment (ADJ) to write stock off.", 400);
@@ -589,15 +642,6 @@ async function addMovement(m) {
     // a correction nobody can explain is what an audit asks about first
     if (!String(m.note || "").trim()) throw err("An adjustment needs a reason.", 400);
     if (!(Math.abs(q) > 1e-9)) throw err("An adjustment of zero changes nothing.", 400);
-    /* The item-wide floor below cannot see a store going negative while
-       another store still holds stock — an ADJ names its store, so it is
-       floored there. */
-    if (q < 0 && m.wh) {
-      const there = await repo.onHandAt(m.itemId, m.wh);
-      if (-q > there + 1e-6)
-        throw err((mvItem.name || m.itemId) + " in " + m.wh + " holds only " + +there.toFixed(3) + " "
-          + (mvItem.uom || "") + ", so it cannot be adjusted by " + +q.toFixed(3) + ". Stock cannot go below zero.", 400);
-    }
     // the reference is the server's, so two adjustments never share one
     if (!m.id) m.id = mvId();
     if (!m.ref) m.ref = "ADJ-" + m.id;
@@ -614,6 +658,16 @@ async function addMovement(m) {
       throw err("This would take " + (mvItem.name || m.itemId) + " to "
         + +(have + q).toFixed(3) + " " + (mvItem.uom || "") + ". Only " + +have.toFixed(3)
         + " is on hand, and stock cannot go below zero.", 400);
+    /* …and the floor is per STORE, not per item: an issue or a write-off
+       names the store it comes out of, and that store must hold it. The
+       item-wide figure alone let an ISSUE from the wrong store post cleanly
+       (the WIP store read −30 while the raw store still held 100). */
+    if (m.wh) {
+      const there = await repo.onHandAt(m.itemId, m.wh);
+      if (-q > there + 1e-6)
+        throw err((mvItem.name || m.itemId) + " in " + m.wh + " holds only " + +there.toFixed(3) + " "
+          + (mvItem.uom || "") + ", so " + +(-q).toFixed(3) + " cannot come out of it. Stock cannot go below zero in a store.", 400);
+    }
   }
   m.qty = +m.qty;
   if (m.rate != null && m.rate !== "") m.rate = +m.rate || 0;
@@ -668,6 +722,7 @@ const strOr = (v, n) => (v == null ? "" : String(v).slice(0, n || 80));
    one's work; the single transaction is what makes the three writes land or
    vanish together. */
 async function receivePurchaseOrder(poId, body, user) {
+  if (body && body.date != null && body.date !== "") body.date = isoDateOrThrow(body.date, "receipt date");
   return await repo.withTx(async (x) => receiveInTx(x, poId, body, user));
 }
 async function receiveInTx(x, poId, body, user) {
@@ -778,7 +833,20 @@ async function assertLinesReferenceRealItems(lines, what) {
     if (!id) throw err("Every " + what + " line needs a material", 400);
     if (!await repo.getItem(id)) throw err("Unknown item " + id, 400);
     if (num(l.qty) <= 0) throw err("Line quantity for " + id + " must be greater than zero", 400);
+    if (l.rate != null && l.rate !== "" && (isNaN(+l.rate) || +l.rate < 0))
+      throw err("The rate for " + id + " cannot be negative", 400);
+    if (l.discPct != null && l.discPct !== "" && (isNaN(+l.discPct) || +l.discPct < 0 || +l.discPct > 100))
+      throw err("The discount for " + id + " must be between 0 and 100%", 400);
   }
+}
+/* AN ORDER'S VALUE IS ITS LINES. The browser used to send whatever figure it
+   had worked out and the server kept it — so a value of ₹1 could sit on a
+   ₹1,000 order. The server's figure is the lines' taxable total (quantity ×
+   rate, less the line discount); the printed document works its own tax on
+   top of the same lines. */
+function linesValue(lines) {
+  const v = (lines || []).reduce((s, l) => s + num(l.qty) * num(l.rate) * (1 - Math.min(100, Math.max(0, num(l.discPct))) / 100), 0);
+  return Math.round(v * 100) / 100;
 }
 
 /* ---- A PURCHASE ORDER BUYS MATERIAL ------------------------------------
@@ -814,7 +882,7 @@ async function createPurchaseOrder(po) {
   else if (await repo.getPurchaseOrder(po.id)) throw err("Purchase order " + po.id + " already exists", 409);
   po.date = po.date || todayISO();
   po.status = po.status || "Open";
-  po.value = num(po.value) || po.lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0);
+  po.value = linesValue(po.lines);   // the server's figure, never the browser's
   return await repo.putPurchaseOrder(po);
 }
 /* ⚠ An order that has taken delivery of anything is CLOSED to edits.
@@ -843,10 +911,34 @@ async function updatePurchaseOrder(id, patch) {
     throw err("Unknown supplier " + merged.supplierId, 400);
   await assertLinesReferenceRealItems(merged.lines, "purchase order");
   await assertLinesAreBought(merged.lines, existing.lines);
+  merged.value = linesValue(merged.lines);
   return await repo.putPurchaseOrder(merged);
 }
 async function deletePurchaseOrder(id) {
-  if (!await repo.getPurchaseOrder(id)) throw err("Purchase order not found", 404);
+  const po = await repo.getPurchaseOrder(id);
+  if (!po) throw err("Purchase order not found", 404);
+  /* Deleting an order takes its receipts out of the ledger with it — which is
+     right while the delivery is still on the shelf (a wrong entry undone),
+     and wrong once any of it has been issued: the store would then read
+     below zero. So each receipt is checked against what its store still
+     holds, and a delivery that has been drawn on closes the order to
+     deletion — a return or an adjustment is the honest correction then. */
+  const st = await repo.getState();
+  const grnIds = new Set((st.grns || []).filter((g) => g && g.poId === id).map((g) => g.id));
+  const received = (st.movements || []).filter((m) => m && m.ref === id && +m.qty > 0);
+  for (const m of received) {
+    let there = m.wh ? await repo.onHandAt(m.itemId, m.wh) : await repo.onHandOf(m.itemId);
+    // what this delivery's failed lot moved to quarantine comes back with the delete, so it still counts as on the shelf
+    there += (st.movements || []).filter((q) => q && q.type === "XFER" && grnIds.has(q.ref) && q.itemId === m.itemId
+      && (!m.wh || q.wh === m.wh) && +q.qty < 0).reduce((s, q) => s - (+q.qty || 0), 0);
+    if (+m.qty > there + 1e-6) {
+      const it = await repo.getItem(m.itemId);
+      throw err("Cannot delete " + id + ": " + (+(+m.qty).toFixed(3)) + " " + ((it && it.uom) || "") + " of "
+        + ((it && it.name) || m.itemId) + " was received against it and only " + (+there.toFixed(3))
+        + " is still in " + (m.wh || "the store") + " — the rest has been issued. Raise a return or a stock "
+        + "adjustment instead; deleting the order would leave the store below zero.", 409);
+    }
+  }
   return await repo.deletePurchaseOrder(id);
 }
 
@@ -900,7 +992,7 @@ async function createSalesOrder(so) {
   so.date = so.date || todayISO();
   so.status = so.status || "Confirmed";
   so.priority = so.priority || "Normal";
-  so.value = num(so.value) || so.lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0);
+  so.value = linesValue(so.lines);   // the server's figure, never the browser's
   return await repo.putSalesOrder(so);
 }
 /* A dispatched order has already moved stock and has an invoice printed from
@@ -916,12 +1008,26 @@ async function updateSalesOrder(id, patch) {
     throw err("Cannot change the lines of " + id + ": it has been dispatched and its stock "
       + "movements and invoice are already issued against these figures.", 409);
   }
+  /* STATUS IS EARNED, NOT TYPED. "Dispatched" is written by the dispatch
+     itself, together with the stock movements and the batch marks; typed on
+     an edit it would close the order with nothing shipped. And a dispatched
+     order stays dispatched — set back to Confirmed it could ship the same
+     goods twice. Deleting it is what reverses a dispatch. */
+  if (patch.status != null && patch.status !== existing.status) {
+    if (patch.status === "Dispatched")
+      throw err("Use Dispatch on " + id + " — that is what moves the stock and marks the batches. "
+        + "A status typed on an edit ships nothing.", 409);
+    if (existing.status === "Dispatched")
+      throw err(id + " has been dispatched and its stock has left, so it cannot be reopened. "
+        + "Delete it to reverse the dispatch, or raise a new order.", 409);
+  }
   const merged = cleanDocSig(Object.assign({}, existing, patch, { id }));
   if (!Array.isArray(merged.lines) || !merged.lines.length) throw err("A sales order needs at least one line", 400);
   if (merged.customerId && !await repo.getCustomer(merged.customerId))
     throw err("Unknown customer " + merged.customerId, 400);
   await assertLinesReferenceRealItems(merged.lines, "sales order");
   await assertBatchesAreFree(merged.lines, id);
+  merged.value = linesValue(merged.lines);
   return await repo.putSalesOrder(merged);
 }
 async function deleteSalesOrder(id) {
@@ -962,7 +1068,8 @@ async function dispatchSalesOrder(soId, body, user) {
     const so = await repo.getSalesOrderForUpdate(soId, x);
     if (!so) throw err("Sales order not found", 404);
     if (so.status === "Dispatched") throw err("Sales order already dispatched", 400);
-    const date = body.date || todayISO();
+    if (so.status === "Cancelled") throw err("Sales order " + so.id + " is cancelled — reopen it before dispatching", 400);
+    const date = body.date ? isoDateOrThrow(body.date, "dispatch date") : todayISO();
     const wh = body.wh || "WH-FG";
     const by = (user && user.username) || "sales";
     const now = new Date().toISOString();
@@ -1038,6 +1145,26 @@ async function saveBom(itemId, bom) {
   const clean = BC.normalize(bom.lines)
     .filter((l) => (l.id || (l.options && l.options.length)) && l.qty > 0);
   if (!clean.length) throw err("A BOM needs at least one component with a positive quantity", 400);
+  /* A RECIPE CANNOT CONTAIN ITSELF, directly or through another product: the
+     planner would follow it round for ever and the requirement is infinite. */
+  const partsOf = (lines) => (lines || []).flatMap((l) => l && l.id ? [l.id]
+    : ((l && l.options) || []).map((o) => (o && typeof o === "object") ? o.id : o)).filter(Boolean);
+  if (partsOf(clean).includes(itemId)) throw err("A product cannot be a component of its own recipe", 400);
+  {
+    const all = (await repo.getState()).boms || {};
+    const seen = new Set();
+    const stack = partsOf(clean);
+    while (stack.length) {
+      const pid = stack.pop();
+      if (pid === itemId)
+        throw err("This recipe would loop: " + itemId + " is made of " + partsOf(clean).join(", ")
+          + ", and that chain leads back to " + itemId + ".", 400);
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      const b = all[pid];
+      if (b) partsOf(BC.normalize(b.lines || [])).forEach((x) => stack.push(x));
+    }
+  }
   let y = num(bom.yield) || 1;
   if (y > 1) y = y / 100;                       // accept 0-1 fraction or 1-100 percent
   y = Math.min(1, Math.max(0.01, y));
@@ -1135,8 +1262,14 @@ async function deleteLead(id) {
 }
 
 /* ---- Customer upsert (CRM Won→customer conversion) ---- */
+/* POST creates. It used to be an upsert, so a second POST carrying an id
+   already in use quietly REPLACED that customer — every order and quote then
+   named somebody else. An existing id is refused; edits go through PATCH. */
 async function upsertCustomer(cust) {
-  if (!cust || !cust.id || !cust.name) throw err("Customer needs an id and name", 400);
+  cust = cust || {};
+  if (!cust.id || !cust.name) throw err("Customer needs an id and name", 400);
+  if (await repo.getCustomer(cust.id))
+    throw err("Customer " + cust.id + " already exists — edit that record instead of creating it again", 409);
   return await repo.putCustomer(cust);
 }
 async function updateCustomer(id, patch) {
@@ -1153,6 +1286,12 @@ async function deleteCustomer(id) {
   const leads = (st.leads || []).filter((l) => l.customerId === id).length;
   if (sos) throw err(`Cannot delete: ${sos} sales order(s) reference this customer. Delete or re-point them first.`, 400);
   if (leads) throw err(`Cannot delete: ${leads} CRM lead(s) reference this customer. Delete or re-point them first.`, 400);
+  const quotes = (st.quotations || []).filter((q) => q.customerId === id).length;
+  const complaints = (st.complaints || []).filter((c) => c.customerId === id).length;
+  const wos = (st.workorders || []).filter((w) => w.customerId === id).length;
+  if (quotes) throw err(`Cannot delete: ${quotes} quotation(s) reference this customer. Delete or re-point them first.`, 400);
+  if (complaints) throw err(`Cannot delete: ${complaints} complaint(s) reference this customer. Delete or re-point them first.`, 400);
+  if (wos) throw err(`Cannot delete: ${wos} work order(s) name this customer. Delete or re-point them first.`, 400);
   return await repo.deleteCustomer(id);
 }
 
@@ -1216,6 +1355,13 @@ async function updateOrg(patch) {
   if (typeof patch !== "object" || Array.isArray(patch)) throw err("Org patch must be an object", 400);
   const merged = Object.assign({}, await repo.getOrg() || {}, patch);
   if (Array.isArray(patch.companies)) {
+    for (const c of patch.companies) {
+      const g = String((c && c.gstin) || "").trim().toUpperCase();
+      if (g && !validGSTIN(g))
+        throw err("GSTIN " + g + (c && c.name ? " for " + c.name : "") + " is not a valid GSTIN — check the 15 characters (the last one is a check digit)", 400);
+      const pan = String((c && c.pan) || "").trim().toUpperCase();
+      if (pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw err("PAN " + pan + " is not a valid PAN", 400);
+    }
     merged.companies = patch.companies.map((c) => ({
       key: String(c.key || "").trim() || "CO",
       name: String(c.name || "").trim(),
@@ -1251,6 +1397,16 @@ async function updateWarehouse(id, patch) {
   const merged = Object.assign({}, existing, patch || {}, { id });
   merged.name = String(merged.name || "").trim();
   if (!merged.name) throw err("Warehouse needs a name", 400);
+  /* Re-typing a store as a quarantine store makes everything in it undrawable
+     at once — done to the main raw store by a slip, every work order stops.
+     So a store that holds stock changes type only with an explicit confirm. */
+  const heldType = (t) => /quarantine|hold|reject/i.test(String(t || ""));
+  if (heldType(merged.type) && !heldType(existing.type) && !(patch && patch.confirm)) {
+    const held = ((await repo.getState()).movements || []).filter((m) => m.wh === id).reduce((s, m) => s + (+m.qty || 0), 0);
+    if (held > 1e-6)
+      throw err(merged.name + " holds " + (+held.toFixed(3)) + " units of stock; making it a quarantine store puts all of it "
+        + "beyond every work order. Move the stock out first, or send confirm:true to do it anyway.", 409);
+  }
   return await repo.putWarehouse(merged);
 }
 
@@ -1692,14 +1848,20 @@ async function deleteItem(id) {
   const wos = (st.workorders || []).filter((w) => w.itemId === id).length;
   const boms = Object.entries(st.boms || {})
     .filter(([k, b]) => k === id || (b.lines || []).some((l) => (Array.isArray(l) ? l[0] : l && l.id) === id)).length;
+  const quotes = (st.quotations || []).filter((q) => q.itemId === id
+    || (((q.sheet && q.sheet.lines) || []).some((l) => l && l.itemId === id))).length;
+  const lps = (st.labProducts || []).filter((p) => p.itemId === id);
+  const certs = (st.labReports || []).filter((r) => lps.some((p) => p.id === r.productId)).length;
   const blocks = [
     [moves, "stock movement(s)"], [pos, "purchase order(s)"], [sos, "sales order(s)"],
-    [wos, "work order(s)"], [boms, "bill(s) of materials"],
+    [wos, "work order(s)"], [boms, "bill(s) of materials"], [quotes, "quotation(s)"], [certs, "lab certificate(s)"],
   ].filter(([n]) => n > 0).map(([n, w]) => n + " " + w);
   if (blocks.length) {
     throw err("Cannot delete " + id + ": " + blocks.join(", ") + " still reference it. "
       + "Deactivate the item instead — deleting it would erase its stock history from every report.", 400);
   }
+  // the lab product raised for a finished good goes with it — nothing points at it any more
+  for (const p of lps) await repo.deleteLabProduct(p.id);
   return await repo.deleteItem(id);
 }
 async function deleteWorkOrder(id) {

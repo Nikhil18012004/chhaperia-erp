@@ -135,7 +135,7 @@ router.post("/items", requireAuth, requireRole("admin", "office"), async (req, r
   try { res.status(201).json(await erp.upsertItem(req.body || {})); } catch (e) { next(e); }
 });
 router.patch("/items/:id", requireAuth, requireRole("admin", "office"), async (req, res, next) => {
-  try { res.json(await erp.upsertItem(Object.assign({}, req.body || {}, { id: req.params.id }))); } catch (e) { next(e); }
+  try { res.json(await erp.upsertItem(Object.assign({}, req.body || {}, { id: req.params.id }), { mustExist: true })); } catch (e) { next(e); }
 });
 // Append a single stock movement (manual receipt / adjustment).
 router.post("/movements", requireAuth, requireRole("admin", "office"), async (req, res, next) => {
@@ -281,7 +281,7 @@ router.post("/lab/products", requireAuth, rw, async (req, res, next) => {
   try { res.status(201).json(await lab.createProduct(req.body || {})); } catch (e) { next(e); }
 });
 router.patch("/lab/products/:id", requireAuth, rw, async (req, res, next) => {
-  try { res.json(await lab.updateProduct(req.params.id, req.body || {})); } catch (e) { next(e); }
+  try { res.json(await lab.updateProduct(req.params.id, req.body || {}, req.user)); } catch (e) { next(e); }
 });
 router.delete("/lab/products/:id", requireAuth, rw, async (req, res, next) => {
   try { res.json(await lab.deleteProduct(req.params.id)); } catch (e) { next(e); }
@@ -424,7 +424,8 @@ router.patch("/production/wo/:id", requireAuth, requireRole("admin", "office"), 
 
 // Only admin/office can write the full dataset.
 router.put("/state", requireAuth, requireRole("admin", "office"), async (req, res, next) => {
-  try { res.json(await erp.saveState(req.body)); } catch (e) { next(e); }
+  // the save merges; ?replace=1 (admin only) is the restore that rewrites everything
+  try { res.json(await erp.saveState(req.body, { replace: req.user.role === "admin" && String(req.query.replace || "") === "1" })); } catch (e) { next(e); }
 });
 
 // System settings (theme/accent/sticker config). Office may write them too —

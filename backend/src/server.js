@@ -74,6 +74,20 @@ app.use("/api/tds", bigBody("60mb"));
 app.use(express.json({ limit: "1mb" }));
 
 // Auth (login, me, user management)
+/* A body nested hundreds of levels deep is not a document anybody typed — it
+   is a probe — and it used to reach the database, which refused it with a
+   500. Nothing the app stores is more than a few levels deep. */
+function depthOf(v, d) {
+  if (!v || typeof v !== "object" || d > 24) return d;
+  let m = d;
+  for (const k of Object.keys(v)) { const c = depthOf(v[k], d + 1); if (c > m) m = c; if (m > 24) break; }
+  return m;
+}
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === "object" && depthOf(req.body, 1) > 24)
+    return res.status(400).json({ error: "The request body is nested too deeply" });
+  next();
+});
 app.use("/api/auth", authRoutes);
 // Exchange rates, sourced from Google only (no business data — public).
 // ?add=THB,SEK warms extra currencies the converter needs beyond the listed set.
@@ -84,9 +98,11 @@ app.get("/api/fx", (req, res, next) => {
     .map((s) => s.trim())
     .filter((s) => /^[A-Z]{3}$/.test(s))
     .slice(0, 8);
+  /* no network is not a server fault: the rate is simply unavailable right now,
+     and the caller is told so with a 424 rather than a 500 that reads as a crash */
   require("./services/fxService").getRates(add)
     .then((payload) => { res.set("Cache-Control", "no-store"); res.json(payload); })
-    .catch(next);
+    .catch((e) => res.status(424).json({ ok: false, source: "unavailable", error: "The live rate could not be fetched: " + ((e && e.message) || "no network") }));
 });
 // One direct pair as Google quotes it (converter, for non-INR pairs)
 app.get("/api/fx/pair", (req, res, next) => {
@@ -96,7 +112,7 @@ app.get("/api/fx/pair", (req, res, next) => {
   if (!ok(from) || !ok(to)) return res.status(400).json({ error: "from/to must be 3-letter codes" });
   require("./services/fxService").getPair(from, to)
     .then((payload) => { res.set("Cache-Control", "no-store"); res.json(payload); })
-    .catch(next);
+    .catch((e) => res.status(424).json({ ok: false, source: "unavailable", error: "The live rate could not be fetched: " + ((e && e.message) || "no network") }));
 });
 // Human Resources (workers, attendance, leave, payroll + device punch ingest)
 app.use("/api/hr", hrRoutes);

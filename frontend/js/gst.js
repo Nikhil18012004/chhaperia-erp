@@ -50,7 +50,17 @@
   var RATES = [0, 5, 12, 18, 28];
 
   var GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z][ZC][0-9A-Z]$/;
-  function validGSTIN(g) { return GSTIN_RE.test(String(g || "").trim().toUpperCase()); }
+  /* …and the 15th character is a check digit (mod 36 over the first 14 with
+     weights 1 and 2 alternating), so a mistyped GSTIN is caught rather than
+     printed on every invoice. */
+  var GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  function validGSTIN(g) {
+    g = String(g || "").trim().toUpperCase();
+    if (!GSTIN_RE.test(g)) return false;
+    var sum = 0;
+    for (var i = 0; i < 14; i++) { var p = GSTIN_CHARS.indexOf(g[i]) * (i % 2 ? 2 : 1); sum += Math.floor(p / 36) + (p % 36); }
+    return GSTIN_CHARS[(36 - (sum % 36)) % 36] === g[14];
+  }
 
   /** First two digits of a GSTIN are the state code. */
   function stateFromGSTIN(gstin) {
@@ -75,8 +85,9 @@
     return {
       qty: qty, rate: rate, discPct: num(l.discPct), gstPct: pct,
       gross: r2(gross), discount: r2(disc), taxable: taxable,
+      // the two halves are the TAX, to the paisa: an odd paisa goes to SGST rather than to both
       cgst: interState ? 0 : r2(tax / 2),
-      sgst: interState ? 0 : r2(tax / 2),
+      sgst: interState ? 0 : r2(tax - r2(tax / 2)),
       igst: interState ? tax : 0,
       tax: tax,
       total: r2(taxable + tax),
@@ -102,7 +113,7 @@
     var freight = num(opts.freight), insurance = num(opts.insurance);
     var chargeTax = r2((freight + insurance) * maxPct / 100);
     if (interState) igst += chargeTax;
-    else { cgst += chargeTax / 2; sgst += chargeTax / 2; }
+    else { var half = r2(chargeTax / 2); cgst += half; sgst += r2(chargeTax - half); }
     taxable = r2(taxable); cgst = r2(cgst); sgst = r2(sgst); igst = r2(igst);
     var raw = r2(taxable + freight + insurance + cgst + sgst + igst);
     /* Rounding to the rupee is the usual thing on a tax invoice, and it is a
@@ -169,6 +180,7 @@
     var v = Math.abs(num(amount));
     var rupees = Math.floor(v);
     var paise = Math.round((v - rupees) * 100);
+    if (paise >= 100) { rupees += 1; paise -= 100; }   // 2.995 rounds to Three, not "Two and undefined Paise"
     var s = "Rupees " + inWords(rupees);
     if (paise) s += " and " + two(paise) + " Paise";
     return s + " Only";

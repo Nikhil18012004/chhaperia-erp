@@ -464,6 +464,14 @@ async function stateForSupervisor(area, username, opts) {
    limits themselves — grading is server-side, so the person
    entering measurements must not see the thresholds.
    ============================================================ */
+/* strip the money off a record for a login that has no business with it */
+function noMoney(r) {
+  if (!r || typeof r !== "object") return r;
+  const o = Object.assign({}, r);
+  ["cost", "price", "rate", "value", "amount"].forEach((k) => { delete o[k]; });
+  return o;
+}
+function noMoneyDoc(r) { const o = noMoney(r); if (o && Array.isArray(o.lines)) o.lines = o.lines.map(noMoney); return o; }
 async function stateForLab() {
   const d = await fullState();
   return {
@@ -474,12 +482,13 @@ async function stateForLab() {
     categories: d.categories || [],
     // the incoming-test limits are withheld here for the same reason the TDS
     // spec is: this is the role that takes the readings
-    items: (d.items || []).map(redactItemQc),
+    // money-free, like the floor's: the lab reads quantities and specs, never prices
+    items: (d.items || []).map(redactItemQc).map(noMoney),
     boms: d.boms || {},
-    movements: d.movements || [],
+    movements: (d.movements || []).map(noMoney),
     workorders: d.workorders || [],
-    purchaseorders: d.purchaseorders || [],
-    salesorders: d.salesorders || [],
+    purchaseorders: (d.purchaseorders || []).map(noMoneyDoc),
+    salesorders: (d.salesorders || []).map(noMoneyDoc),
     suppliers: d.suppliers || [],
     customers: d.customers || [],          // sales orders reference them by id
     /* GOODS RECEIPTS — the incharge tests what arrived, so the receipt that

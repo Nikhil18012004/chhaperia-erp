@@ -1430,7 +1430,7 @@
           roundOff:UI.$("#po_ro")?UI.$("#po_ro").checked:(editPo?editPo.roundOff!==false:true),
           sigImg:sigVal("po_sig"),
           status:editPo?editPo.status:"Draft — not saved", eta:UI.$("#po_eta").value };
-        o.value=docCalc("po",o).calc.grandTotal;
+        o.value=docCalc("po",o).calc.taxable;   // an order's value is its lines — the server keeps this figure
         return o;
       }
       function recalc(){
@@ -2316,7 +2316,7 @@
           const sub=o.lines.reduce((s,l)=>s+l.qty*l.rate*(1-(l.discPct||0)/100),0);
           o.value=+(sub+o.freight+o.insurance).toFixed(2);
         } else {
-          o.value=docCalc("so",o).calc.grandTotal;
+          o.value=docCalc("so",o).calc.taxable;   // an order's value is its lines — the server keeps this figure
         }
         return o;
       }

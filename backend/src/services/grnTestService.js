@@ -517,10 +517,26 @@ async function decideTest(id, body, user) {
 
   let moved = null;
   if (approve) {
-    const qty = +t.acceptedQty || 0;
+    /* the lot in the unit the store KEEPS it in: the receipt line carries the
+       stocked quantity (100 kg of a 200 gsm roll landed as 500 m); the order
+       unit is only what the test report was filed against */
+    let qty = +t.acceptedQty || 0;
+    try {
+      const grn = await repo.getGrn(t.grnId);
+      const line = ((grn && grn.lines) || []).find((l) => l && l.itemId === t.itemId);
+      if (line && +line.stockQty > 0) qty = +line.stockQty;
+    } catch (e) { /* the order-unit figure stands */ }
     const from = t.wh || "";
     const hold = await quarantineWarehouse();
     if (!hold) throw err("No quarantine store exists to hold the lot. Add a warehouse of type 'Quarantine'.", 400);
+    /* …and only what is still on the shelf: a lot ruled on after part of it
+       was drawn moves the balance, and the decision says so — the store is
+       never taken below zero to hold something that is no longer there */
+    let usedBefore = 0;
+    if (qty > 0 && from) {
+      const there = await repo.onHandAt(t.itemId, from);
+      if (there + 1e-6 < qty) { usedBefore = +(qty - Math.max(0, there)).toFixed(3); qty = Math.max(0, +(+there).toFixed(3)); }
+    }
     if (qty > 0 && from && from !== hold) {
       /* An XFER PAIR, the ledger idiom this ERP already uses to re-home stock:
          the lot leaves the receiving store and lands in quarantine, and both
@@ -536,7 +552,7 @@ async function decideTest(id, body, user) {
         { id: mvId(), date: todayISO(), itemId: t.itemId, wh: hold, type: "XFER",
           qty: Math.abs(qty), rate: 0, ref, note: note2, by: (user && user.username) || "admin" },
       ]);
-      moved = { qty: Math.abs(qty), from, to: hold };
+      moved = { qty: Math.abs(qty), from, to: hold, usedBefore };
     }
   }
   const out = Object.assign({}, t, {

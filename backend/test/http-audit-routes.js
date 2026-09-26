@@ -366,7 +366,8 @@ async function run() {
     const sneak = await call("PATCH", "/lab/products/" + lpId, O, { spec: { thickness: { min: 0, max: 1000 } } });
     const after = (await call("GET", "/state", A)).d.labProducts.find((p) => p.id === lpId) || {};
     ok("office cannot rewrite spec LIMITS through PATCH /lab/products (the /spec route is admin-only)",
-      sneak.status === 403 || JSON.stringify((after.spec || {}).thickness) === JSON.stringify({ min: 0.1, max: 0.2 }),
+      /* the values, not the key order: MySQL stores a JSON object's keys in its own order */
+      sneak.status === 403 || (!!(after.spec || {}).thickness && after.spec.thickness.min === 0.1 && after.spec.thickness.max === 0.2),
       "PATCH answered " + sneak.status + " and the stored limit is now " + J((after.spec || {}).thickness));
     /* ONE ITEM, ONE LAB PRODUCT (2026-09-10) — the placeholder case was fixed;
        what about an item whose product is already configured? */
